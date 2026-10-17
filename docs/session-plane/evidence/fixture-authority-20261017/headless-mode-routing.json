@@ -1,0 +1,74 @@
+[
+  {
+    "row": "headless-assert-continues",
+    "explicit": false,
+    "runner_error": false,
+    "passed": true
+  },
+  {
+    "row": "headless-assert-continues",
+    "explicit": false,
+    "runner_error": true,
+    "passed": true
+  },
+  {
+    "row": "headless-render-cap",
+    "explicit": false,
+    "runner_error": false,
+    "passed": true
+  },
+  {
+    "row": "headless-render-cap",
+    "explicit": false,
+    "runner_error": true,
+    "passed": true
+  },
+  {
+    "row": "net-protocol",
+    "explicit": false,
+    "runner_error": false,
+    "passed": true
+  },
+  {
+    "row": "net-protocol",
+    "explicit": false,
+    "runner_error": true,
+    "passed": true
+  },
+  {
+    "row": "headless-assert-continues",
+    "explicit": true,
+    "runner_error": false,
+    "passed": true
+  },
+  {
+    "row": "headless-assert-continues",
+    "explicit": true,
+    "runner_error": true,
+    "passed": true
+  },
+  {
+    "row": "headless-render-cap",
+    "explicit": true,
+    "runner_error": false,
+    "passed": true
+  },
+  {
+    "row": "headless-render-cap",
+    "explicit": true,
+    "runner_error": true,
+    "passed": true
+  },
+  {
+    "row": "net-protocol",
+    "explicit": true,
+    "runner_error": false,
+    "passed": true
+  },
+  {
+    "row": "net-protocol",
+    "explicit": true,
+    "runner_error": true,
+    "passed": true
+  }
+]

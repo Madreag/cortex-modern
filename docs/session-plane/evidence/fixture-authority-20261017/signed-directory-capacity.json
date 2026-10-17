@@ -1,0 +1,16 @@
+{
+  "command": [
+    "/usr/bin/python3",
+    "Source/Network/NetSessionDirectoryCapacitySelfTest.py",
+    "-v"
+  ],
+  "exit_code": 0,
+  "elapsed_s": 3.320169127000554,
+  "files": {
+    "Source/Network/NetSessionDirectoryCapacitySelfTest.py": "f76f0d59dbac734481d56b49bc919c4f5e11e6d10e2e3aa3447f97fc89deaaa9",
+    "tools/session_directory/connection_authority.py": "0046eeb5762ad0ffac429c34051739d84b7ca2731da20f6486d204b946ee69c9",
+    "tools/session_directory/test_session_directory.py": "2d06416711eb4a47bbf5bbcc89b186a0c37f8944600da35721b404b1e8e0b833"
+  },
+  "scope": "real signed endpoint fixture with isolated temporary persisted SQLite state; no engine launch and no deployment",
+  "log": "test_frame_tie_full_record_keeps_a_new_split_available (__main__.FullRecordFixture.test_frame_tie_full_record_keeps_a_new_split_available) ... ok\n\n----------------------------------------------------------------------\nRan 1 test in 3.095s\n\nOK\n"
+}

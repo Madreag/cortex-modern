@@ -1,0 +1,10 @@
+[run-selftests-selftest] PASS default: net-match runs last, the count is the suite's
+[run-selftests-selftest] PASS default retains fixed fixtures and the N=200 driver as separate budgeted rows
+[run-selftests-selftest] PASS --only driver first runs its fresh fixed prerequisite
+[run-selftests-selftest] PASS --quiet-rows last: the tail adds script-graph
+[run-selftests-selftest] PASS --quiet-rows only: the tail alone
+[run-selftests-selftest] PASS --only keeps a named row's place
+[run-selftests-selftest] PASS first product result False retained; no rerun without a recorded HARNESS cause
+[run-selftests-selftest] PASS first product result False retained; no rerun without a recorded HARNESS cause
+[run-selftests-selftest] PASS first product result True retained; no rerun without a recorded HARNESS cause
+[run-selftests-selftest] PASS

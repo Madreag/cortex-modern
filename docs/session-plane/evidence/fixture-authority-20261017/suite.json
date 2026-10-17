@@ -1,0 +1,1112 @@
+{
+  "exe_sha256": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+  "repo": ".",
+  "passed": 46,
+  "total": 55,
+  "quiet_rows": [
+    "net-match"
+  ],
+  "sanitizer": null,
+  "complete": true,
+  "running": null,
+  "results": {
+    "controller-frame": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "row_elapsed_s": 0.6159273489993211,
+      "start_load": [
+        2.3486328125,
+        3.54541015625,
+        3.5009765625
+      ],
+      "topology": "single-peer"
+    },
+    "net-protocol": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "row_elapsed_s": 0.5440060050004831,
+      "start_load": [
+        2.3486328125,
+        3.54541015625,
+        3.5009765625
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-identity": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "row_elapsed_s": 0.5434371110004577,
+      "start_load": [
+        2.3486328125,
+        3.54541015625,
+        3.5009765625
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-session": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "row_elapsed_s": 0.5405674920002639,
+      "start_load": [
+        2.3486328125,
+        3.54541015625,
+        3.5009765625
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-lockstep": {
+      "pass": false,
+      "exit_code": 1,
+      "timed_out": false,
+      "pass_lines": 2,
+      "fail_lines": [
+        "[net-lockstep-selftest] FAIL",
+        "[net-lockstep-selftest] FAIL",
+        "[net-lockstep-selftest] FAIL"
+      ],
+      "fatal": [
+        "[net-lockstep-selftest] FAIL a_release_the_host_took_with_it_ends_on_one_frame: authority ruling: peer 2 installed seat 1's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+        "[net-lockstep-selftest] FAIL successor_records_play_through_host_change: the recording fixture did not migrate: authority ruling: peer 2 installed seat 1's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+        "[net-lockstep-selftest] FAIL commit_only_successor_release_waits_for_own_click: the commit-only survivor did not become host: authority ruling: peer 2 installed seat 1's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn"
+      ],
+      "reason": "exit_code=1",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "row_elapsed_s": 30.0237077590009,
+      "start_load": [
+        2.16015625,
+        3.486328125,
+        3.48193359375
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-session-plane": {
+      "pass": false,
+      "exit_code": 1,
+      "timed_out": false,
+      "pass_lines": 0,
+      "fail_lines": [
+        "[net-session-plane-selftest] FAIL",
+        "[net-session-plane-selftest] FAIL",
+        "[net-session-plane-selftest] FAIL"
+      ],
+      "fatal": [
+        "[net-session-plane-selftest] FAIL repeated_host_changes_bound_the_tail_or_answer_missing: seed=0 admin generation 1: authority ruling: playing peer 2 waited 55ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+        "[net-session-plane-selftest] FAIL relay_link_blackout_return: seed=0 authority ruling: peer 1 installed seat 2's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+        "[net-session-plane-selftest] FAIL peer_returns_40s: seed=0 authority ruling: peer 1 installed seat 2's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn"
+      ],
+      "reason": "exit_code=1",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "fixed_failure_report": {
+        "path": "retained-evidence/fixture/authority-validation/final-suite/runs/net-session-plane-selftest/fixed-failure-groups.txt",
+        "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+        "digest": "bf9b64e2fde9e56578c525e30ad6b34c3385d920c844c5213fb6f80d3d079719",
+        "suite_root": "retained-evidence/fixture/authority-validation/final-suite/runs",
+        "saved_cases_ran": 108
+      },
+      "row_elapsed_s": 35.49536015600097,
+      "start_load": [
+        1.4990234375,
+        3.19921875,
+        3.38525390625
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-session-plane-hold-schedules": {
+      "pass": false,
+      "exit_code": 1,
+      "timed_out": false,
+      "pass_lines": 0,
+      "fail_lines": [
+        "[net-session-plane-selftest] FAIL",
+        "[net-session-plane-selftest] FAIL",
+        "[net-session-plane-selftest] FAIL"
+      ],
+      "fatal": [
+        "[net-session-plane-selftest] FAIL random_hold_schedules group=bound:survivor_waits:2:direct seeds=25,34,36,40,66,88,90,97,102,107,112,126,136,138,153: reproduced by fixed row two_direct_seats_238ms_host_silent_200ms_survivor_waits_seed_2453",
+        "[net-session-plane-selftest] FAIL random_hold_schedules shape=two_direct_seats_44ms_jitter_20ms_host_stopped_200ms_survivor_waits_seed_129 group=bound:survivor_waits:2:internet seeds=129 property=bound kind=survivor_waits minimize_runs=44 repeats=1: authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 6119 ms",
+        "[net-session-plane-selftest] FAIL random_hold_schedules group=bound:survivor_waits:3:direct seeds=15,26,114,134,142,143,193: reproduced by fixed row three_direct_seats_270ms_jitter_20ms_seat2_stopped_200ms_host_silent_360ms_survivor_waits_seed_2469"
+      ],
+      "reason": "exit_code=1",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "schedule_summary": "[net-session-plane-selftest] random_hold_schedules schedules=200 ran=200 seeds=1..200",
+      "fixed_failure_report": {
+        "path": "retained-evidence/fixture/authority-validation/final-suite/runs/net-session-plane-selftest/fixed-failure-groups.txt",
+        "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+        "digest": "bf9b64e2fde9e56578c525e30ad6b34c3385d920c844c5213fb6f80d3d079719",
+        "suite_root": "retained-evidence/fixture/authority-validation/final-suite/runs",
+        "saved_cases_ran": 108
+      },
+      "row_elapsed_s": 28.973429367999415,
+      "start_load": [
+        2.36669921875,
+        3.2392578125,
+        3.392578125
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-input-acceptance": {
+      "pass": false,
+      "exit_code": 1,
+      "timed_out": false,
+      "pass_lines": 0,
+      "fail_lines": [
+        "[net-input-acceptance-selftest] FAIL",
+        "[net-input-acceptance-selftest] FAIL"
+      ],
+      "fatal": [
+        "[net-input-acceptance-selftest] FAIL succession_seed: authority ruling: peer 2 installed seat 1's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+        "[net-input-acceptance-selftest] FAIL"
+      ],
+      "reason": "exit_code=1",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "row_elapsed_s": 1.046143936999215,
+      "start_load": [
+        3.94873046875,
+        3.5419921875,
+        3.48974609375
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-input-acceptance-steady": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "row_elapsed_s": 3.0460536279988446,
+      "start_load": [
+        3.63232421875,
+        3.48291015625,
+        3.470703125
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-lockstep-released-claims": {
+      "pass": false,
+      "exit_code": 1,
+      "timed_out": false,
+      "pass_lines": 0,
+      "fail_lines": [
+        "[net-lockstep-selftest] FAIL",
+        "[net-lockstep-released-claims-selftest] FAIL"
+      ],
+      "fatal": [
+        "[net-lockstep-selftest] FAIL a_release_the_host_took_with_it_ends_on_one_frame: authority ruling: peer 2 installed seat 1's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+        "[net-lockstep-released-claims-selftest] FAIL"
+      ],
+      "reason": "exit_code=1",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "row_elapsed_s": 0.9421351959990716,
+      "start_load": [
+        3.63232421875,
+        3.48291015625,
+        3.470703125
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-lockstep-release-paths": {
+      "pass": false,
+      "exit_code": 1,
+      "timed_out": false,
+      "pass_lines": 0,
+      "fail_lines": [
+        "[net-lockstep-selftest] FAIL",
+        "[net-lockstep-selftest] FAIL",
+        "[net-lockstep-release-paths-selftest] FAIL"
+      ],
+      "fatal": [
+        "[net-lockstep-selftest] FAIL successor_records_play_through_host_change: the recording fixture did not migrate: authority ruling: peer 2 installed seat 1's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+        "[net-lockstep-selftest] FAIL commit_only_successor_release_waits_for_own_click: the commit-only survivor did not become host: authority ruling: peer 2 installed seat 1's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+        "[net-lockstep-release-paths-selftest] FAIL"
+      ],
+      "reason": "exit_code=1",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "row_elapsed_s": 1.5490489799994975,
+      "start_load": [
+        3.63232421875,
+        3.48291015625,
+        3.470703125
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-lockstep-seat-succession": {
+      "pass": false,
+      "exit_code": 1,
+      "timed_out": false,
+      "pass_lines": 0,
+      "fail_lines": [
+        "[net-lockstep-selftest] FAIL",
+        "[net-lockstep-selftest] FAIL",
+        "[net-lockstep-selftest] FAIL"
+      ],
+      "fatal": [
+        "[net-lockstep-selftest] FAIL two_successions_keep_both_former_hosts: first succession failed: authority ruling: peer 2 installed seat 1's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+        "[net-lockstep-selftest] FAIL future_release_is_void_on_every_survivor: the survivors did not succeed at boundary 29",
+        "[net-lockstep-selftest] FAIL announced_host_leave_keeps_one_survivor: authority ruling: peer 2 installed seat 1's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn"
+      ],
+      "reason": "exit_code=1",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "row_elapsed_s": 12.855044711999653,
+      "start_load": [
+        3.50146484375,
+        3.4580078125,
+        3.46240234375
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-lockstep-seat-admission": {
+      "pass": false,
+      "exit_code": 1,
+      "timed_out": false,
+      "pass_lines": 0,
+      "fail_lines": [
+        "[net-lockstep-selftest] FAIL",
+        "[net-lockstep-selftest] FAIL",
+        "[net-lockstep-selftest] FAIL"
+      ],
+      "fatal": [
+        "[net-lockstep-selftest] FAIL future_removal_restores_admission_at_the_boundary: the succession did not use boundary 29",
+        "[net-lockstep-selftest] FAIL announced_leaver_rejoins_the_successor_by_address: authority ruling: peer 2 installed seat 1's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+        "[net-lockstep-selftest] FAIL ordinary_rejoin_walks_two_successions: first succession failed: authority ruling: peer 2 installed seat 1's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn"
+      ],
+      "reason": "exit_code=1",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "row_elapsed_s": 13.963925136999023,
+      "start_load": [
+        3.18994140625,
+        3.39306640625,
+        3.44091796875
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-lockstep-cli": {
+      "pass": true,
+      "reason": "",
+      "fail_lines": [],
+      "exit_code": 0,
+      "timed_out": false,
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "row_elapsed_s": 12.197003257999313,
+      "start_load": [
+        2.7841796875,
+        3.29150390625,
+        3.40673828125
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-auth": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "row_elapsed_s": 0.5446627500004979,
+      "start_load": [
+        2.60986328125,
+        3.2275390625,
+        3.38330078125
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-admission": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "row_elapsed_s": 0.544431739999709,
+      "start_load": [
+        2.60986328125,
+        3.2275390625,
+        3.38330078125
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-reconnect": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "row_elapsed_s": 0.5436002340011328,
+      "start_load": [
+        2.60986328125,
+        3.2275390625,
+        3.38330078125
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-reconnect-session": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "row_elapsed_s": 0.843555124998602,
+      "start_load": [
+        2.60986328125,
+        3.2275390625,
+        3.38330078125
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-world-join": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "row_elapsed_s": 11.452287721000175,
+      "start_load": [
+        2.60986328125,
+        3.2275390625,
+        3.38330078125
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-directory": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "service_python": "/usr/bin/python3",
+      "service_exit_code": 0,
+      "service_log": "retained-evidence/fixture/authority-validation/final-suite/runs/net-directory-selftest/service-tests.log",
+      "row_elapsed_s": 125.67375100900063,
+      "start_load": [
+        2.2080078125,
+        3.12109375,
+        3.34619140625
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-rejoin-matrix": {
+      "pass": false,
+      "exit_code": 1,
+      "timed_out": false,
+      "pass_lines": 0,
+      "fail_lines": [
+        "[net-rejoin-matrix-selftest] FAIL"
+      ],
+      "fatal": [
+        "[net-rejoin-matrix-selftest] pair Migrating x hold-proposed tier=2 result=ENTRY-FAIL expected=\"api=refused sub=run subhost=2\" error=\"authority ruling: peer 2 installed seat 1's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn\"",
+        "[net-rejoin-matrix-selftest] pair Migrating x hold-resolved tier=2 result=ENTRY-FAIL expected=\"sub=run subhost=2\" error=\"authority ruling: peer 2 installed seat 1's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn\"",
+        "[net-rejoin-matrix-selftest] pair Migrating x park-begin tier=2 result=ENTRY-FAIL expected=\"sub=run subhost=2\" error=\"authority ruling: peer 2 installed seat 1's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn\""
+      ],
+      "reason": "exit_code=1",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "row_elapsed_s": 22.52244779800094,
+      "start_load": [
+        1.3818359375,
+        2.32861328125,
+        3.0146484375
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-roster": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "row_elapsed_s": 0.6692801640001562,
+      "start_load": [
+        2.6171875,
+        2.5439453125,
+        3.068359375
+      ],
+      "topology": "single-box: not proof"
+    },
+    "camera-null-scene": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "row_elapsed_s": 3.563733052000316,
+      "start_load": [
+        2.6171875,
+        2.5439453125,
+        3.068359375
+      ],
+      "topology": "single-peer"
+    },
+    "rotate-primitive": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "row_elapsed_s": 0.6536105830000452,
+      "start_load": [
+        2.80810546875,
+        2.5849609375,
+        3.0791015625
+      ],
+      "topology": "single-peer"
+    },
+    "lua-numeric-policy": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "row_elapsed_s": 0.6468436069990275,
+      "start_load": [
+        2.80810546875,
+        2.5849609375,
+        3.0791015625
+      ],
+      "topology": "single-peer"
+    },
+    "fp-environment": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "row_elapsed_s": 0.647848447000797,
+      "start_load": [
+        2.80810546875,
+        2.5849609375,
+        3.0791015625
+      ],
+      "topology": "single-peer"
+    },
+    "deterministic-math": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "row_elapsed_s": 0.7678551389999484,
+      "start_load": [
+        2.80810546875,
+        2.5849609375,
+        3.0791015625
+      ],
+      "topology": "single-peer"
+    },
+    "sim-checksum": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "row_elapsed_s": 0.754182093000054,
+      "start_load": [
+        2.80810546875,
+        2.5849609375,
+        3.0791015625
+      ],
+      "topology": "single-peer"
+    },
+    "cow-checkpoint": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "row_elapsed_s": 0.754966455999238,
+      "start_load": [
+        3.06396484375,
+        2.64208984375,
+        3.09521484375
+      ],
+      "topology": "single-peer"
+    },
+    "frame-recorder": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "row_elapsed_s": 4.038501429999087,
+      "start_load": [
+        3.06396484375,
+        2.64208984375,
+        3.09521484375
+      ],
+      "topology": "single-peer"
+    },
+    "float-text": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "row_elapsed_s": 1.2265670390006562,
+      "start_load": [
+        3.13916015625,
+        2.6650390625,
+        3.10009765625
+      ],
+      "topology": "single-peer"
+    },
+    "combo-key": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "row_elapsed_s": 0.6045440079997206,
+      "start_load": [
+        3.13916015625,
+        2.6650390625,
+        3.10009765625
+      ],
+      "topology": "single-peer"
+    },
+    "rteerror": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "row_elapsed_s": 0.9073777819994575,
+      "start_load": [
+        3.13916015625,
+        2.6650390625,
+        3.10009765625
+      ],
+      "topology": "single-peer"
+    },
+    "steady-clock": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "row_elapsed_s": 0.6113783210003021,
+      "start_load": [
+        3.13916015625,
+        2.6650390625,
+        3.10009765625
+      ],
+      "topology": "single-peer"
+    },
+    "swap-wait": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "row_elapsed_s": 0.6108666849995643,
+      "start_load": [
+        3.13916015625,
+        2.6650390625,
+        3.10009765625
+      ],
+      "topology": "single-peer"
+    },
+    "module-version": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "warning_acknowledgment": {
+        "window": 25165826,
+        "engine_pid": 184940,
+        "owner_pid": 184947,
+        "runtime": "retained-evidence/fixture/authority-validation/final-suite/runs/module-version-selftest/runtime",
+        "caption": "RTE Warning! (>_<)",
+        "action": "Return",
+        "expected_warning_modules": [
+          "StubA.rte",
+          "StubB.rte"
+        ]
+      },
+      "row_elapsed_s": 0.6187955089990282,
+      "start_load": [
+        3.13916015625,
+        2.6650390625,
+        3.10009765625
+      ],
+      "topology": "single-peer"
+    },
+    "ext-validate-version": {
+      "selftest": "ext-validate-version",
+      "exit_code": 1,
+      "timed_out": false,
+      "reason_line": "[module] StubBad.rte was developed for Cortex Command v6.1.0, so this version of Cortex Command (v7.0.0) may not support it. boxes=0",
+      "dialog": false,
+      "continued": false,
+      "exe_sha256": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "stdout": "retained-evidence/fixture/authority-validation/final-suite/runs/ext-validate-version-selftest/run/stdout.log",
+      "pass": true,
+      "reason": "",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "row_elapsed_s": 0.6499172109997744,
+      "start_load": [
+        3.13916015625,
+        2.6650390625,
+        3.10009765625
+      ],
+      "topology": "single-peer"
+    },
+    "path-prefix": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "row_elapsed_s": 0.7495765660005418,
+      "start_load": [
+        3.20849609375,
+        2.6875,
+        3.10498046875
+      ],
+      "topology": "single-peer"
+    },
+    "limb-path": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "row_elapsed_s": 12.469441306999215,
+      "start_load": [
+        3.20849609375,
+        2.6875,
+        3.10498046875
+      ],
+      "topology": "single-peer"
+    },
+    "menu-automation": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "row_elapsed_s": 0.660742324000239,
+      "start_load": [
+        3.55810546875,
+        2.7802734375,
+        3.130859375
+      ],
+      "topology": "single-peer"
+    },
+    "mod-api-shims": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "row_elapsed_s": 12.371504775001085,
+      "start_load": [
+        3.55810546875,
+        2.7802734375,
+        3.130859375
+      ],
+      "topology": "single-peer"
+    },
+    "settings-preferences": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "row_elapsed_s": 0.6366123520001565,
+      "start_load": [
+        4.01953125,
+        2.921875,
+        3.17236328125
+      ],
+      "topology": "single-peer"
+    },
+    "single-module-harness": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "row_elapsed_s": 13.868868679001025,
+      "start_load": [
+        4.01953125,
+        2.921875,
+        3.17236328125
+      ],
+      "topology": "single-peer"
+    },
+    "headless-assert-continues": {
+      "selftest": "headless-assert-continues",
+      "exit_code": 1,
+      "timed_out": false,
+      "fault_line": "RTE Assert (headless, continued like Ignore): Assertion in file '../Source/Menus/MenuAutomation.cpp', line 1968,",
+      "verdicts_after_assert": [
+        "[menu-script] assert_screen expected=MainScreen actual=MainScreen PASS"
+      ],
+      "shutdown_line": "[assert] the run continued past an assert; see the RTE Assert line above",
+      "exe_sha256": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "stdout": "retained-evidence/fixture/authority-validation/final-suite/runs/headless-assert-continues-selftest/run/stdout.log",
+      "pass": true,
+      "reason": "",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "presentation": "default headless-policy probe",
+      "row_elapsed_s": 13.163334889999533,
+      "start_load": [
+        4.38427734375,
+        3.05712890625,
+        3.212890625
+      ],
+      "topology": "single-peer"
+    },
+    "render-window-scripts": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "row_elapsed_s": 3.558116918000451,
+      "start_load": [
+        4.552734375,
+        3.13818359375,
+        3.23779296875
+      ],
+      "topology": "single-peer"
+    },
+    "text-wrap": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "row_elapsed_s": 3.264094739999564,
+      "start_load": [
+        4.5888671875,
+        3.16943359375,
+        3.24755859375
+      ],
+      "topology": "single-peer"
+    },
+    "save-refusal-diagnosis": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "row_elapsed_s": 15.544560345000718,
+      "start_load": [
+        4.6220703125,
+        3.2001953125,
+        3.25732421875
+      ],
+      "topology": "single-peer"
+    },
+    "headless-render-cap": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "cap": "60hz",
+      "frames": 127,
+      "interval_s": 2.1488365190010517,
+      "presentations_per_second": 58.63638247295551,
+      "gpu_max": 18.0,
+      "gpu_avg": 2.090909090909091,
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "presentation": "default headless-policy probe",
+      "row_elapsed_s": 15.475269310998556,
+      "start_load": [
+        4.77392578125,
+        3.30517578125,
+        3.29150390625
+      ],
+      "topology": "single-peer"
+    },
+    "single-player-reference": {
+      "pass": true,
+      "reason": "",
+      "fail_lines": [],
+      "exit_code": 0,
+      "timed_out": false,
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "reference": {
+        "dump_sha256": "f2c46632cd337cfd5bc2eec5307bc4661c715d54a4ce3c251c4b6e9f86bcce79",
+        "dump_bytes": 5445623,
+        "portable_dump_sha256": "fae01e06aa2665c34cdd3676efbc3f10bbcfd000d85383af5ecd20949e79e266",
+        "tick_hashes_sha256": "ddd5a0c7a4d20b9ef5f3be9cdd6d30376f97304c4feaa93283409adc0dc0d89f",
+        "compared_trace_sha256": "fecd87e5e76c4419b0ef74b2ca73a03526dab9214532fe5cbbb98c5a2ff6f9a1"
+      },
+      "observed": {
+        "dump_sha256": "91fcc5f1a4ebddf6cf6ade63f4cda4b79e9258ae80c3dbc1b063cf7aaa1e5e01",
+        "dump_bytes": 3617129,
+        "portable_dump_sha256": "fae01e06aa2665c34cdd3676efbc3f10bbcfd000d85383af5ecd20949e79e266",
+        "tick_count": 320,
+        "tick_hashes_sha256": "ddd5a0c7a4d20b9ef5f3be9cdd6d30376f97304c4feaa93283409adc0dc0d89f",
+        "compared_trace_sha256": "fecd87e5e76c4419b0ef74b2ca73a03526dab9214532fe5cbbb98c5a2ff6f9a1"
+      },
+      "row_elapsed_s": 15.634828678999838,
+      "start_load": [
+        5.20654296875,
+        3.47119140625,
+        3.34619140625
+      ],
+      "topology": "single-peer"
+    },
+    "preview-invariance": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "verdicts": [
+        [
+          "PASS",
+          "153",
+          "8",
+          "8"
+        ]
+      ],
+      "fail_lines": [],
+      "reason": "",
+      "exe_sha256": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "row_elapsed_s": 14.484877250999489,
+      "start_load": [
+        5.302734375,
+        3.5791015625,
+        3.38427734375
+      ],
+      "topology": "single-peer"
+    },
+    "preview-hotplug": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "verdicts": [
+        [
+          "PASS",
+          "153",
+          "8",
+          "8"
+        ]
+      ],
+      "fail_lines": [],
+      "reason": "",
+      "hotplug": [
+        [
+          "60",
+          "4"
+        ]
+      ],
+      "exe_sha256": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "row_elapsed_s": 17.66234093700041,
+      "start_load": [
+        5.2353515625,
+        3.6494140625,
+        3.41064453125
+      ],
+      "topology": "single-peer"
+    },
+    "preview-binding-exhaustive": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "budget_s": 1800,
+      "elapsed_s": 215.932,
+      "walked_classes": 89,
+      "row_elapsed_s": 216.2196393159993,
+      "start_load": [
+        5.1826171875,
+        3.71630859375,
+        3.43701171875
+      ],
+      "topology": "single-peer"
+    },
+    "capture-window": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "row_elapsed_s": 36.294055237000066,
+      "start_load": [
+        5.8154296875,
+        4.8115234375,
+        3.94189453125
+      ],
+      "topology": "single-peer"
+    },
+    "joystick-updater": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "row_elapsed_s": 1.0651981049995811,
+      "start_load": [
+        5.501953125,
+        4.84912109375,
+        3.98828125
+      ],
+      "topology": "single-peer"
+    },
+    "net-match": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+      "load_sensitive": true,
+      "box": {
+        "engines": [],
+        "builds": [
+          "ninja:184247",
+          "cc1plus:186183",
+          "cc1plus:186278",
+          "cc1plus:186313",
+          "cc1plus:186419"
+        ],
+        "load": [
+          5.5,
+          4.85,
+          3.99
+        ]
+      },
+      "row_elapsed_s": 120.55350398999872,
+      "start_load": [
+        5.501953125,
+        4.84912109375,
+        3.98828125
+      ],
+      "topology": "single-box: not proof"
+    }
+  },
+  "topology": "single-box: not proof"
+}

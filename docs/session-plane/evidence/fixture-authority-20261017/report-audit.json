@@ -1,0 +1,16 @@
+{
+  "policy_receipts": [
+    "out/authority-validation/final-suite/runs/headless-assert-continues-selftest/run/launch.json",
+    "out/authority-validation/final-suite/runs/headless-render-cap-selftest/run/launch.json"
+  ],
+  "headed_launch_count": 54,
+  "all_launches_use_tested_binary": true,
+  "default_headless_flag_omitted": true,
+  "fixed_red_classification_counts": {
+    "playing survivor wait remains within 50 ms": 86,
+    "AI ownership and empty input at the installed hold boundary": 106
+  },
+  "nested_red_observations": 38,
+  "n200_alone_samples": 6,
+  "n200_under_300_seconds": true
+}

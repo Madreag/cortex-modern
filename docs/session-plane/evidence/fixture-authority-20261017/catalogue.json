@@ -1,0 +1,1648 @@
+{
+  "binary_sha256": "00bfbb10305f3ac2a29a4f09a1308320ac58e70f44f92daf2258ebf741b24e0c",
+  "source_commit": "909e80ada525b70931d76b2eb5d95f94a15cc79c",
+  "log": {
+    "path": "out/authority-validation/final-suite/runs/net-session-plane-selftest/stdout.log",
+    "bytes": 1577058,
+    "sha256": "c50768f61a2fa9106c99288cc5c68fa3355642d124709221cbe5063b6bcd0444"
+  },
+  "passed": 41,
+  "total": 233,
+  "saved_schedules": {
+    "expected": 108,
+    "ran": 108
+  },
+  "rows": {
+    "a_healed_tie_keeps_one_history_across_a_host_change": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 authority ruling: playing peer 3 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 10710
+    },
+    "a_held_host_preserves_controller_disable_before_its_return_arrives": {
+      "state": "GREEN",
+      "classification": "",
+      "rule": "",
+      "detail": "",
+      "line": 13
+    },
+    "a_kept_hold_waits_for_its_own_directory_without_changing_history": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 3 installed seat 1's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 10766
+    },
+    "a_refused_image_activation_keeps_the_other_returners_service_clear": {
+      "state": "GREEN",
+      "classification": "",
+      "rule": "",
+      "detail": "",
+      "line": 18296
+    },
+    "a_rematch_starts_without_the_ended_rounds_catch_up": {
+      "state": "GREEN",
+      "classification": "",
+      "rule": "",
+      "detail": "",
+      "line": 13625
+    },
+    "agreed_brain_placement_stopped_joiner_keeps_the_survivor_bound": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 authority ruling: playing peer 3 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 9522
+    },
+    "agreed_start_gate_stopped_joiner_keeps_the_survivor_bound": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 authority ruling: playing peer 3 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 9462
+    },
+    "authority_fixture_checks_each_half_and_never_waives_the_bound": {
+      "state": "GREEN",
+      "classification": "",
+      "rule": "",
+      "detail": "",
+      "line": 9660
+    },
+    "benign_image_cancellations_do_not_exhaust_three_returns": {
+      "state": "GREEN",
+      "classification": "",
+      "rule": "",
+      "detail": "",
+      "line": 10730
+    },
+    "declared_leave_keeps_the_round_and_returns_on_its_seat": {
+      "state": "GREEN",
+      "classification": "",
+      "rule": "",
+      "detail": "",
+      "line": 13341
+    },
+    "dedicated_match_stopped_joiner_keeps_the_survivor_bound": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 authority ruling: playing peer 1 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 9342
+    },
+    "directory_client_round_trip_allowances_and_refusals": {
+      "state": "GREEN",
+      "classification": "",
+      "rule": "",
+      "detail": "",
+      "line": 9674
+    },
+    "directory_decision_lands_after_the_final_query": {
+      "state": "GREEN",
+      "classification": "",
+      "rule": "",
+      "detail": "",
+      "line": 10711
+    },
+    "directory_full_record_503_retries_without_frame_authority": {
+      "state": "GREEN",
+      "classification": "",
+      "rule": "",
+      "detail": "",
+      "line": 10718
+    },
+    "directory_general_429_blocks_both_request_allowances": {
+      "state": "GREEN",
+      "classification": "",
+      "rule": "",
+      "detail": "",
+      "line": 10714
+    },
+    "directory_healed_link_queries_before_the_old_exchange_times_out": {
+      "state": "GREEN",
+      "classification": "",
+      "rule": "",
+      "detail": "",
+      "line": 10716
+    },
+    "directory_refuses_stale_host_hash_generation_and_removed_owners": {
+      "state": "GREEN",
+      "classification": "",
+      "rule": "",
+      "detail": "",
+      "line": 10712
+    },
+    "directory_two_split_questions_wait_for_their_own_replies": {
+      "state": "GREEN",
+      "classification": "",
+      "rule": "",
+      "detail": "",
+      "line": 10715
+    },
+    "four_direct_seats_115ms_jitter_40ms_host_silent_476ms_survivor_waits_seed_478": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=478 property=bound kind=survivor_waits: authority ruling: playing peer 4 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 4573 ms",
+      "line": 12976
+    },
+    "four_direct_seats_120ms_jitter_40ms_host_hung_750ms_back_at_105pc_held_seat_returns_late_seed_100": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=100 property=bound kind=survivor_waits: authority ruling: playing peer 4 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 7080 ms",
+      "line": 12956
+    },
+    "four_direct_seats_120ms_jitter_40ms_host_late_100ms_more_928ms_seat3_silent_200ms_back_at_105pc_loss_10pc_host_engine_failed_seed_42": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=42 property=bound kind=survivor_waits: authority ruling: playing peer 3 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 4736 ms",
+      "line": 12940
+    },
+    "four_direct_seats_297ms_jitter_10ms_loss_60pc_seat4_engine_failed_seed_311": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=311 property=bound kind=survivor_waits: authority ruling: playing peer 3 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 1400 ms",
+      "line": 12994
+    },
+    "four_direct_seats_59ms_jitter_20ms_host_hung_372ms_histories_differ_seed_4469": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=4469 property=rules kind=hold_not_immediate_ai: authority ruling: peer 3 installed seat 1's hold at 554 but frame 554 is not AI-owned; the old two-second continuity interval is withdrawn at 9280 ms",
+      "line": 13004
+    },
+    "four_direct_seats_59ms_seat4_silent_408ms_seat3_silent_200ms_tie_survivor_waits_seed_359": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=359 property=rules kind=hold_not_immediate_ai: authority ruling: peer 1 installed seat 4's hold at 254 but frame 254 is not AI-owned; the old two-second continuity interval is withdrawn at 4290 ms",
+      "line": 12986
+    },
+    "four_direct_seats_host_and_joiner_silent_keeps_survivors_bound": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 9036
+    },
+    "four_direct_seats_split_12_from_34_3s": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 property=bound kind=survivor_waits: authority ruling: playing peer 3 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 6072 ms",
+      "line": 13140
+    },
+    "four_host_relay_100ms_joiners_20ms_120s": {
+      "state": "GREEN",
+      "classification": "",
+      "rule": "",
+      "detail": "",
+      "line": 8383
+    },
+    "four_internet_seats_218ms_host_hung_800ms_loss_60pc_seat2_tie_survivor_waits_seed_4282": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=4282 property=bound kind=survivor_waits: authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 4612 ms",
+      "line": 12988
+    },
+    "four_internet_seats_226ms_jitter_5ms_directory_160ms_seat4_slow_68pc_4576ms_back_at_120pc_loss_60pc_seat4_held_seat_never_returns_seed_79": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=79 property=rules kind=hold_not_immediate_ai: authority ruling: peer 3 installed seat 4's hold at 291 but frame 291 is not AI-owned; the old two-second continuity interval is withdrawn at 4904 ms",
+      "line": 12950
+    },
+    "four_internet_seats_238ms_jitter_10ms_loss_60pc_seat2_engine_failed_seed_2125": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=2125 property=bound kind=survivor_waits: authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 5613 ms",
+      "line": 12996
+    },
+    "four_internet_seats_252ms_jitter_40ms_held_at_the_round_start_seed_3034": {
+      "state": "GREEN",
+      "classification": "",
+      "rule": "",
+      "detail": "",
+      "line": 13008
+    },
+    "four_internet_seats_270ms_jitter_40ms_directory_160ms_seat3_late_400ms_more_204ms_back_at_100pc_host_stopped_824ms_loss_90pc_seat4_loss_10pc_seat4_held_without_its_own_trouble_seed_187": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=187 property=bound kind=survivor_waits: authority ruling: playing peer 4 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 5208 ms",
+      "line": 12964
+    },
+    "four_internet_seats_272ms_host_stopped_752ms_back_at_100pc_seat2_slow_86pc_5574ms_back_at_100pc_two_return_frames_seed_404": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=404 property=bound kind=survivor_waits: authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 6292 ms",
+      "line": 13048
+    },
+    "four_internet_seats_297ms_jitter_40ms_held_without_its_own_trouble_seed_3563": {
+      "state": "GREEN",
+      "classification": "",
+      "rule": "",
+      "detail": "",
+      "line": 13039
+    },
+    "four_internet_seats_300ms_jitter_40ms_two_return_frames_seed_131": {
+      "state": "GREEN",
+      "classification": "",
+      "rule": "",
+      "detail": "",
+      "line": 12967
+    },
+    "four_internet_seats_53ms_jitter_26ms_seat4_hung_186ms_back_at_100pc_host_late_400ms_more_436ms_returned_seat_held_again_seed_4066": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=4066 property=bound kind=survivor_waits: authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 6093 ms",
+      "line": 13046
+    },
+    "four_internet_seats_60ms_jitter_25ms_directory_40ms_host_silent_dark_198ms_seat4_silent_dark_3000ms_back_at_120pc_held_seat_returns_late_seed_109": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=109 property=rules kind=hold_not_immediate_ai: authority ruling: peer 4 installed seat 1's hold at 415 but frame 415 is not AI-owned; the old two-second continuity interval is withdrawn at 6957 ms",
+      "line": 12960
+    },
+    "four_internet_seats_decided_split_then_a_kick_then_a_stall": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 property=bound kind=survivor_waits: authority ruling: playing peer 3 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 6125 ms",
+      "line": 13114
+    },
+    "four_internet_seats_host_kicks_while_its_half_lost_the_split": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 property=bound kind=survivor_waits: authority ruling: playing peer 3 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 6125 ms",
+      "line": 13116
+    },
+    "four_internet_seats_split_12_34_heals_then_13_24_splits": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 property=bound kind=survivor_waits: authority ruling: playing peer 3 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 6125 ms",
+      "line": 13104
+    },
+    "four_internet_seats_split_while_a_seat_returns": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 property=bound kind=survivor_waits: authority ruling: playing peer 4 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 6050 ms",
+      "line": 13124
+    },
+    "four_seats_held_joiner_at_round_rate_uses_a_different_donor_over_200ms": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 3924
+    },
+    "four_seats_held_joiner_catches_up_then_runs_at_round_rate_over_100ms": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 1904
+    },
+    "four_seats_held_joiner_catches_up_then_runs_at_round_rate_over_200ms": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 2660
+    },
+    "four_seats_held_joiner_catches_up_then_runs_at_round_rate_over_250ms": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 authority ruling: playing peer 3 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 3423
+    },
+    "four_seats_hold_during_another_seats_private_catch_up": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 property=bound kind=survivor_waits: authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 6050 ms",
+      "line": 13100
+    },
+    "four_seats_host_loop_stopped_2s": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 property=bound kind=survivor_waits: authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 6150 ms",
+      "line": 13094
+    },
+    "four_seats_host_slow_80_percent_10s": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 property=rules kind=hold_not_immediate_ai: authority ruling: peer 2 installed seat 1's hold at 369 but frame 369 is not AI-owned; the old two-second continuity interval is withdrawn at 6184 ms",
+      "line": 13144
+    },
+    "four_seats_joiner_held_catches_up_at_105_percent_over_100ms": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 property=bound kind=survivor_waits: authority ruling: playing peer 3 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 6050 ms",
+      "line": 13068
+    },
+    "four_seats_joiner_held_catches_up_at_105_percent_over_150ms": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 property=bound kind=survivor_waits: authority ruling: playing peer 3 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 6042 ms",
+      "line": 13070
+    },
+    "four_seats_joiner_held_catches_up_at_105_percent_over_200ms": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 property=bound kind=survivor_waits: authority ruling: playing peer 3 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 6050 ms",
+      "line": 13072
+    },
+    "four_seats_joiner_held_catches_up_at_105_percent_over_250ms": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 property=bound kind=survivor_waits: authority ruling: playing peer 3 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 6042 ms",
+      "line": 13074
+    },
+    "four_seats_joiner_held_catches_up_from_a_near_donor_over_200ms": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 property=bound kind=survivor_waits: authority ruling: playing peer 3 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 6274 ms",
+      "line": 13076
+    },
+    "four_seats_two_joiners_held_at_once_catch_up_at_105_percent_over_100ms": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 property=bound kind=survivor_waits: authority ruling: playing peer 3 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 6050 ms",
+      "line": 13086
+    },
+    "healthy_input_runway_spends_no_tie_allowance_before_a_real_cut": {
+      "state": "GREEN",
+      "classification": "",
+      "rule": "",
+      "detail": "",
+      "line": 13608
+    },
+    "held_host_still_serves_another_seats_image": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 1 installed seat 2's hold at 364 but frame 364 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 19489
+    },
+    "held_seat_and_a_member_slow_to_hear_hold_nobody_else": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 1 installed seat 2's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 6134
+    },
+    "held_seat_return_meets_a_silent_voter": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 1 installed seat 2's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 5797
+    },
+    "held_seat_return_meets_a_silent_voter_over_100ms": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 5896
+    },
+    "host_absent_20s": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 2 installed seat 1's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 5242
+    },
+    "host_absent_3s": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 2 installed seat 1's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 4325
+    },
+    "host_hiccup_1500ms": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 2 installed seat 1's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 9164
+    },
+    "host_hiccup_3s": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 2 installed seat 1's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 9064
+    },
+    "host_hold_ai_authority_is_the_certified_frames": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: AI ownership must start at the certified hold frame, not two seconds later, frame=373",
+      "line": 9714
+    },
+    "host_slows_while_a_third_seat_is_already_held": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 property=bound kind=survivor_waits: authority ruling: playing peer 3 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 6091 ms",
+      "line": 13148
+    },
+    "host_spike_150ms": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 2 installed seat 1's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 9295
+    },
+    "host_spike_400ms": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 2 installed seat 1's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 9223
+    },
+    "hung_host_18s_direct_survivor_holds_then_migrates_roster": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 8065
+    },
+    "hung_host_3s_and_directory_dark_survivor_holds_locally": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 2 installed seat 1's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 9701
+    },
+    "hung_host_3s_direct_survivor_holds_without_a_split": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 9667
+    },
+    "image_activation_reannouncement_preserves_closing_time": {
+      "state": "GREEN",
+      "classification": "",
+      "rule": "",
+      "detail": "",
+      "line": 10726
+    },
+    "image_base_host_refusals_allow_fresh_attempts": {
+      "state": "GREEN",
+      "classification": "",
+      "rule": "",
+      "detail": "",
+      "line": 18378
+    },
+    "image_base_out_of_memory_answers_immediately": {
+      "state": "GREEN",
+      "classification": "",
+      "rule": "",
+      "detail": "",
+      "line": 18371
+    },
+    "image_base_transient_refusal_answers_after_four_seconds": {
+      "state": "GREEN",
+      "classification": "",
+      "rule": "",
+      "detail": "",
+      "line": 18369
+    },
+    "image_replay_12ms_tick_10ms_draw_closes_its_trail": {
+      "state": "GREEN",
+      "classification": "",
+      "rule": "",
+      "detail": "",
+      "line": 19523
+    },
+    "image_return_at_round_rate_80_frames_behind_over_100ms": {
+      "state": "GREEN",
+      "classification": "",
+      "rule": "",
+      "detail": "",
+      "line": 10720
+    },
+    "image_return_at_round_rate_80_frames_behind_over_200ms": {
+      "state": "GREEN",
+      "classification": "",
+      "rule": "",
+      "detail": "",
+      "line": 10722
+    },
+    "image_return_at_round_rate_80_frames_behind_over_250ms": {
+      "state": "GREEN",
+      "classification": "",
+      "rule": "",
+      "detail": "",
+      "line": 10724
+    },
+    "image_return_four_seats_over_100ms_keeps_equal_histories_and_bound": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 11855
+    },
+    "image_return_four_seats_over_200ms_keeps_equal_histories_and_bound": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 12939
+    },
+    "image_return_three_seats_over_100ms_keeps_equal_histories_and_bound": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 1 installed seat 2's hold at 366 but frame 366 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 9969
+    },
+    "image_return_three_seats_over_250ms_keeps_equal_histories_and_bound": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 9906
+    },
+    "image_successor_capsule_sealing_refusal_is_retried": {
+      "state": "GREEN",
+      "classification": "",
+      "rule": "",
+      "detail": "",
+      "line": 15961
+    },
+    "in_place_private_reader_skips_the_committed_capture": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 1 installed seat 2's hold at 366 but frame 366 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 18367
+    },
+    "input_delay_uses_link_jitter_without_machine_receipt_cost": {
+      "state": "GREEN",
+      "classification": "",
+      "rule": "",
+      "detail": "",
+      "line": 9672
+    },
+    "joiner_catching_up_at_102_percent_returns_four_seats_over_100ms": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 987
+    },
+    "joiner_catching_up_at_102_percent_returns_from_another_donor": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 1 installed seat 2's hold at 360 but frame 360 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 1167
+    },
+    "joiner_catching_up_at_102_percent_returns_over_100ms": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 1138
+    },
+    "joiner_catching_up_at_105_percent_returns_four_seats_over_100ms": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 5062
+    },
+    "joiner_catching_up_at_105_percent_returns_from_another_donor": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 1 installed seat 2's hold at 360 but frame 360 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 5766
+    },
+    "joiner_catching_up_at_105_percent_returns_over_100ms": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 5617
+    },
+    "joiner_catching_up_at_105_percent_returns_over_200ms": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 5738
+    },
+    "joiner_hiccup_1500ms": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 1 installed seat 2's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 9136
+    },
+    "joiner_hiccup_3s": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 1 installed seat 2's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 8450
+    },
+    "joiner_inputs_lost_1s_held_and_back_over_100ms": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 1 installed seat 2's hold at 366 but frame 366 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 9585
+    },
+    "joiner_keeps_one_input_in_three_over_100ms": {
+      "state": "GREEN",
+      "classification": "",
+      "rule": "",
+      "detail": "",
+      "line": 8933
+    },
+    "joiner_machine_at_80_percent_20s": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 1 installed seat 2's hold at 366 but frame 366 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 5317
+    },
+    "joiner_machine_at_90_percent_20s": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 1 installed seat 2's hold at 372 but frame 372 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 5273
+    },
+    "joiner_spike_150ms": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 1 installed seat 2's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 9267
+    },
+    "joiner_spike_400ms": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 1 installed seat 2's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 9195
+    },
+    "leave_during_handover_exits": {
+      "state": "GREEN",
+      "classification": "",
+      "rule": "",
+      "detail": "",
+      "line": 19525
+    },
+    "loss_20percent_60s": {
+      "state": "GREEN",
+      "classification": "",
+      "rule": "",
+      "detail": "",
+      "line": 4259
+    },
+    "malformed_traffic_does_not_renew_authority": {
+      "state": "GREEN",
+      "classification": "",
+      "rule": "",
+      "detail": "",
+      "line": 19526
+    },
+    "one_return_for_a_held_seat_over_150ms_round_trips": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 6394
+    },
+    "partition_2_2_host_tie": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 3 installed seat 1's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 8419
+    },
+    "partition_3_1": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 1 installed seat 4's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 5214
+    },
+    "pause_policy_stopped_joiner_keeps_the_survivor_bound": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 authority ruling: playing peer 1 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 9356
+    },
+    "peer_frozen_10s_keepalives": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 1 installed seat 2's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 6069
+    },
+    "peer_frozen_10s_return_by_tail_only": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 1 installed seat 2's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 6103
+    },
+    "peer_returns_2s": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 1 installed seat 2's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 9095
+    },
+    "peer_returns_40s": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 1 installed seat 2's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 250
+    },
+    "peer_returns_8s": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 1 installed seat 2's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 6425
+    },
+    "persistent_world_stopped_joiner_keeps_the_survivor_bound": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 authority ruling: playing peer 1 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 9370
+    },
+    "refereed_2_2_split_then_a_second_drop_in_the_same_hold": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 3 installed seat 1's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 6170
+    },
+    "refereed_2_2_split_then_a_second_drop_in_the_same_hold_over_100ms": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 authority ruling: playing peer 3 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 7550
+    },
+    "relay_link_blackout_return": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 1 installed seat 2's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 219
+    },
+    "repeated_host_changes_bound_the_tail_or_answer_missing": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 admin generation 1: authority ruling: playing peer 2 waited 55ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 187
+    },
+    "seed12_four_direct_joiner_slow_74_percent_with_a_lossy_voter": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=12 property=rules kind=hold_not_immediate_ai: authority ruling: peer 3 installed seat 2's hold at 51 but frame 51 is not AI-owned; the old two-second continuity interval is withdrawn at 1044 ms",
+      "line": 13056
+    },
+    "seed12_four_internet_joiner_slow_74_percent_with_a_lossy_voter": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=12 property=rules kind=hold_not_immediate_ai: authority ruling: peer 4 installed seat 2's hold at 373 but frame 373 is not AI-owned; the old two-second continuity interval is withdrawn at 6333 ms",
+      "line": 13058
+    },
+    "seed192_two_internet_host_stopped_then_the_joiner_leaves": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=192 property=rules kind=hold_not_immediate_ai: authority ruling: peer 2 installed seat 1's hold at 370 but frame 370 is not AI-owned; the old two-second continuity interval is withdrawn at 6346 ms",
+      "line": 13062
+    },
+    "seed69_four_internet_host_slow_58_percent_with_loss": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=69 property=bound kind=survivor_waits: authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 4802 ms",
+      "line": 13060
+    },
+    "slow_held_host_names_another_seats_base_through_the_playing_seats": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 1 installed seat 2's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 19520
+    },
+    "slow_joiner_at_50_percent_three_seats_over_100ms_20s": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 3 installed seat 2's hold at 369 but frame 369 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 6035
+    },
+    "slow_joiner_at_80_percent_three_seats_over_100ms_20s": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 3 installed seat 2's hold at 370 but frame 370 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 5965
+    },
+    "split_four_seats_both_hold_before_a_1000ms_reply_winner_history_untouched": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 3 installed seat 1's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 8022
+    },
+    "split_four_seats_directory_dark_both_keep_bound_then_loser_images_back": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 3 installed seat 1's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 8058
+    },
+    "split_two_seats_both_hold_before_a_300ms_reply_loser_images_back": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 1 installed seat 2's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 9386
+    },
+    "steady_rtt_250ms_120s": {
+      "state": "GREEN",
+      "classification": "",
+      "rule": "",
+      "detail": "",
+      "line": 7946
+    },
+    "stored_ticket_redials_the_rematch_lobby_on_its_original_seat": {
+      "state": "GREEN",
+      "classification": "",
+      "rule": "",
+      "detail": "",
+      "line": 18304
+    },
+    "successor_unvalidated_boundary_refused": {
+      "state": "GREEN",
+      "classification": "",
+      "rule": "",
+      "detail": "",
+      "line": 19524
+    },
+    "three_direct_seats_114ms_loss_60pc_seat3_seat2_leaves_tie_survivor_waits_seed_4908": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=4908 property=bound kind=survivor_waits: authority ruling: playing peer 3 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 10622 ms",
+      "line": 12982
+    },
+    "three_direct_seats_120ms_host_hung_200ms_back_at_105pc_held_seat_returns_late_seed_100": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=100 property=rules kind=hold_not_immediate_ai: authority ruling: peer 2 installed seat 1's hold at 366 but frame 366 is not AI-owned; the old two-second continuity interval is withdrawn at 6169 ms",
+      "line": 12954
+    },
+    "three_direct_seats_160ms_seat3_slow_61pc_1061ms_back_at_100pc_survivor_waits_seed_4758": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=4758 property=rules kind=hold_not_immediate_ai: authority ruling: peer 2 installed seat 3's hold at 282 but frame 282 is not AI-owned; the old two-second continuity interval is withdrawn at 4726 ms",
+      "line": 12978
+    },
+    "three_direct_seats_172ms_seat2_silent_200ms_held_seat_returns_late_seed_3309": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=3309 property=bound kind=survivor_waits: authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 5762 ms",
+      "line": 13027
+    },
+    "three_direct_seats_200ms_jitter_40ms_held_without_its_own_trouble_seed_187": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=187 property=rules kind=hold_not_immediate_ai: authority ruling: peer 3 installed seat 2's hold at 28 but frame 28 is not AI-owned; the old two-second continuity interval is withdrawn at 653 ms",
+      "line": 12962
+    },
+    "three_direct_seats_204ms_jitter_10ms_loss_60pc_seat2_loss_90pc_seat3_histories_differ_seed_2810": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=2810 property=bound kind=survivor_waits: authority ruling: playing peer 3 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 5688 ms",
+      "line": 13006
+    },
+    "three_direct_seats_21ms_host_hung_472ms_back_at_120pc_loss_30pc_seat2_held_seat_returns_late_seed_2325": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=2325 property=rules kind=hold_not_immediate_ai: authority ruling: peer 2 installed seat 1's hold at 301 but frame 301 is not AI-owned; the old two-second continuity interval is withdrawn at 5038 ms",
+      "line": 13025
+    },
+    "three_direct_seats_224ms_jitter_10ms_seat3_stopped_1455ms_back_at_120pc_loss_90pc_seat2_histories_differ_seed_2208": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=2208 property=bound kind=survivor_waits: authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 5187 ms",
+      "line": 13002
+    },
+    "three_direct_seats_228ms_jitter_40ms_seat2_stopped_186ms_back_at_105pc_loss_90pc_seat2_engine_failed_seed_2540": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=2540 property=rules kind=hold_not_immediate_ai: authority ruling: peer 3 installed seat 2's hold at 48 but frame 48 is not AI-owned; the old two-second continuity interval is withdrawn at 967 ms",
+      "line": 12992
+    },
+    "three_direct_seats_240ms_jitter_40ms_seat2_slow_53pc_1575ms_host_hung_1410ms_loss_60pc_host_engine_failed_seed_4779": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=4779 property=rules kind=hold_not_immediate_ai: authority ruling: peer 3 installed seat 2's hold at 470 but frame 470 is not AI-owned; the old two-second continuity interval is withdrawn at 7929 ms",
+      "line": 12990
+    },
+    "three_direct_seats_240ms_seat3_silent_200ms_held_seat_returns_late_seed_1020": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=1020 property=bound kind=survivor_waits: authority ruling: playing peer 3 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 5865 ms",
+      "line": 13031
+    },
+    "three_direct_seats_265ms_host_late_200ms_more_1335ms_back_at_105pc_held_seat_never_returns_seed_714": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=714 property=bound kind=survivor_waits: authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 1328 ms",
+      "line": 13019
+    },
+    "three_direct_seats_270ms_jitter_20ms_seat2_stopped_200ms_host_silent_360ms_survivor_waits_seed_2469": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=2469 property=bound kind=survivor_waits: authority ruling: playing peer 1 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 4902 ms",
+      "line": 12974
+    },
+    "three_direct_seats_275ms_seat3_silent_200ms_host_slow_57pc_1744ms_seat2_leaves_tie_survivor_waits_seed_3141": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=3141 property=bound kind=survivor_waits: authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 1394 ms",
+      "line": 12984
+    },
+    "three_direct_seats_290ms_jitter_10ms_seat3_slow_56pc_1296ms_back_at_105pc_host_silent_1335ms_histories_differ_seed_169": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=169 property=rules kind=hold_not_immediate_ai: authority ruling: peer 2 installed seat 3's hold at 295 but frame 295 is not AI-owned; the old two-second continuity interval is withdrawn at 4998 ms",
+      "line": 13050
+    },
+    "three_direct_seats_300ms_host_hung_200ms_seat3_silent_7200ms_returned_seat_held_again_seed_4371": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=4371 property=bound kind=survivor_waits: authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 1474 ms",
+      "line": 13044
+    },
+    "three_direct_seats_47ms_jitter_23ms_host_silent_376ms_held_without_its_own_trouble_seed_1176": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=1176 property=bound kind=survivor_waits: authority ruling: playing peer 3 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 4626 ms",
+      "line": 13037
+    },
+    "three_direct_seats_50ms_jitter_25ms_host_silent_448ms_returned_seat_held_again_seed_1790": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=1790 property=bound kind=survivor_waits: authority ruling: playing peer 1 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 4459 ms",
+      "line": 13040
+    },
+    "three_direct_seats_52ms_host_stopped_188ms_back_at_120pc_loss_90pc_host_held_seat_never_returns_seed_3652": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=3652 property=rules kind=hold_not_immediate_ai: authority ruling: peer 2 installed seat 1's hold at 249 but frame 249 is not AI-owned; the old two-second continuity interval is withdrawn at 4191 ms",
+      "line": 13013
+    },
+    "three_direct_seats_52ms_jitter_26ms_host_silent_832ms_loss_10pc_host_histories_differ_seed_4847": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=4847 property=rules kind=hold_not_immediate_ai: authority ruling: peer 2 installed seat 1's hold at 247 but frame 247 is not AI-owned; the old two-second continuity interval is withdrawn at 4148 ms",
+      "line": 13000
+    },
+    "three_direct_seats_57ms_jitter_10ms_host_hung_456ms_held_without_its_own_trouble_seed_4505": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=4505 property=rules kind=hold_not_immediate_ai: authority ruling: peer 3 installed seat 1's hold at 257 but frame 257 is not AI-owned; the old two-second continuity interval is withdrawn at 4330 ms",
+      "line": 13033
+    },
+    "three_direct_seats_58ms_host_silent_920ms_held_without_its_own_trouble_seed_1964": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=1964 property=rules kind=hold_not_immediate_ai: authority ruling: peer 2 installed seat 1's hold at 447 but frame 447 is not AI-owned; the old two-second continuity interval is withdrawn at 7493 ms",
+      "line": 13035
+    },
+    "three_direct_seats_60ms_jitter_30ms_host_late_400ms_more_344ms_loss_30pc_host_loss_60pc_seat2_returned_seat_held_again_seed_3372": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=3372 property=bound kind=survivor_waits: authority ruling: playing peer 3 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 4674 ms",
+      "line": 13042
+    },
+    "three_internet_seats_290ms_jitter_10ms_seat3_slow_56pc_1296ms_back_at_105pc_host_silent_1335ms_histories_differ_seed_169": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=169 property=rules kind=hold_not_immediate_ai: authority ruling: peer 2 installed seat 3's hold at 295 but frame 295 is not AI-owned; the old two-second continuity interval is withdrawn at 4998 ms",
+      "line": 13052
+    },
+    "three_internet_seats_56ms_host_slow_90pc_895ms_back_at_100pc_seat2_silent_186ms_held_seat_returns_late_seed_116": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=116 property=rules kind=hold_not_immediate_ai: authority ruling: peer 2 installed seat 1's hold at 260 but frame 260 is not AI-owned; the old two-second continuity interval is withdrawn at 4377 ms",
+      "line": 12952
+    },
+    "three_internet_seats_56ms_jitter_20ms_host_silent_200ms_back_at_100pc_host_hung_900ms_back_at_100pc_loss_90pc_seat3_loss_90pc_host_histories_differ_seed_127": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=127 property=bound kind=survivor_waits: authority ruling: playing peer 3 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 5060 ms",
+      "line": 12942
+    },
+    "three_internet_seats_57ms_host_silent_198ms_seat3_silent_3000ms_held_seat_returns_late_seed_109": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=109 property=rules kind=hold_not_immediate_ai: authority ruling: peer 2 installed seat 1's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn at 6077 ms",
+      "line": 12958
+    },
+    "three_retained_seats_tie_goes_to_the_hosts_half": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 1 installed seat 3's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 7966
+    },
+    "three_seats_held_host_catches_up_then_runs_at_round_rate_over_100ms": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 authority ruling: playing peer 1 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 5574
+    },
+    "three_seats_held_host_catches_up_then_runs_at_round_rate_over_250ms": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory",
+      "line": 5509
+    },
+    "three_seats_host_held_catches_up_at_105_percent_over_100ms": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 property=rules kind=hold_not_immediate_ai: authority ruling: peer 2 installed seat 1's hold at 365 but frame 365 is not AI-owned; the old two-second continuity interval is withdrawn at 6150 ms",
+      "line": 13064
+    },
+    "three_seats_host_held_catches_up_at_105_percent_over_250ms": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 property=bound kind=survivor_waits: authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 1251 ms",
+      "line": 13066
+    },
+    "three_seats_host_held_then_a_joiner_slow_70_percent": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 property=bound kind=survivor_waits: authority ruling: playing peer 1 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 6084 ms",
+      "line": 13122
+    },
+    "three_seats_host_held_then_a_joiner_stalls_1s": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 property=bound kind=survivor_waits: authority ruling: playing peer 1 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 6084 ms",
+      "line": 13120
+    },
+    "three_seats_host_held_then_the_joiners_split": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 property=bound kind=survivor_waits: authority ruling: playing peer 1 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 6084 ms",
+      "line": 13118
+    },
+    "three_seats_host_loop_stopped_2s": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 property=rules kind=hold_not_immediate_ai: authority ruling: peer 2 installed seat 1's hold at 365 but frame 365 is not AI-owned; the old two-second continuity interval is withdrawn at 6150 ms",
+      "line": 13142
+    },
+    "three_seats_host_slows_while_the_other_joiner_is_held": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 property=bound kind=survivor_waits: authority ruling: playing peer 3 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 6072 ms",
+      "line": 13054
+    },
+    "three_seats_joiner_150ms_later_for_10s": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 property=bound kind=survivor_waits: authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 6122 ms",
+      "line": 13126
+    },
+    "three_seats_joiner_400ms_later_for_10s": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 property=bound kind=survivor_waits: authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 6122 ms",
+      "line": 13128
+    },
+    "three_seats_joiner_inputs_200ms_late_for_5s_over_100ms": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 property=bound kind=survivor_waits: authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 6122 ms",
+      "line": 13088
+    },
+    "three_seats_joiner_returns_to_a_host_at_95_percent": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 property=rules kind=hold_not_immediate_ai: authority ruling: peer 2 installed seat 1's hold at 325 but frame 325 is not AI-owned; the old two-second continuity interval is withdrawn at 5451 ms",
+      "line": 13082
+    },
+    "three_seats_joiner_returns_while_a_voter_loses_30_percent": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 property=bound kind=survivor_waits: authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 6072 ms",
+      "line": 13080
+    },
+    "three_seats_joiner_returns_while_the_host_loses_30_percent": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 property=bound kind=survivor_waits: authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 6072 ms",
+      "line": 13150
+    },
+    "three_seats_joiner_silent_2s_returns_over_250ms_with_40ms_jitter": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 property=rules kind=hold_not_immediate_ai: authority ruling: peer 2 installed seat 3's hold at 34 but frame 34 is not AI-owned; the old two-second continuity interval is withdrawn at 866 ms",
+      "line": 13078
+    },
+    "three_seats_joiner_slow_50_percent_from_the_round_start": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 property=rules kind=hold_not_immediate_ai: authority ruling: peer 1 installed seat 2's hold at 25 but frame 25 is not AI-owned; the old two-second continuity interval is withdrawn at 767 ms",
+      "line": 13130
+    },
+    "three_seats_joiner_slow_80_percent_6s_back_at_120_percent_stays_returned": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 property=rules kind=hold_not_immediate_ai: authority ruling: peer 3 installed seat 2's hold at 370 but frame 370 is not AI-owned; the old two-second continuity interval is withdrawn at 6188 ms",
+      "line": 13084
+    },
+    "three_seats_joiner_slow_again_just_after_its_return": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 property=rules kind=hold_not_immediate_ai: authority ruling: peer 3 installed seat 2's hold at 369 but frame 369 is not AI-owned; the old two-second continuity interval is withdrawn at 6171 ms",
+      "line": 13132
+    },
+    "three_seats_return_meets_a_voter_whose_reliable_lane_stalls": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 property=bound kind=survivor_waits: authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 6072 ms",
+      "line": 13110
+    },
+    "three_seats_returned_joiner_autosaves_every_10s": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 property=bound kind=survivor_waits: authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 5072 ms",
+      "line": 13098
+    },
+    "three_seats_returned_joiner_meets_a_host_autosave_every_10s": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 property=bound kind=survivor_waits: authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 5072 ms",
+      "line": 13096
+    },
+    "three_seats_second_joiner_drops_while_the_first_is_held": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 1 installed seat 2's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 7986
+    },
+    "three_seats_slow_joiner_near_a_voter_far_from_the_proposer": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 property=rules kind=hold_not_immediate_ai: authority ruling: peer 1 installed seat 2's hold at 371 but frame 371 is not AI-owned; the old two-second continuity interval is withdrawn at 6308 ms",
+      "line": 13134
+    },
+    "three_seats_two_joiners_slow_70_percent_at_once": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 property=bound kind=survivor_waits: authority ruling: playing peer 1 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 6250 ms",
+      "line": 13146
+    },
+    "two_direct_host_3s": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 1 installed seat 2's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 9614
+    },
+    "two_direct_seats_170ms_seat2_slow_88pc_200ms_back_at_120pc_loss_60pc_seat2_held_seat_never_returns_seed_79": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=79 property=rules kind=hold_not_immediate_ai: authority ruling: peer 1 installed seat 2's hold at 293 but frame 293 is not AI-owned; the old two-second continuity interval is withdrawn at 4968 ms",
+      "line": 12948
+    },
+    "two_direct_seats_198ms_host_stopped_230ms_loss_60pc_host_loss_90pc_seat2_held_seat_returns_late_seed_3209": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=3209 property=bound kind=survivor_waits: authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 7299 ms",
+      "line": 13021
+    },
+    "two_direct_seats_238ms_host_silent_200ms_survivor_waits_seed_2453": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=2453 property=bound kind=survivor_waits: authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 5903 ms",
+      "line": 12972
+    },
+    "two_direct_seats_280ms_seat2_late_100ms_more_200ms_back_at_120pc_loss_10pc_seat2_loss_90pc_seat2_held_seat_never_returns_seed_4266": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=4266 property=bound kind=survivor_waits: authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 6224 ms",
+      "line": 13009
+    },
+    "two_direct_seats_282ms_loss_90pc_host_held_seat_returns_late_seed_3760": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=3760 property=bound kind=survivor_waits: authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 6508 ms",
+      "line": 13029
+    },
+    "two_direct_seats_42ms_host_stopped_200ms_back_at_100pc_seat2_slow_74pc_737ms_held_seat_never_returns_seed_163": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=163 property=rules kind=hold_not_immediate_ai: authority ruling: peer 2 installed seat 1's hold at 363 but frame 363 is not AI-owned; the old two-second continuity interval is withdrawn at 6112 ms",
+      "line": 12944
+    },
+    "two_direct_seats_57ms_seat2_late_50ms_more_200ms_back_at_105pc_loss_90pc_host_held_seat_never_returns_seed_568": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=568 property=bound kind=survivor_waits: authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 6154 ms",
+      "line": 13015
+    },
+    "two_direct_seats_59ms_host_stopped_615ms_survivor_waits_seed_1811": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=1811 property=rules kind=hold_not_immediate_ai: authority ruling: peer 2 installed seat 1's hold at 259 but frame 259 is not AI-owned; the old two-second continuity interval is withdrawn at 4388 ms",
+      "line": 12968
+    },
+    "two_direct_seats_91ms_seat2_late_200ms_more_200ms_back_at_105pc_loss_90pc_seat2_held_seat_never_returns_seed_4759": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=4759 property=bound kind=survivor_waits: authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 5730 ms",
+      "line": 13017
+    },
+    "two_direct_seats_host_hung_2s": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 property=bound kind=survivor_waits: authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 6134 ms",
+      "line": 13138
+    },
+    "two_direct_seats_host_loop_stopped_2s": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "playing survivor wait remains within 50 ms",
+      "detail": "seed=0 property=bound kind=survivor_waits: authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory at 6184 ms",
+      "line": 13092
+    },
+    "two_direct_seats_host_slow_80_percent_10s": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 property=rules kind=hold_not_immediate_ai: authority ruling: peer 2 installed seat 1's hold at 369 but frame 369 is not AI-owned; the old two-second continuity interval is withdrawn at 6199 ms",
+      "line": 13136
+    },
+    "two_host_3s_no_directory_configured": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 1 installed seat 2's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 9643
+    },
+    "two_host_relay_100ms_120s": {
+      "state": "GREEN",
+      "classification": "",
+      "rule": "",
+      "detail": "",
+      "line": 1044
+    },
+    "two_image_returners_share_a_base_and_keep_separate_outcomes": {
+      "state": "GREEN",
+      "classification": "",
+      "rule": "",
+      "detail": "",
+      "line": 10729
+    },
+    "two_internet_host_3s_directory_reachable": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 1 installed seat 2's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 9630
+    },
+    "two_internet_host_and_directory_3s": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 1 installed seat 2's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 9690
+    },
+    "two_internet_host_blackout_both_halves_stall": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 1 installed seat 2's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 9312
+    },
+    "two_internet_host_blackout_directory_dark": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 1 installed seat 2's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 9329
+    },
+    "two_internet_host_blackout_directory_reachable_by_both": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 1 installed seat 2's hold at 360 but frame 360 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 9236
+    },
+    "two_internet_host_machine_at_90_percent_20s": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 2 installed seat 1's hold at 372 but frame 372 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 7612
+    },
+    "two_internet_joiner_dark_past_history": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 2 installed seat 1's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 1061
+    },
+    "two_internet_joiner_dark_past_history_over_100ms": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 2 installed seat 1's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 1075
+    },
+    "two_internet_joiner_frozen_10s_return_by_tail_only": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 1 installed seat 2's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 9105
+    },
+    "two_internet_joiner_held_again_while_catching_up": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 1 installed seat 2's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 9402
+    },
+    "two_internet_joiner_held_again_while_never_blocked": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 1 installed seat 2's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 9601
+    },
+    "two_internet_joiner_held_for_a_slow_spell_catches_up_at_115_percent": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 1 installed seat 2's hold at 369 but frame 369 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 5286
+    },
+    "two_internet_joiner_machine_at_80_percent_20s": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 1 installed seat 2's hold at 366 but frame 366 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 7599
+    },
+    "two_internet_late_joiner_takes_every_decision_with_a_240ms_referee": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 1 installed seat 2's hold at 385 but frame 385 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 7573
+    },
+    "two_internet_late_joiner_with_a_referee_past_the_tie_timeout": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 1 installed seat 2's hold at 385 but frame 385 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 7586
+    },
+    "two_internet_seats_180ms_directory_240ms_seat2_silent_174ms_survivor_waits_seed_518": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=518 property=rules kind=hold_not_immediate_ai: authority ruling: peer 2 installed seat 1's hold at 310 but frame 310 is not AI-owned; the old two-second continuity interval is withdrawn at 5255 ms",
+      "line": 12970
+    },
+    "two_internet_seats_212ms_directory_300ms_host_hung_408ms_tie_survivor_waits_seed_3719": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=3719 property=rules kind=hold_not_immediate_ai: authority ruling: peer 2 installed seat 1's hold at 329 but frame 329 is not AI-owned; the old two-second continuity interval is withdrawn at 5588 ms",
+      "line": 12980
+    },
+    "two_internet_seats_42ms_jitter_10ms_directory_40ms_host_stopped_464ms_back_at_100pc_seat2_slow_64pc_5902ms_host_silent_936ms_back_at_100pc_held_seat_never_returns_seed_163": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=163 property=rules kind=hold_not_immediate_ai: authority ruling: peer 1 installed seat 2's hold at 259 but frame 259 is not AI-owned; the old two-second continuity interval is withdrawn at 4403 ms",
+      "line": 12946
+    },
+    "two_internet_seats_50ms_host_silent_dark_388ms_seat2_leaves_histories_differ_seed_360": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=360 property=rules kind=hold_not_immediate_ai: authority ruling: peer 1 installed seat 2's hold at 340 but frame 340 is not AI-owned; the old two-second continuity interval is withdrawn at 5740 ms",
+      "line": 12998
+    },
+    "two_internet_seats_50ms_jitter_20ms_host_stopped_384ms_loss_30pc_host_held_seat_returns_late_seed_3775": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=3775 property=rules kind=hold_not_immediate_ai: authority ruling: peer 2 installed seat 1's hold at 291 but frame 291 is not AI-owned; the old two-second continuity interval is withdrawn at 4913 ms",
+      "line": 13023
+    },
+    "two_internet_seats_54ms_seat2_late_50ms_more_1785ms_returned_seat_held_again_seed_174": {
+      "state": "GREEN",
+      "classification": "",
+      "rule": "",
+      "detail": "",
+      "line": 12966
+    },
+    "two_internet_seats_55ms_host_silent_dark_456ms_seat2_leaves_held_seat_never_returns_seed_4838": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=4838 property=rules kind=hold_not_immediate_ai: authority ruling: peer 1 installed seat 2's hold at 359 but frame 359 is not AI-owned; the old two-second continuity interval is withdrawn at 6059 ms",
+      "line": 13011
+    },
+    "two_internet_seats_host_loop_stopped_2s": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 property=rules kind=hold_not_immediate_ai: authority ruling: peer 2 installed seat 1's hold at 365 but frame 365 is not AI-owned; the old two-second continuity interval is withdrawn at 6174 ms",
+      "line": 13090
+    },
+    "two_internet_seats_joiner_silent_2s_while_the_allowance_is_spent": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 property=rules kind=hold_not_immediate_ai: authority ruling: peer 2 installed seat 1's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn at 6115 ms",
+      "line": 13106
+    },
+    "two_internet_seats_joiner_silent_2s_with_a_300ms_directory": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 property=rules kind=hold_not_immediate_ai: authority ruling: peer 2 installed seat 1's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn at 6115 ms",
+      "line": 13108
+    },
+    "two_internet_seats_link_and_directory_dark_3s_then_the_joiner_stalls": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 property=rules kind=hold_not_immediate_ai: authority ruling: peer 2 installed seat 1's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn at 6115 ms",
+      "line": 13112
+    },
+    "two_internet_seats_split_heals_before_a_hold_then_the_host_stalls_2s": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 property=rules kind=hold_not_immediate_ai: authority ruling: peer 2 installed seat 1's hold at 365 but frame 365 is not AI-owned; the old two-second continuity interval is withdrawn at 6165 ms",
+      "line": 13102
+    },
+    "two_internet_slow_host_whose_directory_is_out_of_reach_20s": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 2 installed seat 1's hold at 372 but frame 372 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 7625
+    },
+    "two_internet_slow_joiner_at_50_percent_20s": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 1 installed seat 2's hold at 368 but frame 368 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 7560
+    },
+    "two_internet_slow_joiner_at_80_percent_20s": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 1 installed seat 2's hold at 369 but frame 369 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 6438
+    },
+    "two_joiner_3s_internet_and_direct": {
+      "state": "RED",
+      "classification": "engine rule",
+      "rule": "AI ownership and empty input at the installed hold boundary",
+      "detail": "seed=0 authority ruling: peer 1 installed seat 2's hold at 362 but frame 362 is not AI-owned; the old two-second continuity interval is withdrawn",
+      "line": 9659
+    },
+    "two_seats_closed_joiner_after_input_does_not_hold_up_the_host": {
+      "state": "GREEN",
+      "classification": "",
+      "rule": "",
+      "detail": "",
+      "line": 13567
+    },
+    "two_seats_closed_joiner_before_host_input_does_not_hold_up_the_host": {
+      "state": "GREEN",
+      "classification": "",
+      "rule": "",
+      "detail": "",
+      "line": 13585
+    },
+    "two_seats_declared_leave_returns_through_a_private_reclaim": {
+      "state": "GREEN",
+      "classification": "",
+      "rule": "",
+      "detail": "",
+      "line": 13546
+    }
+  }
+}
