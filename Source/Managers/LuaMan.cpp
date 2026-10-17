@@ -8624,6 +8624,9 @@ bool LuaStateWrapper::CapturePreparedScriptGraphs(const CheckpointLua::Boundary&
 		CheckpointLua::FrozenBindings bindings(heap, &boundary.Bindings());
 		part.nativeSetupUs = std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - started).count();
 		CheckpointLua::ProtectedCall(state, [&] {
+			// The graph's text fragments live in the capture's arena until the state's text is compacted, so a save's hundred
+			// thousand small text blocks never land among the game's own in the process heap.
+			CheckpointBuffer::AllocationScope allocation(CheckpointWriter::BatchEnabled());
 			const auto copy = [&, bindings](const luabind::detail::class_rep* type, const void* pointer, bool owned) -> void* {
 				const auto started = RTE::SteadyClock::now();
 				struct Cost {
