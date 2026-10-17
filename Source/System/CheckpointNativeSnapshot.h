@@ -194,7 +194,9 @@ namespace RTE {
 		static std::optional<std::shared_ptr<const BitmapSnapshot>> FrozenPixels(const BITMAP* bitmap);
 		std::optional<const std::string*> BitmapPath(const BITMAP* bitmap, int& depth) const;
 		void MaterializePixels() const;
-		CheckpointText FreezeWriter(const Serializable* source);
+		/// An entity's writer text as it stood at the boundary, from its frozen bytes alone: the live object may be gone by now
+		/// and its memory another's.
+		CheckpointText FreezeWriter(const Entity* source);
 		SoundData Freeze(const SoundData& source);
 		/// The frozen copy of a container's sound set, shared by every container whose set freezes to an equal copy.
 		std::shared_ptr<SoundSet> FreezeSoundSet(const std::shared_ptr<SoundSet>& source);

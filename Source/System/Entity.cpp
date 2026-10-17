@@ -313,14 +313,12 @@ namespace RTE {
 		cursor.at = at + bytes;
 		return reinterpret_cast<void*>(at);
 	}
-	CheckpointText CheckpointNativeSnapshot::FreezeWriter(const Serializable* source) {
+	CheckpointText CheckpointNativeSnapshot::FreezeWriter(const Entity* source) {
 		if (const auto known = m_WriterValues.Find(source)) return *known;
 		CheckpointCloneCost cost("Writer text");
 		const Entity* ownedSource = nullptr;
-		if (const auto* entity = dynamic_cast<const Entity*>(source)) {
-			try { ownedSource = Object(entity); }
-			catch (const UnsupportedCheckpointNative&) {}
-		}
+		try { ownedSource = Object(source); }
+		catch (const UnsupportedCheckpointNative&) {}
 		if (ownedSource) {
 			auto values = CheckpointText::DeferredWriter([this, ownedSource] {
 				ReadScope frozen(this);
@@ -330,9 +328,11 @@ namespace RTE {
 			});
 			return m_WriterValues.TryEmplace(source, std::move(values)).first;
 		}
+		// A class with no frozen copy is written from its frozen bytes as they are.
+		const Entity* frozen = Source(source);
 		CheckpointWriter::BatchOverride owned(false);
 		CheckpointWriter::CacheScope uncached(nullptr);
-		auto values = Writer::Capture([source](Writer& writer) { writer << source; }, 1);
+		auto values = Writer::Capture([frozen](Writer& writer) { writer << frozen; }, 1);
 		return m_WriterValues.TryEmplace(source, std::move(values)).first;
 	}
 	CheckpointNativeSnapshot::~CheckpointNativeSnapshot() {
