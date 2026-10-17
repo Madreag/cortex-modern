@@ -374,7 +374,7 @@ namespace RTE {
 		if (IsRunning()) PollPeerFrameTies(nowMs);
 		if (!IsRunning() && m_State != NetLockstepState::WaitingForStart) return;
 		// No input clock starts while a cold mesh is still establishing a direct route.
-		if (m_State == NetLockstepState::WaitingForStart && !m_Config.joinsRunningRound && !m_Config.continuesMatch &&
+		if (m_State == NetLockstepState::WaitingForStart && m_Config.migrationTransportFactory && !m_Config.joinsRunningRound && !m_Config.continuesMatch &&
 		    std::any_of(m_RemotePeerIds.begin(), m_RemotePeerIds.end(), [&](uint8_t peer) { return !HasPeerFrameRoute(peer); })) return;
 		if (m_ConsumerWaitingFrame && *m_ConsumerWaitingFrame == m_Stats.nextFrame) {
 			const uint64_t frame = *m_ConsumerWaitingFrame;
@@ -495,7 +495,12 @@ namespace RTE {
 			if (m_RelayHost && m_Config.localPeerId == GetHostPeerId()) for (const auto& [peer, notice]: m_PeerRemovalNotices)
 				if (m_RemovedPeers.contains(peer)) (void)SendPacket({notice}, NetTransportLane::ControlReliable, nullptr);
 			for (const auto& [key, certificate]: m_PeerBridgeCertificates) {
-				if (key.first + NetLockstepCodec::c_MaxFutureFrameSkew < m_Stats.nextFrame) continue;
+				const bool standingHold = key.second == 0 && std::any_of(m_PeerBridges.begin(), m_PeerBridges.end(), [&](const auto& entry) {
+					return entry.second.committedHold && entry.second.fromFrame == key.first && !entry.second.returnFrame;
+				});
+				// A suspended owner still needs its standing hold when it wakes. Its input horizon is not a lifetime
+				// for the seat's authority record; otherwise it can resume old human input before hearing its hold.
+				if (key.first + NetLockstepCodec::c_MaxFutureFrameSkew < m_Stats.nextFrame && !standingHold) continue;
 				SendPeerFrameMessage(certificate);
 			}
 		}
@@ -513,7 +518,12 @@ namespace RTE {
 		m_PeerSourceInputs.erase(m_PeerSourceInputs.begin(), m_PeerSourceInputs.lower_bound(inputKept));
 		m_PeerRejectedInputs.erase(m_PeerRejectedInputs.begin(), m_PeerRejectedInputs.lower_bound(kept));
 		m_PeerBridgeVotes.erase(m_PeerBridgeVotes.begin(), m_PeerBridgeVotes.lower_bound({kept, 0}));
-		m_PeerBridgeCertificates.erase(m_PeerBridgeCertificates.begin(), m_PeerBridgeCertificates.lower_bound({kept, 0}));
+		for (auto certificate = m_PeerBridgeCertificates.begin(); certificate != m_PeerBridgeCertificates.end() && certificate->first.first < kept;) {
+			const bool standingHold = certificate->first.second == 0 && std::any_of(m_PeerBridges.begin(), m_PeerBridges.end(), [&](const auto& entry) {
+				return entry.second.committedHold && entry.second.fromFrame == certificate->first.first && !entry.second.returnFrame;
+			});
+			certificate = standingHold ? std::next(certificate) : m_PeerBridgeCertificates.erase(certificate);
+		}
 		m_PeerInputSentAtMs.erase(m_PeerInputSentAtMs.begin(), m_PeerInputSentAtMs.lower_bound(kept));
 		m_PeerPreparedPrefixes.erase(m_PeerPreparedPrefixes.begin(), m_PeerPreparedPrefixes.lower_bound(kept));
 		m_PeerFrameWitnesses.erase(m_PeerFrameWitnesses.begin(), m_PeerFrameWitnesses.lower_bound(kept));

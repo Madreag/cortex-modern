@@ -1714,6 +1714,9 @@ namespace RTE {
 			for (uint8_t peer: survivors) common = std::min(common, fixture.worlds[peer - 1].applied);
 			const uint64_t base = common - common % 60;
 			if (!base) return fail("the playing seats did not commit an image capture");
+			if (!fixture.committed[donor - 1].contains(base))
+				return fail("fixture retained no committed capture record at frame " + std::to_string(base) +
+				            "; capture_frames=" + std::to_string(fixture.hub.row.captureFrames) + "; the image-return property could not be checked");
 			World replay; replay.sharedDigests = &fixture.sharedDigests;
 			// The image is the host's state at a named capture every playing seat already committed.
 			for (const auto& [tick, ready]: fixture.committed[donor - 1]) {
@@ -1938,7 +1941,10 @@ namespace RTE {
 					lost = true;
 					if (!stoppedAtFrame[index] || !fixture.imageReturns[index] ||
 					    (fixture.lostFrame[index] && stoppedAtFrame[index] + 1 != fixture.lostFrame[index])) {
-						error = "authority ruling: losing peer " + std::to_string(seat) + " must stop at its decision frame and complete an image return"; return false;
+						error = "authority ruling: losing peer " + std::to_string(seat) + " must stop at its decision frame and complete an image return" +
+						    "; sampled_stop_frame=" + std::to_string(stoppedAtFrame[index]) + " decision_frame=" + std::to_string(fixture.lostFrame[index]) +
+						    " decision_ms=" + std::to_string(fixture.lostAt[index]) + " image_stop_ms=" + std::to_string(fixture.imageAt[index]) +
+						    " image_returns=" + std::to_string(fixture.imageReturns[index]); return false;
 					}
 				} else {
 					if (row.internet && !won[index]) { error = "authority ruling: a healed split never received its arbitration answer"; return false; }
