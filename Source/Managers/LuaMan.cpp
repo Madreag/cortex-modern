@@ -6829,6 +6829,26 @@ static bool RunCaptureWindowCases(LuaStateWrapper& lua) {
 	const auto named = [&refusal](const std::vector<std::string>& found) {
 		return std::any_of(found.begin(), found.end(), [&refusal](const std::string& problem) { return problem.find(refusal) != std::string::npos; });
 	};
+	// The record alone first: a slot free at its fence and taken after, and one live at its fence and freed after, are answered as
+	// they stood at the fence inside a walk's scope, and as they stand now outside one.
+	bool recordAnswers = false;
+	{
+		constexpr size_t bytes = 96;
+		void* freeAtFence = CheckpointNativeStorage::Allocate(bytes, 16);
+		void* liveAtFence = CheckpointNativeStorage::Allocate(bytes, 16);
+		CheckpointNativeStorage::Deallocate(freeAtFence);
+		const auto record = CheckpointHeldMemory::Open();
+		void* taken = CheckpointNativeStorage::Allocate(bytes, 16);
+		CheckpointNativeStorage::Deallocate(liveAtFence);
+		const bool liveNow = !CheckpointNativeStorage::FreeSlotHolds(freeAtFence, bytes) && CheckpointNativeStorage::FreeSlotHolds(liveAtFence, bytes);
+		bool thenAnswers = false;
+		{
+			const CheckpointHeldMemory::WalkScope walk(record.get());
+			thenAnswers = CheckpointNativeStorage::FreeSlotHolds(freeAtFence, bytes) && !CheckpointNativeStorage::FreeSlotHolds(liveAtFence, bytes);
+		}
+		recordAnswers = taken == freeAtFence && liveNow && thenAnswers;
+		CheckpointNativeStorage::Deallocate(taken);
+	}
 	// One world capture through the prepared saver, as a match takes it; the moves are made after its boundary arms.
 	const auto capture = [](const std::function<void()>& beforeArm, const std::function<void()>& inWindow, std::vector<std::string>& problems) {
 		return g_ActivityMan.RunWorldCaptureWindow(beforeArm, inWindow, problems);
@@ -6972,9 +6992,9 @@ _CaptureWindow.menuHolderUID = holder.UniqueID
 	const bool deadMenuCopied = deadMenuCaptured && deadMenuProblems.empty();
 	if (!deadMenuCopied) for (const std::string& problem: deadMenuProblems) std::cout << "[capture-window-selftest] gone actor's pie menu: " << problem << std::endl;
 	lua.RunScriptString("if _CaptureWindow then MovableMan:RemoveActor(_CaptureWindow.dropper); if _CaptureWindow.taker then MovableMan:RemoveActor(_CaptureWindow.taker) end end; _CaptureWindow = nil; collectgarbage()");
-	const bool passed = goneFreedAtFence && reusedInWindow && goneCarried && retainedAtFence && takenInWindow && vectorCarried && liveAtFence && freedInWindow && unreachedRefused &&
-	                    menuAtFence && menuMemoryTaken && deadMenuCopied;
-	std::cout << "[capture-window-selftest] " << (passed ? "PASS" : "FAIL") << " planted=" << planted << " freed_at_fence=" << goneFreedAtFence << " reused_in_window=" << reusedInWindow
+	const bool passed = recordAnswers && goneFreedAtFence && reusedInWindow && goneCarried && retainedAtFence && takenInWindow && vectorCarried && liveAtFence && freedInWindow &&
+	                    unreachedRefused && menuAtFence && menuMemoryTaken && deadMenuCopied;
+	std::cout << "[capture-window-selftest] " << (passed ? "PASS" : "FAIL") << " record_answers_as_of_fence=" << recordAnswers << " planted=" << planted << " freed_at_fence=" << goneFreedAtFence << " reused_in_window=" << reusedInWindow
 	          << " freed_slice_carried=" << goneCarried << " retained_at_fence=" << retainedAtFence << " retained_taken_in_window=" << takenInWindow << " gone_vector_carried=" << vectorCarried
 	          << " live_at_fence=" << liveAtFence << " freed_in_window=" << freedInWindow << " unreached_refused_by_name=" << unreachedRefused
 	          << " menu_at_fence=" << menuAtFence << " menu_memory_taken=" << menuMemoryTaken << " gone_actor_menu_copied=" << deadMenuCopied << std::endl;

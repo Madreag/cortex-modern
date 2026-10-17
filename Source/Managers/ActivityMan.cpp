@@ -2951,7 +2951,7 @@ bool ActivityMan::RunWorldCaptureWindow(const std::function<void()>& beforeArm, 
 				m_PreparedAutosave->queue.WaitUntilPrepared();
 			}
 			SaverThreads::CloseSlice();
-			taken = SaveAutosaveSnapshot("aaaaaaaa-0000-0000-0000-000000000002", static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) + 1 + attempt);
+			taken = SaveAutosaveSnapshot("aaaaaaaa-0000-0000-0000-000000000002", static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
 		}
 		if (!taken) {
 			problems.emplace_back("the capture was not taken: " + LastAutosaveRefusal().reason);
