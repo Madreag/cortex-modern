@@ -872,6 +872,7 @@ struct ActivityMan::PreparedAutosave {
 				copied += hot; fenced += unseen;
 			}
 			const auto [nativeUs, luaUs] = boundary.ArmSplitUs();
+			const auto [warmAtArm, warmAskedUs, warmUs] = boundary.WarmAtArm();
 			size_t luaBytes = 0, luaFaults = 0, previousFaults = 0, holeBytes = 0;
 			int64_t luaCopyUs = 0, previousFaultUs = 0;
 			for (size_t index = 0; index < boundary.StateCount(); ++index) {
@@ -880,9 +881,10 @@ struct ActivityMan::PreparedAutosave {
 				previousFaults += heap.PreviousFaults(); previousFaultUs += heap.PreviousFaultUs();
 			}
 			// The previous capture's copy-on-write faults on the Lua heaps, which its whole save window paid for.
-			System::PrintDiagnosticLine(std::format("[checkpoint-arm-split] tick={} native_ranges={} native_bytes={} native_arm_us={} native_copied_pages={} native_fenced_pages={} lua_heaps={} lua_arm_us={} lua_bytes={} lua_copy_us={} lua_faults={} lua_previous_faults={} lua_previous_fault_us={} lua_copy_mapped_bytes={} lua_copy_idle_bytes={} lua_arm_hole_bytes={} {}",
+			System::PrintDiagnosticLine(std::format("[checkpoint-arm-split] tick={} native_ranges={} native_bytes={} native_arm_us={} native_copied_pages={} native_fenced_pages={} lua_heaps={} lua_arm_us={} lua_bytes={} lua_copy_us={} lua_faults={} lua_previous_faults={} lua_previous_fault_us={} lua_copy_mapped_bytes={} lua_copy_idle_bytes={} lua_arm_hole_bytes={} plan_warm={} warm_asked_ms={} last_warm_ms={} {}",
 			    header.tick, ranges, bytes, nativeUs, copied, fenced, boundary.StateCount(), luaUs, luaBytes, luaCopyUs, luaFaults, previousFaults, previousFaultUs,
-			    CheckpointLua::HeapOwner::MappedCopyBytes(), CheckpointLua::HeapOwner::IdleCopyBytes(), holeBytes, CheckpointNativeStorage::InventoryCensus()));
+			    CheckpointLua::HeapOwner::MappedCopyBytes(), CheckpointLua::HeapOwner::IdleCopyBytes(), holeBytes, warmAtArm ? 1 : 0, warmAskedUs < 0 ? -1 : warmAskedUs / 1000, warmUs / 1000,
+			    CheckpointNativeStorage::InventoryCensus()));
 			// Per heap: slot, MB, copied whole (w) or fenced (f), the pages the boundary copied, the arm's us, the fencing thread, and
 			// the KB the state allocated between its last collections.
 			std::string heapArms;

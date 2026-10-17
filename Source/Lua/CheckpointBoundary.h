@@ -20,6 +20,7 @@
 #include <memory>
 #include <numeric>
 #include <span>
+#include <tuple>
 #include <vector>
 
 namespace RTE::CheckpointLua {
@@ -219,6 +220,10 @@ namespace RTE::CheckpointLua {
 		size_t ArmPart(size_t heap) const { return heap < m_ArmParts.size() ? m_ArmParts[heap] : 0; }
 		/// The Lua arm's plan, copy and fence, in microseconds.
 		std::array<int64_t, 3> ArmPhaseUs() const { return m_ArmPhaseUs; }
+		/// Whether the saver had warmed this plan when it armed, how long before the arm its warm was asked (-1: not asked), and
+		/// how long the saver's last finished warm took.
+		void NoteWarm(bool warmed, int64_t askedUsBefore, int64_t warmUs) noexcept { m_WarmAtArm = warmed; m_WarmAskedUsBefore = askedUsBefore; m_WarmUs = warmUs; }
+		std::tuple<bool, int64_t, int64_t> WarmAtArm() const noexcept { return {m_WarmAtArm, m_WarmAskedUsBefore, m_WarmUs}; }
 		const BindingLease& Bindings() const { return m_Bindings; }
 		/// What the engine held free or retained at the fence, for the walk of the frozen script graphs.
 		const CheckpointHeldMemory* HeldMemory() const noexcept { return m_Held.get(); }
@@ -367,6 +372,8 @@ namespace RTE::CheckpointLua {
 		std::vector<size_t> m_DrainOrder;
 		std::vector<uint8_t> m_ArmParts;
 		std::array<int64_t, 3> m_ArmPhaseUs{};
+		bool m_WarmAtArm = false;
+		int64_t m_WarmAskedUsBefore = -1, m_WarmUs = 0;
 		std::atomic<Status> m_Status{Status::Prepared};
 		std::unique_ptr<CheckpointNativeStorage::Prepared> m_Native;
 		mutable std::shared_ptr<CheckpointHeldMemory> m_Held;

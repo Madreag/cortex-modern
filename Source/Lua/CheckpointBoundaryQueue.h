@@ -55,7 +55,10 @@ namespace RTE::CheckpointLua {
 		/// Whether a capture is near: the saver then commits and warms the prepared plan's copies, and otherwise gives them back.
 		void SetWarm(bool warm) noexcept {
 			HeapOwner::KeepCopiesWarm(warm);
-			if (m_WantWarm.exchange(warm, std::memory_order_acq_rel) != warm) Wake();
+			if (m_WantWarm.exchange(warm, std::memory_order_acq_rel) != warm) {
+				if (warm) m_WarmAskedAt.store(RTE::SteadyClock::now().time_since_epoch().count(), std::memory_order_release);
+				Wake();
+			}
 		}
 		/// Waits up to the given time for a prepared plan the saver has warmed; false if none is warm by then.
 		bool WaitUntilWarm(std::chrono::milliseconds limit) const {
@@ -106,6 +109,10 @@ namespace RTE::CheckpointLua {
 				fill(m_Plan->header);
 				std::array<int64_t, 7>* parts = nullptr;
 				if constexpr (requires { m_Plan->header.BoundaryParts(); }) parts = m_Plan->header.BoundaryParts();
+				const bool wanted = m_WantWarm.load(std::memory_order_acquire);
+				const auto asked = RTE::SteadyClock::time_point(RTE::SteadyClock::duration(m_WarmAskedAt.load(std::memory_order_acquire)));
+				m_Plan->boundary->NoteWarm(m_Warmed.load(std::memory_order_acquire),
+				    wanted ? std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - asked).count() : -1, m_LastWarmUs.load(std::memory_order_acquire));
 				if (m_Plan->boundary->Arm(parts)) {
 					// Prepared slots retain immutable owners without constructing their payloads here.
 					result = m_Plan->result;
@@ -139,6 +146,8 @@ namespace RTE::CheckpointLua {
 		std::atomic<bool> m_WantWarm{false};
 		int m_PlanWarm = -1; //!< The worker's: the prepared plan last warmed (1), cooled (0), or neither yet (-1).
 		std::atomic<bool> m_Warmed{false}; //!< The prepared plan is warm, for a thread that waits on it.
+		std::atomic<RTE::SteadyClock::rep> m_WarmAskedAt{0}; //!< When a capture last became near, for the arm's line.
+		std::atomic<int64_t> m_LastWarmUs{0}; //!< How long the worker's last finished warm took.
 		std::atomic<bool> m_Releasing{false}; //!< The last capture's plan is being torn down before the next preparation.
 		std::atomic<uint64_t> m_Preparations{0}, m_LastReleaseUs{0}, m_LastPrepareUs{0}; //!< Finished preparations and what the last one cost.
 		std::atomic<uint64_t> m_Refusals{0}; //!< Preparations refused since the last one that finished; each is tried again at the next tick.
@@ -220,7 +229,11 @@ namespace RTE::CheckpointLua {
 				// A boundary claimed meanwhile stops a warming or cooling run; the loop then finds it armed.
 				if (state == State::Ready && m_PlanWarm != static_cast<int>(m_WantWarm.load(std::memory_order_acquire))) {
 					const bool warm = m_WantWarm.load(std::memory_order_acquire);
-					if (warm) { try { m_Plan->boundary->Warm(); } catch (...) {} }
+					if (warm) {
+						const auto began = RTE::SteadyClock::now();
+						try { m_Plan->boundary->Warm(); } catch (...) {}
+						m_LastWarmUs.store(std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - began).count(), std::memory_order_release);
+					}
 					else m_Plan->boundary->Cool();
 					m_PlanWarm = warm;
 					m_Warmed.store(warm, std::memory_order_release);
