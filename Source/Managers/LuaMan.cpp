@@ -6604,6 +6604,9 @@ static bool RunStaleActivityReferenceSelfTest(LuaStateWrapper& lua) {
 // gives back the same slice of the same actor's menu, a slice its menu deleted as a gone reference with its identity, a live
 // alias of a living target's position, and the last position of a target that is gone.
 static bool RunEngineHandleSelfTest(LuaStateWrapper& lua) {
+	// A match's objects live in the world's storage, whose free slots hold a dropped device's slices; the class pools serve
+	// only outside it, and a sanitized build has none.
+	CheckpointNativeStorage::WorldAllocationScope world(true);
 	const bool planted = lua.RunScriptString(R"lua(
 _EngineHandles = {}
 local function holding(x)
@@ -6692,7 +6695,7 @@ assert(coroutine.resume(_EngineHandles.follower) and coroutine.resume(_EngineHan
 	}
 	for (const std::string& problem: problems) std::cout << "[engine-handle-selftest] live capture: " << problem << std::endl;
 	for (const std::string& problem: frozenProblems) std::cout << "[engine-handle-selftest] frozen capture: " << problem << std::endl;
-	bool restored = false, kept = false, followed = false, remembered = false, ownKept = false, presetKept = false, refusedByName = false;
+	bool restored = false, kept = false, followed = false, remembered = false, ownKept = false, presetKept = false, restoredFrozenSame = false, refusedByName = false;
 	if (captured) {
 		std::vector<std::string> restoreProblems;
 		restored = lua.RestoreScriptGraph(text, restoreProblems) && restoreProblems.empty();
@@ -6732,6 +6735,24 @@ assert(_ScriptGraphNativeAddress(_EngineHandles.presetEntity) == _ScriptGraphNat
 assert(_ScriptGraphNativeAddress(_EngineHandles.presetSlice) == _ScriptGraphNativeAddress(preset), "the preset slice came back as another object")
 assert(pcall(function() return _EngineHandles.presetSlice.Direction end), "the preset slice came back without its class")
 )lua") == 0;
+		// The restored graph is captured again, frozen as an autosave takes it: a restored gone slice is named gone there too.
+		if (restored) {
+			MovableMan::KnownObjectsScope known;
+			LuaScriptGraphNativeCaptureScope lookups;
+			std::string again;
+			CheckpointText frozenAgain;
+			std::vector<std::string> againProblems, frozenAgainProblems;
+			const bool capturedAgain = lua.SerializeScriptGraph(again, againProblems) && againProblems.empty();
+			try {
+				restoredFrozenSame = capturedAgain && lua.CaptureScriptGraph(frozenAgain, frozenAgainProblems, true) && frozenAgainProblems.empty() && frozenAgain.Text() == again;
+			} catch (const ScriptGraphRefusal& refusal) {
+				frozenAgainProblems.insert(frozenAgainProblems.end(), refusal.problems.begin(), refusal.problems.end());
+			} catch (const std::exception& error) {
+				frozenAgainProblems.emplace_back(error.what());
+			}
+			for (const std::string& problem: againProblems) std::cout << "[engine-handle-selftest] restored live capture: " << problem << std::endl;
+			for (const std::string& problem: frozenAgainProblems) std::cout << "[engine-handle-selftest] restored frozen capture: " << problem << std::endl;
+		}
 	}
 	// A live slice of a menu nothing in the graph reaches - the menu kept alive in the registry - is refused by name.
 	if (planted) {
@@ -6774,10 +6795,10 @@ _EngineHandles.unreached = _UnreachedPieMenu and _UnreachedPieMenu:GetFirstPieSl
 		lua.RunScriptString("if _EngineHandles then _EngineHandles.unreached = nil end");
 	}
 	lua.RunScriptString("MovableMan:RemoveActor(_EngineHandles.holder); MovableMan:RemoveActor(_EngineHandles.dropper); _EngineHandles = nil; collectgarbage()");
-	const bool passed = planted && targetGone && captured && frozenSame && restored && kept && followed && remembered && ownKept && presetKept && refusedByName;
+	const bool passed = planted && targetGone && captured && frozenSame && restored && kept && followed && remembered && ownKept && presetKept && restoredFrozenSame && refusedByName;
 	std::cout << "[engine-handle-selftest] " << (passed ? "PASS" : "FAIL") << " planted=" << planted << " target_gone=" << targetGone << " live_captured=" << captured
 	          << " frozen_same=" << frozenSame << " restored=" << restored << " slices_kept=" << kept << " follower_alias_live=" << followed << " chaser_kept_read=" << remembered << " target_memory=" << targetMemory << " kept=" << keptPosition.GetX() << "," << keptPosition.GetY()
-	          << " own_menu_slices_kept=" << ownKept << " preset_slices_kept=" << presetKept << " unreached_refused_by_name=" << refusedByName << std::endl;
+	          << " own_menu_slices_kept=" << ownKept << " preset_slices_kept=" << presetKept << " restored_frozen_same=" << restoredFrozenSame << " unreached_refused_by_name=" << refusedByName << std::endl;
 	return passed;
 }
 
