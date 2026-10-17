@@ -6807,7 +6807,8 @@ _EngineHandles.unreached = _UnreachedPieMenu and _UnreachedPieMenu:GetFirstPieSl
 // the next objects made take the slots a dropped device's slices freed or a gone target's released memory, and a live slice
 // nothing reaches can be freed before the walk reaches its handle. Each is judged as it stood at the fence - the dropped slice
 // is carried as gone and the waypoint as the position it read though new objects hold their memory, and the live slice is
-// refused by name though its slot is free when the walk gets there.
+// refused by name though its slot is free when the walk gets there. An actor deleted in the window is copied as it stood,
+// its pie menu read from the menu's frozen bytes though other bytes hold the live memory.
 static bool RunCaptureWindowCases(LuaStateWrapper& lua) {
 	lua_State* const L = lua.GetLuaState();
 	const Entity::ClassInfo* sliceType = Entity::ClassInfo::GetClass("PieSlice");
@@ -6932,11 +6933,51 @@ _CaptureWindow.unreached = _UnreachedCaptureMenu and _UnreachedCaptureMenu:GetFi
 	if (kept != LUA_NOREF) luaL_unref(L, LUA_REGISTRYINDEX, kept);
 	const bool unreachedRefused = named(unreachedProblems);
 	if (!unreachedRefused) for (const std::string& problem: unreachedProblems) std::cout << "[capture-window-selftest] unreached slice: " << problem << std::endl;
+	// An actor known at the fence is deleted before the saver copies it, and bytes no object owns take its pie menu's memory, as
+	// the next allocations of that size take a freed slot: the copy of the actor reads its menu's frozen bytes, never the live ones.
+	const bool menuHolderPlanted = lua.RunScriptString(R"lua(
+_CaptureWindow.unreached = nil
+local holder = CreateAHuman("Green Dummy", "Base.rte")
+holder.Pos = Vector(880, 200)
+MovableMan:AddActor(holder)
+_CaptureWindow.menuHolderUID = holder.UniqueID
+)lua") == 0;
+	long menuHolderUID = 0;
+	if (menuHolderPlanted) {
+		lua_getglobal(L, "_CaptureWindow");
+		lua_getfield(L, -1, "menuHolderUID");
+		menuHolderUID = static_cast<long>(lua_tointeger(L, -1));
+		lua_pop(L, 2);
+	}
+	const Entity::ClassInfo* menuType = Entity::ClassInfo::GetClass("PieMenu");
+	bool menuAtFence = false, menuMemoryTaken = false, deadMenuCaptured = false;
+	std::vector<void*> takenBlocks;
+	std::vector<std::string> deadMenuProblems;
+	if (menuHolderUID && menuType && menuType->CheckpointInstanceBytes()) {
+		deadMenuCaptured = capture([] {}, [&] {
+			auto* holder = dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(menuHolderUID));
+			const void* menu = holder ? holder->GetPieMenu() : nullptr;
+			menuAtFence = menu != nullptr;
+			if (!menu || g_MovableMan.RemoveActor(holder) != holder) return;
+			delete holder;
+			for (int attempt = 0; attempt < 64 && !menuMemoryTaken; ++attempt) {
+				void* block = CheckpointNativeStorage::Allocate(menuType->CheckpointInstanceBytes(), menuType->CheckpointInstanceAlignment());
+				std::memset(block, 0xA5, menuType->CheckpointInstanceBytes());
+				takenBlocks.push_back(block);
+				menuMemoryTaken = block == menu;
+			}
+		}, deadMenuProblems);
+	}
+	for (void* block: takenBlocks) CheckpointNativeStorage::Deallocate(block);
+	const bool deadMenuCopied = deadMenuCaptured && deadMenuProblems.empty();
+	if (!deadMenuCopied) for (const std::string& problem: deadMenuProblems) std::cout << "[capture-window-selftest] gone actor's pie menu: " << problem << std::endl;
 	lua.RunScriptString("if _CaptureWindow then MovableMan:RemoveActor(_CaptureWindow.dropper); if _CaptureWindow.taker then MovableMan:RemoveActor(_CaptureWindow.taker) end end; _CaptureWindow = nil; collectgarbage()");
-	const bool passed = goneFreedAtFence && reusedInWindow && goneCarried && retainedAtFence && takenInWindow && vectorCarried && liveAtFence && freedInWindow && unreachedRefused;
+	const bool passed = goneFreedAtFence && reusedInWindow && goneCarried && retainedAtFence && takenInWindow && vectorCarried && liveAtFence && freedInWindow && unreachedRefused &&
+	                    menuAtFence && menuMemoryTaken && deadMenuCopied;
 	std::cout << "[capture-window-selftest] " << (passed ? "PASS" : "FAIL") << " planted=" << planted << " freed_at_fence=" << goneFreedAtFence << " reused_in_window=" << reusedInWindow
 	          << " freed_slice_carried=" << goneCarried << " retained_at_fence=" << retainedAtFence << " retained_taken_in_window=" << takenInWindow << " gone_vector_carried=" << vectorCarried
-	          << " live_at_fence=" << liveAtFence << " freed_in_window=" << freedInWindow << " unreached_refused_by_name=" << unreachedRefused << std::endl;
+	          << " live_at_fence=" << liveAtFence << " freed_in_window=" << freedInWindow << " unreached_refused_by_name=" << unreachedRefused
+	          << " menu_at_fence=" << menuAtFence << " menu_memory_taken=" << menuMemoryTaken << " gone_actor_menu_copied=" << deadMenuCopied << std::endl;
 	return passed;
 }
 
