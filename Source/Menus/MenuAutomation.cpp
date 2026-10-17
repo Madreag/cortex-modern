@@ -55,6 +55,8 @@
 #include <cctype>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
+#include <cstdint>
 #include <cstdlib>
 #include <condition_variable>
 #include <deque>
@@ -1487,6 +1489,17 @@ namespace RTE::MenuAutomation {
 		return "summary RTT " + std::to_string(shown) + " ms against " + std::to_string(expected) + " ms listed";
 	}
 
+	std::string InputDelayContradiction(GUIControlManager* menu) {
+		if (!ScenarioRunner::IsLockstepControllerSyncActive() || !g_SettingsMan.GetNetworkShowDiagnostics()) return "";
+		GUIControl* status = WatchedControl(menu, "LabelNetMatchStatus");
+		std::string text;
+		if (!status || !Shown(status) || !Text(status, text)) return "the live input delay is not shown";
+		char expected[96];
+		const uint16_t delay = ScenarioRunner::GetLockstepLocalInputDelay();
+		std::snprintf(expected, sizeof(expected), "Input delay %u ticks / %.1f ms", static_cast<unsigned>(delay), delay * g_TimerMan.GetDeltaTimeMS());
+		return text.find(expected) == std::string::npos ? std::string("the live overlay lacks ") + expected + ": " + text : "";
+	}
+
 	/// Whether a text box's line is as tall as the box shows, under the box's top margin.
 	bool LineFits(GUIControlManager* manager, GUIControl* control, const std::string& text, std::string& observation) {
 		std::string fontName;
@@ -1648,7 +1661,7 @@ namespace RTE::MenuAutomation {
 			} cost{watch, {}};
 			if (!WatchStateHolds(watch.state)) continue;
 			++watch.active;
-			if (!linesRead && watch.rule != "layout" && watch.rule != "overlap" && watch.rule != "rtt" && watch.rule != "seat_rows") {
+			if (!linesRead && watch.rule != "layout" && watch.rule != "overlap" && watch.rule != "rtt" && watch.rule != "input_delay" && watch.rule != "seat_rows") {
 				lines = ShownLines(menu);
 				linesRead = true;
 			}
@@ -1678,6 +1691,8 @@ namespace RTE::MenuAutomation {
 				detail = DuplicateLine(lines);
 			} else if (watch.rule == "rtt") {
 				if (const std::string contradiction = RttContradiction(menu); !contradiction.empty()) detail = contradiction;
+			} else if (watch.rule == "input_delay") {
+				if (const std::string contradiction = InputDelayContradiction(menu); !contradiction.empty()) detail = contradiction;
 			} else if (watch.rule == "layout") {
 				if (Json offenders = LayoutOffenders(menu); !offenders.empty()) detail = offenders;
 			} else if (watch.rule == "overlap") {
@@ -2054,7 +2069,7 @@ namespace RTE::MenuAutomation {
 					watch.text = text.get<std::string>();
 				}
 				const bool textRule = watch.rule == "require" || watch.rule == "forbid" || watch.rule == "equals" || watch.rule == "contains";
-				const bool known = textRule || watch.rule == "shown" || watch.rule == "duplicates" || watch.rule == "rtt" || watch.rule == "layout" || watch.rule == "overlap" || watch.rule == "seat_rows";
+				const bool known = textRule || watch.rule == "shown" || watch.rule == "duplicates" || watch.rule == "rtt" || watch.rule == "input_delay" || watch.rule == "layout" || watch.rule == "overlap" || watch.rule == "seat_rows";
 				if (!known || watch.state.empty() || (textRule && watch.text.empty()) || ((watch.rule == "equals" || watch.rule == "contains" || watch.rule == "shown") && watch.control.empty())) {
 					observation = "unknown or incomplete watch";
 					return false;

@@ -3202,7 +3202,7 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			if (!FrameMan::SetFeelRecordDirectory(argValue[++i])) {
 				{
 					std::ostringstream line;
-					line << "[feel] recording requires CCCP_HEADLESS=1 and a fresh existing output directory";
+					line << "[feel] recording requires a headless harness or an opted-in headed runner and a fresh existing output directory";
 					System::PrintDiagnosticErrorLine(line.str());
 				}
 				return false;
