@@ -6471,6 +6471,8 @@ assert(coroutine.resume(_F5Handles.follower) and coroutine.resume(_F5Handles.cha
 )lua") == 0;
 	// The chaser's target is deleted before the capture; the waypoint still holds its position.
 	bool targetGone = false;
+	// Where the gone target's memory went: a free native slot, a returned class pool block, or neither.
+	int targetMemory = -1;
 	if (planted) {
 		lua_State* L = lua.GetLuaState();
 		lua_getglobal(L, "_F5Handles");
@@ -6478,8 +6480,10 @@ assert(coroutine.resume(_F5Handles.follower) and coroutine.resume(_F5Handles.cha
 		const long uid = static_cast<long>(lua_tointeger(L, -1));
 		lua_pop(L, 2);
 		if (MovableObject* target = g_MovableMan.FindObjectByUniqueID(uid); target && g_MovableMan.RemoveParticle(target) == target) {
+			const Vector* position = &target->GetPos();
 			delete target;
 			targetGone = true;
+			targetMemory = CheckpointNativeStorage::FreeSlotHolds(position, sizeof(Vector)) ? 1 : Entity::ClassInfo::AnyPoolHolds(position, sizeof(Vector)) ? 2 : 0;
 		}
 	}
 	std::string text;
@@ -6526,7 +6530,7 @@ assert(_ScriptGraphNative(_F5Handles.gone) == "invalid", "the gone slice's handl
 	lua.RunScriptString("MovableMan:RemoveActor(_F5Handles.holder); MovableMan:RemoveActor(_F5Handles.dropper); _F5Handles = nil; collectgarbage()");
 	const bool passed = planted && targetGone && captured && frozenSame && restored && kept && followed && remembered;
 	std::cout << "[engine-handle-selftest] " << (passed ? "PASS" : "FAIL") << " planted=" << planted << " target_gone=" << targetGone << " live_captured=" << captured
-	          << " frozen_same=" << frozenSame << " restored=" << restored << " slices_kept=" << kept << " follower_alias_live=" << followed << " chaser_kept_last=" << remembered << std::endl;
+	          << " frozen_same=" << frozenSame << " restored=" << restored << " slices_kept=" << kept << " follower_alias_live=" << followed << " chaser_kept_last=" << remembered << " target_memory=" << targetMemory << std::endl;
 	return passed;
 }
 
@@ -10854,7 +10858,7 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 	{
 		std::string detail;
 		const bool exact = CheckpointLua::HeapOwner::RunTrimSelfTest(detail);
-		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " a_collected_lua_heap_gives_its_free_pages_back_and_a_capture_commits_them_again " << detail << std::endl;
+		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " a_collected_lua_heap_gives_its_free_pages_back_beside_a_waiting_plan_and_its_arm_commits_them_again " << detail << std::endl;
 		checkpointValues = exact && checkpointValues;
 	}
 	{
