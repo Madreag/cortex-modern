@@ -6827,8 +6827,8 @@ static bool RunCaptureWindowSelfTest(LuaStateWrapper& lua) {
 	const auto named = [&refusal](const std::vector<std::string>& found) {
 		return std::any_of(found.begin(), found.end(), [&refusal](const std::string& problem) { return problem.find(refusal) != std::string::npos; });
 	};
-	lua.PrepareCheckpointValues();
-	lua.PrepareCheckpointBindings();
+	// The managers' values move into the world's storage, as a match's autosave preparation moves them.
+	g_LuaMan.PrepareCheckpointValues();
 	// One world capture of this state: prepared off this thread as the saver prepares it, armed here as the simulation arms
 	// it, the moves made after the arm, then the walk on another thread with the saver's frozen reads.
 	const auto capture = [&](const std::function<void()>& inWindow, std::vector<std::string>& problems) {
