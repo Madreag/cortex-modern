@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <limits>
+#include <map>
 #include <string_view>
 
 namespace RTE {
