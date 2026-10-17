@@ -10828,6 +10828,13 @@ namespace RTE {
 		}
 		// A held host is still the round's hub: its seat is under the AI, never gone.
 		if (const auto past = SeatStateBeforeNewest(peerId, frame)) return *past == SeatTransition::Left || (*past == SeatTransition::Held && peerId != GetHostPeerId());
+		// The latest held state has the same meaning before a future return is learned. Falling through to its leave
+		// watermark here would disable the host's actors only on the reader that has not received that return yet.
+		if (peerId == GetHostPeerId()) {
+			const auto seat = m_SeatTransitions.find(peerId);
+			if (seat != m_SeatTransitions.end() && !seat->second.empty() && seat->second.rbegin()->first <= frame &&
+			    seat->second.rbegin()->second == SeatTransition::Held) return false;
+		}
 		if (const auto reclaim = m_ReclaimTransactions.find(peerId); reclaim != m_ReclaimTransactions.end() && frame >= reclaim->second.activationFrame) return false;
 		const auto leaveIt = m_PeerLeaveFrames.find(peerId);
 		return leaveIt != m_PeerLeaveFrames.end() && frame >= leaveIt->second;

@@ -20,6 +20,16 @@
 #include "GameActivity.h"
 #include "MovableMan.h"
 #include "lz4.h"
+#include "Actor.h"
+#include "Controller.h"
+#include "MovableObject.h"
+#include "NetActorOwnership.h"
+#include "AudioMan.h"
+#include "LuaMan.h"
+#include "SettingsMan.h"
+#include "SimChecksum.h"
+#include "SceneMan.h"
+#include "allegro.h"
 
 #include <algorithm>
 #include <array>
@@ -2702,6 +2712,108 @@ namespace RTE {
 		}
 	}
 
+	bool NetSessionPlaneSelfTest::CheckHeldHostControllers(std::string* error) {
+		struct Wire final : LoopbackTransport {
+			bool Send(NetPeerId, NetTransportLane, const std::vector<uint8_t>&, std::string* = nullptr, bool* = nullptr) override { return true; }
+		};
+		if (!TimerMan::IsConstructed()) TimerMan::Construct();
+		if (!LuaMan::IsConstructed()) LuaMan::Construct();
+		if (!SimChecksum::IsConstructed()) SimChecksum::Construct();
+		if (!MovableMan::IsConstructed()) MovableMan::Construct();
+		if (!ActivityMan::IsConstructed()) ActivityMan::Construct();
+		if (!AudioMan::IsConstructed()) AudioMan::Construct();
+		if (!SettingsMan::IsConstructed()) SettingsMan::Construct();
+		if (!SceneMan::IsConstructed()) {
+			install_allegro(SYSTEM_NONE, &errno, std::atexit);
+			SceneMan::Construct();
+		}
+		Wire wire;
+		NetLockstepCoordinator peer;
+		peer.m_Config.sessionId = 0x60584422;
+		peer.m_Config.matchConfig = NetMatchConfigUtil::MakeDefault(peer.m_Config.sessionId);
+		peer.m_Config.matchConfig.peerCount = 3;
+		peer.m_Config.matchConfig.players.push_back({3, 2, false, "Third"});
+		peer.m_Config.matchConfig.successorOrder = {2, 3};
+		peer.m_Config.matchConfig.roundId = 77;
+		peer.m_Config.localPeerId = 2;
+		peer.m_Config.peerCount = 3;
+		peer.m_Config.startFrame = 1;
+		peer.m_Config.simTickMs = 1000.0 / 60;
+		peer.m_Config.migrationKey.fill(0x39);
+		peer.m_State = NetLockstepState::Running;
+		peer.m_Transport = &wire;
+		peer.m_RemotePeerIds = {1, 3};
+		peer.m_RemoteTransports = {{1, 42}};
+		peer.m_RoundId = 77;
+		peer.m_RoundConfigHash = NetMatchConfigUtil::HashConfig(peer.m_Config.matchConfig);
+		peer.m_LastCompletedSimulationTick = 4422;
+		peer.m_Stats.nextFrame = 4423;
+		peer.m_MigrationPhase = NetHostMigrationPhase::Recovering;
+		peer.m_MigrationSuccessor = 2;
+		peer.m_MigrationGeneration = 1;
+		peer.m_MigrationWireRound = 77;
+		peer.m_MigrationBoundary = 6058;
+		peer.m_MigrationPeers = {{3, 43}};
+		peer.m_MigrationQuorumMask = 7;
+		peer.m_MigrationVoterMask = 6;
+		peer.m_MigrationResult = {1, 6058, 2, {2, 3}, {}, {{3, 43}}};
+		for (uint8_t id : {2, 3}) {
+			auto answer = peer.MigrationMessage(NetHostMigrationMessageType::Answer);
+			answer.senderPeerId = id;
+			peer.m_MigrationAnswers[id] = answer;
+		}
+		peer.m_Config.authorityPeerId = 1;
+		peer.m_Config.peerFrameGroups = true;
+		peer.m_MigrationPhase = NetHostMigrationPhase::None;
+		peer.m_Stats.nextFrame = 728;
+		peer.m_LastDeliveredFrame = 727;
+		peer.m_PeerBridges[1] = {606, 727, true, {}, {}, 6};
+		peer.m_AiHeldSeats[1] = peer.m_PeerLeaveFrames[1] = 727;
+		peer.m_SeatTransitions[1][727] = NetLockstepCoordinator::SeatTransition::Held;
+		std::unique_ptr<Actor> actor = std::make_unique<Actor>();
+		if (actor->MovableObject::Create(1.0F) < 0) { *error = "held-host fixture could not create its actor"; return false; }
+		actor->SetTeam(0);
+		Controller& controller = *actor->GetController();
+		controller.SetControlledActor(actor.get());
+		NetLockstepReadyFrame handoff;
+		handoff.frame = 727;
+		handoff.aiHeldPeerIds = {1};
+		bool valid = true;
+		for (const bool futureReturn: {false, true}) {
+			if (futureReturn) {
+				peer.m_SeatTransitions[1][761] = NetLockstepCoordinator::SeatTransition::Back;
+				peer.m_ReclaimTransactions[1] = {1, 1, 761 * 8 + 1, 1, 761, 5, 790};
+				peer.m_PeerBridges[1].returnFrame = 761;
+			}
+			for (const bool disabled: {false, true}) {
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				controller.ResetLocalInputState(Controller::CIM_PLAYER, 0);
+				controller.ApplyWireMode(Controller::CIM_PLAYER, 0);
+				controller.SetDisabled(disabled);
+				ScenarioRunner::SetLockstepCoordinator(&peer);
+				NetActorOwnership::SeedOwner(actor->GetUniqueID(), 1, 0);
+				const bool gone = peer.IsPeerGoneAtFrame(1, 727);
+				ApplyLockstepLeaveHandoffs(handoff, {actor.get()}, false);
+				const uint8_t producer = ScenarioRunner::GetLockstepActorOwner(actor->GetUniqueID(), 0, true, 727);
+				std::cout << "[net-lockstep-selftest] held_host_handoff future_return=" << futureReturn
+				          << " gone=" << gone << " initial_disabled=" << disabled << " disabled=" << controller.IsQuickDisabled()
+				          << " mode=" << controller.GetInputMode() << " producer=" << static_cast<int>(producer) << std::endl;
+				valid &= !gone && producer == 2 && controller.GetInputMode() == Controller::CIM_AI && controller.IsQuickDisabled() == disabled;
+			}
+		}
+		ScenarioRunner::SetLockstepCoordinator(nullptr);
+		NetActorOwnership::ClearSeededOwners();
+		// The hub's held seat is not a departed hub. An explicit departure still is, and a held client keeps its existing rule.
+		peer.m_SeatTransitions[1][900] = NetLockstepCoordinator::SeatTransition::Left;
+		peer.m_PeerLeaveFrames[1] = 900;
+		peer.m_ReclaimTransactions.erase(1);
+		peer.m_PeerLeaveFrames[3] = peer.m_AiHeldSeats[3] = 727;
+		peer.m_SeatTransitions[3][727] = NetLockstepCoordinator::SeatTransition::Held;
+		valid &= peer.IsPeerGoneAtFrame(1, 900) && peer.IsPeerGoneAtFrame(3, 727);
+		if (!valid) *error = "a held host's controller disable depends on whether its future return has arrived";
+		return valid;
+	}
+
 	bool NetSessionPlaneSelfTest::CheckOwnerHitch(unsigned arm, std::string* error) {
 		Case row{"owner_hitch"};
 		row.seats = arm == 4 ? 2 : 3; row.subject = arm == 3 ? 1 : 2;
@@ -3672,7 +3784,19 @@ namespace RTE {
 		int passed = 0, failed = 0;
 		const char* selected = std::getenv("CC_TEST_SESSION_PLANE_CASE");
 		if (selected && std::string_view(selected) == "fixed_session_fixtures") selected = nullptr;
-		DiagnosticLine() << "[net-session-plane-selftest] topology=single-box proof=false forced_rows=" << (selected ? 1 : rows.size() + 40 + FixedScheduleRows().size()) << std::endl;
+		constexpr const char* heldHostRow = "a_held_host_preserves_controller_disable_before_its_return_arrives";
+		// This row uses the actor handoff's process-wide coordinator; run it before the independent wire fixtures.
+		if (!selected || std::string_view(selected) == heldHostRow) {
+			std::string error;
+			const bool ok = CheckHeldHostControllers(&error);
+			DiagnosticLine() << "[net-session-plane-selftest] " << (ok ? "PASS " : "FAIL ") << heldHostRow << (error.empty() ? "" : ": " + error);
+			if (ok) ++passed; else ++failed;
+			if (selected) {
+				if (ok) DiagnosticLine() << "[net-session-plane-selftest] PASS";
+				return ok ? 0 : 1;
+			}
+		}
+		DiagnosticLine() << "[net-session-plane-selftest] topology=single-box proof=false forced_rows=" << (selected ? 1 : rows.size() + 41 + FixedScheduleRows().size()) << std::endl;
 		// Every row runs on a pool of worker threads: a named row keeps its engine lines and is printed as soon as it ends, the longest
 		// rows started first; the random driver's rounds follow them in the same pool.
 		QuietLines quiet(std::cout);

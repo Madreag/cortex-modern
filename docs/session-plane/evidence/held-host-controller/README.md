@@ -42,3 +42,5 @@ The field did not record per-object state or controller-production/application
 traces. Its one-way attachable checksum cannot identify the exact limb or UID.
 The local Brain Robot UIDs above belong only to the reproducing control. The
 field's exact object remains a lead-owned evidence request, not an inferred UID.
+
+The October 17 v6 build closes the latest-held-state fallthrough in `IsPeerGoneAtFrame`. The detecting function is now `NetSessionPlaneSelfTest::CheckHeldHostControllers`, run serially before the wire fixtures and also by the existing net-lockstep selector. The recorded 7b589c18e RED is unchanged. `green-v6.json` retains the GREEN detector and the native repeat: hold 606, AI 727, return 760, all 1,200 full hash rows identical, and every simdump byte identical across frames 710–790. The script-disabled and explicit-departure assertions remain intact.

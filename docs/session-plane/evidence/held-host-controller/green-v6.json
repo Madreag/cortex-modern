@@ -1,0 +1,814 @@
+{
+  "base_head": "84282b5386fcae372a434000be96959795a44691",
+  "engine_patch_sha256": "fafc3e50cc08dccfadc58e4de538086e2ab305fb87f496914286ab626f597a74",
+  "binary_sha256": "21f906900ee71228ca18786fbfdc98bdfa1bb277c0e5016e5c441444a16a5795",
+  "gns_receipt": {
+    "upstream": "2cb93a06350bb065db53abdb0d87cf297e0bfd34",
+    "patch_sha256": "453f18420ce6bed9d55beecd732a0615400b043fc9777e3c2f4ef7dc71ceafc9",
+    "transport_diagnostics_patch_sha256": "64e5fcd5c0f936a75c8b373052125a95e4259383f7b7ac98915930535ae53dfd",
+    "library": "/home/erol/deps/gns-turnfix-v6/lib/libGameNetworkingSockets_s.a",
+    "library_sha256": "0ac31b066349fffa332c936e9c791a7b64d6501ad242d0b8464bd689d0923e75",
+    "lifetime_version": 5,
+    "transport_diagnostics_version": 1
+  },
+  "detector": {
+    "function": "NetSessionPlaneSelfTest::CheckHeldHostControllers",
+    "row": "a_held_host_preserves_controller_disable_before_its_return_arrives",
+    "baseline_red": "detector-7b-red.json",
+    "stdout": "[lua] allocation sinking: off (a captured state allocates every table)\n[net-lockstep-selftest] held_host_handoff future_return=0 gone=0 initial_disabled=0 disabled=0 mode=2 producer=2\n[lua] allocation sinking: on\n[lua] allocation sinking: off (a captured state allocates every table)\n[net-lockstep-selftest] held_host_handoff future_return=0 gone=0 initial_disabled=1 disabled=1 mode=2 producer=2\n[lua] allocation sinking: on\n[lua] allocation sinking: off (a captured state allocates every table)\n[net-lockstep-selftest] held_host_handoff future_return=1 gone=0 initial_disabled=0 disabled=0 mode=2 producer=2\n[lua] allocation sinking: on\n[lua] allocation sinking: off (a captured state allocates every table)\n[net-lockstep-selftest] held_host_handoff future_return=1 gone=0 initial_disabled=1 disabled=1 mode=2 producer=2\n[lua] allocation sinking: on\n[net-session-plane-selftest] PASS a_held_host_preserves_controller_disable_before_its_return_arrives\n[net-session-plane-selftest] PASS\n",
+    "runner": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-held-host-green/net-session-plane-selftest",
+    "green": true
+  },
+  "native": {
+    "manifest": {
+      "started": "2026-10-17 10:29:35 AM MST",
+      "arm": "30ms",
+      "repeat": 1,
+      "requested_rtt_ms": 30,
+      "ticks": 1200,
+      "per_engine_lag_ms": 15,
+      "headed": true,
+      "display": ":0",
+      "size": [
+        960,
+        540
+      ],
+      "lag_step": null,
+      "local_prediction_max_ticks_setting": 20,
+      "host_stall": [
+        600,
+        2000
+      ],
+      "dump_window": [
+        710,
+        790
+      ],
+      "binary": "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand",
+      "binary_sha256": "21f906900ee71228ca18786fbfdc98bdfa1bb277c0e5016e5c441444a16a5795",
+      "quiet_samples": [
+        {
+          "time": "2026-10-17 10:29:36 AM MST",
+          "foreign": [],
+          "loadavg": [
+            0.88818359375,
+            1.62353515625,
+            1.86279296875
+          ]
+        },
+        {
+          "time": "2026-10-17 10:29:37 AM MST",
+          "foreign": [],
+          "loadavg": [
+            0.88818359375,
+            1.62353515625,
+            1.86279296875
+          ]
+        },
+        {
+          "time": "2026-10-17 10:29:38 AM MST",
+          "foreign": [],
+          "loadavg": [
+            0.88818359375,
+            1.62353515625,
+            1.86279296875
+          ]
+        },
+        {
+          "time": "2026-10-17 10:29:39 AM MST",
+          "foreign": [],
+          "loadavg": [
+            0.88818359375,
+            1.62353515625,
+            1.86279296875
+          ]
+        },
+        {
+          "time": "2026-10-17 10:29:40 AM MST",
+          "foreign": [],
+          "loadavg": [
+            0.88818359375,
+            1.62353515625,
+            1.86279296875
+          ]
+        },
+        {
+          "time": "2026-10-17 10:29:41 AM MST",
+          "foreign": [],
+          "loadavg": [
+            1.1376953125,
+            1.6630859375,
+            1.87451171875
+          ]
+        },
+        {
+          "time": "2026-10-17 10:29:42 AM MST",
+          "foreign": [],
+          "loadavg": [
+            1.1376953125,
+            1.6630859375,
+            1.87451171875
+          ]
+        },
+        {
+          "time": "2026-10-17 10:29:43 AM MST",
+          "foreign": [],
+          "loadavg": [
+            1.1376953125,
+            1.6630859375,
+            1.87451171875
+          ]
+        },
+        {
+          "time": "2026-10-17 10:29:44 AM MST",
+          "foreign": [],
+          "loadavg": [
+            1.1376953125,
+            1.6630859375,
+            1.87451171875
+          ]
+        },
+        {
+          "time": "2026-10-17 10:29:45 AM MST",
+          "foreign": [],
+          "loadavg": [
+            1.1376953125,
+            1.6630859375,
+            1.87451171875
+          ]
+        },
+        {
+          "time": "2026-10-17 10:29:46 AM MST",
+          "foreign": [],
+          "loadavg": [
+            1.84765625,
+            1.8017578125,
+            1.91845703125
+          ]
+        },
+        {
+          "time": "2026-10-17 10:29:47 AM MST",
+          "foreign": [],
+          "loadavg": [
+            1.84765625,
+            1.8017578125,
+            1.91845703125
+          ]
+        },
+        {
+          "time": "2026-10-17 10:29:48 AM MST",
+          "foreign": [],
+          "loadavg": [
+            1.84765625,
+            1.8017578125,
+            1.91845703125
+          ]
+        },
+        {
+          "time": "2026-10-17 10:29:49 AM MST",
+          "foreign": [],
+          "loadavg": [
+            1.84765625,
+            1.8017578125,
+            1.91845703125
+          ]
+        },
+        {
+          "time": "2026-10-17 10:29:50 AM MST",
+          "foreign": [],
+          "loadavg": [
+            1.84765625,
+            1.8017578125,
+            1.91845703125
+          ]
+        },
+        {
+          "time": "2026-10-17 10:29:51 AM MST",
+          "foreign": [],
+          "loadavg": [
+            1.85986328125,
+            1.80517578125,
+            1.9189453125
+          ]
+        },
+        {
+          "time": "2026-10-17 10:29:52 AM MST",
+          "foreign": [],
+          "loadavg": [
+            1.85986328125,
+            1.80517578125,
+            1.9189453125
+          ]
+        },
+        {
+          "time": "2026-10-17 10:29:53 AM MST",
+          "foreign": [],
+          "loadavg": [
+            1.85986328125,
+            1.80517578125,
+            1.9189453125
+          ]
+        },
+        {
+          "time": "2026-10-17 10:29:54 AM MST",
+          "foreign": [],
+          "loadavg": [
+            1.85986328125,
+            1.80517578125,
+            1.9189453125
+          ]
+        },
+        {
+          "time": "2026-10-17 10:29:55 AM MST",
+          "foreign": [],
+          "loadavg": [
+            1.85986328125,
+            1.80517578125,
+            1.9189453125
+          ]
+        },
+        {
+          "time": "2026-10-17 10:29:57 AM MST",
+          "foreign": [],
+          "loadavg": [
+            2.431640625,
+            1.9248046875,
+            1.95703125
+          ]
+        },
+        {
+          "time": "2026-10-17 10:29:58 AM MST",
+          "foreign": [],
+          "loadavg": [
+            2.431640625,
+            1.9248046875,
+            1.95703125
+          ]
+        },
+        {
+          "time": "2026-10-17 10:29:59 AM MST",
+          "foreign": [],
+          "loadavg": [
+            2.431640625,
+            1.9248046875,
+            1.95703125
+          ]
+        },
+        {
+          "time": "2026-10-17 10:30:00 AM MST",
+          "foreign": [],
+          "loadavg": [
+            2.431640625,
+            1.9248046875,
+            1.95703125
+          ]
+        },
+        {
+          "time": "2026-10-17 10:30:01 AM MST",
+          "foreign": [],
+          "loadavg": [
+            2.431640625,
+            1.9248046875,
+            1.95703125
+          ]
+        },
+        {
+          "time": "2026-10-17 10:30:02 AM MST",
+          "foreign": [],
+          "loadavg": [
+            2.39697265625,
+            1.92626953125,
+            1.95751953125
+          ]
+        },
+        {
+          "time": "2026-10-17 10:30:03 AM MST",
+          "foreign": [],
+          "loadavg": [
+            2.39697265625,
+            1.92626953125,
+            1.95751953125
+          ]
+        },
+        {
+          "time": "2026-10-17 10:30:04 AM MST",
+          "foreign": [],
+          "loadavg": [
+            2.39697265625,
+            1.92626953125,
+            1.95751953125
+          ]
+        },
+        {
+          "time": "2026-10-17 10:30:05 AM MST",
+          "foreign": [],
+          "loadavg": [
+            2.39697265625,
+            1.92626953125,
+            1.95751953125
+          ]
+        },
+        {
+          "time": "2026-10-17 10:30:06 AM MST",
+          "foreign": [],
+          "loadavg": [
+            2.39697265625,
+            1.92626953125,
+            1.95751953125
+          ]
+        },
+        {
+          "time": "2026-10-17 10:30:07 AM MST",
+          "foreign": [],
+          "loadavg": [
+            2.525390625,
+            1.9609375,
+            1.96875
+          ]
+        },
+        {
+          "time": "2026-10-17 10:30:08 AM MST",
+          "foreign": [],
+          "loadavg": [
+            2.525390625,
+            1.9609375,
+            1.96875
+          ]
+        },
+        {
+          "time": "2026-10-17 10:30:09 AM MST",
+          "foreign": [],
+          "loadavg": [
+            2.525390625,
+            1.9609375,
+            1.96875
+          ]
+        },
+        {
+          "time": "2026-10-17 10:30:10 AM MST",
+          "foreign": [],
+          "loadavg": [
+            2.525390625,
+            1.9609375,
+            1.96875
+          ]
+        },
+        {
+          "time": "2026-10-17 10:30:11 AM MST",
+          "foreign": [],
+          "loadavg": [
+            2.525390625,
+            1.9609375,
+            1.96875
+          ]
+        }
+      ],
+      "quiet": true,
+      "binary_unchanged": true,
+      "complete": true,
+      "finished": "2026-10-17 10:30:12 AM MST",
+      "peer_hashes": {
+        "first": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/host_trace.json",
+        "second": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/client_trace.json",
+        "cross_peer": true,
+        "sim_gated_pass": true,
+        "existing_comparator": {
+          "compared_ticks": 1200,
+          "first_divergence": null,
+          "divergent_subsystems": [],
+          "reasons": [],
+          "paused_ticks": 0,
+          "per_peer_excluded": [
+            "controller_route"
+          ],
+          "host_info": {
+            "run": {
+              "final_total_hash": "4b59fbff7e103c02b8fc7628420b08e8f5bc488d70a88992a568a4fc584317ee",
+              "numeric": {
+                "__wall_seconds": 21.980270615,
+                "final_tick": 1200.0
+              },
+              "passed": true,
+              "scenario": "P4 Alpha Duel",
+              "seed": 42,
+              "sim_config": {
+                "ai_update_interval": "2",
+                "automatic_gold_deposit": "1",
+                "crab_bombs": "off",
+                "delta_time_bits": "0x3c888865",
+                "enabled_global_scripts": "",
+                "mo_subtraction": "1",
+                "particle_settling": "1",
+                "pathfinder_grid_node_size": "24",
+                "recommended_moid_count": "512"
+              },
+              "strings": {
+                "completion": "completed",
+                "completion_reason": "the match ran to its end",
+                "scenario": "FeelBaseline"
+              },
+              "ticks": 1200
+            }
+          },
+          "client_info": {
+            "run": {
+              "final_total_hash": "4b59fbff7e103c02b8fc7628420b08e8f5bc488d70a88992a568a4fc584317ee",
+              "numeric": {
+                "__wall_seconds": 22.037777867,
+                "final_tick": 1200.0
+              },
+              "passed": true,
+              "scenario": "P4 Alpha Duel",
+              "seed": 42,
+              "sim_config": {
+                "ai_update_interval": "2",
+                "automatic_gold_deposit": "1",
+                "crab_bombs": "off",
+                "delta_time_bits": "0x3c888865",
+                "enabled_global_scripts": "",
+                "mo_subtraction": "1",
+                "particle_settling": "1",
+                "pathfinder_grid_node_size": "24",
+                "recommended_moid_count": "512"
+              },
+              "strings": {
+                "completion": "completed",
+                "completion_reason": "the match ran to its end",
+                "scenario": "FeelBaseline"
+              },
+              "ticks": 1200
+            }
+          },
+          "client_away_ticks": 0,
+          "client_replayed_ticks": 0,
+          "subsystem_sets_seen": [
+            [
+              "actor_timers",
+              "actors",
+              "attachables",
+              "carve_math",
+              "controller",
+              "controller_route",
+              "funds",
+              "lua_state",
+              "particles",
+              "rot_angle",
+              "rot_angvel",
+              "scene",
+              "sim_rng",
+              "terrain",
+              "tick"
+            ],
+            [
+              "actor_timers",
+              "actors",
+              "attachables",
+              "carve_math",
+              "controller",
+              "controller_route",
+              "funds",
+              "lua_state",
+              "rot_angle",
+              "rot_angvel",
+              "scene",
+              "sim_rng",
+              "terrain",
+              "tick"
+            ],
+            [
+              "actor_timers",
+              "actors",
+              "attachables",
+              "controller",
+              "controller_route",
+              "funds",
+              "lua_state",
+              "rot_angle",
+              "rot_angvel",
+              "scene",
+              "sim_rng",
+              "terrain",
+              "tick"
+            ]
+          ],
+          "coverage": "active core hashes; paused ticks cover the same census, per-object subsystems only when the world holds objects"
+        },
+        "all_tick_hashes_identical": true,
+        "first_full_row_difference": null,
+        "pass": true
+      }
+    },
+    "runner_receipts": {
+      "host": {
+        "runner": "posix_test_runner.py",
+        "runner_pid": 23432,
+        "platform": "linux",
+        "argv": [
+          "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand",
+          "-seed",
+          "42",
+          "-max-ticks",
+          "1200",
+          "-tick-hashes",
+          "-out",
+          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/host_trace.json",
+          "-input-script",
+          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/input.txt",
+          "-feel-render-settings",
+          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/host/runtime/Userdata/FeelRender.ini",
+          "-feel-measure",
+          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/host/feel",
+          "-controller-debug-dump",
+          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/host_controller.jsonl",
+          "-controller-debug-ticks",
+          "710-790",
+          "-net-match-service-e2e",
+          "-net-port",
+          "24670",
+          "-net-match-ticks",
+          "1200",
+          "-net-match-humans",
+          "2",
+          "-net-match-peers",
+          "2",
+          "-net-match-cpu-slots",
+          "0",
+          "-net-match-service-preset",
+          "Determinism FeelBaseline",
+          "-net-match-service-module",
+          "UserScenes.rte",
+          "-net-match-auto-delay",
+          "-net-fake-lag",
+          "15",
+          "-net-reconnect-ticket",
+          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/host.ticket",
+          "-net-match-report",
+          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/host_report.json",
+          "-net-test-live-stall",
+          "600:2000",
+          "-net-host"
+        ],
+        "cwd": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/host/runtime",
+        "timeout_seconds": 900,
+        "private_desktop": "n/a",
+        "input_desktop_before": "n/a",
+        "created_utc": "2026-10-17T17:29:35.677578+00:00",
+        "headless_env": null,
+        "visible_window": true,
+        "env_set": {
+          "CC_RUNNER_HEADED": "1",
+          "DISPLAY": ":0",
+          "CC_TEST_FEEL_HEADED": "1",
+          "CCCP_TEST_SINGLE_SCREEN": "1",
+          "CCCP_TEST_SCREEN_WATCHES": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/screen-watches.txt",
+          "CC_TEST_VSYNC_OFF": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "CC_TEST_NET_MATCH_E2E_WAIT_PEERS": "1",
+          "CC_TEST_DELAY_APPLY_DETAILS": "1",
+          "CC_SIM_DUMP": "710:790",
+          "TEMP": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/host/runtime/Temp",
+          "TMP": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/host/runtime/Temp",
+          "TMPDIR": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/host/runtime/Temp",
+          "SDL_VIDEODRIVER": "x11",
+          "CC_TEST_CRASH_DUMP": "crash.dmp"
+        },
+        "desktop_switch_restricted": true,
+        "job_kill_on_close": true,
+        "started": true,
+        "startup_checks": [
+          {
+            "check": "exe_exists",
+            "ok": true,
+            "detail": "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand"
+          },
+          {
+            "check": "exe_sha256_recorded",
+            "ok": true,
+            "detail": "21f906900ee71228ca18786fbfdc98bdfa1bb277c0e5016e5c441444a16a5795"
+          },
+          {
+            "check": "cwd_exists",
+            "ok": true,
+            "detail": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/host/runtime"
+          },
+          {
+            "check": "data_junction_resolves",
+            "ok": true,
+            "detail": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/host/runtime/Data -> /home/erol/cortex-workers/session-plane-engineer/Data"
+          },
+          {
+            "check": "userdata_writable",
+            "ok": true,
+            "detail": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/host/runtime/Userdata"
+          },
+          {
+            "check": "out_dir_private_writable",
+            "ok": true,
+            "detail": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/host"
+          },
+          {
+            "check": "lane_scripts_desktop_free",
+            "ok": true,
+            "detail": "no desktop tool"
+          }
+        ],
+        "evidence_expected": [
+          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/host_trace.json",
+          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/host/feel/raw.jsonl",
+          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/host_report.json"
+        ],
+        "hop": null,
+        "exe_path": "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand",
+        "exe_bytes": 68629656,
+        "exe_mtime_utc": "2026-10-17T17:29:08.878487+00:00",
+        "exe_sha256": "21f906900ee71228ca18786fbfdc98bdfa1bb277c0e5016e5c441444a16a5795",
+        "game_runtime_checks": true,
+        "settings_sha256_before": "286e7c5cc33ddb75f267cd66d071eff0d2f9cdac48e09484e78ad0f2f6af8e2a",
+        "pid": 23441,
+        "started_utc": "2026-10-17T17:29:35.879929+00:00",
+        "exit_code": 0,
+        "elapsed_seconds": 36.261,
+        "ended_utc": "2026-10-17T17:30:12.141091+00:00",
+        "input_desktop_after": "n/a",
+        "timed_out": false,
+        "job_closed": true,
+        "stdout_bytes": 776054,
+        "stderr_bytes": 230,
+        "verdict_lines": [],
+        "verdict_count": 0,
+        "last_verdict": null,
+        "verdict_present": false,
+        "evidence_present": [
+          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/host_trace.json",
+          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/host/feel/raw.jsonl",
+          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/host_report.json"
+        ],
+        "evidence_missing": [],
+        "evidence_complete": true,
+        "settings_sha256_after": "f3e59c23c00fd62151dc604cf5fa1197ea72b7d28ab3d739358e681edaf9f695",
+        "settings_changed": true
+      },
+      "client": {
+        "runner": "posix_test_runner.py",
+        "runner_pid": 23432,
+        "platform": "linux",
+        "argv": [
+          "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand",
+          "-seed",
+          "42",
+          "-max-ticks",
+          "1200",
+          "-tick-hashes",
+          "-out",
+          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/client_trace.json",
+          "-input-script",
+          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/input.txt",
+          "-feel-render-settings",
+          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/client/runtime/Userdata/FeelRender.ini",
+          "-feel-measure",
+          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/client/feel",
+          "-controller-debug-dump",
+          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/client_controller.jsonl",
+          "-controller-debug-ticks",
+          "710-790",
+          "-net-match-service-e2e",
+          "-net-port",
+          "24670",
+          "-net-match-ticks",
+          "1200",
+          "-net-match-humans",
+          "2",
+          "-net-match-peers",
+          "2",
+          "-net-match-cpu-slots",
+          "0",
+          "-net-match-service-preset",
+          "Determinism FeelBaseline",
+          "-net-match-service-module",
+          "UserScenes.rte",
+          "-net-match-auto-delay",
+          "-net-fake-lag",
+          "15",
+          "-net-reconnect-ticket",
+          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/client.ticket",
+          "-net-match-report",
+          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/client_report.json",
+          "-net-join",
+          "127.0.0.1"
+        ],
+        "cwd": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/client/runtime",
+        "timeout_seconds": 900,
+        "private_desktop": "n/a",
+        "input_desktop_before": "n/a",
+        "created_utc": "2026-10-17T17:29:36.634360+00:00",
+        "headless_env": null,
+        "visible_window": true,
+        "env_set": {
+          "CC_RUNNER_HEADED": "1",
+          "DISPLAY": ":0",
+          "CC_TEST_FEEL_HEADED": "1",
+          "CCCP_TEST_SINGLE_SCREEN": "1",
+          "CCCP_TEST_SCREEN_WATCHES": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/screen-watches.txt",
+          "CC_TEST_VSYNC_OFF": "1",
+          "PYTHONDONTWRITEBYTECODE": "1",
+          "CC_TEST_NET_MATCH_E2E_WAIT_PEERS": "1",
+          "CC_TEST_DELAY_APPLY_DETAILS": "1",
+          "CC_SIM_DUMP": "710:790",
+          "TEMP": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/client/runtime/Temp",
+          "TMP": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/client/runtime/Temp",
+          "TMPDIR": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/client/runtime/Temp",
+          "SDL_VIDEODRIVER": "x11",
+          "CC_TEST_CRASH_DUMP": "crash.dmp"
+        },
+        "desktop_switch_restricted": true,
+        "job_kill_on_close": true,
+        "started": true,
+        "startup_checks": [
+          {
+            "check": "exe_exists",
+            "ok": true,
+            "detail": "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand"
+          },
+          {
+            "check": "exe_sha256_recorded",
+            "ok": true,
+            "detail": "21f906900ee71228ca18786fbfdc98bdfa1bb277c0e5016e5c441444a16a5795"
+          },
+          {
+            "check": "cwd_exists",
+            "ok": true,
+            "detail": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/client/runtime"
+          },
+          {
+            "check": "data_junction_resolves",
+            "ok": true,
+            "detail": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/client/runtime/Data -> /home/erol/cortex-workers/session-plane-engineer/Data"
+          },
+          {
+            "check": "userdata_writable",
+            "ok": true,
+            "detail": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/client/runtime/Userdata"
+          },
+          {
+            "check": "out_dir_private_writable",
+            "ok": true,
+            "detail": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/client"
+          },
+          {
+            "check": "lane_scripts_desktop_free",
+            "ok": true,
+            "detail": "no desktop tool"
+          }
+        ],
+        "evidence_expected": [
+          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/client_trace.json",
+          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/client/feel/raw.jsonl",
+          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/client_report.json"
+        ],
+        "hop": null,
+        "exe_path": "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand",
+        "exe_bytes": 68629656,
+        "exe_mtime_utc": "2026-10-17T17:29:08.878487+00:00",
+        "exe_sha256": "21f906900ee71228ca18786fbfdc98bdfa1bb277c0e5016e5c441444a16a5795",
+        "game_runtime_checks": true,
+        "settings_sha256_before": "286e7c5cc33ddb75f267cd66d071eff0d2f9cdac48e09484e78ad0f2f6af8e2a",
+        "pid": 23481,
+        "started_utc": "2026-10-17T17:29:36.773944+00:00",
+        "exit_code": 0,
+        "elapsed_seconds": 35.386,
+        "ended_utc": "2026-10-17T17:30:12.160149+00:00",
+        "input_desktop_after": "n/a",
+        "timed_out": false,
+        "job_closed": true,
+        "stdout_bytes": 760770,
+        "stderr_bytes": 230,
+        "verdict_lines": [
+          "[net-match] state transfer complete: 1753880 bytes"
+        ],
+        "verdict_count": 1,
+        "last_verdict": "[net-match] state transfer complete: 1753880 bytes",
+        "verdict_present": true,
+        "evidence_present": [
+          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/client_trace.json",
+          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/client/feel/raw.jsonl",
+          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/client_report.json"
+        ],
+        "evidence_missing": [],
+        "evidence_complete": true,
+        "settings_sha256_after": "36d2a5fa43608150ac7c128c491c97391aba7e203c96ae4706f7bdb610be6331",
+        "settings_changed": true
+      }
+    },
+    "simdump_window": [
+      710,
+      790
+    ],
+    "all_simdump_bytes_identical": true,
+    "uncompressed_simdump_sha256": "2689c07adb5df60b663aecc7723daed2ee88f3ba18d0d34d014f2bc5c883fa2d",
+    "uncompressed_simdump_bytes": 3421081,
+    "simdump_lines": 9211,
+    "hold_frame": 606,
+    "ai_frame": 727,
+    "return_frame": 760
+  },
+  "scope": "Linux headed local two-engine fake-30-ms match; no multi-machine replay of the field incident. The combined feel driver exits 1 because this one-arm hold run is not a complete B repeat matrix."
+}
