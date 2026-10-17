@@ -45,6 +45,7 @@
 #include <set>
 #include <span>
 #include <string_view>
+#include <unordered_set>
 #include <vector>
 
 #ifndef _MSC_VER
@@ -1493,7 +1494,13 @@ struct CheckpointNativeStorage::ReadState : std::enable_shared_from_this<ReadSta
 	const CheckpointRootIndex& sourceRoots;
 	const CheckpointRootIndex& viewRoots;
 	const CheckpointRootIndex& privateRoots;
-	std::map<std::pair<uintptr_t, size_t>, std::string> strings;
+	// One copy per distinct frozen string: a save reads the same names, file paths and reader positions from thousands of objects.
+	struct StringHash {
+		using is_transparent = void;
+		size_t operator()(std::string_view text) const noexcept { return std::hash<std::string_view>{}(text); }
+	};
+	std::unordered_set<std::string, StringHash, std::equal_to<>> strings;
+	std::string scratch;
 	std::map<std::pair<uintptr_t, uintptr_t>, std::shared_ptr<const void>> indices;
 	std::shared_ptr<PrivateValues> privateValues;
 };
@@ -1754,12 +1761,12 @@ const std::string* CheckpointNativeStorage::ReadString(const char* source, size_
 	if (!s_Read) return nullptr;
 	static const std::string empty;
 	if (!bytes) return &empty;
-	const auto key = std::pair{reinterpret_cast<uintptr_t>(source), bytes};
-	if (const auto found = s_Read->strings.find(key); found != s_Read->strings.end()) return &found->second;
+	std::string& scratch = s_Read->scratch;
+	scratch.resize(bytes);
+	if (!ReadBytes(source, scratch.data(), bytes)) throw std::logic_error("native string is outside the frozen inventory");
+	if (const auto found = s_Read->strings.find(std::string_view(scratch)); found != s_Read->strings.end()) return &*found;
 	CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
-	std::string value(bytes, '\0');
-	if (!ReadBytes(source, value.data(), bytes)) throw std::logic_error("native string is outside the frozen inventory");
-	return &s_Read->strings.emplace(key, std::move(value)).first->second;
+	return &*s_Read->strings.emplace(scratch).first;
 }
 
 std::string CheckpointNativeStorage::SelfTestMismatch() {
