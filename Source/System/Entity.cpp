@@ -916,7 +916,8 @@ namespace RTE {
 		// If compiled with ASan, sidestep pooling and just use the allocator normally.
 
 		void* foundMemory = m_Allocate();
-		RTEAssert(foundMemory, "m_Allocate failed! to make memory!");
+		// A refused allocation is refused here as the pool's refill refuses it: no null instance is handed out.
+		if (!foundMemory) throw std::bad_alloc();
 #else
 
 		RTEAssert(IsConcrete(), "Trying to get pool memory of an abstract Entity class!");
