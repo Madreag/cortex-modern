@@ -2176,8 +2176,8 @@ namespace RTE::CheckpointLua {
 		if (m_CowCoordinator) {
 			CowCoordinator::Locked guard(m_CowCoordinator->lock);
 			// An unarmed plan's copy fences nothing yet, but once a capture is near its saver has committed the heap for the boundary.
-			const bool near = KeepWarm().load(std::memory_order_acquire);
-			for (const auto& copy: m_CowCoordinator->copies) if (!copy->completed && (near || copy->armed.load(std::memory_order_acquire) != 0)) return false;
+			const bool captureNear = KeepWarm().load(std::memory_order_acquire);
+			for (const auto& copy: m_CowCoordinator->copies) if (!copy->completed && (captureNear || copy->armed.load(std::memory_order_acquire) != 0)) return false;
 		}
 		return true;
 	}
