@@ -133,15 +133,16 @@ namespace RTE {
 		if (const auto bridge = m_PeerBridges.find(owner); bridge != m_PeerBridges.end() &&
 		    frame >= bridge->second.fromFrame && (!bridge->second.returnFrame || frame < *bridge->second.returnFrame))
 			return owner != m_Config.localPeerId || m_PeerCommittedTail.contains(frame);
-		return PeerGroupHasAuthority(PeerInputVoters(frame, owner));
+		return PeerGroupHasAuthority(PeerInputVoters(frame, owner), frame);
 	}
 
 	uint32_t NetLockstepCoordinator::PeerInputVoters(uint64_t frame, uint8_t owner) const {
-		// A removed or released owner's input before its boundary is accepted by the seats that remain.
-		uint32_t accepted = m_RemovedPeers.contains(owner) || IsSeatReleased(owner) ? 0 : SeatBit(owner);
+		const uint32_t retained = PeerRetainedSeatsAt(frame);
+		if ((retained & SeatBit(owner)) == 0) return 0;
+		uint32_t accepted = SeatBit(owner);
 		if (const auto receipts = m_PeerInputReceipts.find(owner); receipts != m_PeerInputReceipts.end())
 			for (const auto& [peer, through]: receipts->second)
-				if (!m_RemovedPeers.contains(peer) && !IsSeatReleased(peer) && through > frame) accepted |= SeatBit(peer);
+				if ((retained & SeatBit(peer)) != 0 && through > frame) accepted |= SeatBit(peer);
 		return accepted;
 	}
 
@@ -156,11 +157,8 @@ namespace RTE {
 			through = std::max(through, m_LastQueuedTargetFrame + 1);
 		if (const auto found = m_PeerInputReceipts.find(owner); found != m_PeerInputReceipts.end()) {
 			for (const auto& [receiver, candidate]: found->second) {
-				if (m_RemovedPeers.contains(receiver) || IsSeatReleased(receiver)) continue;
-				uint32_t voters = SeatBit(owner);
-				for (const auto& [peer, accepted]: found->second)
-					if (!m_RemovedPeers.contains(peer) && !IsSeatReleased(peer) && accepted >= candidate) voters |= SeatBit(peer);
-				if (PeerGroupHasAuthority(voters)) through = std::max(through, candidate);
+				if (candidate == 0) continue;
+				if (PeerGroupHasAuthority(PeerInputVoters(candidate - 1, owner), candidate - 1)) through = std::max(through, candidate);
 			}
 		}
 		return through == 0 ? std::nullopt : std::optional(through - 1);
@@ -192,10 +190,59 @@ namespace RTE {
 
 	void NetLockstepCoordinator::RemovePeerFrameSeat(uint8_t peer, uint64_t frame) {
 		if (!UsesPeerFrameGroups()) return;
+		m_PeerOwnershipChanges[peer][frame] = false;
+		std::set<PeerDecisionKey> retired;
+		const auto superseded = [&](const NetHostMigrationMessage& proposal) {
+			return proposal.preparedFrame == 1 && proposal.frame >= frame && ReturnCrossesDeparture(proposal, m_PeerOwnershipChanges);
+		};
+		// A removal before a certified return supersedes the entire named cohort.
+		// Retire it on early receivers just as installation rejects it on late ones.
+		for (auto cert = m_PeerBridgeCertificates.lower_bound({frame, 0}); cert != m_PeerBridgeCertificates.end(); ++cert) {
+			if (cert->first.second != 1) continue;
+			NetHostMigrationMessage agreed; uint32_t voters = 0;
+			if (!DecodePeerBridgeCertificate(cert->second, agreed, voters) || !superseded(agreed)) continue;
+			retired.insert(cert->first);
+			for (uint8_t named: agreed.members) {
+				if (auto bridge = m_PeerBridges.find(named); bridge != m_PeerBridges.end() && bridge->second.returnFrame == agreed.frame) bridge->second.returnFrame.reset();
+				if (auto back = m_ReclaimTransactions.find(named); back != m_ReclaimTransactions.end() && back->second.activationFrame == agreed.frame) {
+					m_PeerEffectiveStart.erase(named);
+					if (auto admission = m_PeerAdmissions.find(named); admission != m_PeerAdmissions.end() && admission->second.frame == agreed.frame) m_PeerAdmissions.erase(admission);
+					m_ReclaimTransactions.erase(back);
+				}
+				if (auto holds = m_PeerFrameHolds.find(named); holds != m_PeerFrameHolds.end()) {
+					const auto back = holds->second.find(agreed.frame);
+					if (back != holds->second.end() && !back->second) holds->second.erase(back);
+				}
+				if (auto transitions = m_SeatTransitions.find(named); transitions != m_SeatTransitions.end()) {
+					const auto back = transitions->second.find(agreed.frame);
+					if (back != transitions->second.end() && back->second == SeatTransition::Back) transitions->second.erase(back);
+				}
+				// An independently certified delay at the same frame still stands.
+				NetHostMigrationMessage delay; uint32_t delayVoters = 0;
+				const auto delayCert = m_PeerBridgeCertificates.find({agreed.frame, static_cast<uint8_t>(8 + named)});
+				if (delayCert == m_PeerBridgeCertificates.end() || !DecodePeerBridgeCertificate(delayCert->second, delay, delayVoters) ||
+				    std::find(delay.members.begin(), delay.members.end(), named) == delay.members.end()) m_DelayChanges[named].erase(agreed.frame);
+			}
+		}
+		for (const auto& [key, votes]: m_PeerBridgeVotes) if (key.second == 1 && key.first >= frame)
+			for (const auto& [voter, proposal]: votes) if (superseded(proposal)) retired.insert(key);
+		for (const auto& [key, pending]: m_PendingPeerDecisions) if (key.second == 1 && key.first >= frame) {
+			NetHostMigrationMessage proposal; uint32_t voters = 0;
+			if (DecodePeerBridgeCertificate(pending.first, proposal, voters) && superseded(proposal)) retired.insert(key);
+		}
+		for (const auto& [activation, proof]: m_PeerReturnProofs) if (activation >= frame) {
+			NetHostMigrationMessage proposal; uint32_t voters = 0;
+			if (DecodePeerBridgeCertificate(proof, proposal, voters) && superseded(proposal)) retired.emplace(activation, 1);
+		}
+		for (const auto& key: retired) {
+			m_PeerBridgeCertificates.erase(key); m_PeerBridgeVotes.erase(key); m_PendingPeerDecisions.erase(key);
+			m_PeerVotedAtMs.erase(key); m_AuthorityWaitSinceMs.erase(key); m_PeerReturnProofs.erase(key.first);
+		}
 		m_PeerOwnReceiptProgress.erase(peer); m_PeerReceiptDelaySamples.erase(peer); m_PeerInputReliableThrough.erase(peer);
 		m_PeerTailSendRanges.erase(peer); m_PeerTailOutgoing.erase(peer);
 		m_PeerTailLastSentMs.erase(peer); m_PeerTailResendFrames.erase(peer);
-		for (auto& [owner, receipts]: m_PeerInputReceipts) receipts.erase(peer);
+		// Keep the old owner's real receipts for earlier frames, without authorizing a new incarnation's inputs.
+		for (auto& [owner, receipts]: m_PeerInputReceipts) if (auto receipt = receipts.find(peer); receipt != receipts.end()) receipt->second = std::min(receipt->second, frame);
 		const uint32_t members = PeerFrameMembersAt(frame);
 		m_FrameGroupChanges.try_emplace(frame, members);
 		for (auto change = m_FrameGroupChanges.lower_bound(frame); change != m_FrameGroupChanges.end(); ++change) change->second &= ~SeatBit(peer);
@@ -218,7 +265,14 @@ namespace RTE {
 		}
 		if (PeerFrameBlackout(nowMs)) return true;
 		if (message.sessionId != m_Config.sessionId || message.roundId != m_Config.matchConfig.roundId || message.configHash != m_RoundConfigHash ||
-		    message.senderPeerId == 0 || message.senderPeerId == m_Config.localPeerId || message.senderPeerId > m_Config.peerCount || message.generation != 1 || m_RemovedPeers.contains(message.senderPeerId)) return true;
+		    message.senderPeerId == 0 || message.senderPeerId == m_Config.localPeerId || message.senderPeerId > m_Config.peerCount || message.generation != 1) return true;
+		if (m_RemovedPeers.contains(message.senderPeerId)) {
+			const bool historicalData = message.type == NetHostMigrationMessageType::PeerInput || message.type == NetHostMigrationMessageType::PeerForwardInput ||
+			    message.type == NetHostMigrationMessageType::PeerReceipt || message.type == NetHostMigrationMessageType::PeerTail ||
+			    message.type == NetHostMigrationMessageType::PeerBridge || message.type == NetHostMigrationMessageType::PeerBridgeCommit;
+			const uint64_t at = message.type == NetHostMigrationMessageType::PeerReceipt && message.preparedFrame != UINT64_MAX && message.frame > 0 ? message.frame - 1 : message.frame;
+			if (!historicalData || at < m_Config.startFrame || (PeerRetainedSeatsAt(at) & SeatBit(message.senderPeerId)) == 0) return true;
+		}
 		const auto heard = [&] {
 			if (m_Config.peerSessionLinks) m_Config.peerSessionLinks->progressAt[message.senderPeerId] = nowMs;
 			m_PeerLastHeardMs[message.senderPeerId] = nowMs;
@@ -335,6 +389,8 @@ namespace RTE {
 		if (message.type == NetHostMigrationMessageType::PeerBridgeCommit) {
 			NetHostMigrationMessage agreed; uint32_t voters = 0;
 			if (message.preparedFrame == 1 && DecodePeerBridgeCertificate(message, agreed, voters)) {
+				if (ReturnCrossesDeparture(agreed, m_PeerOwnershipChanges)) return true;
+				for (uint8_t peer: agreed.members) if ((PeerRetainedSeatsAt(agreed.frame) & SeatBit(peer)) == 0) return true;
 				m_PeerReturnProofs.try_emplace(message.frame, message);
 				while (m_PeerReturnProofs.size() > 32) m_PeerReturnProofs.erase(m_PeerReturnProofs.begin());
 			}
@@ -467,7 +523,7 @@ namespace RTE {
 				if (agreed.preparedFrame == 3 && agreed.completeFrom > m_Config.migrationGeneration) {
 					NoteSuperseded(agreed.completeFrom);
 					if (PeerAdminCertificateValid(agreed, voters) && 2 * std::popcount(voters) >= static_cast<int>(m_Config.peerCount)) m_PeerAdminFrameMembers = voters;
-				} else if (agreed.connectedMask == message.voterMask && !PeerGroupHasAuthority(voters)) CheckPeerFrameTie(agreed.frame, voters, nowMs);
+				} else if (agreed.connectedMask == message.voterMask && !PeerGroupHasAuthority(voters, agreed.frame)) CheckPeerFrameTie(agreed.frame, voters, nowMs);
 				if (agreed.preparedFrame == 1) {
 					size_t offset = NetHash32{}.size();
 					for (uint8_t member: agreed.members) {
@@ -497,7 +553,7 @@ namespace RTE {
 			}
 			if (at != body.size()) return true;
 			heard();
-			if (!PeerGroupHasAuthority(message.voterMask)) return true;
+			if (!PeerGroupHasAuthority(message.voterMask, message.frame)) return true;
 			uint32_t agreeing = witnessed;
 			if ((message.voterMask & SeatBit(m_Config.localPeerId)) != 0) {
 				const auto own = m_PeerSourceInputs.find(message.frame);
@@ -526,7 +582,7 @@ namespace RTE {
 		}
 		if (!inputMessage || body.empty()) return true;
 		const uint8_t owner = message.type == NetHostMigrationMessageType::PeerForwardInput ? message.successorPeerId : message.senderPeerId;
-		if (owner == 0 || owner > m_Config.peerCount || m_RemovedPeers.contains(owner)) return true;
+		if (owner == 0 || owner > m_Config.peerCount) return true;
 		const auto wireBody = body;
 		if (body.front() == 0) {
 			size_t packedOffset = 1; uint32_t size = 0;
@@ -604,6 +660,7 @@ namespace RTE {
 		}
 		for (const NetLockstepFrame* entry: inputs) {
 			const NetLockstepFrame& input = *entry;
+			if ((PeerRetainedSeatsAt(input.targetFrame) & SeatBit(input.senderPeerId)) == 0) continue;
 			if (input.targetFrame < m_Stats.nextFrame || input.targetFrame - m_Stats.nextFrame > NetLockstepCodec::c_MaxFutureFrameSkew) continue;
 			if ((m_PeerRejectedInputs[input.targetFrame] & SeatBit(input.senderPeerId)) != 0) {
 				if (!m_PeerBridgeCertificates.contains({input.targetFrame, 0})) {

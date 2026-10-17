@@ -1681,9 +1681,11 @@ namespace RTE {
 		/// The seats that vote at a frame (the next one to prepare by default), with voters narrowed to them; zero when no voter is a retained seat.
 		uint32_t PeerVotingOwners(uint32_t& voters, uint64_t frame = UINT64_MAX) const;
 		uint32_t PeerHeldSeatsAt(uint64_t frame) const;
+		uint32_t PeerRetainedSeatsAt(uint64_t frame) const;
 		uint32_t PeerFrameMembersAt(uint64_t frame) const;
+		void PrunePeerFrameSeatChanges(uint64_t floor);
 		/// Whether the round's referee decides its ties: a directory round of two or four retained seats; the host's half wins any other tie.
-		bool PeerTieRefereed() const;
+		bool PeerTieRefereed(uint64_t frame = UINT64_MAX) const;
 		/// Whether voters are exactly half of the seats that vote at a frame in a round whose ties the referee decides.
 		bool PeerGroupIsRefereedHalf(uint32_t voters, uint64_t frame = UINT64_MAX) const;
 		/// The frame from which the whole group last played together at or before frame: the name every half gives the split after it.
@@ -1816,6 +1818,7 @@ namespace RTE {
 		uint32_t m_FrameGroupMembers = 0;
 		std::map<uint64_t, uint32_t> m_FrameGroupChanges;
 		std::map<uint8_t, std::map<uint64_t, bool>> m_PeerFrameHolds; //!< Each seat's certified hold/return boundaries, independent of another decision's group snapshot.
+		std::map<uint8_t, std::map<uint64_t, bool>> m_PeerOwnershipChanges; //!< Ownership is retained through a hold; only an agreed departure/release or a fresh admission changes it.
 		std::map<uint64_t, uint32_t> m_PeerSplitRenewals; //!< Frames the whole group agreed a new split name at, after a tie it settled, and that group.
 		uint8_t m_AuthenticatedPeerMessage = 0;
 		bool m_PeerPrimaryListener = false;

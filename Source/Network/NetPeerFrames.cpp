@@ -106,19 +106,33 @@ namespace RTE {
 		return held;
 	}
 
+	uint32_t NetLockstepCoordinator::PeerRetainedSeatsAt(uint64_t frame) const {
+		uint32_t retained = (1U << m_Config.peerCount) - 1;
+		for (const auto& [peer, changes]: m_PeerOwnershipChanges) {
+			const auto after = changes.upper_bound(frame);
+			if (after != changes.begin() && !std::prev(after)->second) retained &= ~SeatBit(peer);
+		}
+		return retained;
+	}
+
 	uint32_t NetLockstepCoordinator::PeerFrameMembersAt(uint64_t frame) const {
 		const auto group = m_FrameGroupChanges.upper_bound(frame);
 		const uint32_t members = group == m_FrameGroupChanges.begin() ? (1U << m_Config.peerCount) - 1 : std::prev(group)->second;
 		// A future return can have been signed before another seat's intervening hold.
 		// Its snapshot cannot return that other seat: only a return naming it ends its hold.
-		return members & ~PeerHeldSeatsAt(frame);
+		return members & PeerRetainedSeatsAt(frame) & ~PeerHeldSeatsAt(frame);
+	}
+
+	void NetLockstepCoordinator::PrunePeerFrameSeatChanges(uint64_t floorFrame) {
+		for (auto* histories: {&m_PeerFrameHolds, &m_PeerOwnershipChanges}) for (auto& [peer, history]: *histories) {
+			const auto floor = history.lower_bound(floorFrame);
+			if (floor != history.begin()) history.erase(history.begin(), std::prev(floor));
+		}
 	}
 
 	uint32_t NetLockstepCoordinator::PeerVotingOwners(uint32_t& voters, uint64_t frame) const {
 		const uint64_t at = frame == UINT64_MAX ? m_Stats.nextFrame : frame;
-		uint32_t owners = 0;
-		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer)
-			if (!m_RemovedPeers.contains(peer) && !IsSeatReleased(peer)) owners |= SeatBit(peer);
+		uint32_t owners = PeerRetainedSeatsAt(at);
 		if (voters == 0 || (voters & ~owners) != 0) return 0;
 		// A declared Leave keeps its AI seat but answers nothing more from the moment it is declared, its last inputs ahead included.
 		for (const auto& [peer, ended]: m_PeerRoundEnds) if (!ended.closedLink) owners &= ~SeatBit(peer);
@@ -132,11 +146,10 @@ namespace RTE {
 		return voters == 0 ? 0 : owners;
 	}
 
-	bool NetLockstepCoordinator::PeerTieRefereed() const {
+	bool NetLockstepCoordinator::PeerTieRefereed(uint64_t frame) const {
 		// The directory referees an even split of two or four retained seats; any other tie goes to the host's half. Three retained
 		// seats never split evenly for it: with one held, the two that play tie one to one and the host's half keeps the round.
-		int retained = 0;
-		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) retained += !m_RemovedPeers.contains(peer) && !IsSeatReleased(peer);
+		const int retained = std::popcount(PeerRetainedSeatsAt(frame == UINT64_MAX ? m_Stats.nextFrame : frame));
 		return m_Config.frameTieReferee && (retained == 2 || retained == 4);
 	}
 
@@ -149,7 +162,7 @@ namespace RTE {
 	}
 
 	bool NetLockstepCoordinator::PeerGroupIsRefereedHalf(uint32_t voters, uint64_t frame) const {
-		const uint32_t owners = PeerTieRefereed() ? PeerVotingOwners(voters, frame) : 0;
+		const uint32_t owners = PeerTieRefereed(frame) ? PeerVotingOwners(voters, frame) : 0;
 		return owners != 0 && 2 * std::popcount(voters) == std::popcount(owners);
 	}
 
@@ -161,7 +174,7 @@ namespace RTE {
 		if (m_PeerAdminFrameMembers != 0 && voters == m_PeerAdminFrameMembers) return true;
 		const int votes = std::popcount(voters), seats = std::popcount(owners);
 		if (2 * votes != seats) return 2 * votes > seats;
-		if (!PeerTieRefereed()) return (voters & SeatBit(PeerTieHalfHolder(owners))) != 0;
+		if (!PeerTieRefereed(at)) return (voters & SeatBit(PeerTieHalfHolder(owners))) != 0;
 		const auto decision = m_PeerFrameTieWinners.find(PeerSplitEpoch(at));
 		return decision != m_PeerFrameTieWinners.end() && decision->second == voters;
 	}
@@ -170,16 +183,14 @@ namespace RTE {
 		if ((agreeing & ~members) != 0) return false;
 		const int votes = std::popcount(agreeing), seats = std::popcount(members);
 		if (2 * votes != seats) return 2 * votes > seats;
-		if (!PeerTieRefereed()) return (agreeing & SeatBit(PeerTieHalfHolder(members))) != 0;
+		if (!PeerTieRefereed(frame)) return (agreeing & SeatBit(PeerTieHalfHolder(members))) != 0;
 		const auto decision = m_PeerFrameTieWinners.find(PeerSplitEpoch(frame));
 		return decision != m_PeerFrameTieWinners.end() && decision->second == agreeing;
 	}
 
 	uint64_t NetLockstepCoordinator::PeerSplitEpoch(uint64_t frame) const {
 		// A seat held at the frame plays in neither half, so each new set of held seats names a new split for the referee.
-		uint32_t whole = 0;
-		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer)
-			if (!m_RemovedPeers.contains(peer) && !IsSeatReleased(peer)) whole |= SeatBit(peer);
+		uint32_t whole = PeerRetainedSeatsAt(frame);
 		whole &= ~PeerHeldSeatsAt(frame);
 		uint64_t name = m_Config.startFrame;
 		for (auto change = m_FrameGroupChanges.upper_bound(frame); change != m_FrameGroupChanges.begin();)
@@ -193,7 +204,7 @@ namespace RTE {
 	void NetLockstepCoordinator::CheckPeerFrameTie(uint64_t frame, uint32_t members, uint64_t nowMs) {
 		// Both halves name a split by the last frame the whole group played, so every check-in of one split meets one decision.
 		const uint64_t split = PeerSplitEpoch(frame);
-		if (!PeerTieRefereed() || m_PeerFrameTieWinners.contains(split)) return;
+		if (!PeerTieRefereed(frame) || m_PeerFrameTieWinners.contains(split)) return;
 		NetFrameTieRequest request;
 		request.generation = m_Config.migrationGeneration; request.roundId = m_Config.matchConfig.roundId;
 		request.frame = split; request.configHash = m_RoundConfigHash; request.host = GetHostPeerId();
@@ -417,10 +428,7 @@ namespace RTE {
 			const auto floor = history->lower_bound(historyFloor);
 			if (floor != history->begin()) history->erase(history->begin(), std::prev(floor));
 		}
-		for (auto& [peer, history]: m_PeerFrameHolds) {
-			const auto floor = history.lower_bound(historyFloor);
-			if (floor != history.begin()) history.erase(history.begin(), std::prev(floor));
-		}
+		PrunePeerFrameSeatChanges(historyFloor);
 		std::erase_if(m_PeerFrameIncoming, [&](const auto& entry) { return nowMs >= entry.second.lastReceivedMs && nowMs - entry.second.lastReceivedMs > c_NetHostLossSilenceMs; });
 	}
 

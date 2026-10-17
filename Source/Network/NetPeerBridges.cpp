@@ -175,6 +175,10 @@ namespace RTE {
 
 	bool NetLockstepCoordinator::ValidatePeerBridge(const NetHostMigrationMessage& proposal) const {
 		if (proposal.preparedFrame == 3) return ValidatePeerAdmin(proposal);
+		if (proposal.preparedFrame == 1) {
+			if (ReturnCrossesDeparture(proposal, m_PeerOwnershipChanges)) return false;
+			for (uint8_t peer: proposal.members) if ((PeerRetainedSeatsAt(proposal.frame) & SeatBit(peer)) == 0) return false;
+		}
 		// A hold may collect the missing seat's co-sign; its certificate still needs authority from the actual signers.
 		const bool cooperativeHold = proposal.preparedFrame == 0 && proposal.members.size() == 1 &&
 		    PeerGroupHasAuthority(proposal.connectedMask | SeatBit(proposal.members.front()), proposal.frame);
@@ -728,6 +732,10 @@ namespace RTE {
 		};
 		NetHostMigrationMessage agreed; uint32_t voters = 0;
 		if (!DecodePeerBridgeCertificate(certificate, agreed, voters)) { refused("certificate"); return; }
+		if (agreed.preparedFrame == 1) {
+			if (ReturnCrossesDeparture(agreed, m_PeerOwnershipChanges)) { refused("owner changed"); return; }
+			for (uint8_t peer: agreed.members) if ((PeerRetainedSeatsAt(agreed.frame) & SeatBit(peer)) == 0) { refused("removed"); return; }
+		}
 		// A tie the referee decides is asked before the decision is set aside: its answer may already be there.
 		if (agreed.preparedFrame != 3 && !PeerGroupHasAuthority(voters, certificate.frame)) CheckPeerFrameTie(certificate.frame, voters, nowMs);
 		const PeerDecisionKey decision{certificate.frame, DecisionKind(certificate)};
@@ -822,6 +830,8 @@ namespace RTE {
 				const uint64_t revision = agreed.frame * 8 + peer;
 				const auto [delay, neutral, incarnation] = returnDelays.at(peer);
 				m_ReclaimTransactions[peer] = {peer, m_Config.migrationGeneration, revision, incarnation, agreed.frame, delay, neutral};
+				// Every survivor knows the certified terms before the returning process sends its new start.
+				m_PeerAdmissions[peer] = {agreed.frame, delay};
 				if (delay != InputDelayAt(peer, agreed.frame)) m_DelayChanges[peer][agreed.frame] = delay;
 				m_PeerEffectiveStart[peer] = agreed.frame + delay;
 				m_PeerAcceptedThrough[peer] = neutral + 1;

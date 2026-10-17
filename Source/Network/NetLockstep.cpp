@@ -4557,6 +4557,7 @@ namespace RTE {
 			for (const auto& [frame, release]: releases) {
 				if (frame > m_MigrationBoundary) continue;
 				m_SeatReleases[peer][frame] = release;
+				m_PeerOwnershipChanges[peer][frame] = false;
 				m_ReleasedAiSeats.insert(peer);
 			}
 		for (const auto& [peer, frame]: m_AiHeldSeats) if (!m_ReleasedAiSeats.contains(peer)) {
@@ -5460,7 +5461,7 @@ namespace RTE {
 		m_PeerTailPrefixes.clear(); m_PeerTailVotes.clear(); m_PeerTailDecisions.clear();
 		m_PeerPaceStartMs.reset(); m_PeerConsumerAtMs.reset(); m_PeerPaceStartFrame = 0; m_PeerPaceReference = GetHostPeerId(); m_PeerHadHitch = false;
 		if (!m_Config.peerSessionLinks) { PeerListenerBindings().clear(); PeerPrimaryBindings().clear(); }
-		m_FrameGroupChanges.clear(); m_PeerFrameHolds.clear(); m_PeerSplitRenewals.clear(); m_PeerDelayBelowSinceMs.clear();
+		m_FrameGroupChanges.clear(); m_PeerFrameHolds.clear(); m_PeerOwnershipChanges.clear(); m_PeerSplitRenewals.clear(); m_PeerDelayBelowSinceMs.clear();
 		m_PeerFrameTie.reset(); m_PeerFrameTieWinners.clear(); m_PeerFrameTieSinceMs = 0;
 		m_PeerAdminRequest.reset(); m_PeerAdminOwnVote.reset(); m_PeerAdminFrameMembers = 0;
 		m_PeerAdminReady.clear();
@@ -5534,13 +5535,16 @@ namespace RTE {
 			if (m_Config.peerFrameGroups && m_PeerBridges.contains(peer)) {
 				m_PeerBridges[peer].returnFrame = reclaim.activationFrame;
 				m_PeerFrameHolds[peer][reclaim.activationFrame] = false;
+				m_PeerOwnershipChanges[peer][reclaim.activationFrame] = true;
 			}
 			m_NextTimingRevision = std::max(m_NextTimingRevision, reclaim.eventSequence == UINT64_MAX ? UINT64_MAX : reclaim.eventSequence + 1);
 		}
 		if (m_Config.peerFrameGroups) {
+			for (uint8_t peer: m_RemovedPeers) m_PeerOwnershipChanges[peer][m_Config.startFrame] = false;
 			m_FrameGroupMembers = (1U << m_Config.peerCount) - 1;
 			for (const auto& [peer, bridge]: m_PeerBridges)
 				if (!bridge.returnFrame || *bridge.returnFrame > m_Config.startFrame) m_FrameGroupMembers &= ~(1U << (peer - 1));
+			m_FrameGroupMembers &= PeerRetainedSeatsAt(m_Config.startFrame);
 			m_FrameGroupChanges[m_Config.startFrame] = m_FrameGroupMembers;
 			for (auto& [peer, bridge]: m_PeerBridges) bridge.members = m_FrameGroupMembers;
 		}
@@ -6232,7 +6236,13 @@ namespace RTE {
 		}
 		// A release the replay read from the tail is the round's too: its seat's claims already ended there.
 		for (const auto& [peer, releases]: replay.m_SeatReleases)
-			for (const auto& [frame, release]: releases) m_SeatReleases[peer].emplace(frame, release);
+			for (const auto& [frame, release]: releases) {
+				m_SeatReleases[peer].emplace(frame, release);
+				m_PeerOwnershipChanges[peer][frame] = false;
+			}
+		for (const auto& [peer, changes]: replay.m_PeerOwnershipChanges)
+			for (const auto& [frame, retained]: changes)
+				if (frame <= replay.m_LastCompletedSimulationTick.value_or(0)) m_PeerOwnershipChanges[peer].try_emplace(frame, retained);
 		const auto knowTaken = [&](uint64_t revision, NetLockstepTiming proposal) {
 			if (m_TimingDecisions.contains(revision)) return;
 			proposal.phase = NetTimingPhase::Propose;
@@ -6577,6 +6587,7 @@ namespace RTE {
 			}
 			// Every peer ends the seat's claims at this frame; a replay reads it from the record the frame carries.
 			m_SeatReleases[timing.peerId][timing.applyFrame] = {timing.peerId, timing.authorityGeneration, timing.revision, timing.seatIncarnations[timing.peerId - 1], timing.applyFrame};
+			m_PeerOwnershipChanges[timing.peerId][timing.applyFrame] = false;
 			DiagnosticLine() << "[net-lockstep] release of peer " << static_cast<int>(timing.peerId) << " at " << timing.applyFrame << " revision=" << timing.revision
 			          << " next=" << m_Stats.nextFrame << std::endl;
 		}
@@ -7474,6 +7485,7 @@ namespace RTE {
 		m_AiHeldSeats.erase(peer); m_HoldTransactions.erase(peer); m_ReleasedAiSeats.erase(peer);
 		m_SlowMachineHolds.erase(peer);
 		m_RemovedPeers.erase(peer);
+		m_PeerOwnershipChanges[peer][reclaim.applyFrame] = true;
 		m_PeerLeaveFrames.erase(peer); m_PeerFrameWaivers.erase(peer);
 		m_DroppedSeats.erase(peer); m_LeftSeatsHeld.erase(peer); m_DroppedAtMs.erase(peer);
 		m_DroppedSeatResolutions[peer] = NetLockstepHoldResolution::Reclaimed;
@@ -9058,7 +9070,10 @@ namespace RTE {
 			}
 			for (const auto& command: input.commands) {
 				if (const auto* delay = std::get_if<NetGameInputDelay>(&command.payload)) m_DelayChanges[delay->peerId][input.targetFrame] = delay->frames;
-				if (const auto* release = std::get_if<NetGameSeatRelease>(&command.payload)) m_SeatReleases[release->peerId][input.targetFrame] = *release;
+				if (const auto* release = std::get_if<NetGameSeatRelease>(&command.payload)) {
+					m_SeatReleases[release->peerId][input.targetFrame] = *release;
+					m_PeerOwnershipChanges[release->peerId][input.targetFrame] = false;
+				}
 				if (const auto* hold = std::get_if<NetGameSeatHold>(&command.payload)) {
 					m_AiHeldSeats[hold->peerId] = input.targetFrame;
 					NoteSeatTransition(hold->peerId, input.targetFrame, SeatTransition::Held);
@@ -10384,6 +10399,7 @@ namespace RTE {
 							return false;
 						}
 						m_SeatReleases[release->peerId][outFrame.frame] = *release;
+						m_PeerOwnershipChanges[release->peerId][outFrame.frame] = false;
 						m_ReleasedAiSeats.insert(release->peerId);
 						m_DroppedSeats.erase(release->peerId);
 						RefreshLeftSeatHolds();
@@ -10431,6 +10447,9 @@ namespace RTE {
 				if (command.senderPeerId != GetHostPeerId() || reclaim->peerId == 0 || reclaim->peerId > m_Config.peerCount || reclaim->activationFrame != outFrame.frame) {
 					Fail(NetLockstepStopReason::ProtocolError, outFrame.frame, "recorded reclaim has invalid authority or frame"); return false;
 				}
+				const auto priorIncarnation = m_Config.peerIncarnations.find(reclaim->peerId);
+				if (reclaim->seatIncarnation > (priorIncarnation == m_Config.peerIncarnations.end() ? 1U : priorIncarnation->second))
+					m_PeerOwnershipChanges[reclaim->peerId][outFrame.frame] = true;
 				// A hold the round agreed for a later frame is the seat's newer state: a simulation behind its commits (a host held for
 				// its own) delivers the return after that hold was taken, and the return's delivery must leave it standing.
 				const auto laterHold = m_HoldTransactions.find(reclaim->peerId);
@@ -12941,6 +12960,7 @@ namespace RTE {
 		const auto incarnation = m_Config.peerIncarnations.find(peerId);
 		m_SeatReleases[peerId][frame] = {peerId, m_Config.migrationGeneration, frame == UINT64_MAX ? frame : frame + 1,
 		    incarnation == m_Config.peerIncarnations.end() ? 1 : incarnation->second, frame};
+		m_PeerOwnershipChanges[peerId][frame] = false;
 	}
 
 	bool NetLockstepCoordinator::AnyLeftSeatHeld() const {

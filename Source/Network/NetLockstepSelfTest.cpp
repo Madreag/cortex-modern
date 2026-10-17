@@ -206,9 +206,9 @@ namespace RTE {
 			*error = "the eligible second return was not proposed"; return false;
 		}
 
-		static bool ReturnKeepsOtherSeatHeld(std::string* error) {
+		static bool ReturnMembershipCases(std::string* error, bool checkAdmission) {
 			// Seed12: return2 at127 was signed while seat3 still played; hold3 at91 intervened.
-			for (bool returnFirst: {false, true}) for (uint8_t local: {1, 3}) {
+			for (bool returnFirst: {false, true}) for (uint8_t local: {1, 3}) for (bool removalFirst: {false, true}) {
 				Wire wire;
 				NetLockstepCoordinator peer;
 				Configure(peer, wire);
@@ -217,12 +217,15 @@ namespace RTE {
 				peer.m_Config.matchConfig.players.push_back({4, 3, false, "Fourth"});
 				peer.m_Config.matchConfig.successorOrder = {2, 3, 4};
 				peer.m_Config.peerFrameGroups = true;
+				peer.m_RemotePeerIds.clear();
+				for (uint8_t id = 1; id <= 4; ++id) if (id != local) peer.m_RemotePeerIds.push_back(id);
 				peer.m_RoundConfigHash = NetMatchConfigUtil::HashConfig(peer.m_Config.matchConfig);
 				peer.m_MigrationPhase = NetHostMigrationPhase::None;
 				peer.m_FrameGroupMembers = 15; peer.m_FrameGroupChanges = {{1, 15}};
 				peer.m_LastCompletedSimulationTick = 50; peer.m_Stats.nextFrame = 51;
 				peer.m_MigrationHistory.clear(); peer.m_MigrationHistory[50] = {1, 2, 3};
-				const auto install = [&](uint8_t seat, bool held, uint64_t frame, uint32_t members, uint32_t voters) {
+				NetHostMigrationMessage lastReturn;
+				const auto install = [&](uint8_t seat, bool held, uint64_t frame, uint32_t members, uint32_t voters, bool deliver = true) {
 					auto proposal = peer.PeerFrameMessage(NetHostMigrationMessageType::PeerBridge);
 					proposal.frame = frame; proposal.boundary = 50; proposal.preparedFrame = held ? 0 : 1;
 					proposal.members = {seat}; proposal.connectedMask = members;
@@ -238,13 +241,15 @@ namespace RTE {
 					certificate.voterMask = voters; certificate.bytes = {static_cast<uint8_t>(std::popcount(voters))};
 					for (uint8_t voter = 1; voter <= 4; ++voter) if ((voters & (1U << (voter - 1))) != 0) {
 						proposal.senderPeerId = voter; proposal.voterMask = 1U << (voter - 1);
+						if (!held) peer.m_PeerBridgeVotes[{frame, 1}][voter] = proposal;
 						std::vector<uint8_t> signedVote;
 						if (!NetHostMigrationCodec::Encode(proposal, peer.m_Config.migrationKey, signedVote)) return false;
 						append32(certificate.bytes, signedVote.size());
 						certificate.bytes.insert(certificate.bytes.end(), signedVote.begin(), signedVote.end());
 					}
 					certificate.totalBytes = certificate.bytes.size();
-					peer.InstallPeerBridge(certificate, 1000 + frame);
+					if (!held) { lastReturn = certificate; peer.m_PeerReturnProofs[frame] = certificate; }
+					if (deliver) peer.InstallPeerBridge(certificate, 1000 + frame);
 					return peer.m_PeerBridgeCertificates.contains({frame, held ? 0 : 1});
 				};
 				if (!install(2, true, 51, 13, 15)) { *error = "the first signed hold was not installed"; return false; }
@@ -252,15 +257,33 @@ namespace RTE {
 				if (returnFirst && !install(2, false, 127, 15, 15)) { *error = "the scheduled return was not installed"; return false; }
 				if (!install(3, true, 91, 9, 13)) { *error = "the intervening signed hold was not installed"; return false; }
 				if (!returnFirst && !install(2, false, 127, 15, 15)) { *error = "the later-delivered return was not installed"; return false; }
-				if (!install(3, false, 204, 15, 15)) { *error = "the named return for the other seat was not installed"; return false; }
+				if (checkAdmission) {
+					NetLockstepStart start;
+					start.sessionId = peer.m_Config.sessionId; start.roundId = 77; start.localPeerId = 2;
+					start.startFrame = 127; start.inputDelayFrames = 3; start.peerCount = 4;
+					start.controllerFrameVersion = ControllerFrame::c_Version; start.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+					start.scenario = peer.m_Config.scenario; start.ownershipPolicy = peer.m_Config.ownershipPolicy;
+					if (!peer.StartMatchesConfig(start)) { *error = "a survivor rejected the certified return's new start frame and delay"; return false; }
+					start.inputDelayFrames = 4;
+					if (peer.StartMatchesConfig(start)) { *error = "the return's start accepted an uncertified delay"; return false; }
+					start.inputDelayFrames = 3; start.startFrame = 128;
+					if (peer.StartMatchesConfig(start)) { *error = "the return's start accepted an uncertified activation"; return false; }
+					continue;
+				}
+				if (removalFirst) {
+					(void)install(3, false, 204, 15, 15, false);
+					peer.RemovePeerFrameSeat(3, 180);
+					peer.InstallPeerBridge(lastReturn, 1204);
+					if (peer.m_PeerBridgeCertificates.contains({204, 1})) { *error = "a later return ignored an earlier removal"; return false; }
+				} else if (!install(3, false, 204, 15, 15)) { *error = "the named future return was not installed"; return false; }
 				peer.PreparePeerBridgeInputs(175, 2175);
 				if (peer.m_FrameGroupMembers != 11) { *error = "return2 reintroduced still-held seat3 at frame175"; return false; }
-				for (const auto [frame, members]: std::array<std::pair<uint64_t, uint32_t>, 9>{{{50, 15}, {51, 13}, {90, 13}, {91, 9}, {126, 9}, {127, 11}, {175, 11}, {203, 11}, {204, 15}}}) {
+				for (const auto [frame, members]: std::array<std::pair<uint64_t, uint32_t>, 9>{{{50, 15}, {51, 13}, {90, 13}, {91, 9}, {126, 9}, {127, 11}, {175, 11}, {203, 11}, {204, removalFirst ? 11U : 15U}}}) {
 					peer.PreparePeerBridgeInputs(frame, 2000 + frame);
 					if (peer.m_FrameGroupMembers != members) {
 						*error = "return2 changed another seat's certified membership at frame" + std::to_string(frame); return false;
 					}
-					uint32_t voters = 15;
+					uint32_t voters = peer.PeerRetainedSeatsAt(frame);
 					const uint32_t expectedVoters = frame == 127 ? 9 : frame == 204 ? 11 : members;
 					if (peer.PeerVotingOwners(voters, frame) != expectedVoters || voters != expectedVoters) {
 						*error = "a future return changed an earlier frame's voting seats"; return false;
@@ -272,9 +295,42 @@ namespace RTE {
 				if (local == 3 ? witness != peer.m_PeerFrameWitnesses[175].end() : witness == peer.m_PeerFrameWitnesses[175].end() || witness->second.voterMask != 11) {
 					*error = "the committed tail's witness resurrected the other held seat"; return false;
 				}
+				if (!removalFirst) peer.RemovePeerFrameSeat(3, 180);
+				if (peer.m_PeerBridges.at(3).returnFrame || peer.m_ReclaimTransactions.contains(3) || peer.m_DelayChanges[3].contains(204) ||
+				    peer.m_SeatTransitions[3].contains(204) || peer.PeerFrameMembersAt(204) != 11 || peer.PeerRetainedSeatsAt(204) != 11) {
+					*error = "a removal failed to retire a previously certified future return"; return false;
+				}
+				if (peer.m_PeerBridgeCertificates.contains({204, 1}) || peer.m_PeerReturnProofs.contains(204) || peer.m_PeerBridgeVotes.contains({204, 1})) {
+					*error = "a superseded future return remained a tail proof or vote fence"; return false;
+				}
+				peer.m_Stats.nextFrame = 204;
+				if (peer.TakePendingPeerDecisions(5000)) { *error = "a removed return still fenced its activation"; return false; }
+				// A later admission cannot revive a return signed from the preceding owner's prefix.
+				peer.m_PeerOwnershipChanges[3][190] = true;
+				peer.InstallPeerBridge(lastReturn, 5204);
+				if (peer.m_PeerBridges.at(3).returnFrame) { *error = "a readmission revived the superseded return"; return false; }
+				const auto deliverObsolete = [&](NetHostMigrationMessage message) {
+					message.senderPeerId = 4;
+					if (message.type == NetHostMigrationMessageType::PeerBridge) message.voterMask = 8;
+					std::vector<uint8_t> bytes; NetHostMigrationMessage authenticated;
+					return NetHostMigrationCodec::Encode(message, peer.m_Config.migrationKey, bytes) &&
+					    NetHostMigrationCodec::Decode(bytes, peer.m_Config.migrationKey, authenticated) && peer.HandlePeerFrameMessage(authenticated, 5300);
+				};
+				NetHostMigrationMessage obsolete; uint32_t obsoleteVoters = 0;
+				peer.m_Stats.nextFrame = 180;
+				if (!peer.DecodePeerBridgeCertificate(lastReturn, obsolete, obsoleteVoters) || !deliverObsolete(obsolete) || !deliverObsolete(lastReturn) ||
+				    peer.m_PeerBridgeVotes.contains({204, 1}) || peer.m_PeerReturnProofs.contains(204) || peer.m_PeerBridgeCertificates.contains({204, 1})) {
+					*error = "a late authenticated vote or proof revived the obsolete return"; return false;
+				}
+				peer.m_Stats.nextFrame = 204;
+				if (peer.TakePendingPeerDecisions(6000)) { *error = "an obsolete late return fenced the new owner"; return false; }
+
 			}
 			return true;
 		}
+
+		static bool ReturnKeepsOtherSeatHeld(std::string* error) { return ReturnMembershipCases(error, false); }
+		static bool ReturnStartAdmission(std::string* error) { return ReturnMembershipCases(error, true); }
 
 		static bool FutureRemovalKeepsPastAuthority(std::string* error) {
 			Wire wire;
@@ -295,6 +351,8 @@ namespace RTE {
 			if (peer.PeerGroupHasAuthority(3, 363) || peer.PeerFrameGroupConfirms(3, 15, 363) || !peer.PeerFrameGroupConfirms(12, 15, 363)) {
 				*error = "the starting directory decision was not respected"; return false;
 			}
+			peer.m_PeerInputReceipts[4][3] = 364;
+			peer.m_PeerInputReceipts[1][4] = 364;
 			peer.m_RemovedPeers.insert(4);
 			peer.RemovePeerFrameSeat(4, 366);
 			if (peer.PeerGroupHasAuthority(3, 363) || peer.PeerFrameGroupConfirms(3, 15, 363) || !peer.PeerFrameGroupConfirms(12, 15, 363)) {
@@ -303,6 +361,33 @@ namespace RTE {
 			if (!peer.PeerGroupHasAuthority(3, 366) || !peer.PeerFrameGroupConfirms(3, 7, 366)) {
 				*error = "the new three-owner majority did not take effect at the removal frame"; return false;
 			}
+			if (peer.PeerInputVoters(363, 4) != 12 || peer.PeerInputVoters(363, 1) != 9) {
+				*error = "removing seat4 discarded its input receipt authority before366"; return false;
+			}
+			peer.m_PeerLeaveFrames[4] = 366;
+			const auto deliverInput = [&](uint64_t frame, uint8_t sender) {
+				NetLockstepFrame input; input.senderPeerId = 4; input.roundId = 77; input.targetFrame = frame;
+				std::vector<uint8_t> encoded;
+				if (!NetLockstepCodec::EncodeRecoveryInput(input, encoded)) return false;
+				auto message = peer.PeerFrameMessage(sender == 4 ? NetHostMigrationMessageType::PeerInput : NetHostMigrationMessageType::PeerForwardInput);
+				message.senderPeerId = sender; message.successorPeerId = 4; message.frame = frame;
+				message.bytes = {1};
+				for (unsigned shift = 0; shift < 32; shift += 8) message.bytes.push_back(static_cast<uint8_t>(encoded.size() >> shift));
+				message.bytes.insert(message.bytes.end(), encoded.begin(), encoded.end()); message.totalBytes = message.bytes.size();
+				std::vector<uint8_t> signedMessage; NetHostMigrationMessage authenticated;
+				return NetHostMigrationCodec::Encode(message, peer.m_Config.migrationKey, signedMessage) &&
+				    NetHostMigrationCodec::Decode(signedMessage, peer.m_Config.migrationKey, authenticated) && peer.HandlePeerFrameMessage(authenticated, 2000 + frame);
+			};
+			if (!deliverInput(363, 3) || !peer.m_PeerSourceInputs[363].contains(4) || !deliverInput(365, 4) || !peer.m_PeerSourceInputs[365].contains(4)) {
+				*error = "an agreed future removal rejected its authenticated historical input"; return false;
+			}
+			if (!deliverInput(366, 3) || peer.m_PeerSourceInputs[366].contains(4) || peer.PeerInputVoters(366, 4) != 0) {
+				*error = "the removed seat supplied input at its removal frame"; return false;
+			}
+			// A hold signed before the kick can land later; keeping/pruning it cannot restore the removed owner.
+			peer.m_PeerFrameHolds[4][450] = true;
+			peer.PrunePeerFrameSeatChanges(600);
+			if (peer.PeerRetainedSeatsAt(600) != 7) { *error = "pruning a later hold restored the removed owner"; return false; }
 			return true;
 		}
 
@@ -29792,6 +29877,13 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "return-start-admission") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::ReturnStartAdmission(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS a_return_start_uses_its_certified_admission" << std::endl;
+				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "future-removal-authority") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::FutureRemovalKeepsPastAuthority(&error)) return fail(error);
@@ -29876,6 +29968,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::ConcurrentReturnMembership, "a_later_return_keeps_the_earlier_scheduled_return");
 		row(&SessionPlaneRecoveryTest::ReturnKeepsOtherSeatHeld, "a_return_cannot_return_another_held_seat");
 		row(&SessionPlaneRecoveryTest::FutureRemovalKeepsPastAuthority, "a_future_removal_keeps_the_past_directory_decision");
+		row(&SessionPlaneRecoveryTest::ReturnStartAdmission, "a_return_start_uses_its_certified_admission");
 		row(&SessionPlaneRecoveryTest::HoldInvitation, "an_unsigned_hold_invitation_never_fences_an_input");
 		row(&SessionPlaneRecoveryTest::OwnAheadHoldFence, "a_seat_co_signs_and_fences_its_own_future_hold");
 		row(&SessionPlaneRecoveryTest::HeldHostBaseCapture, "held_host_names_a_private_base_through_the_playing_seats");

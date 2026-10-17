@@ -472,11 +472,13 @@ namespace RTE {
 		const auto refuse = [&](const char* reason) { if (why) *why = reason; return false; };
 		if (proof.type != NetHostMigrationMessageType::PeerBridgeCommit || proof.frame != activation) return refuse("not this return's certificate");
 		if (!DecodePeerBridgeCertificate(proof, agreed, voters)) return refuse("certificate unreadable");
-		if (!PeerGroupHasAuthority(voters)) return refuse("voters lack authority");
+		if (!PeerGroupHasAuthority(voters, activation)) return refuse("voters lack authority");
 		if (agreed.sessionId != config.sessionId) return refuse("other session");
 		if (agreed.roundId != config.matchConfig.roundId) return refuse("other round");
 		if (agreed.configHash != config.originalRoundConfigHash) return refuse("other round configuration");
 		if (agreed.preparedFrame != 1) return refuse("not committed");
+		if (ReturnCrossesDeparture(agreed, m_PeerOwnershipChanges)) return refuse("owner changed before return");
+		for (uint8_t peer: agreed.members) if ((PeerRetainedSeatsAt(activation) & SeatBit(peer)) == 0) return refuse("seat removed before return");
 		if (!replay.m_MigrationHistory.contains(agreed.boundary) && !replay.m_PeerReplayAppliedPrefixes.contains(agreed.boundary)) return refuse("boundary not replayed");
 		const auto prefix = replay.PeerAppliedFramePrefix(agreed.boundary);
 		if (!std::equal(prefix.begin(), prefix.end(), agreed.bytes.begin())) return refuse("applied prefix differs");

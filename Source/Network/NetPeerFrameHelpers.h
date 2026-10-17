@@ -19,6 +19,15 @@ namespace RTE::NetPeerFrameDetail {
 			       a.connectedMask == b.connectedMask && a.preparedFrame == b.preparedFrame && a.boundary == b.boundary && a.completeFrom == b.completeFrom &&
 			       a.successorPeerId == b.successorPeerId && a.members == b.members && a.bytes == b.bytes;
 		}
+		// A return from a common prefix before an agreed departure cannot restore that owner,
+		// including when a later admission has already restored ownership at its activation.
+		inline bool ReturnCrossesDeparture(const NetHostMigrationMessage& proposal, const std::map<uint8_t, std::map<uint64_t, bool>>& ownership) {
+			for (uint8_t peer: proposal.members) if (const auto history = ownership.find(peer); history != ownership.end()) {
+				for (auto change = history->second.upper_bound(proposal.boundary); change != history->second.end() && change->first <= proposal.frame; ++change)
+					if (!change->second) return true;
+			}
+			return false;
+		}
 		inline std::vector<ControllerFrame> FramesForSeat(const NetLockstepReadyFrame& ready, uint8_t peer) {
 			if (peer == ready.localPeerId) return ready.localFrames;
 			size_t offset = 0;
