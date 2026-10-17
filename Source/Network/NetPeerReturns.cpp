@@ -386,6 +386,10 @@ namespace RTE {
 		const auto own = m_PeerBridges.find(m_Config.localPeerId);
 		if (own != m_PeerBridges.end() && own->second.committedHold && !own->second.returnFrame &&
 		    m_PeerTailThrough && *m_LastCompletedSimulationTick < *m_PeerTailThrough) return true;
+		// The certified neutral interval is the returner's remaining catch-up runway. Keep using its existing bounded replay
+		// budget through that interval; matching one survivor's display clock can still leave it behind a faster survivor's phase.
+		if (const auto back = m_ReclaimTransactions.find(m_Config.localPeerId); back != m_ReclaimTransactions.end() &&
+		    *m_LastCompletedSimulationTick >= back->second.activationFrame && *m_LastCompletedSimulationTick < back->second.neutralThroughFrame) return true;
 		// The initial handshake reaches seats at different times. Follow one
 		// stable member's displayed clock so that difference cannot become a
 		// permanent phase offset. This only selects the existing 3x/six-tick

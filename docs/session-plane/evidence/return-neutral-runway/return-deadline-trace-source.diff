@@ -1,0 +1,14 @@
+diff --git a/Source/Network/NetPeerBridges.cpp b/Source/Network/NetPeerBridges.cpp
+index 2fad5f161..c3fd41d45 100644
+--- a/Source/Network/NetPeerBridges.cpp
++++ b/Source/Network/NetPeerBridges.cpp
+@@ -625,6 +625,9 @@ namespace RTE {
+ 				    << " frame=" << proposal.frame << " ai_frame=" << proposal.frame + static_cast<uint64_t>(std::ceil(c_NetInputContinuityMs / m_Config.simTickMs))
+ 				    << " observed_frame=" << frame << " now_ms=" << nowMs << " cause=" << cause << " ahead=" << heldAhead
+ 				    << " first_missing_ms=" << m_FirstMissingMs << " last_heard_ms=" << heard << " last_progress_ms=" << stats.lastProgressMs
++				    << " displayed=" << m_LastCompletedSimulationTick.value_or(0) << " consumer_at_ms=" << m_PeerConsumerAtMs.value_or(0)
++				    << " pace_start_ms=" << m_PeerPaceStartMs.value_or(0) << " pace_start_frame=" << m_PeerPaceStartFrame
++				    << " waiting_frame=" << m_ConsumerWaitingFrame.value_or(0) << " waiting_since_ms=" << m_ConsumerWaitStartMs
+ 				    << " received_through=" << stats.highestTargetFrame << " accepted_through=" << stats.acceptedThroughFrame
+ 				    << " input_voters=" << PeerInputVoters(frame, peer) << " delay_ticks=" << InputDelayAt(peer, frame)
+ 				    << " bound_ticks=" << m_Config.slowPlayerBoundTicks << " transport_rtt_ms=" << (wire ? wire->GetPeerPingMs(route) : 0)

@@ -1,0 +1,17 @@
+[net-session-plane-selftest] topology=single-box proof=false forced_rows=1
+[net-peer-hold-installed] local=1 peer=2 frame=363 ai_frame=483 voters=5 proposer=1 certificate_sender=1 next=363 displayed=362 now_ms=6099 cause=input_missing
+[net-peer-hold-installed] local=3 peer=2 frame=363 ai_frame=483 voters=5 proposer=1 certificate_sender=3 next=363 displayed=362 now_ms=6116 cause=input_missing
+[net-peer-hold-installed] local=2 peer=2 frame=363 ai_frame=483 voters=5 proposer=1 certificate_sender=3 next=363 displayed=361 now_ms=6951 cause=certified_peer_decision
+[net-peer-return-runway] peer=2 activation=1223 delay_ticks=9 neutral_through=1254
+[net-peer-hold-installed] local=3 peer=2 frame=1255 ai_frame=1375 voters=5 proposer=1 certificate_sender=3 next=1255 displayed=1253 now_ms=20916 cause=input_missing
+[net-peer-hold-installed] local=1 peer=2 frame=1255 ai_frame=1375 voters=5 proposer=1 certificate_sender=1 next=1255 displayed=1253 now_ms=20949 cause=input_missing
+[net-peer-hold-installed] local=2 peer=2 frame=1255 ai_frame=1375 voters=7 proposer=1 certificate_sender=2 next=1255 displayed=1248 now_ms=20949 cause=own_hold_consent
+[net-peer-return-runway] peer=2 activation=1286 delay_ticks=8 neutral_through=1313
+[net-peer-hold-installed] local=3 peer=2 frame=1314 ai_frame=1434 voters=5 proposer=1 certificate_sender=3 next=1314 displayed=1312 now_ms=21900 cause=input_missing
+[net-peer-hold-installed] local=1 peer=2 frame=1314 ai_frame=1434 voters=5 proposer=1 certificate_sender=1 next=1314 displayed=1312 now_ms=21933 cause=input_missing
+[net-peer-hold-installed] local=2 peer=2 frame=1314 ai_frame=1434 voters=5 proposer=1 certificate_sender=3 next=1314 displayed=1311 now_ms=21950 cause=certified_peer_decision
+[net-peer-return-runway] peer=2 activation=1343 delay_ticks=8 neutral_through=1368
+[net-session-plane-selftest] FAIL joiner_catching_up_at_105_percent_returns_over_100ms: seed=0 the slow seat was held 3 times, not once and kept
+[net-session-plane-selftest] saved_schedule_catalogue expected=108 ran=0
+[net-session-plane-selftest] 0 of 1 passed
+[net-session-plane-selftest] FAIL
