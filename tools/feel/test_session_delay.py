@@ -44,6 +44,7 @@ class SessionDelayMeasurement(unittest.TestCase):
             peer = dict(peer='sp' if arm == 'sp' else 'host', b3_coverage_pass=True,
                         latency_ms=dict(p50=value), latency_frames=dict(p50=2),
                         b1_delay_pass=True, b2_depth_pass=True, b4_overlay_pass=True,
+                        c_duplicates_pass=True, c_own_hold_pass=True,
                         preview_ms_per_actor_tick=0.2, delay_min=3, delay_max=3)
             return dict(arm=arm, repeat=1, peers=[peer],
                         manifest=dict(complete=True, quiet=True, binary_unchanged=True))
@@ -51,6 +52,8 @@ class SessionDelayMeasurement(unittest.TestCase):
         result = summarize(cases + [case('30ms', 33)], 3, ['sp', '30ms', '200ms'])
         self.assertFalse(result['rows'][-1]['b3_pass'])
         self.assertEqual(result['single_player_repeat_noise']['p50_max_ms'], 32)
+        within = summarize(cases + [case('30ms', 31)], 3, ['sp', '30ms', '200ms'])
+        self.assertTrue(within['rows'][-1]['b3_pass'])
 
 
 if __name__ == '__main__':
