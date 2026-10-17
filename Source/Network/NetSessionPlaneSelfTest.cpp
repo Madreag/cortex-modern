@@ -4140,7 +4140,7 @@ namespace RTE {
 			RowRun run; run.name = "repeated_host_changes_bound_the_tail_or_answer_missing"; run.cost = 4000000;
 			run.check = [](std::string& error) {
 				const auto fail = [&](const std::string& detail) { error = "seed=0 " + detail; return false; };
-				Case row{"tail_after_33_administrations"}; row.subject = 1; row.seats = 4; row.gapMs = 20000;
+				Case row{"tail_after_33_administrations"}; row.subject = 1; row.seats = 4; row.gapMs = 20000; row.hung = true;
 				row.internet = row.adminDirectory = row.repeatedAdministration = row.imageReturn = true; row.rttMs = row.otherRttMs = 100;
 				row.stepMs = 5;
 				Fixture fixture; std::string detail;
@@ -4155,7 +4155,7 @@ namespace RTE {
 					std::fill(fixture.maxWait.begin(), fixture.maxWait.end(), 0);
 					bool returned = false;
 					for (const uint64_t until = fixture.hub.faultEnd + 14000; fixture.hub.now < until;) {
-						if (!fixture.Step(detail)) return fail("admin generation " + std::to_string(generation) + ": " + detail);
+						if (!fixture.Step(detail) || !fixture.CheckBound(detail)) return fail("admin generation " + std::to_string(generation) + ": " + detail);
 						if (fixture.hub.now < fixture.hub.faultEnd + 1000) continue;
 						returned = true;
 						for (uint8_t seat = 1; seat <= 4; ++seat) {
