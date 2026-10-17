@@ -6076,7 +6076,10 @@ namespace RTE {
 			}
 			// The cursor is this loop's own: a frame the capture park already committed is accepted without
 			// moving the queued watermark, and re-reading it there would pad the same frame for ever.
-			for (uint64_t pad = m_LastQueuedTargetFrame + 1; pad < target; ++pad) {
+			const uint64_t firstPad = UsesPeerFrameGroups() ? std::max({m_LastQueuedTargetFrame + 1, m_Stats.nextFrame, EffectiveStartOf(m_Config.localPeerId)}) : m_LastQueuedTargetFrame + 1;
+			for (uint64_t pad = firstPad; pad < target; ++pad) {
+				// A returning seat owes no input in its certified neutral interval.
+				if (UsesPeerFrameGroups() && IsSeatReclaimGap(m_Config.localPeerId, pad)) continue;
 				if (!QueueInputAtTarget(pad, previous.frames, {}, error, {})) return false;
 				++m_Stats.delayPaddingFrames;
 			}
@@ -6123,7 +6126,9 @@ namespace RTE {
 			controller.SetFlipIntent(false);
 			controller.hatchCommand = static_cast<uint8_t>(ControllerFrame::HatchCommand::None);
 		}
-		for (uint64_t pad = m_LastQueuedTargetFrame + 1; pad < nextTarget; ++pad) {
+		const uint64_t firstPad = UsesPeerFrameGroups() ? std::max({m_LastQueuedTargetFrame + 1, m_Stats.nextFrame, EffectiveStartOf(m_Config.localPeerId)}) : m_LastQueuedTargetFrame + 1;
+		for (uint64_t pad = firstPad; pad < nextTarget; ++pad) {
+			if (UsesPeerFrameGroups() && IsSeatReclaimGap(m_Config.localPeerId, pad)) continue;
 			std::string ignored;
 			if (!QueueInputAtTarget(pad, previous.frames, {}, &ignored, {})) return;
 			++m_Stats.delayPaddingFrames;
