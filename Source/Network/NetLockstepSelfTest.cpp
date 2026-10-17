@@ -438,6 +438,55 @@ namespace RTE {
 			return true;
 		}
 
+		static bool DeferredReturnKeepsItsFirstVote(std::string* error) {
+			// Seeds72/106: the receive path keeps this peer's first promise,
+			// but the next plane tick must keep it when answering stored votes too.
+			for (uint64_t secondFrame: {4440ULL, 4480ULL}) {
+				Wire wire; NetLockstepCoordinator peer;
+				Configure(peer, wire);
+				peer.m_Config.localPeerId = 3; peer.m_Config.authorityPeerId = 1;
+				peer.m_Config.peerCount = peer.m_Config.matchConfig.peerCount = 4;
+				peer.m_Config.matchConfig.players.push_back({4, 3, false, "Fourth"});
+				peer.m_Config.matchConfig.successorOrder = {2, 3, 4};
+				peer.m_Config.peerFrameGroups = true;
+				peer.m_RoundConfigHash = NetMatchConfigUtil::HashConfig(peer.m_Config.matchConfig);
+				peer.m_MigrationPhase = NetHostMigrationPhase::None;
+				peer.m_RemotePeerIds = {1, 2, 4}; peer.m_RemoteTransports = {{1, 41}, {2, 42}, {4, 44}};
+				peer.m_FrameGroupMembers = 13; peer.m_FrameGroupChanges = {{1, 15}, {4300, 13}};
+				peer.m_PeerBridges[2] = {4300, 4420, true, {}, {}, 13};
+				peer.m_PeerFrameHolds[2][4300] = true;
+				peer.m_MigrationHistory[4400] = {1, 2, 3};
+				const auto deliver = [&](uint8_t sender, uint64_t frame) {
+					auto proposal = peer.PeerFrameMessage(NetHostMigrationMessageType::PeerBridge);
+					proposal.senderPeerId = proposal.successorPeerId = sender;
+					proposal.frame = frame; proposal.boundary = 4400; proposal.preparedFrame = 1;
+					proposal.members = {2}; proposal.connectedMask = 15; proposal.voterMask = 1U << (sender - 1);
+					const auto prefix = peer.PeerAppliedFramePrefix(4400);
+					proposal.bytes.assign(prefix.begin(), prefix.end());
+					for (uint32_t value: {18U, 50U, 1U})
+						for (unsigned shift = 0; shift < 32; shift += 8) proposal.bytes.push_back(static_cast<uint8_t>(value >> shift));
+					proposal.totalBytes = static_cast<uint32_t>(proposal.bytes.size());
+					std::vector<uint8_t> bytes; NetHostMigrationMessage authenticated;
+					return NetHostMigrationCodec::Encode(proposal, peer.m_Config.migrationKey, bytes) &&
+					    NetHostMigrationCodec::Decode(bytes, peer.m_Config.migrationKey, authenticated) && peer.HandlePeerFrameMessage(authenticated, 1000);
+				};
+				if (!deliver(1, 4460) || !peer.m_PeerBridgeVotes[{4460, 1}].contains(3)) {
+					*error = "the first authenticated return did not obtain this playing peer's vote"; return false;
+				}
+				if (!deliver(4, secondFrame) || peer.m_PeerBridgeVotes[{secondFrame, 1}].contains(3)) {
+					*error = "the receive path voted for a conflicting return"; return false;
+				}
+				peer.TickPeerFrameGroups(1001);
+				if (peer.m_PeerBridgeVotes[{secondFrame, 1}].contains(3)) {
+					*error = "the deferred path signed another activation for the same hold: first4460 second" + std::to_string(secondFrame); return false;
+				}
+				if (!peer.m_PeerBridgeVotes[{4460, 1}].contains(3)) {
+					*error = "the plane dropped its first return promise"; return false;
+				}
+			}
+			return true;
+		}
+
 		static bool SilenceDoesNotChangeTheSendingRate(std::string* error) {
 			Wire wire; NetLockstepCoordinator peer;
 			Configure(peer, wire);
@@ -30074,6 +30123,13 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "deferred-return-vote") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::DeferredReturnKeepsItsFirstVote(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS a_deferred_return_cannot_sign_a_second_activation" << std::endl;
+				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "sender-rate-silence") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::SilenceDoesNotChangeTheSendingRate(&error)) return fail(error);
@@ -30169,6 +30225,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::ReturnMemberStarts, "a_return_keeps_each_authenticated_members_start");
 		row(&SessionPlaneRecoveryTest::RemovalNoticeRetries, "a_roster_removal_keeps_its_frame_after_a_cut");
 		row(&SessionPlaneRecoveryTest::FutureDepartureKeepsFramePrefix, "a_future_removal_does_not_rewrite_an_earlier_frame_prefix");
+		row(&SessionPlaneRecoveryTest::DeferredReturnKeepsItsFirstVote, "a_deferred_return_cannot_sign_a_second_activation");
 		row(&SessionPlaneRecoveryTest::SilenceDoesNotChangeTheSendingRate, "a_silent_interval_does_not_lower_the_measured_sending_rate");
 		row(&SessionPlaneRecoveryTest::HoldInvitation, "an_unsigned_hold_invitation_never_fences_an_input");
 		row(&SessionPlaneRecoveryTest::OwnAheadHoldFence, "a_seat_co_signs_and_fences_its_own_future_hold");
