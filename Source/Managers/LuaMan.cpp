@@ -4450,6 +4450,8 @@ static void NameStaleActivityValues(lua_State* L, const std::string& stateName) 
 	int named = 0;
 	std::function<void(int, const std::string&, int)> walk;
 	const auto value = [&](int index, const std::string& path, int depth) {
+		// A level pushes up to three values; a walk that cannot reserve them stops there.
+		if (!lua_checkstack(L, 4)) return;
 		if (lua_istable(L, index)) {
 			walk(index, path, depth + 1);
 		} else if (lua_isfunction(L, index)) {
@@ -4470,7 +4472,7 @@ static void NameStaleActivityValues(lua_State* L, const std::string& stateName) 
 	};
 	walk = [&](int index, const std::string& path, int depth) {
 		if (!lua_istable(L, index)) { value(index, path, depth); return; }
-		if (depth > 8 || named >= 16 || !seen.insert(lua_topointer(L, index)).second) return;
+		if (depth > 8 || named >= 16 || !lua_checkstack(L, 4) || !seen.insert(lua_topointer(L, index)).second) return;
 		lua_pushnil(L);
 		while (lua_next(L, index) != 0) {
 			std::string key;
