@@ -1771,7 +1771,7 @@ local function visitUserdata(value, ctx)
 		for index, address in ipairs(_ScriptGraphAreaBoxes(value)) do ctx.areaBoxes[address] = { owner = value, index = index } end
 	end
 	if kind == "vector" then
-		return userdataNode(value, ctx, "v" .. numberText(value.X) .. "," .. numberText(value.Y) .. ";")
+		return userdataNode(value, ctx, (native[2] and "W" or "v") .. numberText(value.X) .. "," .. numberText(value.Y) .. ";")
 	elseif kind == "alarm" then
 		return userdataNode(value, ctx, "c" .. "n" .. numberText(value.ScenePos.X) .. ";n" .. numberText(value.ScenePos.Y) .. ";n" .. outputNumber(value.Team) .. ";n" .. numberText(value.Range) .. ";")
 	elseif kind == "module-ref" then
@@ -1883,8 +1883,8 @@ local function visitUserdata(value, ctx)
 			return reference(ctx, id)
 		end
 		-- A reference the script kept past the end of what it points into: the value it reads through it, as a vector of its own.
-		local goneX, goneY = _ScriptGraphGoneVector(value)
-		if goneX then return userdataNode(value, ctx, "v" .. numberText(goneX) .. "," .. numberText(goneY) .. ";") end
+		local goneX, goneY, goneConstant = _ScriptGraphGoneVector(value)
+		if goneX then return userdataNode(value, ctx, (goneConstant and "W" or "v") .. numberText(goneX) .. "," .. numberText(goneY) .. ";") end
 		problem(ctx, "a " .. kind .. " into an engine object that no known property exposes")
 		return "z;"
 	end
@@ -2407,10 +2407,10 @@ local function newReader(text)
 			local token = { t = "ref", id = self:integer(self:readUntil(";"), 1) }
 			self.references[#self.references + 1] = token
 			return token
-		elseif c == "v" then
+		elseif c == "v" or c == "W" then
 			local x, y = string.match(self:readUntil(";"), "^([^,]+),([^,]+)$")
 			if not x then self:bad("invalid vector") end
-			return { t = "vector", x = self:number(x), y = self:number(y) }
+			return { t = "vector", x = self:number(x), y = self:number(y), constant = c == "W" }
 		elseif c == "m" then
 			local a, b, c2, d = string.match(self:readUntil(";"), "^([^,]+),([^,]+),([^,]+),([^,]+)$")
 			if not a then self:bad("invalid timer") end
@@ -2819,7 +2819,9 @@ function Graph.deserialize(text, reuseHeld, adoptRoots)
 			return controller
 		elseif t == "vector" then
 			local vector = held or Vector()
+			if held then _ScriptGraphConstant(vector, false) end
 			vector.X, vector.Y = token.x, token.y
+			if token.constant then _ScriptGraphConstant(vector, true) end
 			return vector
 		elseif t == "alarm" then
 			local alarm = held or AlarmEvent()
@@ -5617,7 +5619,16 @@ static int ScriptGraphGoneVector(lua_State* L) {
 	const Vector value = *static_cast<const Vector*>(rep->ptr());
 	lua_pushnumber(L, value.GetX());
 	lua_pushnumber(L, value.GetY());
-	return 2;
+	lua_pushboolean(L, (rep->flags() & luabind::detail::object_rep::constant) != 0);
+	return 3;
+}
+
+// (vector, constant): a restored owned vector takes or leaves the constness its reference had.
+static int ScriptGraphConstant(lua_State* L) {
+	if (auto* rep = luabind::detail::is_class_object(L, 1); rep && (rep->flags() & luabind::detail::object_rep::owner)) {
+		rep->set_flags((rep->flags() & ~luabind::detail::object_rep::constant) | (lua_toboolean(L, 2) ? luabind::detail::object_rep::constant : 0));
+	}
+	return 0;
 }
 
 static int ScriptGraphLimbVector(lua_State* L) {
@@ -6304,7 +6315,9 @@ static int ScriptGraphNative(lua_State* L) {
 	if (className == "Vector") {
 		if (owned) {
 			lua_pushstring(L, "vector");
-			return 1;
+			if (!(rep->flags() & luabind::detail::object_rep::constant)) return 1;
+			lua_pushboolean(L, 1);
+			return 2;
 		}
 		if (s_GraphNativeCapture) {
 			if (const VectorField* field = s_GraphNativeCapture->VectorOwner(rep->ptr())) {
@@ -6465,17 +6478,21 @@ local function waypointTo(mo)
 		local Waypoint = {}
 		Waypoint.Pos = mo.Pos
 		coroutine.yield()
-		return Waypoint.Pos.X, Waypoint.Pos.Y
+		return Waypoint.Pos.X, Waypoint.Pos.Y, Waypoint.Pos
 	end)
 end
 _F5Handles.follower = waypointTo(_F5Handles.holder)
 _F5Handles.chaser = waypointTo(target)
+-- Whether a script may write through the position reference it keeps.
+_F5Handles.positionConstant = not pcall(function() local position = target.Pos; position.X = position.X end)
 assert(coroutine.resume(_F5Handles.follower) and coroutine.resume(_F5Handles.chaser))
 )lua") == 0;
 	// The chaser's target is deleted before the capture; the waypoint still holds its position.
 	bool targetGone = false;
 	// Where the gone target's memory went: retained for its Lua handles, a free native slot, a returned class pool block, or none.
 	int targetMemory = -1;
+	// What the kept reference reads once the object is gone: its destructor's bytes in the retained memory.
+	Vector keptPosition;
 	if (planted) {
 		lua_State* L = lua.GetLuaState();
 		lua_getglobal(L, "_F5Handles");
@@ -6488,6 +6505,7 @@ assert(coroutine.resume(_F5Handles.follower) and coroutine.resume(_F5Handles.cha
 			targetGone = true;
 			targetMemory = MovableObject::RetainedMemoryHolds(position, sizeof(Vector)) ? 3 : CheckpointNativeStorage::FreeSlotHolds(position, sizeof(Vector)) ? 1 :
 			               Entity::ClassInfo::AnyPoolHolds(position, sizeof(Vector)) ? 2 : 0;
+			if (targetMemory > 0) keptPosition = *position;
 		}
 	}
 	std::string text;
@@ -6529,12 +6547,15 @@ assert(_ScriptGraphNative(_F5Handles.gone) == "invalid", "the gone slice's handl
 )lua") == 0;
 		// The living target moves after the restore; the waypoint reads it through the reference it kept.
 		followed = restored && lua.RunScriptString("_F5Handles.holder.Pos = Vector(555.5, 201); local ok, x, y = coroutine.resume(_F5Handles.follower); assert(ok and x == 555.5 and y == 201, 'the follower read ' .. tostring(x) .. ', not its target')") == 0;
-		remembered = restored && lua.RunScriptString("local ok, x, y = coroutine.resume(_F5Handles.chaser); assert(ok and x == 610 and y == 190, 'the chaser read ' .. tostring(x) .. ', not its gone target\'s last position')") == 0;
+		remembered = restored && targetMemory > 0 &&
+		             lua.RunScriptString(std::format("local ok, x, y, kept = coroutine.resume(_F5Handles.chaser); assert(ok and x == {} and y == {}, 'the chaser read ' .. tostring(x) .. ', ' .. tostring(y) .. ', not what its kept reference read'); "
+		                                             "assert(pcall(function() kept.X = kept.X end) ~= _F5Handles.positionConstant, 'the kept reference changed its constness')",
+		                                             static_cast<double>(keptPosition.GetX()), static_cast<double>(keptPosition.GetY()))) == 0;
 	}
 	lua.RunScriptString("MovableMan:RemoveActor(_F5Handles.holder); MovableMan:RemoveActor(_F5Handles.dropper); _F5Handles = nil; collectgarbage()");
 	const bool passed = planted && targetGone && captured && frozenSame && restored && kept && followed && remembered;
 	std::cout << "[engine-handle-selftest] " << (passed ? "PASS" : "FAIL") << " planted=" << planted << " target_gone=" << targetGone << " live_captured=" << captured
-	          << " frozen_same=" << frozenSame << " restored=" << restored << " slices_kept=" << kept << " follower_alias_live=" << followed << " chaser_kept_last=" << remembered << " target_memory=" << targetMemory << std::endl;
+	          << " frozen_same=" << frozenSame << " restored=" << restored << " slices_kept=" << kept << " follower_alias_live=" << followed << " chaser_kept_read=" << remembered << " target_memory=" << targetMemory << " kept=" << keptPosition.GetX() << "," << keptPosition.GetY() << std::endl;
 	return passed;
 }
 
@@ -7287,6 +7308,8 @@ void LuaStateWrapper::LoadScriptGraphHelper() {
 		RegisterScriptGraphHelper(m_State, "_ScriptGraphPropertyOwner", ScriptGraphPropertyOwner);
 		lua_pushcfunction(m_State, ScriptGraphProperty);
 		lua_setglobal(m_State, "_ScriptGraphProperty");
+		lua_pushcfunction(m_State, ScriptGraphConstant);
+		lua_setglobal(m_State, "_ScriptGraphConstant");
 		RegisterScriptGraphHelper(m_State, "_ScriptGraphSoundSetOwner", ScriptGraphSoundSetOwner);
 		lua_pushcfunction(m_State, ScriptGraphSoundSet);
 		lua_setglobal(m_State, "_ScriptGraphSoundSet");
