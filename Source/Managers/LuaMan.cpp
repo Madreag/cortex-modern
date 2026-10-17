@@ -11124,6 +11124,12 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 		checkpointValues = exact && checkpointValues;
 	}
 	{
+		std::string detail;
+		const bool bounded = CheckpointLua::HeapOwner::RunLargeChurnBoundSelfTest(detail);
+		std::cout << "[script-graph-selftest] " << (bounded ? "PASS" : "FAIL") << " large_blocks_of_ever_new_sizes_keep_the_lua_heap_within_its_bound " << detail << std::endl;
+		checkpointValues = bounded && checkpointValues;
+	}
+	{
 		const std::string mismatch = CheckpointLua::Boundary::SelfTestMismatch();
 		std::cout << "[script-graph-selftest] " << (mismatch.empty() ? "PASS" : "FAIL") << " prepared_boundary_keeps_native_and_lua_values_at_one_tick" << std::endl;
 		if (!mismatch.empty()) std::cout << "[script-graph-selftest] detail=" << mismatch << std::endl;

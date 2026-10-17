@@ -556,6 +556,8 @@ namespace RTE::CheckpointLua {
 		static bool RunPreparationLifetimeSelfTest();
 		static bool RunReusedOwnerSelfTest();
 		static bool RunTrimSelfTest(std::string& detail);
+		/// Large blocks of ever new sizes, made and dropped, keep the heap within a stated bound of what it held before.
+		static bool RunLargeChurnBoundSelfTest(std::string& detail);
 		/// Prepares storage and watches on the saver; Arm reads no Lua objects and allocates nothing.
 		std::shared_ptr<Prepared> PrepareFreeze();
 		/// Gives the free memory of a collected heap back to the system, past an eighth of its live bytes (4 MB at least), a
@@ -2514,6 +2516,39 @@ namespace RTE::CheckpointLua {
 		// Three quarters of what the garbage grew go back, and taking pages again commits no more than the first growth did.
 		return grown >= before + (size_t(32) << 20) && (trimmed <= before || (trimmed - before) * 4 <= grown - before) && filled && kept && reused <= grown + c_CommitStep &&
 		       givenBack && stillHeld * 4 <= givenBack;
+	}
+
+	inline bool HeapOwner::RunLargeChurnBoundSelfTest(std::string& detail) {
+		auto owner = Create();
+		lua_State* state = owner->State();
+		const auto held = [&owner] { return owner->m_Committed - owner->m_HoleBytes.load(std::memory_order_acquire); };
+		lua_gc(state, LUA_GCSTOP, 0);
+		lua_gc(state, LUA_GCCOLLECT, 0);
+		const size_t before = held();
+		constexpr size_t c_Strings = 2000, c_First = 9 * 1024, c_Step = 64, c_Bound = size_t(32) << 20;
+		const std::string bytes(c_First + c_Strings * c_Step, 'x');
+		size_t made = 0, peak = before;
+		ProtectedCall(state, [&] {
+			for (size_t index = 0; index < c_Strings; ++index) {
+				// Each size is new: a string of it is made and dropped, and the collector runs every 64.
+				const size_t size = c_First + index * c_Step;
+				lua_pushlstring(state, bytes.data(), size);
+				lua_pop(state, 1);
+				made += size;
+				if (index % 64 == 63) {
+					lua_gc(state, LUA_GCCOLLECT, 0);
+					lua_gc(state, LUA_GCSTOP, 0);
+					peak = std::max(peak, held());
+				}
+			}
+		});
+		lua_gc(state, LUA_GCCOLLECT, 0);
+		lua_gc(state, LUA_GCSTOP, 0);
+		const size_t after = held();
+		peak = std::max(peak, after);
+		detail = "made_mb=" + std::to_string(made >> 20) + " before_mb=" + std::to_string(before >> 20) + " peak_mb=" + std::to_string(peak >> 20) +
+		         " after_mb=" + std::to_string(after >> 20) + " bound_mb=" + std::to_string(c_Bound >> 20);
+		return made >= (size_t(128) << 20) && peak <= before + c_Bound;
 	}
 
 	// Every userdata hangs after the main thread in the GC chain; nothing before it is one.
