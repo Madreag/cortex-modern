@@ -4318,6 +4318,8 @@ static std::string ResyncSaveName() {
 		// host's schedule or, on a peer, from the last capture it took.
 		bool named = std::any_of(output.send.begin(), output.send.end(), [](const auto& note) { return note.kind == NetGameCheckpoint::Capture || note.kind == NetGameCheckpoint::ManualCapture; });
 		for (const CheckpointNote& note: input.applied) named = named || note.kind == NetGameCheckpoint::Capture || note.kind == NetGameCheckpoint::ManualCapture;
+		// A named capture stays near until this peer reaches it; a returner's interval estimate starts over at its return.
+		named = named || !m_ScheduledCaptures.empty();
 		// The host knows of a returner's base, a world join's capture and a manual save before it names their tick.
 		if (m_IsHost) named = named || m_PrivateBaseRequested || m_WorldCapturePending || input.manualRequested || output.manualPending;
 		if (m_CaptureAnchorSimTime < 0) m_CaptureAnchorSimTime = input.now;
