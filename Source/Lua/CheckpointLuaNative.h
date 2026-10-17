@@ -867,6 +867,8 @@ namespace RTE::CheckpointLua {
 				const auto* preset = entity->GetPresetForCopy();
 				entry.kind = token("preset"); entry.nativeTail[entry.nativeTailCount++] = token(entity->GetClassName().c_str());
 				entry.nativeTail[entry.nativeTailCount++] = token(preset ? preset->GetPresetName().c_str() : ""); entry.nativeTail[entry.nativeTailCount++] = token(preset ? preset->GetModuleName().c_str() : "");
+				// The class a script holds a preset as, as the descriptor names it, when it is not the plain Entity.
+				if (std::strcmp(type->name(), "Entity") != 0) entry.nativeTail[entry.nativeTailCount++] = token(type->name());
 				entry.namedWhenAddressed = ClassDerivesFrom(type, "Activity") || type->type() == LUABIND_TYPEID(GlobalScript);
 				if (entry.namedWhenAddressed) entry.addressedKind = token("named");
 			}
