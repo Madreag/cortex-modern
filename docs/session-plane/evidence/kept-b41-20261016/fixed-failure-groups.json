@@ -1,0 +1,7 @@
+{
+  "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/kept-b41-final-validation/suite-54/net-session-plane-selftest/fixed-failure-groups.txt",
+  "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+  "digest": "f214ba039fc4cadb8be08b11f41fb021459eed0de669ca1594a3545795d21c9d",
+  "suite_root": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/kept-b41-final-validation/suite-54",
+  "saved_cases_ran": 108
+}

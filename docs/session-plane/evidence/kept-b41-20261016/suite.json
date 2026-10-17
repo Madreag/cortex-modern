@@ -1,0 +1,1045 @@
+{
+  "exe_sha256": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+  "repo": "/home/erol/cortex-workers/session-plane-engineer",
+  "passed": 48,
+  "total": 54,
+  "quiet_rows": [
+    "net-match"
+  ],
+  "sanitizer": null,
+  "complete": true,
+  "running": null,
+  "results": {
+    "controller-frame": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "row_elapsed_s": 0.5823197399731725,
+      "start_load": [
+        4.28271484375,
+        4.07568359375,
+        2.9013671875
+      ],
+      "topology": "single-peer"
+    },
+    "net-protocol": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "row_elapsed_s": 0.5444495939882472,
+      "start_load": [
+        4.28271484375,
+        4.07568359375,
+        2.9013671875
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-identity": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "row_elapsed_s": 0.5450682119699195,
+      "start_load": [
+        4.28271484375,
+        4.07568359375,
+        2.9013671875
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-session": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "row_elapsed_s": 0.5416166969807819,
+      "start_load": [
+        4.28271484375,
+        4.07568359375,
+        2.9013671875
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-lockstep": {
+      "pass": false,
+      "exit_code": 1,
+      "timed_out": false,
+      "pass_lines": 2,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "exit_code=1",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "row_elapsed_s": 58.30815836502006,
+      "start_load": [
+        4.28271484375,
+        4.07568359375,
+        2.9013671875
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-session-plane": {
+      "pass": false,
+      "exit_code": 1,
+      "timed_out": false,
+      "pass_lines": 0,
+      "fail_lines": [
+        "[net-session-plane-selftest] FAIL",
+        "[net-session-plane-selftest] FAIL",
+        "[net-session-plane-selftest] FAIL"
+      ],
+      "fatal": [
+        "[net-session-plane-selftest] FAIL relay_link_blackout_return: seed=0 a retained seat did not return automatically: peer=2 applied=1431 prepared=1442 bridge_count=0",
+        "[net-session-plane-selftest] FAIL joiner_catching_up_at_102_percent_returns_four_seats_over_100ms: seed=0 non-lagging peer 3 stalled 68ms past its bound",
+        "[net-session-plane-selftest] FAIL two_internet_joiner_dark_past_history: seed=0 non-lagging peer 1 stalled 126ms past its bound"
+      ],
+      "reason": "exit_code=1",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "fixed_failure_report": {
+        "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/kept-b41-final-validation/suite-54/net-session-plane-selftest/fixed-failure-groups.txt",
+        "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+        "digest": "f214ba039fc4cadb8be08b11f41fb021459eed0de669ca1594a3545795d21c9d",
+        "suite_root": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/kept-b41-final-validation/suite-54",
+        "saved_cases_ran": 108
+      },
+      "row_elapsed_s": 160.1606821619789,
+      "start_load": [
+        2.5068359375,
+        3.60302734375,
+        2.810546875
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-session-plane-hold-schedules": {
+      "pass": false,
+      "exit_code": 1,
+      "timed_out": false,
+      "pass_lines": 0,
+      "fail_lines": [
+        "[net-session-plane-selftest] FAIL",
+        "[net-session-plane-selftest] FAIL",
+        "[net-session-plane-selftest] FAIL"
+      ],
+      "fatal": [
+        "[net-session-plane-selftest] FAIL random_hold_schedules group=bound:survivor_waits:2:direct seeds=25,34,66,90,102,112,138,153: reproduced by fixed row two_direct_seats_host_loop_stopped_2s",
+        "[net-session-plane-selftest] FAIL random_hold_schedules group=bound:survivor_waits:2:internet seeds=24,44,125,135,146,160,163,174: reproduced by fixed row two_internet_seats_42ms_jitter_10ms_directory_40ms_host_stopped_464ms_back_at_100pc_seat2_slow_64pc_5902ms_host_silent_936ms_back_at_100pc_held_seat_never_returns_seed_163",
+        "[net-session-plane-selftest] FAIL random_hold_schedules group=bound:survivor_waits:3:direct seeds=15,16,17,114,134,142,143,175: reproduced by fixed row three_direct_seats_200ms_jitter_40ms_held_without_its_own_trouble_seed_187"
+      ],
+      "reason": "exit_code=1",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "schedule_summary": "[net-session-plane-selftest] random_hold_schedules schedules=200 ran=200 seeds=1..200",
+      "fixed_failure_report": {
+        "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/kept-b41-final-validation/suite-54/net-session-plane-selftest/fixed-failure-groups.txt",
+        "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+        "digest": "f214ba039fc4cadb8be08b11f41fb021459eed0de669ca1594a3545795d21c9d",
+        "suite_root": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/kept-b41-final-validation/suite-54",
+        "saved_cases_ran": 108
+      },
+      "row_elapsed_s": 203.79303003498353,
+      "start_load": [
+        4.36767578125,
+        4.08935546875,
+        3.130859375
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-input-acceptance": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "row_elapsed_s": 3.5540447020321153,
+      "start_load": [
+        6.4833984375,
+        5.55908203125,
+        3.93505859375
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-input-acceptance-steady": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "row_elapsed_s": 3.046513864013832,
+      "start_load": [
+        6.1240234375,
+        5.49951171875,
+        3.92431640625
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-lockstep-released-claims": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "row_elapsed_s": 3.5539630129933357,
+      "start_load": [
+        6.1240234375,
+        5.49951171875,
+        3.92431640625
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-lockstep-release-paths": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "row_elapsed_s": 6.670317773008719,
+      "start_load": [
+        5.79345703125,
+        5.44140625,
+        3.91357421875
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-lockstep-seat-succession": {
+      "pass": false,
+      "exit_code": 1,
+      "timed_out": false,
+      "pass_lines": 0,
+      "fail_lines": [
+        "[net-lockstep-selftest] FAIL",
+        "[net-lockstep-selftest] FAIL",
+        "[net-lockstep-seat-succession-selftest] FAIL"
+      ],
+      "fatal": [
+        "[net-lockstep-selftest] FAIL announced_host_leave_keeps_one_survivor: non-lagging peer 2 stalled 101ms past its bound",
+        "[net-lockstep-selftest] FAIL announced_host_returns_by_ticket: non-lagging peer 2 stalled 101ms past its bound",
+        "[net-lockstep-seat-succession-selftest] FAIL"
+      ],
+      "reason": "exit_code=1",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "row_elapsed_s": 40.06680273398524,
+      "start_load": [
+        5.4892578125,
+        5.3837890625,
+        3.90283203125
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-lockstep-seat-admission": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "row_elapsed_s": 22.093412785965484,
+      "start_load": [
+        3.7880859375,
+        4.95751953125,
+        3.82080078125
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-lockstep-cli": {
+      "pass": true,
+      "reason": "",
+      "fail_lines": [],
+      "exit_code": 0,
+      "timed_out": false,
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "row_elapsed_s": 13.69804709800519,
+      "start_load": [
+        3.1767578125,
+        4.71875,
+        3.771484375
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-auth": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "row_elapsed_s": 0.5439113070024177,
+      "start_load": [
+        4.41845703125,
+        4.927734375,
+        3.849609375
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-admission": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "row_elapsed_s": 0.5435118899913505,
+      "start_load": [
+        4.224609375,
+        4.87890625,
+        3.83935546875
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-reconnect": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "row_elapsed_s": 0.5433298920397647,
+      "start_load": [
+        4.224609375,
+        4.87890625,
+        3.83935546875
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-reconnect-session": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "row_elapsed_s": 0.8435268920147792,
+      "start_load": [
+        4.224609375,
+        4.87890625,
+        3.83935546875
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-world-join": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "row_elapsed_s": 11.453142324986402,
+      "start_load": [
+        4.224609375,
+        4.87890625,
+        3.83935546875
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-directory": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "service_python": "/usr/bin/python3",
+      "service_exit_code": 0,
+      "service_log": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/kept-b41-final-validation/suite-54/net-directory-selftest/service-tests.log",
+      "row_elapsed_s": 123.8339099700097,
+      "start_load": [
+        3.728515625,
+        4.7509765625,
+        3.80810546875
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-rejoin-matrix": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "row_elapsed_s": 56.062672365049366,
+      "start_load": [
+        1.51416015625,
+        3.5537109375,
+        3.48388671875
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-roster": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "row_elapsed_s": 0.545739138033241,
+      "start_load": [
+        1.8427734375,
+        3.30419921875,
+        3.40087890625
+      ],
+      "topology": "single-box: not proof"
+    },
+    "camera-null-scene": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "row_elapsed_s": 2.1423566109733656,
+      "start_load": [
+        1.8427734375,
+        3.30419921875,
+        3.40087890625
+      ],
+      "topology": "single-peer"
+    },
+    "rotate-primitive": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "row_elapsed_s": 0.5440162039594725,
+      "start_load": [
+        1.85546875,
+        3.2822265625,
+        3.39306640625
+      ],
+      "topology": "single-peer"
+    },
+    "lua-numeric-policy": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "row_elapsed_s": 0.5444413740187883,
+      "start_load": [
+        1.85546875,
+        3.2822265625,
+        3.39306640625
+      ],
+      "topology": "single-peer"
+    },
+    "fp-environment": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "row_elapsed_s": 0.5439905370003544,
+      "start_load": [
+        1.85546875,
+        3.2822265625,
+        3.39306640625
+      ],
+      "topology": "single-peer"
+    },
+    "deterministic-math": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "row_elapsed_s": 0.544482794997748,
+      "start_load": [
+        1.85546875,
+        3.2822265625,
+        3.39306640625
+      ],
+      "topology": "single-peer"
+    },
+    "sim-checksum": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "row_elapsed_s": 0.5443288100068457,
+      "start_load": [
+        1.85546875,
+        3.2822265625,
+        3.39306640625
+      ],
+      "topology": "single-peer"
+    },
+    "cow-checkpoint": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "row_elapsed_s": 0.5446064309799112,
+      "start_load": [
+        1.85546875,
+        3.2822265625,
+        3.39306640625
+      ],
+      "topology": "single-peer"
+    },
+    "frame-recorder": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "row_elapsed_s": 2.5442100020009093,
+      "start_load": [
+        1.85546875,
+        3.2822265625,
+        3.39306640625
+      ],
+      "topology": "single-peer"
+    },
+    "float-text": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "row_elapsed_s": 0.8448608239996247,
+      "start_load": [
+        1.8671875,
+        3.2607421875,
+        3.38525390625
+      ],
+      "topology": "single-peer"
+    },
+    "combo-key": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "row_elapsed_s": 0.5442019740003161,
+      "start_load": [
+        1.8671875,
+        3.2607421875,
+        3.38525390625
+      ],
+      "topology": "single-peer"
+    },
+    "rteerror": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "row_elapsed_s": 0.8446859579999,
+      "start_load": [
+        1.8671875,
+        3.2607421875,
+        3.38525390625
+      ],
+      "topology": "single-peer"
+    },
+    "steady-clock": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "row_elapsed_s": 0.5443132760119624,
+      "start_load": [
+        1.8671875,
+        3.2607421875,
+        3.38525390625
+      ],
+      "topology": "single-peer"
+    },
+    "swap-wait": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "row_elapsed_s": 0.5457278829999268,
+      "start_load": [
+        1.8671875,
+        3.2607421875,
+        3.38525390625
+      ],
+      "topology": "single-peer"
+    },
+    "module-version": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "warning_acknowledgment": {
+        "window": 48234498,
+        "engine_pid": 3009016,
+        "owner_pid": 3009023,
+        "runtime": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/kept-b41-final-validation/suite-54/module-version-selftest/runtime",
+        "caption": "RTE Warning! (>_<)",
+        "action": "Return",
+        "expected_warning_modules": [
+          "StubA.rte",
+          "StubB.rte"
+        ]
+      },
+      "row_elapsed_s": 0.6475081290118396,
+      "start_load": [
+        1.79736328125,
+        3.22314453125,
+        3.3720703125
+      ],
+      "topology": "single-peer"
+    },
+    "ext-validate-version": {
+      "selftest": "ext-validate-version",
+      "exit_code": 1,
+      "timed_out": false,
+      "reason_line": "[module] StubBad.rte was developed for Cortex Command v6.1.0, so this version of Cortex Command (v7.0.0) may not support it. boxes=0",
+      "dialog": false,
+      "continued": false,
+      "exe_sha256": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "stdout": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/kept-b41-final-validation/suite-54/ext-validate-version-selftest/run/stdout.log",
+      "pass": true,
+      "reason": "",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "row_elapsed_s": 0.5444093419937417,
+      "start_load": [
+        1.79736328125,
+        3.22314453125,
+        3.3720703125
+      ],
+      "topology": "single-peer"
+    },
+    "path-prefix": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "row_elapsed_s": 0.5436229500337504,
+      "start_load": [
+        1.79736328125,
+        3.22314453125,
+        3.3720703125
+      ],
+      "topology": "single-peer"
+    },
+    "limb-path": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "row_elapsed_s": 7.647873902984429,
+      "start_load": [
+        1.79736328125,
+        3.22314453125,
+        3.3720703125
+      ],
+      "topology": "single-peer"
+    },
+    "menu-automation": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "row_elapsed_s": 0.5406748600071296,
+      "start_load": [
+        1.89404296875,
+        3.21923828125,
+        3.36962890625
+      ],
+      "topology": "single-peer"
+    },
+    "mod-api-shims": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "row_elapsed_s": 7.648610521981027,
+      "start_load": [
+        1.822265625,
+        3.18212890625,
+        3.3564453125
+      ],
+      "topology": "single-peer"
+    },
+    "settings-preferences": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "row_elapsed_s": 0.5439137530047446,
+      "start_load": [
+        1.8369140625,
+        3.162109375,
+        3.34912109375
+      ],
+      "topology": "single-peer"
+    },
+    "single-module-harness": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "row_elapsed_s": 8.749629437981639,
+      "start_load": [
+        1.8369140625,
+        3.162109375,
+        3.34912109375
+      ],
+      "topology": "single-peer"
+    },
+    "headless-assert-continues": {
+      "selftest": "headless-assert-continues",
+      "exit_code": 1,
+      "timed_out": false,
+      "fault_line": "",
+      "verdicts_after_assert": [],
+      "shutdown_line": "",
+      "exe_sha256": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "stdout": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/kept-b41-final-validation/suite-54/headless-assert-continues-selftest/run/stdout.log",
+      "pass": false,
+      "reason": "no continued-assert fault line",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "row_elapsed_s": 8.348000725964084,
+      "start_load": [
+        1.9482421875,
+        3.140625,
+        3.34033203125
+      ],
+      "topology": "single-peer"
+    },
+    "render-window-scripts": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "row_elapsed_s": 2.041553174960427,
+      "start_load": [
+        1.94970703125,
+        3.1025390625,
+        3.32568359375
+      ],
+      "topology": "single-peer"
+    },
+    "text-wrap": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "row_elapsed_s": 2.041703122027684,
+      "start_load": [
+        1.94970703125,
+        3.1025390625,
+        3.32568359375
+      ],
+      "topology": "single-peer"
+    },
+    "save-refusal-diagnosis": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "row_elapsed_s": 8.947816872037947,
+      "start_load": [
+        1.94970703125,
+        3.1025390625,
+        3.32568359375
+      ],
+      "topology": "single-peer"
+    },
+    "headless-render-cap": {
+      "pass": false,
+      "exit_code": 1,
+      "timed_out": false,
+      "pass_lines": 0,
+      "fail_lines": [
+        "exit_code=1"
+      ],
+      "fatal": [],
+      "reason": "exit_code=1",
+      "cap": "",
+      "frames": 0,
+      "interval_s": 0.0,
+      "presentations_per_second": 0.0,
+      "gpu_max": 5.0,
+      "gpu_avg": 3.0,
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "row_elapsed_s": 2.44385958800558,
+      "start_load": [
+        1.87744140625,
+        3.04931640625,
+        3.3056640625
+      ],
+      "topology": "single-peer"
+    },
+    "single-player-reference": {
+      "pass": true,
+      "reason": "",
+      "fail_lines": [],
+      "exit_code": 0,
+      "timed_out": false,
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "reference": {
+        "dump_sha256": "f2c46632cd337cfd5bc2eec5307bc4661c715d54a4ce3c251c4b6e9f86bcce79",
+        "dump_bytes": 5445623,
+        "portable_dump_sha256": "fae01e06aa2665c34cdd3676efbc3f10bbcfd000d85383af5ecd20949e79e266",
+        "tick_hashes_sha256": "ddd5a0c7a4d20b9ef5f3be9cdd6d30376f97304c4feaa93283409adc0dc0d89f",
+        "compared_trace_sha256": "fecd87e5e76c4419b0ef74b2ca73a03526dab9214532fe5cbbb98c5a2ff6f9a1"
+      },
+      "observed": {
+        "dump_sha256": "91fcc5f1a4ebddf6cf6ade63f4cda4b79e9258ae80c3dbc1b063cf7aaa1e5e01",
+        "dump_bytes": 3617129,
+        "portable_dump_sha256": "fae01e06aa2665c34cdd3676efbc3f10bbcfd000d85383af5ecd20949e79e266",
+        "tick_count": 320,
+        "tick_hashes_sha256": "ddd5a0c7a4d20b9ef5f3be9cdd6d30376f97304c4feaa93283409adc0dc0d89f",
+        "compared_trace_sha256": "fecd87e5e76c4419b0ef74b2ca73a03526dab9214532fe5cbbb98c5a2ff6f9a1"
+      },
+      "row_elapsed_s": 13.197419819014613,
+      "start_load": [
+        1.80712890625,
+        3.01513671875,
+        3.29296875
+      ],
+      "topology": "single-peer"
+    },
+    "preview-invariance": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "verdicts": [
+        [
+          "PASS",
+          "153",
+          "8",
+          "8"
+        ]
+      ],
+      "fail_lines": [],
+      "reason": "",
+      "exe_sha256": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "row_elapsed_s": 10.851080848020501,
+      "start_load": [
+        1.7568359375,
+        2.96484375,
+        3.27294921875
+      ],
+      "topology": "single-peer"
+    },
+    "preview-hotplug": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "verdicts": [
+        [
+          "PASS",
+          "153",
+          "8",
+          "8"
+        ]
+      ],
+      "fail_lines": [],
+      "reason": "",
+      "hotplug": [
+        [
+          "60",
+          "4"
+        ]
+      ],
+      "exe_sha256": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "row_elapsed_s": 11.250222152972128,
+      "start_load": [
+        1.6396484375,
+        2.89990234375,
+        3.248046875
+      ],
+      "topology": "single-peer"
+    },
+    "preview-binding-exhaustive": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "budget_s": 1800,
+      "elapsed_s": 151.059,
+      "walked_classes": 89,
+      "row_elapsed_s": 151.21133724105312,
+      "start_load": [
+        1.49755859375,
+        2.80615234375,
+        3.21142578125
+      ],
+      "topology": "single-peer"
+    },
+    "joystick-updater": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "row_elapsed_s": 0.9439017859986052,
+      "start_load": [
+        2.70849609375,
+        2.685546875,
+        3.09423828125
+      ],
+      "topology": "single-peer"
+    },
+    "net-match": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+      "load_sensitive": true,
+      "box": {
+        "engines": [],
+        "builds": [],
+        "load": [
+          2.71,
+          2.69,
+          3.09
+        ]
+      },
+      "row_elapsed_s": 114.4199033890036,
+      "start_load": [
+        2.70849609375,
+        2.685546875,
+        3.09423828125
+      ],
+      "topology": "single-box: not proof"
+    }
+  },
+  "topology": "single-box: not proof"
+}

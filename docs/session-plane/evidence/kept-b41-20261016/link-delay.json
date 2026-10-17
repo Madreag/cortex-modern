@@ -1,0 +1,1356 @@
+{
+  "binary_sha256": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+  "scope": "All positive completed survivor waits in each entire 30-second simulated match; link samples after 5000ms. Unfinished endpoint waits below the bound are not enumerated by these log records.",
+  "rows": [
+    {
+      "name": "2-seats-referee-0-30ms",
+      "schedule": "seed=0 seats=2 internet=0 exchange=100 end=30000 rtt=30 jitter=0 recover=300,300 phase=0,0 spell=1:slow:6000:10000:80",
+      "runner_pass": true,
+      "survivor_wait_count": 0,
+      "survivor_startup_wait_count": 0,
+      "wait_scope": "entire match",
+      "survivor_longest_ms": 0,
+      "settled_path_sample_count": 8,
+      "settled_delay_min": 3,
+      "settled_delay_max": 3,
+      "log_sha256": "d0d5fd5f7e40d647617a4c76145aeb138c5b128eb7cad8b3f5a09aea7322fb54",
+      "settled_path_samples": [
+        {
+          "local": 1,
+          "peer": 2,
+          "now_ms": 5016,
+          "frame": 300,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 2,
+          "peer": 1,
+          "now_ms": 5016,
+          "frame": 300,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 1,
+          "peer": 2,
+          "now_ms": 10016,
+          "frame": 551,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 1,
+          "peer": 2,
+          "now_ms": 15016,
+          "frame": 791,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 1,
+          "peer": 2,
+          "now_ms": 20016,
+          "frame": 1202,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 2,
+          "peer": 1,
+          "now_ms": 20016,
+          "frame": 1200,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 1,
+          "peer": 2,
+          "now_ms": 25016,
+          "frame": 1502,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 2,
+          "peer": 1,
+          "now_ms": 25016,
+          "frame": 1500,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        }
+      ]
+    },
+    {
+      "name": "2-seats-referee-1-30ms",
+      "schedule": "seed=0 seats=2 internet=1 exchange=100 end=30000 rtt=30 jitter=0 recover=300,300 phase=0,0 spell=1:slow:6000:10000:80",
+      "runner_pass": true,
+      "survivor_wait_count": 0,
+      "survivor_startup_wait_count": 0,
+      "wait_scope": "entire match",
+      "survivor_longest_ms": 0,
+      "settled_path_sample_count": 8,
+      "settled_delay_min": 3,
+      "settled_delay_max": 3,
+      "log_sha256": "c5ed922a67688d9d616d8db88835daff24927662ae99b609a68f2e81023c0c37",
+      "settled_path_samples": [
+        {
+          "local": 1,
+          "peer": 2,
+          "now_ms": 5016,
+          "frame": 300,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 2,
+          "peer": 1,
+          "now_ms": 5016,
+          "frame": 300,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 1,
+          "peer": 2,
+          "now_ms": 10016,
+          "frame": 551,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 1,
+          "peer": 2,
+          "now_ms": 15016,
+          "frame": 791,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 1,
+          "peer": 2,
+          "now_ms": 20016,
+          "frame": 1202,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 2,
+          "peer": 1,
+          "now_ms": 20016,
+          "frame": 1200,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 1,
+          "peer": 2,
+          "now_ms": 25016,
+          "frame": 1502,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 2,
+          "peer": 1,
+          "now_ms": 25016,
+          "frame": 1500,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        }
+      ]
+    },
+    {
+      "name": "4-seats-referee-1-30ms",
+      "schedule": "seed=0 seats=4 internet=1 exchange=100 end=30000 rtt=30,30,30,30,30,30 jitter=0,0,0,0,0,0 recover=300,300,300,300 phase=0,0,0,0 spell=1:slow:6000:10000:80",
+      "runner_pass": true,
+      "survivor_wait_count": 0,
+      "survivor_startup_wait_count": 0,
+      "wait_scope": "entire match",
+      "survivor_longest_ms": 0,
+      "settled_path_sample_count": 54,
+      "settled_delay_min": 3,
+      "settled_delay_max": 3,
+      "log_sha256": "e70624f2a9bdbdd349c78f24094785106a0c6eea3031bc2323987aebed2a8050",
+      "settled_path_samples": [
+        {
+          "local": 1,
+          "peer": 2,
+          "now_ms": 5016,
+          "frame": 300,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 1,
+          "peer": 3,
+          "now_ms": 5016,
+          "frame": 300,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 1,
+          "peer": 4,
+          "now_ms": 5016,
+          "frame": 300,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 2,
+          "peer": 1,
+          "now_ms": 5031,
+          "frame": 300,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 2,
+          "peer": 3,
+          "now_ms": 5031,
+          "frame": 300,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 2,
+          "peer": 4,
+          "now_ms": 5031,
+          "frame": 300,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 3,
+          "peer": 1,
+          "now_ms": 5031,
+          "frame": 300,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 3,
+          "peer": 2,
+          "now_ms": 5031,
+          "frame": 300,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 3,
+          "peer": 4,
+          "now_ms": 5031,
+          "frame": 300,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 4,
+          "peer": 1,
+          "now_ms": 5031,
+          "frame": 300,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 4,
+          "peer": 2,
+          "now_ms": 5031,
+          "frame": 300,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 4,
+          "peer": 3,
+          "now_ms": 5031,
+          "frame": 300,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 1,
+          "peer": 2,
+          "now_ms": 10016,
+          "frame": 551,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 1,
+          "peer": 3,
+          "now_ms": 10016,
+          "frame": 551,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 1,
+          "peer": 4,
+          "now_ms": 10016,
+          "frame": 551,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 2,
+          "peer": 3,
+          "now_ms": 10031,
+          "frame": 600,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 2,
+          "peer": 4,
+          "now_ms": 10031,
+          "frame": 600,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 3,
+          "peer": 2,
+          "now_ms": 10031,
+          "frame": 600,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 3,
+          "peer": 4,
+          "now_ms": 10031,
+          "frame": 600,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 4,
+          "peer": 2,
+          "now_ms": 10031,
+          "frame": 600,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 4,
+          "peer": 3,
+          "now_ms": 10031,
+          "frame": 600,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 1,
+          "peer": 2,
+          "now_ms": 15016,
+          "frame": 791,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 1,
+          "peer": 3,
+          "now_ms": 15016,
+          "frame": 791,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 1,
+          "peer": 4,
+          "now_ms": 15016,
+          "frame": 791,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 2,
+          "peer": 3,
+          "now_ms": 15031,
+          "frame": 900,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 2,
+          "peer": 4,
+          "now_ms": 15031,
+          "frame": 900,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 3,
+          "peer": 2,
+          "now_ms": 15031,
+          "frame": 900,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 3,
+          "peer": 4,
+          "now_ms": 15031,
+          "frame": 900,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 4,
+          "peer": 2,
+          "now_ms": 15031,
+          "frame": 900,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 4,
+          "peer": 3,
+          "now_ms": 15031,
+          "frame": 900,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 1,
+          "peer": 2,
+          "now_ms": 20016,
+          "frame": 1200,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 1,
+          "peer": 3,
+          "now_ms": 20016,
+          "frame": 1200,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 1,
+          "peer": 4,
+          "now_ms": 20016,
+          "frame": 1200,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 2,
+          "peer": 1,
+          "now_ms": 20031,
+          "frame": 1200,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 2,
+          "peer": 3,
+          "now_ms": 20031,
+          "frame": 1200,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 2,
+          "peer": 4,
+          "now_ms": 20031,
+          "frame": 1200,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 3,
+          "peer": 1,
+          "now_ms": 20031,
+          "frame": 1200,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 3,
+          "peer": 2,
+          "now_ms": 20031,
+          "frame": 1200,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 3,
+          "peer": 4,
+          "now_ms": 20031,
+          "frame": 1200,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 4,
+          "peer": 1,
+          "now_ms": 20031,
+          "frame": 1200,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 4,
+          "peer": 2,
+          "now_ms": 20031,
+          "frame": 1200,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 4,
+          "peer": 3,
+          "now_ms": 20031,
+          "frame": 1200,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 1,
+          "peer": 2,
+          "now_ms": 25016,
+          "frame": 1500,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 1,
+          "peer": 3,
+          "now_ms": 25016,
+          "frame": 1500,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 1,
+          "peer": 4,
+          "now_ms": 25016,
+          "frame": 1500,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 2,
+          "peer": 1,
+          "now_ms": 25031,
+          "frame": 1500,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 2,
+          "peer": 3,
+          "now_ms": 25031,
+          "frame": 1500,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 2,
+          "peer": 4,
+          "now_ms": 25031,
+          "frame": 1500,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 3,
+          "peer": 1,
+          "now_ms": 25031,
+          "frame": 1500,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 3,
+          "peer": 2,
+          "now_ms": 25031,
+          "frame": 1500,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 3,
+          "peer": 4,
+          "now_ms": 25031,
+          "frame": 1500,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 4,
+          "peer": 1,
+          "now_ms": 25031,
+          "frame": 1500,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 4,
+          "peer": 2,
+          "now_ms": 25031,
+          "frame": 1500,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        },
+        {
+          "local": 4,
+          "peer": 3,
+          "now_ms": 25031,
+          "frame": 1500,
+          "transport_rtt_ms": 30,
+          "receipt_p95_ms": 30,
+          "input_delay_ticks": 3
+        }
+      ]
+    },
+    {
+      "name": "2-seats-referee-0-200ms",
+      "schedule": "seed=0 seats=2 internet=0 exchange=100 end=30000 rtt=200 jitter=0 recover=300,300 phase=0,0 spell=1:slow:6000:10000:80",
+      "runner_pass": true,
+      "survivor_wait_count": 0,
+      "survivor_startup_wait_count": 0,
+      "wait_scope": "entire match",
+      "survivor_longest_ms": 0,
+      "settled_path_sample_count": 8,
+      "settled_delay_min": 13,
+      "settled_delay_max": 14,
+      "log_sha256": "c2bade2f4fdc6823497b88ac832bba359de1fb8ca48e044f0a70f433260037fd",
+      "settled_path_samples": [
+        {
+          "local": 1,
+          "peer": 2,
+          "now_ms": 5101,
+          "frame": 300,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 13
+        },
+        {
+          "local": 2,
+          "peer": 1,
+          "now_ms": 5101,
+          "frame": 300,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 13
+        },
+        {
+          "local": 1,
+          "peer": 2,
+          "now_ms": 10101,
+          "frame": 545,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 13
+        },
+        {
+          "local": 1,
+          "peer": 2,
+          "now_ms": 15101,
+          "frame": 785,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 13
+        },
+        {
+          "local": 1,
+          "peer": 2,
+          "now_ms": 20101,
+          "frame": 1207,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 14
+        },
+        {
+          "local": 2,
+          "peer": 1,
+          "now_ms": 20101,
+          "frame": 1200,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 13
+        },
+        {
+          "local": 1,
+          "peer": 2,
+          "now_ms": 25101,
+          "frame": 1507,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 14
+        },
+        {
+          "local": 2,
+          "peer": 1,
+          "now_ms": 25101,
+          "frame": 1500,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 13
+        }
+      ]
+    },
+    {
+      "name": "2-seats-referee-1-200ms",
+      "schedule": "seed=0 seats=2 internet=1 exchange=100 end=30000 rtt=200 jitter=0 recover=300,300 phase=0,0 spell=1:slow:6000:10000:80",
+      "runner_pass": true,
+      "survivor_wait_count": 0,
+      "survivor_startup_wait_count": 0,
+      "wait_scope": "entire match",
+      "survivor_longest_ms": 0,
+      "settled_path_sample_count": 8,
+      "settled_delay_min": 13,
+      "settled_delay_max": 14,
+      "log_sha256": "3d4f3ed24660386e9f38b32a9e30a33bb70648d9bb50092b5cacd42fc47aedf9",
+      "settled_path_samples": [
+        {
+          "local": 1,
+          "peer": 2,
+          "now_ms": 5101,
+          "frame": 300,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 13
+        },
+        {
+          "local": 2,
+          "peer": 1,
+          "now_ms": 5101,
+          "frame": 300,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 13
+        },
+        {
+          "local": 1,
+          "peer": 2,
+          "now_ms": 10101,
+          "frame": 540,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 13
+        },
+        {
+          "local": 1,
+          "peer": 2,
+          "now_ms": 15101,
+          "frame": 780,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 13
+        },
+        {
+          "local": 1,
+          "peer": 2,
+          "now_ms": 20101,
+          "frame": 1207,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 14
+        },
+        {
+          "local": 2,
+          "peer": 1,
+          "now_ms": 20101,
+          "frame": 1200,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 13
+        },
+        {
+          "local": 1,
+          "peer": 2,
+          "now_ms": 25101,
+          "frame": 1507,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 14
+        },
+        {
+          "local": 2,
+          "peer": 1,
+          "now_ms": 25101,
+          "frame": 1500,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 13
+        }
+      ]
+    },
+    {
+      "name": "4-seats-referee-1-200ms",
+      "schedule": "seed=0 seats=4 internet=1 exchange=100 end=30000 rtt=200,200,200,200,200,200 jitter=0,0,0,0,0,0 recover=300,300,300,300 phase=0,0,0,0 spell=1:slow:6000:10000:80",
+      "runner_pass": false,
+      "survivor_wait_count": 1374,
+      "survivor_startup_wait_count": 78,
+      "wait_scope": "entire match",
+      "survivor_longest_ms": 167,
+      "settled_path_sample_count": 54,
+      "settled_delay_min": 13,
+      "settled_delay_max": 18,
+      "log_sha256": "755ecd1dca6a503697b61b20f50c25bd15e3716c678b9c57dca4aa6968cea7ec",
+      "settled_path_samples": [
+        {
+          "local": 1,
+          "peer": 2,
+          "now_ms": 5101,
+          "frame": 298,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 14
+        },
+        {
+          "local": 1,
+          "peer": 3,
+          "now_ms": 5101,
+          "frame": 298,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 14
+        },
+        {
+          "local": 1,
+          "peer": 4,
+          "now_ms": 5101,
+          "frame": 298,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 14
+        },
+        {
+          "local": 2,
+          "peer": 1,
+          "now_ms": 5201,
+          "frame": 298,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 18
+        },
+        {
+          "local": 2,
+          "peer": 3,
+          "now_ms": 5201,
+          "frame": 298,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 18
+        },
+        {
+          "local": 2,
+          "peer": 4,
+          "now_ms": 5201,
+          "frame": 298,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 18
+        },
+        {
+          "local": 3,
+          "peer": 1,
+          "now_ms": 5201,
+          "frame": 300,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 18
+        },
+        {
+          "local": 3,
+          "peer": 2,
+          "now_ms": 5201,
+          "frame": 300,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 18
+        },
+        {
+          "local": 3,
+          "peer": 4,
+          "now_ms": 5201,
+          "frame": 300,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 202,
+          "input_delay_ticks": 18
+        },
+        {
+          "local": 4,
+          "peer": 1,
+          "now_ms": 5201,
+          "frame": 300,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 18
+        },
+        {
+          "local": 4,
+          "peer": 2,
+          "now_ms": 5201,
+          "frame": 300,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 202,
+          "input_delay_ticks": 18
+        },
+        {
+          "local": 4,
+          "peer": 3,
+          "now_ms": 5201,
+          "frame": 300,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 18
+        },
+        {
+          "local": 1,
+          "peer": 2,
+          "now_ms": 10101,
+          "frame": 536,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 14
+        },
+        {
+          "local": 1,
+          "peer": 3,
+          "now_ms": 10101,
+          "frame": 536,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 14
+        },
+        {
+          "local": 1,
+          "peer": 4,
+          "now_ms": 10101,
+          "frame": 536,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 14
+        },
+        {
+          "local": 2,
+          "peer": 3,
+          "now_ms": 10201,
+          "frame": 598,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 15
+        },
+        {
+          "local": 2,
+          "peer": 4,
+          "now_ms": 10201,
+          "frame": 598,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 15
+        },
+        {
+          "local": 3,
+          "peer": 2,
+          "now_ms": 10201,
+          "frame": 600,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 15
+        },
+        {
+          "local": 3,
+          "peer": 4,
+          "now_ms": 10201,
+          "frame": 600,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 15
+        },
+        {
+          "local": 4,
+          "peer": 2,
+          "now_ms": 10201,
+          "frame": 600,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 15
+        },
+        {
+          "local": 4,
+          "peer": 3,
+          "now_ms": 10201,
+          "frame": 600,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 15
+        },
+        {
+          "local": 1,
+          "peer": 2,
+          "now_ms": 15101,
+          "frame": 776,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 14
+        },
+        {
+          "local": 1,
+          "peer": 3,
+          "now_ms": 15101,
+          "frame": 776,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 14
+        },
+        {
+          "local": 1,
+          "peer": 4,
+          "now_ms": 15101,
+          "frame": 776,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 14
+        },
+        {
+          "local": 2,
+          "peer": 3,
+          "now_ms": 15201,
+          "frame": 898,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 15
+        },
+        {
+          "local": 2,
+          "peer": 4,
+          "now_ms": 15201,
+          "frame": 898,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 15
+        },
+        {
+          "local": 3,
+          "peer": 2,
+          "now_ms": 15201,
+          "frame": 900,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 15
+        },
+        {
+          "local": 3,
+          "peer": 4,
+          "now_ms": 15201,
+          "frame": 900,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 15
+        },
+        {
+          "local": 4,
+          "peer": 2,
+          "now_ms": 15201,
+          "frame": 900,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 15
+        },
+        {
+          "local": 4,
+          "peer": 3,
+          "now_ms": 15201,
+          "frame": 900,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 15
+        },
+        {
+          "local": 1,
+          "peer": 2,
+          "now_ms": 20101,
+          "frame": 1194,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 13
+        },
+        {
+          "local": 1,
+          "peer": 3,
+          "now_ms": 20101,
+          "frame": 1194,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 13
+        },
+        {
+          "local": 1,
+          "peer": 4,
+          "now_ms": 20101,
+          "frame": 1194,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 13
+        },
+        {
+          "local": 2,
+          "peer": 1,
+          "now_ms": 20201,
+          "frame": 1198,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 14
+        },
+        {
+          "local": 2,
+          "peer": 3,
+          "now_ms": 20201,
+          "frame": 1198,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 14
+        },
+        {
+          "local": 2,
+          "peer": 4,
+          "now_ms": 20201,
+          "frame": 1198,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 14
+        },
+        {
+          "local": 3,
+          "peer": 1,
+          "now_ms": 20201,
+          "frame": 1200,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 14
+        },
+        {
+          "local": 3,
+          "peer": 2,
+          "now_ms": 20201,
+          "frame": 1200,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 14
+        },
+        {
+          "local": 3,
+          "peer": 4,
+          "now_ms": 20201,
+          "frame": 1200,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 14
+        },
+        {
+          "local": 4,
+          "peer": 1,
+          "now_ms": 20201,
+          "frame": 1200,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 14
+        },
+        {
+          "local": 4,
+          "peer": 2,
+          "now_ms": 20201,
+          "frame": 1200,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 14
+        },
+        {
+          "local": 4,
+          "peer": 3,
+          "now_ms": 20201,
+          "frame": 1200,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 14
+        },
+        {
+          "local": 1,
+          "peer": 2,
+          "now_ms": 25101,
+          "frame": 1494,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 13
+        },
+        {
+          "local": 1,
+          "peer": 3,
+          "now_ms": 25101,
+          "frame": 1494,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 13
+        },
+        {
+          "local": 1,
+          "peer": 4,
+          "now_ms": 25101,
+          "frame": 1494,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 13
+        },
+        {
+          "local": 2,
+          "peer": 1,
+          "now_ms": 25201,
+          "frame": 1498,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 14
+        },
+        {
+          "local": 2,
+          "peer": 3,
+          "now_ms": 25201,
+          "frame": 1498,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 14
+        },
+        {
+          "local": 2,
+          "peer": 4,
+          "now_ms": 25201,
+          "frame": 1498,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 14
+        },
+        {
+          "local": 3,
+          "peer": 1,
+          "now_ms": 25201,
+          "frame": 1500,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 14
+        },
+        {
+          "local": 3,
+          "peer": 2,
+          "now_ms": 25201,
+          "frame": 1500,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 14
+        },
+        {
+          "local": 3,
+          "peer": 4,
+          "now_ms": 25201,
+          "frame": 1500,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 14
+        },
+        {
+          "local": 4,
+          "peer": 1,
+          "now_ms": 25201,
+          "frame": 1500,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 14
+        },
+        {
+          "local": 4,
+          "peer": 2,
+          "now_ms": 25201,
+          "frame": 1500,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 14
+        },
+        {
+          "local": 4,
+          "peer": 3,
+          "now_ms": 25201,
+          "frame": 1500,
+          "transport_rtt_ms": 200,
+          "receipt_p95_ms": 200,
+          "input_delay_ticks": 14
+        }
+      ]
+    }
+  ]
+}

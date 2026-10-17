@@ -1,0 +1,31 @@
+{
+  "binary_sha256": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+  "source_log": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/kept-b41-final-validation/random-5000/net-session-plane-hold-schedules-selftest/stdout.log",
+  "source_sha256": "12271c208ddaac22bc370943f134b49649b90dcc42e5533c184e4ed7699e9ad7",
+  "rows": [
+    {
+      "failure": "[net-session-plane-selftest] FAIL random_hold_schedules group=history:histories_differ:2:internet seeds=2169: not minimized (past CC_TEST_HOLD_SCHEDULE_SHAPES or _BUDGET_S), seed 2169: histories differ at displayed frame 744: peer 1 AI seats [] peer 2 AI seats [] at 12692 ms",
+      "line": 16,
+      "name": "two_internet_seats_198ms_jitter_10ms_directory_160ms_seat2_stopped_688ms_seat2_silent_dark_2880ms_loss_90pc_seat2_loss_60pc_seat2_seed_2169",
+      "schedule": "seed=2169 seats=2 internet=1 exchange=160 end=18228 rtt=198 jitter=10 recover=120,300 phase=1976,2288 spell=2:stopped:9194:688 spell=2:silent:4983:2880:dark burst=2:10426:1802:90 burst=2:5251:2438:60"
+    },
+    {
+      "failure": "[net-session-plane-selftest] FAIL random_hold_schedules group=history:histories_differ:4:direct seeds=2532: not minimized (past CC_TEST_HOLD_SCHEDULE_SHAPES or _BUDGET_S), seed 2532: histories differ at displayed frame 162: peer 1 AI seats [] peer 2 AI seats [] peer 3 AI seats [] peer 4 AI seats [] at 3057 ms",
+      "line": 18,
+      "name": "four_direct_seats_287ms_jitter_20ms_seat3_slow_91pc_7218ms_back_at_100pc_seed_2532",
+      "schedule": "seed=2532 seats=4 internet=0 exchange=40 end=24546 rtt=212,270,285,215,212,287 jitter=0,20,0,0,0,0 recover=120,100,100,120 phase=4663,2159,2419,1354 spell=3:slow:9328:7218:91"
+    },
+    {
+      "failure": "[net-session-plane-selftest] FAIL random_hold_schedules group=history:histories_differ:4:internet seeds=4172: not minimized (past CC_TEST_HOLD_SCHEDULE_SHAPES or _BUDGET_S), seed 4172: histories differ at displayed frame 94: peer 1 AI seats [] peer 2 AI seats [] peer 3 AI seats [] peer 4 AI seats [] at 1770 ms",
+      "line": 20,
+      "name": "four_internet_seats_118ms_jitter_40ms_directory_300ms_seat2_hung_384ms_seat4_late_200ms_more_648ms_back_at_105pc_seed_4172",
+      "schedule": "seed=4172 seats=4 internet=1 exchange=300 end=22631 rtt=91,118,80,101,98,99 jitter=5,40,20,40,5,40 recover=300,300,120,105 phase=428,2546,2114,3076 spell=2:hung:5435:384 spell=4:late:9983:648:200"
+    },
+    {
+      "failure": "[net-session-plane-selftest] FAIL random_hold_schedules group=history:never_started:4:internet seeds=2501,4125: not minimized (past CC_TEST_HOLD_SCHEDULE_SHAPES or _BUDGET_S), seed 4125: the seats never all displayed their first second of a round",
+      "line": 22,
+      "name": "four_internet_seats_50ms_jitter_20ms_directory_40ms_seat2_silent_dark_3540ms_back_at_100pc_seat3_leaves_seed_4125",
+      "schedule": "seed=4125 seats=4 internet=1 exchange=40 end=21585 rtt=50,40,45,49,41,46 jitter=20,20,0,20,20,0 recover=120,100,105,300 phase=53,2682,1384,4259 spell=2:silent:8275:3540:dark leave=3:10724"
+    }
+  ]
+}

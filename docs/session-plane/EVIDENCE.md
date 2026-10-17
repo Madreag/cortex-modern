@@ -1,9 +1,11 @@
 # Session-plane evidence
 
 The records below preserve individual failing and passing observations. A green
-coordinator detector does not make its complete match green. The full validation
-of the kept engine source `51b578e56` is still running; the earlier complete gate
-under `evidence/20261016` used `ec5d90c835` and is not evidence for the kept tip.
+coordinator detector does not make its complete match green. The [completed
+validation](evidence/kept-b41-20261016/gate.json) of engine source `51b578e56`
+is RED: suite 48/54, 3218 failures in 5000 schedules, and 63 GREEN / 58 RED of
+121 listed shapes. Every schedule ran, seeds 1 through 5000, on the same frozen
+executable. The earlier complete gate under `evidence/20261016` used `ec5d90c835`.
 All engine observations in this lane are headed Linux runs through the official
 runners. No spread match has run in this lane.
 

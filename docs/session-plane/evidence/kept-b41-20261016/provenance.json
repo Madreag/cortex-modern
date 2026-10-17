@@ -1,0 +1,12 @@
+{
+  "source_head": "bfd988349eb75a6b428828dc330d2fdf3e4888ac",
+  "origin_relay_findings": "bfd988349eb75a6b428828dc330d2fdf3e4888ac",
+  "engine_source_head": "51b578e5641ad01df9cd3963898ee4370312797d",
+  "cm_dev_e7cdf1dca1_is_ancestor": true,
+  "fixture_06a44fb82_is_ancestor": true,
+  "source_changes_since_freeze": [],
+  "working_tree": "",
+  "binary_sha256": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+  "conflict_marker_scan_exit_code": 1,
+  "conflict_markers": ""
+}

@@ -1,0 +1,18 @@
+{
+  "captured_utc": "2026-10-17T05:04:58.598942+00:00",
+  "pid": 3010362,
+  "process_environment": {
+    "CC_TEST_HOLD_SCHEDULES": "5000",
+    "CC_TEST_HOLD_SCHEDULE_SEED": "1",
+    "CC_TEST_HOLD_SCHEDULE_SHAPES": "0",
+    "CC_TEST_HOLD_SCHEDULE_THREADS": "7",
+    "CC_TEST_SESSION_PLANE_CASE": "random_hold_schedules",
+    "CC_RUNNER_HEADED": "1",
+    "DISPLAY": ":0",
+    "CCCP_HEADLESS": null
+  },
+  "visible_window": true,
+  "headless_env": null,
+  "exe_sha256": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+  "timeout_seconds": 10800.0
+}
