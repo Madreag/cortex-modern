@@ -5602,14 +5602,17 @@ static int ScriptGraphLimbVectorOwner(lua_State* L) {
 }
 
 // A Vector reference that outlived the object it points into (an AI's waypoint into a move target that died): the value the
-// script reads through it, read only from memory the engine holds and no living object owns - a slot a native pool holds free
-// or a block a class pool holds returned; nothing for any other reference, or while an owner luabind recorded lives.
+// script reads through it, read only from memory the engine holds and no living object owns - a gone object's memory its Lua
+// handles retain, a slot a native pool holds free or a block a class pool holds returned; nothing for any other reference, or
+// while an owner luabind recorded lives.
 static int ScriptGraphGoneVector(lua_State* L) {
 	auto* rep = luabind::detail::is_class_object(L, 1);
 	if (!rep || !rep->ptr() || (rep->flags() & luabind::detail::object_rep::owner) || !rep->crep() || rep->crep()->type() != LUABIND_TYPEID(Vector)) return 0;
 	if (rep->get_dependencies().is_valid() && ScriptGraphNativeAlive(L, rep)) return 0;
 	const void* original = CheckpointNativeStorage::Original(rep->ptr());
-	if (!CheckpointNativeStorage::FreeSlotHolds(original, sizeof(Vector)) && !Entity::ClassInfo::AnyPoolHolds(original, sizeof(Vector))) return 0;
+	if (!MovableObject::RetainedMemoryHolds(original, sizeof(Vector)) && !CheckpointNativeStorage::FreeSlotHolds(original, sizeof(Vector)) &&
+	    !Entity::ClassInfo::AnyPoolHolds(original, sizeof(Vector)))
+		return 0;
 	// Through the view: a frozen state reads its copy of the bytes.
 	const Vector value = *static_cast<const Vector*>(rep->ptr());
 	lua_pushnumber(L, value.GetX());
@@ -6471,7 +6474,7 @@ assert(coroutine.resume(_F5Handles.follower) and coroutine.resume(_F5Handles.cha
 )lua") == 0;
 	// The chaser's target is deleted before the capture; the waypoint still holds its position.
 	bool targetGone = false;
-	// Where the gone target's memory went: a free native slot, a returned class pool block, or neither.
+	// Where the gone target's memory went: retained for its Lua handles, a free native slot, a returned class pool block, or none.
 	int targetMemory = -1;
 	if (planted) {
 		lua_State* L = lua.GetLuaState();
@@ -6483,7 +6486,8 @@ assert(coroutine.resume(_F5Handles.follower) and coroutine.resume(_F5Handles.cha
 			const Vector* position = &target->GetPos();
 			delete target;
 			targetGone = true;
-			targetMemory = CheckpointNativeStorage::FreeSlotHolds(position, sizeof(Vector)) ? 1 : Entity::ClassInfo::AnyPoolHolds(position, sizeof(Vector)) ? 2 : 0;
+			targetMemory = MovableObject::RetainedMemoryHolds(position, sizeof(Vector)) ? 3 : CheckpointNativeStorage::FreeSlotHolds(position, sizeof(Vector)) ? 1 :
+			               Entity::ClassInfo::AnyPoolHolds(position, sizeof(Vector)) ? 2 : 0;
 		}
 	}
 	std::string text;
