@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <vector>
 #include "CheckpointNativeSnapshot.h"
 #include "CheckpointNativeStorage.h"
