@@ -6756,7 +6756,8 @@ _F5Handles.unreached = _F5Unreached and _F5Unreached:GetFirstPieSliceByPresetNam
 			LuaScriptGraphNativeCaptureScope lookups;
 			lua.SerializeScriptGraph(unreachedText, unreachedProblems);
 			try {
-				lua.CaptureScriptGraph(unreachedFrozen, unreachedFrozenProblems, true);
+				const bool carried = lua.CaptureScriptGraph(unreachedFrozen, unreachedFrozenProblems, true);
+				if (unreachedFrozenProblems.empty()) unreachedFrozenProblems.emplace_back(carried ? "the frozen capture carried it" : "the frozen capture failed with no problem named");
 			} catch (const ScriptGraphRefusal& refused) {
 				unreachedFrozenProblems.insert(unreachedFrozenProblems.end(), refused.problems.begin(), refused.problems.end());
 			} catch (const std::exception& error) {
