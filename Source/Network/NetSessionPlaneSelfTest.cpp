@@ -3852,6 +3852,10 @@ namespace RTE {
 				if (jitter.SenderRequiredFrames(c_TestTickMs, 3) != 4) { error = "recent p95 link jitter did not add its input margin"; return false; }
 				jitter.Observe(11000, 30);
 				if (jitter.SenderRequiredFrames(c_TestTickMs, 3) != 3) { error = "expired link jitter still inflated the input delay"; return false; }
+				for (uint64_t at = 11100; at < 13000; at += 100) jitter.Observe(at, 30);
+				jitter.Observe(13000, 200);
+				jitter.Observe(13100, 200);
+				if (jitter.SenderRequiredFrames(c_TestTickMs, 3) != 13) { error = "a sustained RTT rise was also charged as jitter"; return false; }
 				return true;
 			}});
 		}
