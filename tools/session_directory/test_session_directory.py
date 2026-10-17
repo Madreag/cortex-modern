@@ -15,6 +15,7 @@ import re
 import select
 import shutil
 import socket
+import sqlite3
 import struct
 import ssl
 import subprocess
@@ -34,7 +35,8 @@ import session_directory
 from world_ticks import compare_world_ticks, read_world_ticks
 from session_directory import IP_REG_PER_MIN, IP_REQ_PER_MIN, REQ_PER_MIN, DualRateLimiter, LOGGER, RunningServer, spawn_server
 from unittest import mock
-from connection_authority import ConnectionErrorReply, ConnectionAuthority, REQUEST_DOMAIN, TOKEN_DOMAIN, TOKEN_FIELDS
+from connection_authority import ConnectionErrorReply, ConnectionAuthority, MAX_RECORD_BYTES, REQUEST_DOMAIN, TOKEN_DOMAIN, TOKEN_FIELDS
+from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
 INSTALL_KEY = "0123456789abcdef"
@@ -3572,6 +3574,117 @@ class ConnectionAuthorityTests(unittest.TestCase):
             record["host_seat"] = 2
             self.store.connections._save(self.sid, record)
         self.assertEqual(self.frame_check_in(3, [2, 3], query_only=True)["members"], [0, 1])
+
+    def test_inline_frame_tie_history_migrates_without_reopening_a_decision(self):
+        self.referee_fixture()
+        self.assertEqual(self.frame_check_in(0, [0, 1])["members"], [0, 1])
+        authority = self.store.connections
+        record = dict(authority.records())[self.sid]
+        nonce = os.urandom(12)
+        sealed = nonce + authority._seal.encrypt(nonce, json.dumps(record).encode(), self.sid.encode("ascii"))
+        with authority._db:
+            authority._db.execute("DELETE FROM connection_frame_ties WHERE session=?", (self.sid,))
+            authority._db.execute("UPDATE connections SET record=? WHERE session=?", (sealed, self.sid))
+        self.store.stop()
+        self.store = session_directory.SessionDirectory(15, 5, **self.options)
+        self.assertEqual(self.frame_check_in(2, [2, 3])["members"], [0, 1])
+        authority = self.store.connections
+        saved = authority._db.execute("SELECT record FROM connections WHERE session=?", (self.sid,)).fetchone()[0]
+        with self.assertRaises(InvalidTag):
+            authority._seal.decrypt(saved[:12], saved[12:], self.sid.encode("ascii"))
+        live = json.loads(authority._seal.decrypt(saved[:12], saved[12:], authority._record_context(self.sid)))
+        self.assertNotIn("frame_ties", live)
+        self.assertEqual(live["_frame_tie_history"]["count"], 1)
+        self.assertEqual(authority._db.execute("SELECT COUNT(*) FROM connection_frame_ties").fetchone()[0], 1)
+        self.store.stop()
+        self.store = session_directory.SessionDirectory(15, 5, **self.options)
+        self.assertEqual(self.frame_check_in(2, [2, 3], query_only=True)["members"], [0, 1])
+
+    def test_frame_tie_storage_rejects_missing_replaced_and_rebound_history(self):
+        for corruption in ("missing", "rebound", "replaced", "extra"):
+            with self.subTest(corruption=corruption):
+                path = Path(self.temporary.name) / f"ties-{corruption}.sqlite3"
+                authority = ConnectionAuthority(b"isolated-test-service-key", path)
+                sid = str(uuid.uuid4())
+                tie = dict(owners=[0, 1], host=0, winner=[0])
+                record = dict(version=session_directory.CONNECTION_PROTOCOL, seats={}, removed={}, retain_until=self.wall + 3600,
+                              frame_ties={"first": tie})
+                authority._save(sid, record)
+                with authority._db:
+                    if corruption == "missing":
+                        authority._db.execute("DELETE FROM connection_frame_ties")
+                    elif corruption == "rebound":
+                        authority._db.execute("UPDATE connection_frame_ties SET name='another'")
+                    elif corruption == "extra":
+                        authority._db.execute("INSERT INTO connection_frame_ties SELECT session, 'another', record FROM connection_frame_ties")
+                    else:
+                        # A valid older ciphertext must still match the live record's committed history digest.
+                        nonce = os.urandom(12)
+                        changed = json.dumps(dict(tie, winner=[1])).encode()
+                        sealed = nonce + authority._seal.encrypt(nonce, changed, authority._tie_context(sid, "first"))
+                        authority._db.execute("UPDATE connection_frame_ties SET record=?", (sealed,))
+                authority.close()
+                with self.assertRaisesRegex(ValueError, "could not be verified"):
+                    ConnectionAuthority(b"isolated-test-service-key", path)
+                path.unlink()
+
+    def test_history_larger_than_the_live_record_limit_survives_restart(self):
+        self.referee_fixture()
+        self.frame_check_in(0, [0, 1])
+        authority = self.store.connections
+        record = dict(authority.records())[self.sid]
+        for index in range(3):
+            record["frame_ties"][f"retained-{index}"] = dict(owners=[0, 1, 2, 3], host=0, winner=[0, 1],
+                                                          padding="x" * (MAX_RECORD_BYTES // 2))
+        self.assertGreater(len(authority._json(record)), MAX_RECORD_BYTES)
+        authority._save(self.sid, record)
+        saved = authority._db.execute("SELECT record FROM connections WHERE session=?", (self.sid,)).fetchone()[0]
+        self.assertLessEqual(len(saved), MAX_RECORD_BYTES + 28)
+        self.store.stop()
+        self.store = session_directory.SessionDirectory(15, 5, **self.options)
+        self.assertEqual(dict(self.store.connections.records())[self.sid]["frame_ties"], record["frame_ties"])
+        self.assertEqual(self.frame_check_in(2, [2, 3], query_only=True)["members"], [0, 1])
+
+    def test_frame_tie_history_and_live_record_commit_together(self):
+        self.referee_fixture()
+        self.frame_check_in(0, [0, 1])
+        authority = self.store.connections
+        record = dict(authority.records())[self.sid]
+        record["frame_ties"]["another"] = dict(owners=[0, 1, 2, 3], host=0, winner=[2, 3])
+        before = authority._db.execute("SELECT record FROM connections WHERE session=?", (self.sid,)).fetchone()[0]
+        authority._db.execute("CREATE TRIGGER reject_live_record BEFORE UPDATE ON connections BEGIN SELECT RAISE(ABORT, 'test write failure'); END")
+        with self.assertRaises(sqlite3.IntegrityError):
+            authority._save(self.sid, record)
+        self.assertEqual(authority._db.execute("SELECT COUNT(*) FROM connection_frame_ties").fetchone()[0], 1)
+        self.assertEqual(authority._db.execute("SELECT record FROM connections WHERE session=?", (self.sid,)).fetchone()[0], before)
+        self.assertNotIn("another", dict(authority.records())[self.sid]["frame_ties"])
+        authority._db.execute("DROP TRIGGER reject_live_record")
+        self.assertEqual(self.frame_check_in(2, [2, 3])["members"], [0, 1])
+
+    def test_separate_history_keeps_the_record_and_entry_size_bounds(self):
+        self.referee_fixture()
+        self.frame_check_in(0, [0, 1])
+        authority = self.store.connections
+        for large_tie in (False, True):
+            record = dict(authority.records())[self.sid]
+            if large_tie:
+                record["frame_ties"]["another"] = dict(padding="x" * MAX_RECORD_BYTES)
+            else:
+                record["padding"] = "x" * MAX_RECORD_BYTES
+            with self.assertRaises(ConnectionErrorReply) as too_large:
+                authority._save(self.sid, record)
+            self.assertEqual(too_large.exception.body["error"], "connection_capacity")
+        self.assertEqual(authority._db.execute("SELECT COUNT(*) FROM connection_frame_ties").fetchone()[0], 1)
+        self.assertEqual(self.frame_check_in(2, [2, 3])["members"], [0, 1])
+
+    def test_expired_match_removes_its_persisted_frame_ties(self):
+        self.referee_fixture()
+        self.frame_check_in(0, [0, 1])
+        authority = self.store.connections
+        authority.prune(dict(authority.records())[self.sid]["retain_until"] + 1)
+        self.assertNotIn(self.sid, authority._records)
+        self.assertNotIn(self.sid, authority._tie_rows)
+        self.assertEqual(authority._db.execute("SELECT COUNT(*) FROM connection_frame_ties").fetchone()[0], 0)
 
     def test_host_referee_names_one_host_boundary_and_fences_old_owner(self):
         self.referee_fixture(); self.referee_silent_host()

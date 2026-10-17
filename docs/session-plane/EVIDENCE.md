@@ -143,3 +143,5 @@ remains reachable and RED; its expected held host conflicts with the existing
 no-referee host-half continuation rule. No winner or authority check was changed.
 Native B1 live rise / B2 cap control (2026-10-16): [live-rise-and-cap-one.json](evidence/feel-20261016/live-rise-and-cap-one.json) records three completed headed two-engine cases on2c224533. The30→200ms link really changes inside GNS at outgoing600; both observers apply each delay at the same frame679/710/830, with1200 equal hashes. With the private legacy preview cap set to1, both peers still preview their whole4–5/15-tick delays. Transition waits and missing response edges are retained; this is not a B3 or overall zero-survivor-wait pass.
 
+
+The 2026-10-17 brief explicitly includes the full directory record. The [directory history correction](evidence/directory-history/README.md) makes that original signed capacity fixture GREEN locally, preserving its property and all retained decisions. It supersedes the capacity verdict above; deployment and spread proof remain unperformed.

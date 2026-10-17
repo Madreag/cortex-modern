@@ -99,6 +99,7 @@ class ConnectionAuthority:
         self._db = None
         self._closed = False
         self._records: dict[str, dict[str, Any]] = {}
+        self._tie_rows: dict[str, dict[str, bytes]] = {}
         if path is not None:
             path = Path(path)
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -111,20 +112,51 @@ class ConnectionAuthority:
                 self._db.execute("PRAGMA journal_mode=DELETE")
                 self._db.execute("PRAGMA synchronous=FULL")
                 self._db.execute("CREATE TABLE IF NOT EXISTS connections (session TEXT PRIMARY KEY, record BLOB NOT NULL)")
+                self._db.execute("CREATE TABLE IF NOT EXISTS connection_frame_ties (session TEXT NOT NULL, name TEXT NOT NULL, record BLOB NOT NULL, PRIMARY KEY(session, name))")
                 now = time.time()
                 for sid, sealed in self._db.execute("SELECT session, record FROM connections"):
                     try:
                         if str(uuid.UUID(sid)) != sid or not 28 <= len(sealed) <= MAX_RECORD_BYTES + 28:
                             raise ValueError()
-                        raw = self._seal.decrypt(sealed[:12], sealed[12:], sid.encode("ascii"))
+                        separate_history = False
+                        try:
+                            raw = self._seal.decrypt(sealed[:12], sealed[12:], sid.encode("ascii"))
+                        except InvalidTag:
+                            raw = self._seal.decrypt(sealed[:12], sealed[12:], self._record_context(sid))
+                            separate_history = True
                         record = json.loads(raw)
                         if not isinstance(record, dict) or type(record.get("version")) is not int or record["version"] > CONNECTION_PROTOCOL:
+                            raise ValueError()
+                        if separate_history != ("_frame_tie_history" in record):
                             raise ValueError()
                         # No current game presents an older protocol's tokens: its matches are dropped, never served.
                         if record["version"] < CONNECTION_PROTOCOL:
                             continue
                         if record.get("retain_until", 0) > now:
+                            history = record.pop("_frame_tie_history", None)
+                            count = self._db.execute("SELECT COUNT(*) FROM connection_frame_ties WHERE session=?", (sid,)).fetchone()[0]
+                            rows = {}
+                            if history is not None:
+                                if ("frame_ties" in record or not isinstance(history, dict) or type(history.get("count")) is not int
+                                        or history["count"] != count):
+                                    raise ValueError()
+                                ties = {}
+                                for name, sealed_tie in self._db.execute("SELECT name, record FROM connection_frame_ties WHERE session=?", (sid,)):
+                                    if not isinstance(name, str) or not 28 <= len(sealed_tie) <= MAX_RECORD_BYTES + 28:
+                                        raise ValueError()
+                                    raw_tie = self._seal.decrypt(sealed_tie[:12], sealed_tie[12:], self._tie_context(sid, name))
+                                    tie = json.loads(raw_tie)
+                                    if not isinstance(tie, dict):
+                                        raise ValueError()
+                                    ties[name] = tie
+                                    rows[name] = self._json(tie)
+                                if self._tie_digest(ties) != history.get("sha256"):
+                                    raise ValueError()
+                                record["frame_ties"] = ties
+                            elif count:
+                                raise ValueError()
                             self._records[sid] = record
+                            self._tie_rows[sid] = rows
                     except (ValueError, InvalidTag, TypeError):
                         raise ValueError("connection state could not be verified; restore the matching directory state and service key") from None
                 self.prune(now)
@@ -139,29 +171,65 @@ class ConnectionAuthority:
                 self._db.close()
                 self._db = None
 
+    @staticmethod
+    def _json(value: Any) -> bytes:
+        return json.dumps(value, separators=(",", ":"), ensure_ascii=True, sort_keys=True).encode()
+
+    @classmethod
+    def _tie_digest(cls, ties: dict[str, Any]) -> str:
+        return hashlib.sha256(cls._json(ties)).hexdigest()
+
+    @staticmethod
+    def _tie_context(sid: str, name: str) -> bytes:
+        return sid.encode("ascii") + b"\0frame-tie\0" + name.encode("ascii")
+
+    @staticmethod
+    def _record_context(sid: str) -> bytes:
+        # An older directory must refuse the record rather than forget its separately retained decisions.
+        return sid.encode("ascii") + b"\0frame-tie-history-v1"
+
     def _save(self, sid: str, record: dict[str, Any]) -> None:
         if self._closed:
             raise ConnectionErrorReply(503, "directory_restarting", "The directory is restarting. Your match can keep playing; reconnecting will retry.")
         if sid not in self._records and len(self._records) >= MAX_MATCHES:
             raise ConnectionErrorReply(503, "connection_capacity", "The directory is full. Wait a moment and host again.")
-        raw = json.dumps(record, separators=(",", ":"), ensure_ascii=True).encode()
-        if len(raw) > MAX_RECORD_BYTES:
+        # Decisions outlive the live record; its sealed digest detects missing or replaced history after a restart.
+        stored = {key: value for key, value in record.items() if key not in ("frame_ties", "_frame_tie_history")}
+        rows = {name: self._json(tie) for name, tie in record.get("frame_ties", {}).items()}
+        if "frame_ties" in record:
+            stored["_frame_tie_history"] = dict(count=len(rows), sha256=self._tie_digest(record["frame_ties"]))
+        raw = self._json(stored)
+        if len(raw) > MAX_RECORD_BYTES or any(len(row) > MAX_RECORD_BYTES for row in rows.values()):
             raise ConnectionErrorReply(503, "connection_capacity", "The directory is busy. Your match can keep playing; retry the connection shortly.")
         if self._db is not None:
             nonce = secrets.token_bytes(12)
-            sealed = nonce + self._seal.encrypt(nonce, raw, sid.encode("ascii"))
+            context = self._record_context(sid) if "_frame_tie_history" in stored else sid.encode("ascii")
+            sealed = nonce + self._seal.encrypt(nonce, raw, context)
             with self._db:
+                previous = self._tie_rows.get(sid, {})
+                for name, raw_tie in rows.items():
+                    if previous.get(name) == raw_tie:
+                        continue
+                    tie_nonce = secrets.token_bytes(12)
+                    sealed_tie = tie_nonce + self._seal.encrypt(tie_nonce, raw_tie, self._tie_context(sid, name))
+                    self._db.execute("INSERT INTO connection_frame_ties VALUES (?, ?, ?) ON CONFLICT(session, name) DO UPDATE SET record=excluded.record",
+                                     (sid, name, sealed_tie))
+                for name in previous.keys() - rows.keys():
+                    self._db.execute("DELETE FROM connection_frame_ties WHERE session=? AND name=?", (sid, name))
                 self._db.execute("INSERT INTO connections VALUES (?, ?) ON CONFLICT(session) DO UPDATE SET record=excluded.record", (sid, sealed))
         self._records[sid] = record
+        self._tie_rows[sid] = rows
 
     def prune(self, now: float) -> None:
         with self._lock:
             for sid in [sid for sid, record in self._records.items() if record.get("retain_until", 0) <= now]:
                 self._records.pop(sid, None)
+                self._tie_rows.pop(sid, None)
             if self._db is not None:
                 with self._db:
                     for (sid,) in self._db.execute("SELECT session FROM connections").fetchall():
                         if sid not in self._records:
+                            self._db.execute("DELETE FROM connection_frame_ties WHERE session=?", (sid,))
                             self._db.execute("DELETE FROM connections WHERE session=?", (sid,))
 
     def records(self) -> list[tuple[str, dict[str, Any]]]:
@@ -197,8 +265,10 @@ class ConnectionAuthority:
                 # listing must not reserve a day of connection-table capacity.
                 if self._db is not None:
                     with self._db:
+                        self._db.execute("DELETE FROM connection_frame_ties WHERE session=?", (sid,))
                         self._db.execute("DELETE FROM connections WHERE session=?", (sid,))
                 self._records.pop(sid, None)
+                self._tie_rows.pop(sid, None)
                 return
             record.update(ended=True, seats={}, session=None, retain_until=now + MATCH_RETENTION_SECONDS,
                           world_boot=(record.get("session") or {}).get("fields", {}).get("world_boot", 0))
