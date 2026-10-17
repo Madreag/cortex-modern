@@ -208,12 +208,12 @@ namespace RTE {
 		NetFrameTieRequest request;
 		request.generation = m_Config.migrationGeneration; request.roundId = m_Config.matchConfig.roundId;
 		request.frame = split; request.configHash = m_RoundConfigHash; request.host = GetHostPeerId();
-		request.queryOnly = (members & SeatBit(m_Config.localPeerId)) == 0;
 		// The tie is between the seats that vote now, and the referee decides an even split of every retained seat: the seats that
 		// do not vote are dealt to the halves in seat order, the lower ones to the half that holds the lowest voting seat.
 		uint32_t voting = members;
 		const uint32_t owners = PeerVotingOwners(voting, frame);
 		if (owners == 0 || 2 * std::popcount(voting) != std::popcount(owners)) return;
+		request.queryOnly = (voting & SeatBit(m_Config.localPeerId)) == 0;
 		uint32_t retained = 0;
 		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer)
 			if (!m_RemovedPeers.contains(peer) && !IsSeatReleased(peer)) retained |= SeatBit(peer);
