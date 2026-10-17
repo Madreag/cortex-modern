@@ -1,0 +1,2 @@
+[net-lockstep-selftest] PASS a_return_uses_only_voters_past_their_certified_neutral_gap
+[net-lockstep-selftest] PASS

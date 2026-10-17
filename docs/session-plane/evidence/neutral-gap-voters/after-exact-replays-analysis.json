@@ -1,0 +1,1423 @@
+{
+  "seed-841": {
+    "exit_code": 1,
+    "original_group": "history:engine_failed:3:direct",
+    "log_sha256": "c1b05c08d9cfc52687444386341b16638d28ae5754f8c15f85a11bbcd5333e4a",
+    "failures": [
+      "[net-session-plane-selftest] FAIL three_direct_seats_252ms_jitter_5ms_seat2_late_100ms_more_3510ms_back_at_120pc_seat3_late_200ms_more_6000ms_back_at_120pc seed=841 property=bound kind=survivor_waits: seat 3 waited 73 ms for frame 363 from 6117 ms, the spells then [2:late]"
+    ],
+    "decisions": [
+      {
+        "line": 352,
+        "text": "[net-peer-hold-installed] local=1 peer=1 frame=365 ai_frame=485 voters=6 proposer=2 certificate_sender=3 next=365 displayed=362 now_ms=6164 cause=certified_peer_decision"
+      },
+      {
+        "line": 388,
+        "text": "[net-peer-hold-installed] local=3 peer=1 frame=365 ai_frame=485 voters=6 proposer=2 certificate_sender=3 next=365 displayed=362 now_ms=6190 cause=peer_hold_proposal"
+      },
+      {
+        "line": 442,
+        "text": "[net-peer-hold-installed] local=2 peer=1 frame=365 ai_frame=485 voters=6 proposer=2 certificate_sender=2 next=365 displayed=362 now_ms=6275 cause=slow_machine_capacity"
+      },
+      {
+        "line": 595,
+        "text": "[net-peer-hold-installed] local=2 peer=3 frame=386 ai_frame=506 voters=2 proposer=2 certificate_sender=2 next=386 displayed=375 now_ms=6394 cause=slow_machine_capacity"
+      },
+      {
+        "line": 1236,
+        "text": "[net-peer-hold-installed] local=3 peer=3 frame=386 ai_frame=506 voters=2 proposer=2 certificate_sender=2 next=386 displayed=385 now_ms=6620 cause=certified_peer_decision"
+      },
+      {
+        "line": 1549,
+        "text": "[net-peer-hold-installed] local=1 peer=3 frame=386 ai_frame=506 voters=2 proposer=2 certificate_sender=2 next=386 displayed=384 now_ms=6766 cause=certified_peer_decision"
+      },
+      {
+        "line": 1632,
+        "text": "[net-peer-return-runway] peer=3 activation=498 delay_ticks=29 neutral_through=587"
+      },
+      {
+        "line": 1633,
+        "text": "[net-frame-group] return frame=498 members=6 voters=2"
+      },
+      {
+        "line": 1658,
+        "text": "[net-peer-return-runway] peer=1 activation=531 delay_ticks=16 neutral_through=590"
+      },
+      {
+        "line": 1659,
+        "text": "[net-frame-group] return frame=531 members=7 voters=2"
+      },
+      {
+        "line": 1677,
+        "text": "[net-frame-group] return frame=498 members=6 voters=2"
+      },
+      {
+        "line": 1680,
+        "text": "[net-frame-group] return frame=498 members=6 voters=2"
+      },
+      {
+        "line": 1692,
+        "text": "[net-frame-group] return frame=531 members=7 voters=3"
+      },
+      {
+        "line": 1697,
+        "text": "[net-frame-group] return frame=531 members=7 voters=6"
+      },
+      {
+        "line": 1869,
+        "text": "[net-peer-hold-installed] local=2 peer=3 frame=588 ai_frame=708 voters=2 proposer=1 certificate_sender=2 next=588 displayed=575 now_ms=9734 cause=input_missing"
+      },
+      {
+        "line": 1886,
+        "text": "[net-peer-hold-installed] local=1 peer=3 frame=588 ai_frame=708 voters=3 proposer=1 certificate_sender=1 next=588 displayed=580 now_ms=9838 cause=peer_hold_proposal"
+      },
+      {
+        "line": 1903,
+        "text": "[net-peer-hold-installed] local=3 peer=3 frame=588 ai_frame=708 voters=2 proposer=1 certificate_sender=2 next=588 displayed=587 now_ms=10060 cause=certified_peer_decision"
+      },
+      {
+        "line": 2053,
+        "text": "[net-peer-return-runway] peer=3 activation=933 delay_ticks=29 neutral_through=1009"
+      },
+      {
+        "line": 2063,
+        "text": "[net-frame-group] return frame=933 members=7 voters=3"
+      },
+      {
+        "line": 2073,
+        "text": "[net-frame-group] return frame=933 members=7 voters=3"
+      },
+      {
+        "line": 2074,
+        "text": "[net-frame-group] return frame=933 members=7 voters=7"
+      }
+    ]
+  },
+  "seed-2316": {
+    "exit_code": 0,
+    "original_group": "history:engine_failed:3:internet",
+    "log_sha256": "0ad3e77aca0260b5db0401bfdc9c89be96401bbd9600d00b527f2d444c2b0041",
+    "failures": [],
+    "decisions": [
+      {
+        "line": 23,
+        "text": "[net-peer-hold-installed] local=3 peer=2 frame=409 ai_frame=529 voters=5 proposer=1 certificate_sender=3 next=409 displayed=408 now_ms=6868 cause=input_missing"
+      },
+      {
+        "line": 27,
+        "text": "[net-peer-hold-installed] local=1 peer=2 frame=409 ai_frame=529 voters=5 proposer=1 certificate_sender=1 next=409 displayed=408 now_ms=6873 cause=input_missing"
+      },
+      {
+        "line": 41,
+        "text": "[net-peer-hold-installed] local=2 peer=2 frame=409 ai_frame=529 voters=5 proposer=1 certificate_sender=1 next=409 displayed=407 now_ms=7097 cause=certified_peer_decision"
+      },
+      {
+        "line": 92,
+        "text": "[net-peer-hold-installed] local=1 peer=3 frame=455 ai_frame=575 voters=1 proposer=1 certificate_sender=1 next=455 displayed=454 now_ms=7656 cause=input_missing"
+      },
+      {
+        "line": 95,
+        "text": "[net-peer-return-runway] peer=2 activation=466 delay_ticks=5 neutral_through=483"
+      },
+      {
+        "line": 96,
+        "text": "[net-frame-group] return frame=466 members=3 voters=1"
+      },
+      {
+        "line": 98,
+        "text": "[net-peer-hold-installed] local=2 peer=3 frame=455 ai_frame=575 voters=1 proposer=1 certificate_sender=1 next=455 displayed=454 now_ms=7677 cause=certified_peer_decision"
+      },
+      {
+        "line": 114,
+        "text": "[net-frame-group] return frame=466 members=3 voters=1"
+      },
+      {
+        "line": 116,
+        "text": "[net-peer-hold-installed] local=3 peer=3 frame=455 ai_frame=575 voters=1 proposer=1 certificate_sender=1 next=455 displayed=454 now_ms=7763 cause=certified_peer_decision"
+      },
+      {
+        "line": 187,
+        "text": "[net-peer-hold-installed] local=1 peer=2 frame=559 ai_frame=679 voters=3 proposer=1 certificate_sender=1 next=559 displayed=553 now_ms=9257 cause=peer_hold_proposal"
+      },
+      {
+        "line": 198,
+        "text": "[net-peer-hold-installed] local=2 peer=2 frame=559 ai_frame=679 voters=3 proposer=1 certificate_sender=2 next=559 displayed=554 now_ms=9278 cause=slow_machine_capacity"
+      },
+      {
+        "line": 357,
+        "text": "[net-frame-group] return frame=466 members=3 voters=1"
+      },
+      {
+        "line": 399,
+        "text": "[net-peer-hold-installed] local=3 peer=2 frame=559 ai_frame=679 voters=3 proposer=1 certificate_sender=2 next=559 displayed=462 now_ms=10892 cause=certified_peer_decision"
+      },
+      {
+        "line": 403,
+        "text": "[net-peer-return-runway] peer=3 activation=696 delay_ticks=6 neutral_through=831"
+      },
+      {
+        "line": 404,
+        "text": "[net-frame-group] return frame=696 members=5 voters=1"
+      },
+      {
+        "line": 416,
+        "text": "[net-frame-group] return frame=696 members=5 voters=1"
+      },
+      {
+        "line": 417,
+        "text": "[net-frame-group] return frame=696 members=5 voters=1"
+      },
+      {
+        "line": 421,
+        "text": "[net-peer-return-runway] peer=2 activation=749 delay_ticks=5 neutral_through=794"
+      },
+      {
+        "line": 422,
+        "text": "[net-frame-group] return frame=749 members=7 voters=1"
+      },
+      {
+        "line": 423,
+        "text": "[net-frame-group] return frame=749 members=7 voters=3"
+      },
+      {
+        "line": 947,
+        "text": "[net-peer-hold-installed] local=3 peer=2 frame=357 ai_frame=477 voters=5 proposer=1 certificate_sender=3 next=357 displayed=356 now_ms=20988 cause=input_missing"
+      },
+      {
+        "line": 951,
+        "text": "[net-peer-hold-installed] local=1 peer=2 frame=357 ai_frame=477 voters=7 proposer=1 certificate_sender=1 next=357 displayed=356 now_ms=21001 cause=input_missing"
+      },
+      {
+        "line": 955,
+        "text": "[net-peer-hold-installed] local=2 peer=2 frame=357 ai_frame=477 voters=7 proposer=1 certificate_sender=2 next=357 displayed=351 now_ms=21004 cause=own_hold_consent"
+      },
+      {
+        "line": 964,
+        "text": "[net-peer-return-runway] peer=2 activation=462 delay_ticks=5 neutral_through=478"
+      },
+      {
+        "line": 967,
+        "text": "[net-frame-group] return frame=462 members=7 voters=5"
+      },
+      {
+        "line": 969,
+        "text": "[net-frame-group] return frame=462 members=7 voters=5"
+      },
+      {
+        "line": 970,
+        "text": "[net-frame-group] return frame=462 members=7 voters=5"
+      }
+    ]
+  },
+  "seed-260": {
+    "exit_code": 1,
+    "original_group": "history:engine_failed:4:direct",
+    "log_sha256": "44f0462458a33209b1b4b986e8b4eaa0a38ea460cc83885370628455e1f5a1a9",
+    "failures": [
+      "[net-session-plane-selftest] FAIL four_direct_seats_120ms_jitter_40ms_seat2_slow_69pc_9677ms_back_at_120pc_host_slow_84pc_9820ms_back_at_100pc_seat3_stopped_3060ms_loss_90pc_seat2_loss_90pc_seat2 seed=260 property=bound kind=survivor_waits: seat 4 waited 30322 ms for frame 623 from 11892 ms, the spells then [2:slow,1:slow]"
+    ],
+    "decisions": [
+      {
+        "line": 185,
+        "text": "[net-peer-hold-installed] local=2 peer=3 frame=45 ai_frame=165 voters=3 proposer=1 certificate_sender=2 next=45 displayed=44 now_ms=832 cause=input_missing"
+      },
+      {
+        "line": 186,
+        "text": "[net-peer-hold-installed] local=2 peer=4 frame=45 ai_frame=165 voters=3 proposer=1 certificate_sender=2 next=45 displayed=44 now_ms=832 cause=input_missing"
+      },
+      {
+        "line": 192,
+        "text": "[net-peer-hold-installed] local=1 peer=3 frame=45 ai_frame=165 voters=3 proposer=1 certificate_sender=1 next=45 displayed=44 now_ms=842 cause=input_missing"
+      },
+      {
+        "line": 193,
+        "text": "[net-peer-hold-installed] local=1 peer=4 frame=45 ai_frame=165 voters=3 proposer=1 certificate_sender=1 next=45 displayed=44 now_ms=842 cause=input_missing"
+      },
+      {
+        "line": 198,
+        "text": "[net-peer-hold-installed] local=4 peer=3 frame=45 ai_frame=165 voters=3 proposer=1 certificate_sender=2 next=45 displayed=44 now_ms=875 cause=input_missing"
+      },
+      {
+        "line": 199,
+        "text": "[net-peer-hold-installed] local=4 peer=4 frame=45 ai_frame=165 voters=3 proposer=1 certificate_sender=2 next=45 displayed=44 now_ms=875 cause=certified_peer_decision"
+      },
+      {
+        "line": 206,
+        "text": "[net-peer-hold-installed] local=3 peer=3 frame=45 ai_frame=165 voters=3 proposer=1 certificate_sender=2 next=45 displayed=44 now_ms=891 cause=certified_peer_decision"
+      },
+      {
+        "line": 207,
+        "text": "[net-peer-hold-installed] local=3 peer=4 frame=45 ai_frame=165 voters=3 proposer=1 certificate_sender=2 next=45 displayed=44 now_ms=891 cause=input_missing"
+      },
+      {
+        "line": 244,
+        "text": "[net-peer-return-runway] peer=4 activation=88 delay_ticks=12 neutral_through=123"
+      },
+      {
+        "line": 252,
+        "text": "[net-frame-group] return frame=88 members=11 voters=3"
+      },
+      {
+        "line": 258,
+        "text": "[net-frame-group] return frame=88 members=11 voters=11"
+      },
+      {
+        "line": 262,
+        "text": "[net-frame-group] return frame=88 members=11 voters=3"
+      },
+      {
+        "line": 263,
+        "text": "[net-frame-group] return frame=88 members=11 voters=3"
+      },
+      {
+        "line": 267,
+        "text": "[net-peer-return-runway] peer=3 activation=96 delay_ticks=12 neutral_through=130"
+      },
+      {
+        "line": 275,
+        "text": "[net-frame-group] return frame=96 members=15 voters=3"
+      },
+      {
+        "line": 281,
+        "text": "[net-frame-group] return frame=96 members=15 voters=11"
+      },
+      {
+        "line": 284,
+        "text": "[net-frame-group] return frame=96 members=15 voters=3"
+      },
+      {
+        "line": 285,
+        "text": "[net-frame-group] return frame=96 members=15 voters=7"
+      },
+      {
+        "line": 534,
+        "text": "[net-peer-hold-installed] local=4 peer=1 frame=292 ai_frame=412 voters=15 proposer=2 certificate_sender=4 next=292 displayed=287 now_ms=4866 cause=peer_hold_proposal"
+      },
+      {
+        "line": 537,
+        "text": "[net-peer-hold-installed] local=2 peer=1 frame=292 ai_frame=412 voters=15 proposer=2 certificate_sender=2 next=292 displayed=290 now_ms=4868 cause=peer_hold_proposal"
+      },
+      {
+        "line": 540,
+        "text": "[net-peer-hold-installed] local=3 peer=1 frame=292 ai_frame=412 voters=15 proposer=2 certificate_sender=3 next=292 displayed=289 now_ms=4870 cause=peer_hold_proposal"
+      },
+      {
+        "line": 543,
+        "text": "[net-peer-hold-installed] local=1 peer=1 frame=292 ai_frame=412 voters=15 proposer=2 certificate_sender=1 next=292 displayed=286 now_ms=4871 cause=slow_machine_capacity"
+      },
+      {
+        "line": 573,
+        "text": "[net-peer-hold-installed] local=3 peer=2 frame=314 ai_frame=434 voters=12 proposer=3 certificate_sender=3 next=314 displayed=311 now_ms=5236 cause=input_missing"
+      },
+      {
+        "line": 579,
+        "text": "[net-peer-hold-installed] local=4 peer=2 frame=314 ai_frame=434 voters=12 proposer=3 certificate_sender=4 next=314 displayed=312 now_ms=5250 cause=input_missing"
+      },
+      {
+        "line": 682,
+        "text": "[net-peer-hold-installed] local=1 peer=2 frame=314 ai_frame=434 voters=12 proposer=3 certificate_sender=3 next=314 displayed=307 now_ms=6088 cause=certified_peer_decision"
+      },
+      {
+        "line": 696,
+        "text": "[net-peer-hold-installed] local=2 peer=2 frame=314 ai_frame=434 voters=12 proposer=3 certificate_sender=4 next=314 displayed=312 now_ms=6240 cause=certified_peer_decision"
+      },
+      {
+        "line": 719,
+        "text": "[net-peer-return-runway] peer=2 activation=474 delay_ticks=10 neutral_through=531"
+      },
+      {
+        "line": 721,
+        "text": "[net-frame-group] return frame=474 members=14 voters=12"
+      },
+      {
+        "line": 722,
+        "text": "[net-frame-group] return frame=474 members=14 voters=14"
+      },
+      {
+        "line": 726,
+        "text": "[net-frame-group] return frame=474 members=14 voters=12"
+      },
+      {
+        "line": 727,
+        "text": "[net-frame-group] return frame=474 members=14 voters=12"
+      },
+      {
+        "line": 763,
+        "text": "[net-peer-hold-installed] local=4 peer=3 frame=491 ai_frame=611 voters=12 proposer=2 certificate_sender=4 next=491 displayed=490 now_ms=8276 cause=peer_hold_proposal"
+      },
+      {
+        "line": 773,
+        "text": "[net-peer-hold-installed] local=3 peer=3 frame=491 ai_frame=611 voters=12 proposer=2 certificate_sender=3 next=491 displayed=480 now_ms=8333 cause=own_hold_consent"
+      },
+      {
+        "line": 789,
+        "text": "[net-peer-hold-installed] local=2 peer=3 frame=491 ai_frame=611 voters=12 proposer=2 certificate_sender=3 next=491 displayed=490 now_ms=8393 cause=peer_hold_proposal"
+      },
+      {
+        "line": 2922,
+        "text": "[net-peer-hold-installed] local=1 peer=3 frame=491 ai_frame=611 voters=12 proposer=2 certificate_sender=4 next=491 displayed=488 now_ms=10192 cause=certified_peer_decision"
+      },
+      {
+        "line": 2960,
+        "text": "[net-peer-hold-installed] local=4 peer=2 frame=532 ai_frame=652 voters=10 proposer=4 certificate_sender=4 next=532 displayed=531 now_ms=10458 cause=peer_hold_proposal"
+      },
+      {
+        "line": 2965,
+        "text": "[net-peer-return-runway] peer=1 activation=550 delay_ticks=11 neutral_through=622"
+      },
+      {
+        "line": 2966,
+        "text": "[net-frame-group] return frame=550 members=9 voters=8"
+      },
+      {
+        "line": 2971,
+        "text": "[net-peer-hold-installed] local=2 peer=2 frame=532 ai_frame=652 voters=10 proposer=4 certificate_sender=2 next=532 displayed=524 now_ms=10501 cause=peer_hold_proposal"
+      },
+      {
+        "line": 3035,
+        "text": "[net-frame-group] return frame=550 members=9 voters=8"
+      },
+      {
+        "line": 3615,
+        "text": "[net-peer-hold-installed] local=3 peer=2 frame=532 ai_frame=652 voters=10 proposer=4 certificate_sender=4 next=532 displayed=480 now_ms=10753 cause=certified_peer_decision"
+      },
+      {
+        "line": 3707,
+        "text": "[net-peer-hold-installed] local=1 peer=2 frame=532 ai_frame=652 voters=10 proposer=4 certificate_sender=4 next=532 displayed=490 now_ms=10792 cause=certified_peer_decision"
+      },
+      {
+        "line": 3739,
+        "text": "[net-frame-group] return frame=550 members=9 voters=8"
+      }
+    ]
+  },
+  "seed-2303": {
+    "exit_code": 1,
+    "original_group": "history:engine_failed:4:internet",
+    "log_sha256": "0fba45d81d3ebf7127e246db17eabe463a81bdf942ee32ea26133101f577584b",
+    "failures": [
+      "[net-session-plane-selftest] FAIL four_internet_seats_57ms_jitter_23ms_directory_40ms_host_silent_452ms_seat4_late_50ms_more_464ms_host_slow_88pc_4160ms_loss_60pc_seat4_loss_30pc_host seed=2303 property=history kind=engine_failed: peer 3 failed: ProtocolError:the committed tail differs from displayed history at frame 944 at 15975 ms referee_seat4=asked:112,waiting:111,decided:1,requests:24,first_decided_ms:41"
+    ],
+    "decisions": [
+      {
+        "line": 66,
+        "text": "[net-peer-hold-installed] local=3 peer=4 frame=430 ai_frame=550 voters=7 proposer=1 certificate_sender=3 next=430 displayed=429 now_ms=7199 cause=input_missing"
+      },
+      {
+        "line": 69,
+        "text": "[net-peer-hold-installed] local=2 peer=4 frame=430 ai_frame=550 voters=7 proposer=1 certificate_sender=2 next=430 displayed=429 now_ms=7200 cause=input_missing"
+      },
+      {
+        "line": 72,
+        "text": "[net-peer-hold-installed] local=1 peer=4 frame=430 ai_frame=550 voters=7 proposer=1 certificate_sender=1 next=430 displayed=429 now_ms=7202 cause=input_missing"
+      },
+      {
+        "line": 76,
+        "text": "[net-peer-hold-installed] local=4 peer=4 frame=430 ai_frame=550 voters=7 proposer=1 certificate_sender=1 next=430 displayed=429 now_ms=7224 cause=certified_peer_decision"
+      },
+      {
+        "line": 91,
+        "text": "[net-peer-hold-installed] local=3 peer=1 frame=458 ai_frame=578 voters=6 proposer=2 certificate_sender=3 next=458 displayed=457 now_ms=7659 cause=input_missing"
+      },
+      {
+        "line": 95,
+        "text": "[net-peer-hold-installed] local=2 peer=1 frame=458 ai_frame=578 voters=6 proposer=2 certificate_sender=2 next=458 displayed=457 now_ms=7663 cause=input_missing"
+      },
+      {
+        "line": 117,
+        "text": "[net-peer-hold-installed] local=1 peer=1 frame=458 ai_frame=578 voters=6 proposer=2 certificate_sender=2 next=458 displayed=456 now_ms=8109 cause=certified_peer_decision"
+      },
+      {
+        "line": 155,
+        "text": "[net-peer-return-runway] peer=1 activation=532 delay_ticks=5 neutral_through=549"
+      },
+      {
+        "line": 157,
+        "text": "[net-frame-group] return frame=532 members=7 voters=6"
+      },
+      {
+        "line": 160,
+        "text": "[net-frame-group] return frame=532 members=7 voters=7"
+      },
+      {
+        "line": 161,
+        "text": "[net-frame-group] return frame=532 members=7 voters=6"
+      },
+      {
+        "line": 311,
+        "text": "[net-peer-hold-installed] local=4 peer=1 frame=458 ai_frame=578 voters=6 proposer=2 certificate_sender=3 next=458 displayed=436 now_ms=9796 cause=certified_peer_decision"
+      },
+      {
+        "line": 314,
+        "text": "[net-frame-group] return frame=532 members=7 voters=6"
+      },
+      {
+        "line": 336,
+        "text": "[net-peer-hold-installed] local=1 peer=1 frame=616 ai_frame=736 voters=7 proposer=2 certificate_sender=1 next=616 displayed=612 now_ms=10230 cause=slow_machine_capacity"
+      },
+      {
+        "line": 362,
+        "text": "[net-peer-hold-installed] local=3 peer=1 frame=616 ai_frame=736 voters=7 proposer=2 certificate_sender=3 next=616 displayed=612 now_ms=10239 cause=peer_hold_proposal"
+      },
+      {
+        "line": 381,
+        "text": "[net-peer-hold-installed] local=2 peer=1 frame=616 ai_frame=736 voters=7 proposer=2 certificate_sender=2 next=616 displayed=612 now_ms=10253 cause=peer_hold_proposal"
+      },
+      {
+        "line": 425,
+        "text": "[net-peer-hold-installed] local=4 peer=1 frame=616 ai_frame=736 voters=7 proposer=2 certificate_sender=3 next=616 displayed=530 now_ms=10315 cause=certified_peer_decision"
+      },
+      {
+        "line": 430,
+        "text": "[net-peer-return-runway] peer=4 activation=640 delay_ticks=6 neutral_through=740"
+      },
+      {
+        "line": 434,
+        "text": "[net-frame-group] return frame=640 members=14 voters=6"
+      },
+      {
+        "line": 437,
+        "text": "[net-frame-group] return frame=640 members=14 voters=6"
+      },
+      {
+        "line": 438,
+        "text": "[net-frame-group] return frame=640 members=14 voters=6"
+      },
+      {
+        "line": 452,
+        "text": "[net-frame-group] return frame=640 members=14 voters=6"
+      },
+      {
+        "line": 637,
+        "text": "[net-peer-hold-installed] local=2 peer=4 frame=751 ai_frame=871 voters=6 proposer=2 certificate_sender=2 next=751 displayed=750 now_ms=12558 cause=input_missing"
+      },
+      {
+        "line": 641,
+        "text": "[net-peer-hold-installed] local=3 peer=4 frame=751 ai_frame=871 voters=6 proposer=2 certificate_sender=3 next=751 displayed=750 now_ms=12561 cause=input_missing"
+      },
+      {
+        "line": 661,
+        "text": "[net-peer-hold-installed] local=4 peer=4 frame=751 ai_frame=871 voters=6 proposer=2 certificate_sender=3 next=751 displayed=748 now_ms=12652 cause=certified_peer_decision"
+      },
+      {
+        "line": 677,
+        "text": "[net-peer-return-runway] peer=4 activation=783 delay_ticks=6 neutral_through=803"
+      },
+      {
+        "line": 680,
+        "text": "[net-frame-group] return frame=783 members=14 voters=6"
+      },
+      {
+        "line": 682,
+        "text": "[net-frame-group] return frame=783 members=14 voters=6"
+      },
+      {
+        "line": 685,
+        "text": "[net-frame-group] return frame=783 members=14 voters=6"
+      },
+      {
+        "line": 734,
+        "text": "[net-peer-hold-installed] local=1 peer=4 frame=751 ai_frame=871 voters=6 proposer=2 certificate_sender=2 next=751 displayed=738 now_ms=13183 cause=certified_peer_decision"
+      },
+      {
+        "line": 740,
+        "text": "[net-frame-group] return frame=783 members=14 voters=6"
+      },
+      {
+        "line": 796,
+        "text": "[net-peer-hold-installed] local=3 peer=4 frame=804 ai_frame=924 voters=6 proposer=2 certificate_sender=3 next=804 displayed=802 now_ms=13414 cause=input_missing"
+      },
+      {
+        "line": 799,
+        "text": "[net-peer-hold-installed] local=2 peer=4 frame=804 ai_frame=924 voters=6 proposer=2 certificate_sender=2 next=804 displayed=802 now_ms=13415 cause=input_missing"
+      },
+      {
+        "line": 826,
+        "text": "[net-peer-hold-installed] local=4 peer=4 frame=804 ai_frame=924 voters=6 proposer=2 certificate_sender=3 next=804 displayed=802 now_ms=13452 cause=certified_peer_decision"
+      },
+      {
+        "line": 843,
+        "text": "[net-peer-return-runway] peer=4 activation=828 delay_ticks=6 neutral_through=848"
+      },
+      {
+        "line": 847,
+        "text": "[net-frame-group] return frame=828 members=14 voters=6"
+      },
+      {
+        "line": 850,
+        "text": "[net-frame-group] return frame=828 members=14 voters=6"
+      },
+      {
+        "line": 852,
+        "text": "[net-frame-group] return frame=828 members=14 voters=6"
+      },
+      {
+        "line": 978,
+        "text": "[net-peer-hold-installed] local=3 peer=4 frame=849 ai_frame=969 voters=6 proposer=2 certificate_sender=3 next=849 displayed=847 now_ms=14165 cause=input_missing"
+      },
+      {
+        "line": 982,
+        "text": "[net-peer-hold-installed] local=2 peer=4 frame=849 ai_frame=969 voters=6 proposer=2 certificate_sender=2 next=849 displayed=847 now_ms=14166 cause=input_missing"
+      },
+      {
+        "line": 1005,
+        "text": "[net-peer-hold-installed] local=4 peer=4 frame=849 ai_frame=969 voters=6 proposer=2 certificate_sender=2 next=849 displayed=847 now_ms=14200 cause=certified_peer_decision"
+      },
+      {
+        "line": 1020,
+        "text": "[net-peer-return-runway] peer=4 activation=871 delay_ticks=6 neutral_through=890"
+      },
+      {
+        "line": 1038,
+        "text": "[net-frame-group] return frame=871 members=14 voters=6"
+      },
+      {
+        "line": 1042,
+        "text": "[net-frame-group] return frame=871 members=14 voters=6"
+      },
+      {
+        "line": 1045,
+        "text": "[net-frame-group] return frame=871 members=14 voters=14"
+      },
+      {
+        "line": 1272,
+        "text": "[net-peer-hold-installed] local=1 peer=4 frame=804 ai_frame=924 voters=6 proposer=2 certificate_sender=3 next=804 displayed=768 now_ms=14881 cause=certified_peer_decision"
+      },
+      {
+        "line": 1274,
+        "text": "[net-frame-group] return frame=828 members=14 voters=6"
+      },
+      {
+        "line": 1276,
+        "text": "[net-peer-hold-installed] local=1 peer=4 frame=849 ai_frame=969 voters=6 proposer=2 certificate_sender=3 next=849 displayed=768 now_ms=14881 cause=certified_peer_decision"
+      },
+      {
+        "line": 1278,
+        "text": "[net-frame-group] return frame=871 members=14 voters=6"
+      },
+      {
+        "line": 1399,
+        "text": "[net-peer-return-runway] peer=1 activation=942 delay_ticks=5 neutral_through=1012"
+      },
+      {
+        "line": 1464,
+        "text": "[net-peer-hold-installed] local=3 peer=1 frame=942 ai_frame=1062 voters=15 proposer=2 certificate_sender=3 next=942 displayed=941 now_ms=15805 cause=peer_hold_proposal"
+      },
+      {
+        "line": 1467,
+        "text": "[net-peer-hold-installed] local=1 peer=1 frame=942 ai_frame=1062 voters=15 proposer=2 certificate_sender=1 next=942 displayed=941 now_ms=15822 cause=own_hold_consent"
+      },
+      {
+        "line": 1470,
+        "text": "[net-peer-hold-installed] local=2 peer=1 frame=942 ai_frame=1062 voters=15 proposer=2 certificate_sender=2 next=942 displayed=941 now_ms=15823 cause=peer_hold_proposal"
+      },
+      {
+        "line": 1473,
+        "text": "[net-peer-hold-installed] local=4 peer=1 frame=942 ai_frame=1062 voters=15 proposer=2 certificate_sender=4 next=942 displayed=941 now_ms=15823 cause=input_missing"
+      },
+      {
+        "line": 1494,
+        "text": "[net-peer-hold-installed] local=3 peer=2 frame=948 ai_frame=1068 voters=12 proposer=3 certificate_sender=3 next=948 displayed=941 now_ms=15975 cause=input_missing"
+      }
+    ]
+  },
+  "seed-1476": {
+    "exit_code": 1,
+    "original_group": "history:fixture:3:internet",
+    "log_sha256": "014b46bc4788b9e80d1ab71f64c0b527047f6aeebff13e1f883031e099a8b924",
+    "failures": [
+      "[net-session-plane-selftest] FAIL three_internet_seats_250ms_jitter_5ms_directory_240ms_host_silent_dark_750ms_back_at_105pc_host_silent_750ms_back_at_105pc_loss_60pc_host_loss_60pc_seat3 seed=1476 property=history kind=fixture: local input precedes the sender's admission delay at 8773 ms"
+    ],
+    "decisions": [
+      {
+        "line": 121,
+        "text": "[net-peer-hold-installed] local=3 peer=1 frame=261 ai_frame=381 voters=6 proposer=2 certificate_sender=3 next=261 displayed=260 now_ms=4487 cause=peer_hold_proposal"
+      },
+      {
+        "line": 133,
+        "text": "[net-peer-hold-installed] local=2 peer=1 frame=261 ai_frame=381 voters=6 proposer=2 certificate_sender=3 next=261 displayed=260 now_ms=4641 cause=input_missing"
+      },
+      {
+        "line": 571,
+        "text": "[net-peer-hold-installed] local=2 peer=3 frame=311 ai_frame=431 voters=2 proposer=2 certificate_sender=2 next=311 displayed=293 now_ms=5108 cause=slow_machine_capacity"
+      },
+      {
+        "line": 1181,
+        "text": "[net-peer-hold-installed] local=1 peer=1 frame=261 ai_frame=381 voters=6 proposer=2 certificate_sender=3 next=261 displayed=258 now_ms=6700 cause=certified_peer_decision"
+      },
+      {
+        "line": 1344,
+        "text": "[net-peer-hold-installed] local=1 peer=3 frame=311 ai_frame=431 voters=2 proposer=2 certificate_sender=2 next=311 displayed=260 now_ms=7117 cause=certified_peer_decision"
+      },
+      {
+        "line": 1389,
+        "text": "[net-peer-return-runway] peer=3 activation=459 delay_ticks=21 neutral_through=533"
+      },
+      {
+        "line": 1390,
+        "text": "[net-frame-group] return frame=459 members=6 voters=2"
+      },
+      {
+        "line": 1426,
+        "text": "[net-frame-group] return frame=459 members=6 voters=2"
+      },
+      {
+        "line": 1438,
+        "text": "[net-frame-group] return frame=459 members=6 voters=2"
+      }
+    ]
+  },
+  "seed-3092": {
+    "exit_code": 1,
+    "original_group": "history:histories_differ:3:internet",
+    "log_sha256": "69be941db6cc34fbeeada3f1c531c9bd4026954cc65f08579e51f3c9af5b9dec",
+    "failures": [
+      "[net-session-plane-selftest] FAIL three_internet_seats_60ms_jitter_23ms_directory_160ms_host_stopped_404ms_seat2_late_50ms_more_872ms_host_late_100ms_more_1575ms seed=3092 property=return kind=held_without_its_own_trouble: seat 3 was held at 9083 ms with no trouble of its own since 6083 ms"
+    ],
+    "decisions": [
+      {
+        "line": 21,
+        "text": "[net-peer-hold-installed] local=3 peer=1 frame=248 ai_frame=368 voters=6 proposer=2 certificate_sender=3 next=248 displayed=247 now_ms=4169 cause=input_missing"
+      },
+      {
+        "line": 24,
+        "text": "[net-peer-hold-installed] local=1 peer=1 frame=248 ai_frame=368 voters=7 proposer=2 certificate_sender=1 next=248 displayed=242 now_ms=4174 cause=own_hold_consent"
+      },
+      {
+        "line": 28,
+        "text": "[net-peer-hold-installed] local=2 peer=1 frame=248 ai_frame=368 voters=6 proposer=2 certificate_sender=2 next=248 displayed=247 now_ms=4176 cause=input_missing"
+      },
+      {
+        "line": 65,
+        "text": "[net-peer-return-runway] peer=1 activation=323 delay_ticks=6 neutral_through=342"
+      },
+      {
+        "line": 70,
+        "text": "[net-frame-group] return frame=323 members=7 voters=6"
+      },
+      {
+        "line": 72,
+        "text": "[net-frame-group] return frame=323 members=7 voters=7"
+      },
+      {
+        "line": 74,
+        "text": "[net-frame-group] return frame=323 members=7 voters=7"
+      },
+      {
+        "line": 156,
+        "text": "[net-peer-hold-installed] local=1 peer=2 frame=537 ai_frame=657 voters=5 proposer=1 certificate_sender=1 next=537 displayed=536 now_ms=8999 cause=input_missing"
+      },
+      {
+        "line": 159,
+        "text": "[net-peer-hold-installed] local=3 peer=2 frame=537 ai_frame=657 voters=5 proposer=1 certificate_sender=3 next=537 displayed=536 now_ms=8999 cause=input_missing"
+      },
+      {
+        "line": 171,
+        "text": "[net-peer-hold-installed] local=2 peer=2 frame=537 ai_frame=657 voters=5 proposer=1 certificate_sender=3 next=537 displayed=536 now_ms=9077 cause=certified_peer_decision"
+      },
+      {
+        "line": 177,
+        "text": "[net-peer-hold-installed] local=1 peer=3 frame=543 ai_frame=663 voters=1 proposer=1 certificate_sender=1 next=543 displayed=542 now_ms=9083 cause=input_missing"
+      },
+      {
+        "line": 191,
+        "text": "[net-peer-hold-installed] local=3 peer=3 frame=543 ai_frame=663 voters=1 proposer=1 certificate_sender=1 next=543 displayed=542 now_ms=9208 cause=certified_peer_decision"
+      },
+      {
+        "line": 206,
+        "text": "[net-peer-hold-installed] local=2 peer=3 frame=543 ai_frame=663 voters=1 proposer=1 certificate_sender=1 next=543 displayed=536 now_ms=9438 cause=certified_peer_decision"
+      },
+      {
+        "line": 275,
+        "text": "[net-peer-return-runway] peer=2 activation=619 delay_ticks=7 neutral_through=652"
+      },
+      {
+        "line": 276,
+        "text": "[net-frame-group] return frame=619 members=3 voters=1"
+      },
+      {
+        "line": 299,
+        "text": "[net-peer-return-runway] peer=3 activation=637 delay_ticks=6 neutral_through=666"
+      },
+      {
+        "line": 300,
+        "text": "[net-frame-group] return frame=637 members=7 voters=1"
+      },
+      {
+        "line": 310,
+        "text": "[net-frame-group] return frame=619 members=3 voters=1"
+      },
+      {
+        "line": 312,
+        "text": "[net-frame-group] return frame=619 members=3 voters=1"
+      },
+      {
+        "line": 317,
+        "text": "[net-frame-group] return frame=637 members=7 voters=3"
+      },
+      {
+        "line": 318,
+        "text": "[net-frame-group] return frame=637 members=7 voters=5"
+      }
+    ]
+  },
+  "seed-3221": {
+    "exit_code": 1,
+    "original_group": "history:histories_differ:4:internet",
+    "log_sha256": "28b65bc26a7b85f1698d32723c2401b0139bd58915f5d939a986c4e5ad6d7d3a",
+    "failures": [
+      "[net-session-plane-selftest] FAIL four_internet_seats_114ms_jitter_40ms_directory_160ms_seat4_late_200ms_more_6780ms seed=3221 property=bound kind=survivor_waits: seat 1 waited 59 ms for frame 278 from 4692 ms, the spells then [4:late] referee_seat2=asked:73,waiting:72,decided:1,requests:1,first_decided_ms:211 referee_seat3=asked:103,waiting:103,decided:0,requests:1,first_decided_ms:never referee_seat4=asked:151,waiting:150,decided:1,requests:30,first_decided_ms:214"
+    ],
+    "decisions": [
+      {
+        "line": 167,
+        "text": "[net-peer-hold-installed] local=2 peer=1 frame=36 ai_frame=156 voters=14 proposer=2 certificate_sender=2 next=36 displayed=35 now_ms=755 cause=input_missing"
+      },
+      {
+        "line": 172,
+        "text": "[net-peer-hold-installed] local=4 peer=1 frame=36 ai_frame=156 voters=14 proposer=2 certificate_sender=4 next=36 displayed=35 now_ms=762 cause=input_missing"
+      },
+      {
+        "line": 176,
+        "text": "[net-peer-hold-installed] local=3 peer=1 frame=36 ai_frame=156 voters=14 proposer=2 certificate_sender=3 next=36 displayed=35 now_ms=771 cause=input_missing"
+      },
+      {
+        "line": 181,
+        "text": "[net-peer-hold-installed] local=1 peer=1 frame=36 ai_frame=156 voters=14 proposer=2 certificate_sender=2 next=36 displayed=35 now_ms=809 cause=certified_peer_decision"
+      },
+      {
+        "line": 218,
+        "text": "[net-peer-return-runway] peer=1 activation=98 delay_ticks=10 neutral_through=128"
+      },
+      {
+        "line": 225,
+        "text": "[net-frame-group] return frame=98 members=15 voters=14"
+      },
+      {
+        "line": 226,
+        "text": "[net-frame-group] return frame=98 members=15 voters=14"
+      },
+      {
+        "line": 228,
+        "text": "[net-frame-group] return frame=98 members=15 voters=15"
+      },
+      {
+        "line": 229,
+        "text": "[net-frame-group] return frame=98 members=15 voters=14"
+      },
+      {
+        "line": 418,
+        "text": "[net-peer-hold-installed] local=2 peer=4 frame=278 ai_frame=398 voters=7 proposer=1 certificate_sender=2 next=278 displayed=277 now_ms=4720 cause=input_missing"
+      },
+      {
+        "line": 422,
+        "text": "[net-peer-hold-installed] local=3 peer=4 frame=278 ai_frame=398 voters=7 proposer=1 certificate_sender=3 next=278 displayed=277 now_ms=4729 cause=input_missing"
+      },
+      {
+        "line": 426,
+        "text": "[net-peer-hold-installed] local=1 peer=4 frame=278 ai_frame=398 voters=7 proposer=1 certificate_sender=1 next=278 displayed=277 now_ms=4751 cause=input_missing"
+      },
+      {
+        "line": 455,
+        "text": "[net-peer-hold-installed] local=4 peer=4 frame=278 ai_frame=398 voters=7 proposer=1 certificate_sender=2 next=278 displayed=277 now_ms=4963 cause=certified_peer_decision"
+      },
+      {
+        "line": 946,
+        "text": "[net-peer-hold-installed] local=1 peer=3 frame=362 ai_frame=482 voters=3 proposer=1 certificate_sender=2 next=362 displayed=357 now_ms=5994 cause=slow_machine_capacity"
+      },
+      {
+        "line": 1049,
+        "text": "[net-peer-hold-installed] local=3 peer=3 frame=362 ai_frame=482 voters=7 proposer=1 certificate_sender=3 next=362 displayed=355 now_ms=6008 cause=own_hold_consent"
+      },
+      {
+        "line": 1093,
+        "text": "[net-peer-hold-installed] local=2 peer=3 frame=362 ai_frame=482 voters=3 proposer=1 certificate_sender=2 next=362 displayed=355 now_ms=6015 cause=peer_hold_proposal"
+      },
+      {
+        "line": 1634,
+        "text": "[net-peer-hold-installed] local=4 peer=3 frame=362 ai_frame=482 voters=3 proposer=1 certificate_sender=2 next=362 displayed=360 now_ms=6348 cause=certified_peer_decision"
+      },
+      {
+        "line": 1643,
+        "text": "[net-peer-return-runway] peer=4 activation=410 delay_ticks=11 neutral_through=469"
+      },
+      {
+        "line": 1648,
+        "text": "[net-frame-group] return frame=410 members=11 voters=3"
+      },
+      {
+        "line": 1655,
+        "text": "[net-frame-group] return frame=410 members=11 voters=3"
+      },
+      {
+        "line": 1656,
+        "text": "[net-frame-group] return frame=410 members=11 voters=3"
+      },
+      {
+        "line": 1682,
+        "text": "[net-frame-group] return frame=410 members=11 voters=3"
+      },
+      {
+        "line": 1781,
+        "text": "[net-peer-return-runway] peer=3 activation=457 delay_ticks=12 neutral_through=494"
+      },
+      {
+        "line": 1793,
+        "text": "[net-frame-group] return frame=457 members=15 voters=3"
+      },
+      {
+        "line": 1803,
+        "text": "[net-frame-group] return frame=457 members=15 voters=7"
+      },
+      {
+        "line": 1806,
+        "text": "[net-frame-group] return frame=457 members=15 voters=3"
+      },
+      {
+        "line": 1845,
+        "text": "[net-frame-group] return frame=457 members=15 voters=11"
+      },
+      {
+        "line": 1923,
+        "text": "[net-peer-hold-installed] local=2 peer=4 frame=470 ai_frame=590 voters=3 proposer=1 certificate_sender=2 next=470 displayed=466 now_ms=7865 cause=input_missing"
+      },
+      {
+        "line": 1929,
+        "text": "[net-peer-hold-installed] local=3 peer=4 frame=470 ai_frame=590 voters=7 proposer=1 certificate_sender=3 next=470 displayed=469 now_ms=7894 cause=peer_hold_proposal"
+      },
+      {
+        "line": 1933,
+        "text": "[net-peer-hold-installed] local=1 peer=4 frame=470 ai_frame=590 voters=3 proposer=1 certificate_sender=1 next=470 displayed=469 now_ms=7901 cause=input_missing"
+      },
+      {
+        "line": 1977,
+        "text": "[net-peer-hold-installed] local=4 peer=4 frame=470 ai_frame=590 voters=3 proposer=1 certificate_sender=2 next=470 displayed=469 now_ms=8110 cause=certified_peer_decision"
+      },
+      {
+        "line": 2309,
+        "text": "[net-peer-return-runway] peer=4 activation=719 delay_ticks=11 neutral_through=756"
+      },
+      {
+        "line": 2320,
+        "text": "[net-frame-group] return frame=719 members=15 voters=7"
+      },
+      {
+        "line": 2323,
+        "text": "[net-frame-group] return frame=719 members=15 voters=15"
+      },
+      {
+        "line": 2324,
+        "text": "[net-frame-group] return frame=719 members=15 voters=15"
+      },
+      {
+        "line": 2325,
+        "text": "[net-frame-group] return frame=719 members=15 voters=15"
+      }
+    ]
+  },
+  "seed-2491": {
+    "exit_code": 1,
+    "original_group": "history:never_started:4:internet",
+    "log_sha256": "8daccd771a2dad78f75c9e000eb35f9085dbbc41c85b09d3fa536fa32506694b",
+    "failures": [
+      "[net-session-plane-selftest] FAIL four_internet_seats_57ms_jitter_28ms_directory_240ms_host_stopped_170ms seed=2491 property=history kind=never_started: the seats never all displayed their first second of a round"
+    ],
+    "decisions": []
+  },
+  "seed-984": {
+    "exit_code": 1,
+    "original_group": "rules:directory_refused:4:internet",
+    "log_sha256": "ba372cff75d3a8cf18a18a40b1180fd3909e2b6a431db8f68cb9e551e8d84e04",
+    "failures": [
+      "[net-session-plane-selftest] FAIL four_internet_seats_280ms_jitter_10ms_directory_40ms_host_silent_952ms_back_at_100pc_seat3_late_400ms_more_448ms seed=984 property=rules kind=directory_refused: 1 tie check-ins refused, the first seat 4 frame 495: frame_tie_request referee_seat1=asked:218,waiting:216,decided:2,requests:5,first_decided_ms:6958 referee_seat2=asked:72,waiting:71,decided:1,requests:1,first_decided_ms:41 referee_seat3=asked:44,waiting:43,decided:1,requests:1,first_decided_ms:44 referee_seat4=asked:88,waiting:76,decided:1,requests:3,first_decided_ms:8617"
+    ],
+    "decisions": [
+      {
+        "line": 117,
+        "text": "[net-peer-hold-installed] local=4 peer=2 frame=36 ai_frame=156 voters=13 proposer=1 certificate_sender=4 next=36 displayed=35 now_ms=899 cause=input_missing"
+      },
+      {
+        "line": 127,
+        "text": "[net-peer-hold-installed] local=1 peer=2 frame=36 ai_frame=156 voters=13 proposer=1 certificate_sender=1 next=36 displayed=35 now_ms=925 cause=input_missing"
+      },
+      {
+        "line": 132,
+        "text": "[net-peer-hold-installed] local=3 peer=2 frame=36 ai_frame=156 voters=13 proposer=1 certificate_sender=3 next=36 displayed=35 now_ms=938 cause=input_missing"
+      },
+      {
+        "line": 151,
+        "text": "[net-peer-hold-installed] local=2 peer=2 frame=36 ai_frame=156 voters=13 proposer=1 certificate_sender=4 next=36 displayed=35 now_ms=1040 cause=certified_peer_decision"
+      },
+      {
+        "line": 161,
+        "text": "[net-peer-hold-installed] local=4 peer=1 frame=53 ai_frame=173 voters=12 proposer=3 certificate_sender=4 next=53 displayed=52 now_ms=1133 cause=input_missing"
+      },
+      {
+        "line": 166,
+        "text": "[net-peer-hold-installed] local=3 peer=1 frame=53 ai_frame=173 voters=12 proposer=3 certificate_sender=3 next=53 displayed=52 now_ms=1137 cause=input_missing"
+      },
+      {
+        "line": 194,
+        "text": "[net-peer-hold-installed] local=1 peer=1 frame=53 ai_frame=173 voters=12 proposer=3 certificate_sender=3 next=53 displayed=52 now_ms=1247 cause=certified_peer_decision"
+      },
+      {
+        "line": 206,
+        "text": "[net-peer-hold-installed] local=2 peer=1 frame=53 ai_frame=173 voters=12 proposer=3 certificate_sender=4 next=53 displayed=41 now_ms=1275 cause=certified_peer_decision"
+      },
+      {
+        "line": 255,
+        "text": "[net-peer-return-runway] peer=1 activation=151 delay_ticks=16 neutral_through=199"
+      },
+      {
+        "line": 266,
+        "text": "[net-frame-group] return frame=151 members=13 voters=12"
+      },
+      {
+        "line": 275,
+        "text": "[net-frame-group] return frame=151 members=13 voters=13"
+      },
+      {
+        "line": 279,
+        "text": "[net-frame-group] return frame=151 members=13 voters=13"
+      },
+      {
+        "line": 294,
+        "text": "[net-frame-group] return frame=151 members=13 voters=13"
+      },
+      {
+        "line": 391,
+        "text": "[net-peer-return-runway] peer=2 activation=234 delay_ticks=29 neutral_through=310"
+      },
+      {
+        "line": 418,
+        "text": "[net-frame-group] return frame=234 members=15 voters=13"
+      },
+      {
+        "line": 419,
+        "text": "[net-frame-group] return frame=234 members=15 voters=13"
+      },
+      {
+        "line": 422,
+        "text": "[net-frame-group] return frame=234 members=15 voters=15"
+      },
+      {
+        "line": 423,
+        "text": "[net-frame-group] return frame=234 members=15 voters=13"
+      },
+      {
+        "line": 883,
+        "text": "[net-peer-hold-installed] local=3 peer=1 frame=452 ai_frame=572 voters=14 proposer=2 certificate_sender=3 next=452 displayed=451 now_ms=7915 cause=certified_peer_decision"
+      },
+      {
+        "line": 891,
+        "text": "[net-peer-hold-installed] local=4 peer=1 frame=452 ai_frame=572 voters=14 proposer=2 certificate_sender=4 next=452 displayed=451 now_ms=7994 cause=certified_peer_decision"
+      },
+      {
+        "line": 895,
+        "text": "[net-peer-hold-installed] local=2 peer=1 frame=452 ai_frame=572 voters=14 proposer=2 certificate_sender=2 next=452 displayed=451 now_ms=7997 cause=slow_machine_capacity"
+      },
+      {
+        "line": 1780,
+        "text": "[net-peer-hold-installed] local=3 peer=4 frame=495 ai_frame=615 voters=14 proposer=2 certificate_sender=3 next=495 displayed=493 now_ms=8871 cause=peer_hold_proposal"
+      },
+      {
+        "line": 2384,
+        "text": "[net-peer-hold-installed] local=4 peer=4 frame=495 ai_frame=615 voters=14 proposer=2 certificate_sender=4 next=495 displayed=493 now_ms=8940 cause=own_hold_consent"
+      },
+      {
+        "line": 2418,
+        "text": "[net-peer-hold-installed] local=2 peer=4 frame=495 ai_frame=615 voters=14 proposer=2 certificate_sender=2 next=495 displayed=493 now_ms=8943 cause=certified_peer_decision"
+      },
+      {
+        "line": 2677,
+        "text": "[net-peer-hold-installed] local=1 peer=1 frame=452 ai_frame=572 voters=14 proposer=2 certificate_sender=3 next=452 displayed=448 now_ms=8966 cause=certified_peer_decision"
+      },
+      {
+        "line": 2893,
+        "text": "[net-peer-hold-installed] local=2 peer=3 frame=510 ai_frame=630 voters=10 proposer=2 certificate_sender=4 next=510 displayed=502 now_ms=8986 cause=slow_machine_capacity"
+      },
+      {
+        "line": 3540,
+        "text": "[net-peer-hold-installed] local=3 peer=3 frame=510 ai_frame=630 voters=10 proposer=2 certificate_sender=4 next=510 displayed=505 now_ms=9059 cause=certified_peer_decision"
+      },
+      {
+        "line": 3552,
+        "text": "[net-peer-hold-installed] local=1 peer=4 frame=495 ai_frame=615 voters=14 proposer=2 certificate_sender=3 next=495 displayed=457 now_ms=9062 cause=certified_peer_decision"
+      },
+      {
+        "line": 3624,
+        "text": "[net-peer-hold-installed] local=4 peer=3 frame=510 ai_frame=630 voters=10 proposer=2 certificate_sender=4 next=510 displayed=509 now_ms=9408 cause=peer_hold_proposal"
+      },
+      {
+        "line": 3636,
+        "text": "[net-peer-hold-installed] local=1 peer=3 frame=510 ai_frame=630 voters=10 proposer=2 certificate_sender=4 next=510 displayed=492 now_ms=9659 cause=certified_peer_decision"
+      },
+      {
+        "line": 3678,
+        "text": "[net-peer-return-runway] peer=3 activation=604 delay_ticks=20 neutral_through=663"
+      },
+      {
+        "line": 3679,
+        "text": "[net-frame-group] return frame=604 members=6 voters=2"
+      },
+      {
+        "line": 3698,
+        "text": "[net-frame-group] return frame=604 members=6 voters=2"
+      },
+      {
+        "line": 3701,
+        "text": "[net-frame-group] return frame=604 members=6 voters=2"
+      },
+      {
+        "line": 3702,
+        "text": "[net-frame-group] return frame=604 members=6 voters=2"
+      },
+      {
+        "line": 3739,
+        "text": "[net-peer-return-runway] peer=4 activation=661 delay_ticks=20 neutral_through=720"
+      },
+      {
+        "line": 3740,
+        "text": "[net-frame-group] return frame=661 members=14 voters=2"
+      },
+      {
+        "line": 3747,
+        "text": "[net-frame-group] return frame=661 members=14 voters=2"
+      },
+      {
+        "line": 3752,
+        "text": "[net-frame-group] return frame=661 members=14 voters=6"
+      },
+      {
+        "line": 3753,
+        "text": "[net-frame-group] return frame=661 members=14 voters=10"
+      }
+    ]
+  },
+  "seed-1221": {
+    "exit_code": 1,
+    "original_group": "rules:two_return_frames:4:direct",
+    "log_sha256": "c36b512df60229b944badd6d73931ff2486c636e4254aecc7bcd29428efb50ec",
+    "failures": [
+      "[net-session-plane-selftest] FAIL four_direct_seats_272ms_jitter_20ms_seat2_stopped_2910ms_host_hung_3000ms_back_at_120pc_loss_30pc_seat3_loss_10pc_host seed=1221 property=bound kind=survivor_waits: seat 2 waited 534 ms for frame 580 from 12017 ms, the spells then []"
+    ],
+    "decisions": [
+      {
+        "line": 213,
+        "text": "[net-peer-hold-installed] local=1 peer=2 frame=57 ai_frame=177 voters=9 proposer=1 certificate_sender=1 next=57 displayed=56 now_ms=1099 cause=input_missing"
+      },
+      {
+        "line": 214,
+        "text": "[net-peer-hold-installed] local=1 peer=3 frame=57 ai_frame=177 voters=9 proposer=1 certificate_sender=1 next=57 displayed=56 now_ms=1099 cause=input_missing"
+      },
+      {
+        "line": 219,
+        "text": "[net-peer-hold-installed] local=4 peer=2 frame=57 ai_frame=177 voters=9 proposer=1 certificate_sender=4 next=57 displayed=56 now_ms=1115 cause=input_missing"
+      },
+      {
+        "line": 220,
+        "text": "[net-peer-hold-installed] local=4 peer=3 frame=57 ai_frame=177 voters=9 proposer=1 certificate_sender=4 next=57 displayed=56 now_ms=1115 cause=input_missing"
+      },
+      {
+        "line": 232,
+        "text": "[net-peer-hold-installed] local=2 peer=2 frame=57 ai_frame=177 voters=9 proposer=1 certificate_sender=4 next=57 displayed=56 now_ms=1226 cause=certified_peer_decision"
+      },
+      {
+        "line": 233,
+        "text": "[net-peer-hold-installed] local=2 peer=3 frame=57 ai_frame=177 voters=9 proposer=1 certificate_sender=4 next=57 displayed=56 now_ms=1226 cause=input_missing"
+      },
+      {
+        "line": 238,
+        "text": "[net-peer-hold-installed] local=3 peer=2 frame=57 ai_frame=177 voters=9 proposer=1 certificate_sender=1 next=57 displayed=56 now_ms=1227 cause=certified_peer_decision"
+      },
+      {
+        "line": 239,
+        "text": "[net-peer-hold-installed] local=3 peer=3 frame=57 ai_frame=177 voters=9 proposer=1 certificate_sender=1 next=57 displayed=56 now_ms=1227 cause=certified_peer_decision"
+      },
+      {
+        "line": 254,
+        "text": "[net-peer-return-runway] peer=2 activation=129 delay_ticks=22 neutral_through=199"
+      },
+      {
+        "line": 270,
+        "text": "[net-frame-group] return frame=129 members=11 voters=9"
+      },
+      {
+        "line": 285,
+        "text": "[net-frame-group] return frame=129 members=11 voters=11"
+      },
+      {
+        "line": 286,
+        "text": "[net-frame-group] return frame=129 members=11 voters=9"
+      },
+      {
+        "line": 293,
+        "text": "[net-frame-group] return frame=129 members=11 voters=9"
+      },
+      {
+        "line": 298,
+        "text": "[net-peer-return-runway] peer=3 activation=150 delay_ticks=23 neutral_through=214"
+      },
+      {
+        "line": 316,
+        "text": "[net-frame-group] return frame=150 members=15 voters=9"
+      },
+      {
+        "line": 339,
+        "text": "[net-frame-group] return frame=150 members=15 voters=11"
+      },
+      {
+        "line": 340,
+        "text": "[net-frame-group] return frame=150 members=15 voters=9"
+      },
+      {
+        "line": 345,
+        "text": "[net-frame-group] return frame=150 members=15 voters=9"
+      },
+      {
+        "line": 559,
+        "text": "[net-peer-hold-installed] local=1 peer=2 frame=278 ai_frame=398 voters=13 proposer=1 certificate_sender=1 next=278 displayed=277 now_ms=4784 cause=input_missing"
+      },
+      {
+        "line": 563,
+        "text": "[net-peer-hold-installed] local=4 peer=2 frame=278 ai_frame=398 voters=13 proposer=1 certificate_sender=4 next=278 displayed=277 now_ms=4798 cause=input_missing"
+      },
+      {
+        "line": 567,
+        "text": "[net-peer-hold-installed] local=3 peer=2 frame=278 ai_frame=398 voters=13 proposer=1 certificate_sender=3 next=278 displayed=277 now_ms=4806 cause=input_missing"
+      },
+      {
+        "line": 571,
+        "text": "[net-peer-hold-installed] local=2 peer=2 frame=278 ai_frame=398 voters=15 proposer=1 certificate_sender=2 next=278 displayed=255 now_ms=4816 cause=own_hold_consent"
+      },
+      {
+        "line": 860,
+        "text": "[net-peer-hold-installed] local=4 peer=1 frame=340 ai_frame=460 voters=12 proposer=3 certificate_sender=4 next=340 displayed=331 now_ms=5599 cause=peer_hold_proposal"
+      },
+      {
+        "line": 1308,
+        "text": "[net-peer-hold-installed] local=3 peer=1 frame=340 ai_frame=460 voters=13 proposer=3 certificate_sender=3 next=340 displayed=333 now_ms=5664 cause=slow_machine_capacity"
+      },
+      {
+        "line": 1552,
+        "text": "[net-peer-hold-installed] local=1 peer=1 frame=340 ai_frame=460 voters=13 proposer=3 certificate_sender=1 next=340 displayed=334 now_ms=5715 cause=own_hold_consent"
+      },
+      {
+        "line": 1799,
+        "text": "[net-peer-hold-installed] local=2 peer=1 frame=340 ai_frame=460 voters=12 proposer=3 certificate_sender=4 next=340 displayed=255 now_ms=5856 cause=certified_peer_decision"
+      },
+      {
+        "line": 1855,
+        "text": "[net-peer-return-runway] peer=1 activation=507 delay_ticks=18 neutral_through=579"
+      },
+      {
+        "line": 1865,
+        "text": "[net-frame-group] return frame=507 members=13 voters=12"
+      },
+      {
+        "line": 1866,
+        "text": "[net-frame-group] return frame=507 members=13 voters=12"
+      },
+      {
+        "line": 1867,
+        "text": "[net-frame-group] return frame=507 members=13 voters=12"
+      },
+      {
+        "line": 1868,
+        "text": "[net-peer-return-runway] peer=2 activation=525 delay_ticks=22 neutral_through=672"
+      },
+      {
+        "line": 1870,
+        "text": "[net-frame-group] return frame=525 members=15 voters=12"
+      },
+      {
+        "line": 1871,
+        "text": "[net-frame-group] return frame=525 members=15 voters=14"
+      },
+      {
+        "line": 1876,
+        "text": "[net-frame-group] return frame=525 members=15 voters=14"
+      },
+      {
+        "line": 1901,
+        "text": "[net-peer-hold-installed] local=3 peer=4 frame=553 ai_frame=673 voters=4 proposer=1 certificate_sender=3 next=553 displayed=541 now_ms=9124 cause=input_missing"
+      },
+      {
+        "line": 1907,
+        "text": "[net-peer-hold-installed] local=4 peer=4 frame=553 ai_frame=673 voters=4 proposer=1 certificate_sender=3 next=553 displayed=552 now_ms=9313 cause=certified_peer_decision"
+      },
+      {
+        "line": 1985,
+        "text": "[net-frame-group] return frame=507 members=13 voters=13"
+      },
+      {
+        "line": 1988,
+        "text": "[net-frame-group] return frame=525 members=15 voters=15"
+      },
+      {
+        "line": 2220,
+        "text": "[net-peer-hold-installed] local=2 peer=4 frame=553 ai_frame=673 voters=4 proposer=1 certificate_sender=3 next=553 displayed=531 now_ms=11746 cause=certified_peer_decision"
+      },
+      {
+        "line": 2243,
+        "text": "[net-peer-hold-installed] local=1 peer=4 frame=553 ai_frame=673 voters=4 proposer=1 certificate_sender=3 next=553 displayed=535 now_ms=11951 cause=certified_peer_decision"
+      },
+      {
+        "line": 2321,
+        "text": "[net-peer-hold-installed] local=3 peer=1 frame=580 ai_frame=700 voters=5 proposer=2 certificate_sender=3 next=580 displayed=579 now_ms=12448 cause=peer_hold_proposal"
+      },
+      {
+        "line": 2325,
+        "text": "[net-peer-hold-installed] local=2 peer=1 frame=580 ai_frame=700 voters=7 proposer=2 certificate_sender=2 next=580 displayed=579 now_ms=12551 cause=peer_hold_proposal"
+      },
+      {
+        "line": 2329,
+        "text": "[net-peer-hold-installed] local=1 peer=1 frame=580 ai_frame=700 voters=5 proposer=2 certificate_sender=3 next=580 displayed=579 now_ms=12573 cause=peer_hold_proposal"
+      },
+      {
+        "line": 2334,
+        "text": "[net-peer-hold-installed] local=4 peer=1 frame=580 ai_frame=700 voters=5 proposer=2 certificate_sender=3 next=580 displayed=579 now_ms=12588 cause=certified_peer_decision"
+      },
+      {
+        "line": 2456,
+        "text": "[net-peer-return-runway] peer=1 activation=700 delay_ticks=18 neutral_through=755"
+      },
+      {
+        "line": 2457,
+        "text": "[net-peer-return-runway] peer=4 activation=700 delay_ticks=21 neutral_through=755"
+      },
+      {
+        "line": 2473,
+        "text": "[net-frame-group] return frame=700 members=15 voters=6"
+      },
+      {
+        "line": 2489,
+        "text": "[net-frame-group] return frame=700 members=15 voters=6"
+      },
+      {
+        "line": 2493,
+        "text": "[net-frame-group] return frame=700 members=15 voters=6"
+      },
+      {
+        "line": 2496,
+        "text": "[net-frame-group] return frame=700 members=15 voters=14"
+      }
+    ]
+  },
+  "seed-4716": {
+    "exit_code": 0,
+    "original_group": "rules:two_return_frames:4:internet",
+    "log_sha256": "b0562fc56862b900f81d87a0fd72a44074b403ff179ac8b7583b5abdb2060b44",
+    "failures": [],
+    "decisions": [
+      {
+        "line": 553,
+        "text": "[net-peer-hold-installed] local=3 peer=2 frame=270 ai_frame=390 voters=13 proposer=1 certificate_sender=3 next=270 displayed=269 now_ms=4558 cause=input_missing"
+      },
+      {
+        "line": 557,
+        "text": "[net-peer-hold-installed] local=1 peer=2 frame=270 ai_frame=390 voters=13 proposer=1 certificate_sender=1 next=270 displayed=269 now_ms=4577 cause=input_missing"
+      },
+      {
+        "line": 560,
+        "text": "[net-peer-hold-installed] local=4 peer=2 frame=270 ai_frame=390 voters=15 proposer=1 certificate_sender=4 next=270 displayed=269 now_ms=4590 cause=input_missing"
+      },
+      {
+        "line": 564,
+        "text": "[net-peer-hold-installed] local=2 peer=2 frame=270 ai_frame=390 voters=15 proposer=1 certificate_sender=2 next=270 displayed=259 now_ms=4603 cause=own_hold_consent"
+      },
+      {
+        "line": 613,
+        "text": "[net-peer-return-runway] peer=2 activation=348 delay_ticks=10 neutral_through=375"
+      },
+      {
+        "line": 622,
+        "text": "[net-frame-group] return frame=348 members=15 voters=15"
+      },
+      {
+        "line": 624,
+        "text": "[net-frame-group] return frame=348 members=15 voters=15"
+      },
+      {
+        "line": 625,
+        "text": "[net-frame-group] return frame=348 members=15 voters=15"
+      },
+      {
+        "line": 629,
+        "text": "[net-frame-group] return frame=348 members=15 voters=15"
+      },
+      {
+        "line": 745,
+        "text": "[net-peer-hold-installed] local=4 peer=1 frame=373 ai_frame=493 voters=12 proposer=2 certificate_sender=4 next=373 displayed=372 now_ms=6281 cause=input_missing"
+      },
+      {
+        "line": 749,
+        "text": "[net-peer-hold-installed] local=2 peer=1 frame=373 ai_frame=493 voters=14 proposer=2 certificate_sender=2 next=373 displayed=372 now_ms=6288 cause=peer_hold_proposal"
+      },
+      {
+        "line": 753,
+        "text": "[net-peer-hold-installed] local=3 peer=1 frame=373 ai_frame=493 voters=12 proposer=2 certificate_sender=3 next=373 displayed=372 now_ms=6291 cause=input_missing"
+      },
+      {
+        "line": 769,
+        "text": "[net-peer-hold-installed] local=1 peer=1 frame=373 ai_frame=493 voters=12 proposer=2 certificate_sender=3 next=373 displayed=369 now_ms=6483 cause=certified_peer_decision"
+      },
+      {
+        "line": 793,
+        "text": "[net-peer-return-runway] peer=1 activation=439 delay_ticks=11 neutral_through=471"
+      },
+      {
+        "line": 801,
+        "text": "[net-frame-group] return frame=439 members=15 voters=15"
+      },
+      {
+        "line": 802,
+        "text": "[net-frame-group] return frame=439 members=15 voters=15"
+      },
+      {
+        "line": 804,
+        "text": "[net-frame-group] return frame=439 members=15 voters=15"
+      },
+      {
+        "line": 805,
+        "text": "[net-frame-group] return frame=439 members=15 voters=14"
+      },
+      {
+        "line": 846,
+        "text": "[net-peer-hold-installed] local=3 peer=1 frame=472 ai_frame=592 voters=14 proposer=2 certificate_sender=3 next=472 displayed=469 now_ms=7854 cause=input_missing"
+      },
+      {
+        "line": 850,
+        "text": "[net-peer-hold-installed] local=4 peer=1 frame=472 ai_frame=592 voters=14 proposer=2 certificate_sender=4 next=472 displayed=471 now_ms=7892 cause=input_missing"
+      },
+      {
+        "line": 853,
+        "text": "[net-peer-hold-installed] local=2 peer=1 frame=472 ai_frame=592 voters=14 proposer=2 certificate_sender=2 next=472 displayed=471 now_ms=7893 cause=input_missing"
+      },
+      {
+        "line": 1010,
+        "text": "[net-peer-hold-installed] local=1 peer=1 frame=472 ai_frame=592 voters=15 proposer=2 certificate_sender=1 next=472 displayed=460 now_ms=9175 cause=peer_hold_proposal"
+      },
+      {
+        "line": 1014,
+        "text": "[net-peer-return-runway] peer=1 activation=607 delay_ticks=11 neutral_through=668"
+      },
+      {
+        "line": 1015,
+        "text": "[net-frame-group] return frame=607 members=15 voters=15"
+      },
+      {
+        "line": 1016,
+        "text": "[net-frame-group] return frame=607 members=15 voters=15"
+      },
+      {
+        "line": 1017,
+        "text": "[net-frame-group] return frame=607 members=15 voters=15"
+      },
+      {
+        "line": 1018,
+        "text": "[net-frame-group] return frame=607 members=15 voters=15"
+      }
+    ]
+  }
+}

@@ -684,7 +684,12 @@ namespace RTE {
 		if (agreed.preparedFrame == 1) for (uint8_t peer: agreed.members) required &= ~SeatBit(peer);
 		// A seat the round holds at the decision's frame plays none of it: whether it voted decides nothing, so a voter that knows of the
 		// hold certifies without it, and a seat held after voting cannot leave a decision certified on one peer and passed on another.
-		if (agreed.preparedFrame != 3) required &= ~PeerHeldSeatsAt(agreed.frame);
+		if (agreed.preparedFrame != 3) {
+			required &= ~PeerHeldSeatsAt(agreed.frame);
+			// A certified neutral interval excludes the seat from voting until it plays again.
+			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer)
+				if (IsSeatReclaimGap(peer, agreed.frame)) required &= ~SeatBit(peer);
+		}
 		return required;
 	}
 
