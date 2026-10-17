@@ -1,0 +1,1 @@
+[net-lockstep-selftest] FAIL: a measured 30 ms link was padded to 18 input ticks

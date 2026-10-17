@@ -1,0 +1,59 @@
+93e67a1b1 Record the frozen suite and return timing failures
+ec5d90c83 Log holds learned from certified history
+47aa7cc39 Keep one return promise in deferred voting
+b8f134412 Detect conflicting deferred return votes
+4296718e5 Merge remote-tracking branch 'origin/cm-wip/hold-rows' into cm-wip/relay-findings
+06a44fb82 Collect fight test pictures across supported Pillow versions
+d39e3392b Name relay proof participants by role and align diagnostic check
+e9149984d Describe frame setup timing without a machine name
+24c15ae94 Use neutral names in test fixtures and preserve path boundaries
+739c78332 Describe the dark display without naming a machine
+11c6171e5 Measure sender rate between received packets
+f2d6b9b69 Detect silence lowering a steady sender rate
+a391ace03 Use the own-held overlay sentence for return notifications
+2a7952194 Commit departure facts only at their agreed frame
+7ca43f5e4 Merge remote-tracking branch 'origin/cm-wip/hold-rows' into cm-wip/relay-findings
+615ecf60d Detect future departures in earlier committed frame prefixes
+d6b8d0d33 Retain authenticated member starts and retry exact roster removals
+f430d04d1 Use fresh fixed schedule failures to avoid duplicate minimizer replays
+7bcdd8ac7 Merge remote-tracking branch 'origin/cm-wip/hold-rows' into cm-wip/relay-findings
+674919c54 Size the fixed and independent hold pools separately
+6dff4d914 Record the remaining return handshake and lost removal notice
+9d2d66a06 Preserve historical seat ownership and certified return admission
+84dbd4697 Merge remote-tracking branch 'origin/cm-wip/hold-rows' into cm-wip/relay-findings
+cc7b7cc3c Budget the fixed session fixtures and random schedules as separate suite rows
+62d03110b Give the session-plane suite pool enough workers beside a build
+60328c3f2 Merge remote-tracking branch 'origin/cm-wip/hold-rows' into cm-wip/relay-findings
+a0811aa0a Make the two headless policy probes an explicit suite mode
+99f5218b4 Acknowledge the module-version rows own headed warning
+16cdf6e79 Detect retroactive authority after a future seat removal
+a743b7e5a Preserve each seat's certified membership through other returns
+937405f17 Include transport diagnostics in the native dependency build
+b8f2ff2f2 Record the complete shape inventory and rejected startup change
+3afeb9691 Retire stale hold causes and sample stalled peer transports
+63dd255c2 Merge remote-tracking branch 'origin/cm-wip/hold-rows' into cm-wip/relay-findings
+5552074ca Require pending hold authority to survive the old local time limit
+c47f54ab4 Merge remote-tracking branch 'origin/cm-wip/relay-findings' into cm-wip/hold-rows
+7c06aca46 Keep every newly minimized return and duplicate return failure
+39043566e Keep the current tail history and missing return counterexamples
+7e5ae2439 Merge remote-tracking branch 'origin/cm-wip/hold-rows' into cm-wip/relay-findings
+273c24f98 Keep pending frame decisions until authority resolves them
+a28731fdc Merge remote-tracking branch 'origin/cm-wip/hold-rows' into cm-wip/relay-findings
+05dd30663 Preserve selected routes through transport close diagnostics
+8150b2a77 Merge remote-tracking branch 'origin/cm-wip/relay-findings' into cm-wip/hold-rows
+60a22f24e Handshake the image return while its private replay finishes
+0c018f7e6 Detect local-clock expiry of pending frame authority
+8c44fccf4 Read the image return certificate from its own delivered link
+ad61859d4 Record older-source hold regression and resumed checks
+e8e51ebe9 Name the shared capture that supplies an image return
+0a94b9cd7 Merge remote-tracking branch 'origin/cm-wip/relay-findings' into cm-wip/hold-rows
+a4cfde6cb Use committed image bases and own return records, isolate scene tickets, and preserve known failing groups
+49fe8212d Merge remote-tracking branch 'origin/cm-wip/hold-rows' into cm-wip/relay-findings
+37f8b8529 Make the other image seat actually held before asking a held host for its base
+ad61c1e6c Record resumed validation and fixture capture agreement
+def12f57a Merge remote-tracking branch 'origin/cm-wip/hold-rows' into cm-wip/relay-findings
+573f4d3c1 Keep headed match checks aligned with link timing
+b21c57b73 Merge remote-tracking branch 'origin/cm-wip/relay-findings' into cm-wip/hold-rows
+3bba8e826 Drive catch-up convergence on the merged timed grant API
+c42a77b43 Merge remote-tracking branch 'origin/cm-wip/relay-findings' into cm-wip/hold-rows
+23dd1a907 Follow a held hosts base request through the playing seats committed capture

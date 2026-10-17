@@ -1,0 +1,18 @@
+{
+  "upstream": "2cb93a06350bb065db53abdb0d87cf297e0bfd34",
+  "patch_order": [
+    {
+      "name": "gns-turn-lifetime.patch",
+      "sha256": "453f18420ce6bed9d55beecd732a0615400b043fc9777e3c2f4ef7dc71ceafc9",
+      "check_and_apply": true
+    },
+    {
+      "name": "gns-transport-diagnostics.patch",
+      "sha256": "64e5fcd5c0f936a75c8b373052125a95e4259383f7b7ac98915930535ae53dfd",
+      "check_and_apply": true
+    }
+  ],
+  "required_headers": true,
+  "source": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/transport-diagnostics/builder-patch-check-source",
+  "native_rebuild": "The same patched native source already built in s07local/transport-diagnostics/gns-build; this check changes the helper recipe only."
+}

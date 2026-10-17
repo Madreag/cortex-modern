@@ -1,0 +1,23 @@
+{
+  "source_head": "11c6171e5c3423ed8d9f8cbf779fc51d3b79d3a7",
+  "binary_sha256": "1b4bae6682b956ea0a63305ce20ccca3f392ee09fd28bff033d21d6325b7b46d",
+  "results": [
+    {
+      "name": "seed-139",
+      "schedule": "seed=139 seats=3 internet=1 exchange=160 end=20188 rtt=275,235,260 jitter=0,0,20 recover=120,105,100 phase=2825,162,2113 spell=1:hung:7964:704 spell=3:late:8359:1455:100 burst=1:10353:2472:30 burst=3:7742:2694:90",
+      "exit_code": 1
+    },
+    {
+      "name": "seed-72",
+      "schedule": "seed=72 seats=4 internet=1 exchange=160 end=27901 rtt=247,217,237,292,270,285 jitter=20,20,10,10,20,10 recover=120,300,300,300 phase=4468,3027,2118,4525 spell=2:stopped:7489:1245 spell=4:silent:17929:1315 rematch=12648",
+      "exit_code": 1
+    },
+    {
+      "name": "seed-106",
+      "schedule": "seed=106 seats=4 internet=0 exchange=40 end=18186 rtt=280,267,200,220,250,297 jitter=0,0,0,0,10,5 recover=300,300,300,100 phase=476,3250,1574,1077 spell=1:slow:5653:4066:77 burst=1:4180:581:90",
+      "exit_code": 1
+    }
+  ],
+  "complete": true,
+  "running": null
+}

@@ -1,0 +1,3 @@
+[net-lockstep-selftest] FAIL: removing seat4 discarded its input receipt authority before366
+[net-lockstep-selftest] FAIL: a superseded future return remained a tail proof or vote fence
+[net-lockstep-selftest] FAIL: a survivor rejected the certified return's new start frame and delay

@@ -1,0 +1,7 @@
+{
+  "head": "7b589c18e7014f6bb3aae85275f64ec1ddc288e9",
+  "binary_sha256": "c491d5e3018fef3129755784c07237fd52383ade7a93c2c2b8d4ae4ccab7a34b",
+  "runner_exit": 1,
+  "expectation": "RED at frame175 because return2 reintroduces still-held seat3",
+  "complete": true
+}

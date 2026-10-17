@@ -1,0 +1,2 @@
+[net-lockstep-selftest] PASS a_silent_interval_does_not_lower_the_measured_sending_rate
+[net-lockstep-selftest] PASS

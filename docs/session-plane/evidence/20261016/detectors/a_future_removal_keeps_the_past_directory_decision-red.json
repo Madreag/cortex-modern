@@ -1,0 +1,21 @@
+{
+  "source_parent": "60328c3f2491ffbba4a55b33e7eca215752cf08e",
+  "binary_sha256": "7b297ed53fb8722437192357181f3f330d1add09fdb9dd708205c46cb463197c",
+  "results": [
+    {
+      "selector": "return-keeps-other-held",
+      "exit_code": 1,
+      "failure": "a superseded future return remained a tail proof or vote fence"
+    },
+    {
+      "selector": "future-removal-authority",
+      "exit_code": 1,
+      "failure": "removing seat4 discarded its input receipt authority before366"
+    },
+    {
+      "selector": "return-start-admission",
+      "exit_code": 1,
+      "failure": "a survivor rejected the certified return's new start frame and delay"
+    }
+  ]
+}

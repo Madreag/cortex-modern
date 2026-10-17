@@ -1,0 +1,2 @@
+[net-lockstep-selftest] PASS pending_decisions_wait_for_authority_across_local_timeouts
+[net-lockstep-selftest] PASS

@@ -1,0 +1,2 @@
+[net-lockstep-selftest] PASS an_unsigned_hold_invitation_never_fences_an_input
+[net-lockstep-selftest] PASS

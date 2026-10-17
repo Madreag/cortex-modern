@@ -1,0 +1,76 @@
+{
+  "source_parent": "47aa7cc39e400436f18c3a12800488bd5a9a98b9",
+  "binary_sha256": "8fb5b753511cfa6e4904bd4301d6fd9fbbdd72cb8daf2449e8042f4954124762",
+  "results": [
+    {
+      "name": "deferred-return-vote",
+      "exit_code": 0
+    },
+    {
+      "name": "sender-rate-silence",
+      "exit_code": 0
+    },
+    {
+      "name": "future-removal-authority",
+      "exit_code": 0
+    },
+    {
+      "name": "return-keeps-other-held",
+      "exit_code": 0
+    },
+    {
+      "name": "return-start-admission",
+      "exit_code": 0
+    },
+    {
+      "name": "return-member-starts",
+      "exit_code": 0
+    },
+    {
+      "name": "removal-retry",
+      "exit_code": 0
+    },
+    {
+      "name": "future-facts-prefix",
+      "exit_code": 0
+    },
+    {
+      "name": "concurrent-returns",
+      "exit_code": 0
+    },
+    {
+      "name": "pending-decision-authority",
+      "exit_code": 0
+    },
+    {
+      "name": "own-ahead-hold",
+      "exit_code": 0
+    },
+    {
+      "name": "hold-invitation",
+      "exit_code": 0
+    },
+    {
+      "name": "link-delay",
+      "exit_code": 0
+    },
+    {
+      "name": "held-host-base-capture",
+      "exit_code": 0
+    },
+    {
+      "name": "seat-return-pacing",
+      "exit_code": 0
+    },
+    {
+      "name": "A-authority",
+      "exit_code": 0
+    },
+    {
+      "name": "C-ui",
+      "exit_code": 0
+    }
+  ],
+  "complete": true,
+  "running": null
+}

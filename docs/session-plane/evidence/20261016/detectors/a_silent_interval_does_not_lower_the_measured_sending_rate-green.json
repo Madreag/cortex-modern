@@ -1,0 +1,30 @@
+{
+  "exe_sha256": "8fb5b753511cfa6e4904bd4301d6fd9fbbdd72cb8daf2449e8042f4954124762",
+  "repo": "/home/erol/cortex-workers/session-plane-engineer",
+  "passed": 1,
+  "total": 1,
+  "quiet_rows": [],
+  "sanitizer": null,
+  "complete": true,
+  "running": null,
+  "results": {
+    "net-lockstep": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "8fb5b753511cfa6e4904bd4301d6fd9fbbdd72cb8daf2449e8042f4954124762",
+      "row_elapsed_s": 0.629063744971063,
+      "start_load": [
+        0.51904296875,
+        1.11376953125,
+        2.97802734375
+      ],
+      "topology": "single-box: not proof"
+    }
+  },
+  "topology": "single-box: not proof"
+}

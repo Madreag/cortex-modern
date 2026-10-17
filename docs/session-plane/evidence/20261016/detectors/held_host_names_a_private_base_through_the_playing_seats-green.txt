@@ -1,0 +1,2 @@
+[net-lockstep-selftest] PASS held_host_names_a_private_base_through_the_playing_seats
+[net-lockstep-selftest] PASS

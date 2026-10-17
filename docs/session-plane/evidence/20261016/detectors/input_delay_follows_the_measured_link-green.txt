@@ -1,0 +1,2 @@
+[net-lockstep-selftest] PASS input_delay_follows_the_measured_link
+[net-lockstep-selftest] PASS

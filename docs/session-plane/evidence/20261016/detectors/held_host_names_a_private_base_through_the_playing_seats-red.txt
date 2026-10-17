@@ -1,0 +1,1 @@
+[net-lockstep-selftest] FAIL: a held host cannot name its requested base through the playing seats

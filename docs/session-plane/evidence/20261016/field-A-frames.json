@@ -1,0 +1,524 @@
+{
+  "source_evidence": "/home/erol/cortex-workers/four-player-run/.four-player-run/full-game/s10f1-desync",
+  "samples": [
+    {
+      "frame": 42285,
+      "different_subsystems": [],
+      "host_held": [],
+      "joiner_held": [],
+      "host_delay": 22,
+      "joiner_delay": 22,
+      "host_unix_ms": 1792102577093,
+      "joiner_unix_ms": 1792102577289
+    },
+    {
+      "frame": 42286,
+      "different_subsystems": [],
+      "host_held": [
+        1
+      ],
+      "joiner_held": [
+        1
+      ],
+      "host_delay": 22,
+      "joiner_delay": 22,
+      "host_unix_ms": 1792102577104,
+      "joiner_unix_ms": 1792102577307
+    },
+    {
+      "frame": 42287,
+      "different_subsystems": [],
+      "host_held": [
+        1
+      ],
+      "joiner_held": [
+        1
+      ],
+      "host_delay": 22,
+      "joiner_delay": 22,
+      "host_unix_ms": 1792102577114,
+      "joiner_unix_ms": 1792102577326
+    },
+    {
+      "frame": 49616,
+      "different_subsystems": [],
+      "host_held": [],
+      "joiner_held": [],
+      "host_delay": 22,
+      "joiner_delay": 22,
+      "host_unix_ms": 1792102699171,
+      "joiner_unix_ms": 1792102699463
+    },
+    {
+      "frame": 49617,
+      "different_subsystems": [],
+      "host_held": [
+        1
+      ],
+      "joiner_held": [
+        1
+      ],
+      "host_delay": 22,
+      "joiner_delay": 22,
+      "host_unix_ms": 1792102699192,
+      "joiner_unix_ms": 1792102699478
+    },
+    {
+      "frame": 49618,
+      "different_subsystems": [],
+      "host_held": [
+        1
+      ],
+      "joiner_held": [
+        1
+      ],
+      "host_delay": 22,
+      "joiner_delay": 22,
+      "host_unix_ms": 1792102699202,
+      "joiner_unix_ms": 1792102699499
+    },
+    {
+      "frame": 57165,
+      "different_subsystems": [],
+      "host_held": [],
+      "joiner_held": [],
+      "host_delay": 22,
+      "joiner_delay": 22,
+      "host_unix_ms": 1792102824990,
+      "joiner_unix_ms": 1792102825302
+    },
+    {
+      "frame": 57166,
+      "different_subsystems": [],
+      "host_held": [],
+      "joiner_held": [],
+      "host_delay": 22,
+      "joiner_delay": 22,
+      "host_unix_ms": 1792102825002,
+      "joiner_unix_ms": 1792102825308
+    },
+    {
+      "frame": 57167,
+      "different_subsystems": [],
+      "host_held": [],
+      "joiner_held": [],
+      "host_delay": 22,
+      "joiner_delay": 22,
+      "host_unix_ms": 1792102825014,
+      "joiner_unix_ms": 1792102825337
+    },
+    {
+      "frame": 57168,
+      "different_subsystems": [],
+      "host_held": [],
+      "joiner_held": [],
+      "host_delay": 22,
+      "joiner_delay": 22,
+      "host_unix_ms": 1792102825027,
+      "joiner_unix_ms": 1792102825344
+    },
+    {
+      "frame": 57169,
+      "different_subsystems": [],
+      "host_held": [],
+      "joiner_held": [],
+      "host_delay": 22,
+      "joiner_delay": 22,
+      "host_unix_ms": 1792102825040,
+      "joiner_unix_ms": 1792102825369
+    },
+    {
+      "frame": 57170,
+      "different_subsystems": [],
+      "host_held": [],
+      "joiner_held": [],
+      "host_delay": 22,
+      "joiner_delay": 22,
+      "host_unix_ms": 1792102825059,
+      "joiner_unix_ms": 1792102825376
+    },
+    {
+      "frame": 57171,
+      "different_subsystems": [],
+      "host_held": [],
+      "joiner_held": [],
+      "host_delay": 22,
+      "joiner_delay": 22,
+      "host_unix_ms": 1792102825072,
+      "joiner_unix_ms": 1792102825401
+    },
+    {
+      "frame": 57172,
+      "different_subsystems": [],
+      "host_held": [],
+      "joiner_held": [],
+      "host_delay": 22,
+      "joiner_delay": 22,
+      "host_unix_ms": 1792102825086,
+      "joiner_unix_ms": 1792102825408
+    },
+    {
+      "frame": 57173,
+      "different_subsystems": [],
+      "host_held": [],
+      "joiner_held": [],
+      "host_delay": 22,
+      "joiner_delay": 22,
+      "host_unix_ms": 1792102825098,
+      "joiner_unix_ms": 1792102825436
+    },
+    {
+      "frame": 57174,
+      "different_subsystems": [],
+      "host_held": [],
+      "joiner_held": [],
+      "host_delay": 22,
+      "joiner_delay": 22,
+      "host_unix_ms": 1792102825110,
+      "joiner_unix_ms": 1792102825443
+    },
+    {
+      "frame": 57175,
+      "different_subsystems": [],
+      "host_held": [
+        1
+      ],
+      "joiner_held": [
+        1
+      ],
+      "host_delay": 22,
+      "joiner_delay": 22,
+      "host_unix_ms": 1792102825123,
+      "joiner_unix_ms": 1792102825470,
+      "host_subsystem_digests": {
+        "actor_timers": "4fe15113a746730738064db1480ff7d605c741b14b5b1d851b477dc6315953c1",
+        "actors": "8638cb79750a3a32f1ae042d574e6626c2762f38746fd4f6bd1313e64d3ab32d",
+        "attachables": "8618a2b73c0d79f7593c0fefa6ca41d2638ba323f970068e8e5da91bdb1c157f",
+        "carve_math": "873231faf67d7f466220904daf8951ef78e011c29c2a3dc67d86d6ecf0bac6d4",
+        "controller": "5b6072cff108bd5c279341fcafa1b127ac72d479d97aba440d083d0818cc2c9e",
+        "controller_route": "00357bdd11c461b3b78d3f67e8da51946980e9a80bc2a5ef643c1781ada826d4",
+        "funds": "33a9c8081726c0dcbf6451e0e44ea2a6c110b1049f60ae36c2b2f8ecc22e798d",
+        "items": "a9b49ddb6b611d8345dc9182992f0ae8c9c7972de4e3b5bf55a4ffca055b7321",
+        "lua_state": "dfb01574bc6ba97553ed0e21f7725e5d7475330a220a03b1108e114ee43f6b33",
+        "particles": "ab491b53df776001605575a48860599b5a90d771d9bd750174e64debece4637c",
+        "rot_angle": "afb2078436439737605c062ee95909b66969a521ebc369ceb376f98ffd622e82",
+        "rot_angvel": "7bd6f97bace3ad3b3d7849bcbe44e0b84bc8b4be7bd947a6535f827aebaf5781",
+        "scene": "717001447ab32d098fbc4069390f54d1aee03174a199e0f396576375b9ed445e",
+        "sim_rng": "38d2301c023a3d10944c2fec13be1b002df898422619d5f13eb918fbf9881beb",
+        "terrain": "c9627c9d464146b7349dee685aab5c3d656d5402b5fe4d5011208c6191fbc171",
+        "tick": "45da5b08355eb0da3c7e229cb400309965056a8773ba1ca45dd40168ce985878"
+      },
+      "joiner_subsystem_digests": {
+        "actor_timers": "4fe15113a746730738064db1480ff7d605c741b14b5b1d851b477dc6315953c1",
+        "actors": "8638cb79750a3a32f1ae042d574e6626c2762f38746fd4f6bd1313e64d3ab32d",
+        "attachables": "8618a2b73c0d79f7593c0fefa6ca41d2638ba323f970068e8e5da91bdb1c157f",
+        "carve_math": "873231faf67d7f466220904daf8951ef78e011c29c2a3dc67d86d6ecf0bac6d4",
+        "controller": "5b6072cff108bd5c279341fcafa1b127ac72d479d97aba440d083d0818cc2c9e",
+        "controller_route": "00357bdd11c461b3b78d3f67e8da51946980e9a80bc2a5ef643c1781ada826d4",
+        "funds": "33a9c8081726c0dcbf6451e0e44ea2a6c110b1049f60ae36c2b2f8ecc22e798d",
+        "items": "a9b49ddb6b611d8345dc9182992f0ae8c9c7972de4e3b5bf55a4ffca055b7321",
+        "lua_state": "dfb01574bc6ba97553ed0e21f7725e5d7475330a220a03b1108e114ee43f6b33",
+        "particles": "ab491b53df776001605575a48860599b5a90d771d9bd750174e64debece4637c",
+        "rot_angle": "afb2078436439737605c062ee95909b66969a521ebc369ceb376f98ffd622e82",
+        "rot_angvel": "7bd6f97bace3ad3b3d7849bcbe44e0b84bc8b4be7bd947a6535f827aebaf5781",
+        "scene": "717001447ab32d098fbc4069390f54d1aee03174a199e0f396576375b9ed445e",
+        "sim_rng": "38d2301c023a3d10944c2fec13be1b002df898422619d5f13eb918fbf9881beb",
+        "terrain": "c9627c9d464146b7349dee685aab5c3d656d5402b5fe4d5011208c6191fbc171",
+        "tick": "45da5b08355eb0da3c7e229cb400309965056a8773ba1ca45dd40168ce985878"
+      }
+    },
+    {
+      "frame": 57176,
+      "different_subsystems": [
+        "attachables"
+      ],
+      "host_held": [
+        1
+      ],
+      "joiner_held": [
+        1
+      ],
+      "host_delay": 22,
+      "joiner_delay": 22,
+      "host_unix_ms": 1792102825133,
+      "joiner_unix_ms": 1792102825476,
+      "host_subsystem_digests": {
+        "actor_timers": "1b224e9b4314e760fd9a387e2594567876bfe0a1c43bcbca5e8148a538032756",
+        "actors": "238b214d2a53b40cc2bcf4e3caa53aa07933da32a2eb71e28308428a591b1765",
+        "attachables": "c8f730837bd4ea0143d779060d55515e1d8bf5ace4428e2e2b5e4a353a1b9069",
+        "carve_math": "85b0bb73bedf117aed3907c2d169d18d2ad16ebf9a4f1aece2c405e808b3f483",
+        "controller": "5b6072cff108bd5c279341fcafa1b127ac72d479d97aba440d083d0818cc2c9e",
+        "controller_route": "00357bdd11c461b3b78d3f67e8da51946980e9a80bc2a5ef643c1781ada826d4",
+        "funds": "33a9c8081726c0dcbf6451e0e44ea2a6c110b1049f60ae36c2b2f8ecc22e798d",
+        "items": "2d0029198c7ff729c7b3c0cb1c0b65dc55cdc77ae9cded35efcc45a65ce1c3ec",
+        "lua_state": "dfb01574bc6ba97553ed0e21f7725e5d7475330a220a03b1108e114ee43f6b33",
+        "particles": "b28e1806485bea0558795830563cf9b63baefe3c270515c9c603bfe203976a1a",
+        "rot_angle": "50d362e5d98efbf4430ef48f41e853e59b5f97a52b2c65d4f4634a186655564e",
+        "rot_angvel": "e4ff7909580e0220dcda659d17c619cca0332e702529437da2ad850e3757c374",
+        "scene": "c007d7a38d885f1ae532baea81d87bb7807de136dd8d50b7423a18900575e8ae",
+        "sim_rng": "71dc57d97f213fd73437222f034f364ee9d9297825a678fdf9e8e75d00202841",
+        "terrain": "b5dadda9e796a323986b48966d77bb4435578fd5060fd3599414b3d554c39f89",
+        "tick": "aba626654f3d4da083f94e73851fc013560ce4b4f221e45cfe05884b7cad594d"
+      },
+      "joiner_subsystem_digests": {
+        "actor_timers": "1b224e9b4314e760fd9a387e2594567876bfe0a1c43bcbca5e8148a538032756",
+        "actors": "238b214d2a53b40cc2bcf4e3caa53aa07933da32a2eb71e28308428a591b1765",
+        "attachables": "a7c1cf4f2f3237653744d2ef6ce262cb493054587e8af23cf34c6e01f0e5ab47",
+        "carve_math": "85b0bb73bedf117aed3907c2d169d18d2ad16ebf9a4f1aece2c405e808b3f483",
+        "controller": "5b6072cff108bd5c279341fcafa1b127ac72d479d97aba440d083d0818cc2c9e",
+        "controller_route": "00357bdd11c461b3b78d3f67e8da51946980e9a80bc2a5ef643c1781ada826d4",
+        "funds": "33a9c8081726c0dcbf6451e0e44ea2a6c110b1049f60ae36c2b2f8ecc22e798d",
+        "items": "2d0029198c7ff729c7b3c0cb1c0b65dc55cdc77ae9cded35efcc45a65ce1c3ec",
+        "lua_state": "dfb01574bc6ba97553ed0e21f7725e5d7475330a220a03b1108e114ee43f6b33",
+        "particles": "b28e1806485bea0558795830563cf9b63baefe3c270515c9c603bfe203976a1a",
+        "rot_angle": "50d362e5d98efbf4430ef48f41e853e59b5f97a52b2c65d4f4634a186655564e",
+        "rot_angvel": "e4ff7909580e0220dcda659d17c619cca0332e702529437da2ad850e3757c374",
+        "scene": "c007d7a38d885f1ae532baea81d87bb7807de136dd8d50b7423a18900575e8ae",
+        "sim_rng": "71dc57d97f213fd73437222f034f364ee9d9297825a678fdf9e8e75d00202841",
+        "terrain": "b5dadda9e796a323986b48966d77bb4435578fd5060fd3599414b3d554c39f89",
+        "tick": "aba626654f3d4da083f94e73851fc013560ce4b4f221e45cfe05884b7cad594d"
+      }
+    },
+    {
+      "frame": 57177,
+      "different_subsystems": [
+        "attachables"
+      ],
+      "host_held": [
+        1
+      ],
+      "joiner_held": [
+        1
+      ],
+      "host_delay": 22,
+      "joiner_delay": 22,
+      "host_unix_ms": 1792102825144,
+      "joiner_unix_ms": 1792102825503
+    },
+    {
+      "frame": 57178,
+      "different_subsystems": [
+        "attachables"
+      ],
+      "host_held": [
+        1
+      ],
+      "joiner_held": [
+        1
+      ],
+      "host_delay": 22,
+      "joiner_delay": 22,
+      "host_unix_ms": 1792102825154,
+      "joiner_unix_ms": 1792102825510
+    },
+    {
+      "frame": 57179,
+      "different_subsystems": [
+        "attachables"
+      ],
+      "host_held": [
+        1
+      ],
+      "joiner_held": [
+        1
+      ],
+      "host_delay": 22,
+      "joiner_delay": 22,
+      "host_unix_ms": 1792102825164,
+      "joiner_unix_ms": 1792102825536
+    },
+    {
+      "frame": 57180,
+      "different_subsystems": [
+        "attachables"
+      ],
+      "host_held": [
+        1
+      ],
+      "joiner_held": [
+        1
+      ],
+      "host_delay": 22,
+      "joiner_delay": 22,
+      "host_unix_ms": 1792102825174,
+      "joiner_unix_ms": 1792102825543
+    },
+    {
+      "frame": 57181,
+      "different_subsystems": [
+        "attachables"
+      ],
+      "host_held": [
+        1
+      ],
+      "joiner_held": [
+        1
+      ],
+      "host_delay": 22,
+      "joiner_delay": 22,
+      "host_unix_ms": 1792102825193,
+      "joiner_unix_ms": 1792102825571
+    },
+    {
+      "frame": 57182,
+      "different_subsystems": [
+        "attachables"
+      ],
+      "host_held": [
+        1
+      ],
+      "joiner_held": [
+        1
+      ],
+      "host_delay": 22,
+      "joiner_delay": 22,
+      "host_unix_ms": 1792102825203,
+      "joiner_unix_ms": 1792102825578
+    },
+    {
+      "frame": 57183,
+      "different_subsystems": [
+        "attachables"
+      ],
+      "host_held": [
+        1
+      ],
+      "joiner_held": [
+        1
+      ],
+      "host_delay": 22,
+      "joiner_delay": 22,
+      "host_unix_ms": 1792102825213,
+      "joiner_unix_ms": 1792102825604
+    },
+    {
+      "frame": 57184,
+      "different_subsystems": [
+        "attachables"
+      ],
+      "host_held": [
+        1
+      ],
+      "joiner_held": [
+        1
+      ],
+      "host_delay": 22,
+      "joiner_delay": 22,
+      "host_unix_ms": 1792102825223,
+      "joiner_unix_ms": 1792102825611
+    },
+    {
+      "frame": 57185,
+      "different_subsystems": [
+        "attachables"
+      ],
+      "host_held": [
+        1
+      ],
+      "joiner_held": [
+        1
+      ],
+      "host_delay": 22,
+      "joiner_delay": 22,
+      "host_unix_ms": 1792102825235,
+      "joiner_unix_ms": 1792102825636
+    },
+    {
+      "frame": 57186,
+      "different_subsystems": [
+        "attachables"
+      ],
+      "host_held": [
+        1
+      ],
+      "joiner_held": [
+        1
+      ],
+      "host_delay": 22,
+      "joiner_delay": 22,
+      "host_unix_ms": 1792102825245,
+      "joiner_unix_ms": 1792102825644
+    },
+    {
+      "frame": 57187,
+      "different_subsystems": [
+        "attachables"
+      ],
+      "host_held": [
+        1
+      ],
+      "joiner_held": [
+        1
+      ],
+      "host_delay": 22,
+      "joiner_delay": 22,
+      "host_unix_ms": 1792102825257,
+      "joiner_unix_ms": 1792102825672
+    },
+    {
+      "frame": 57188,
+      "different_subsystems": [
+        "attachables"
+      ],
+      "host_held": [
+        1
+      ],
+      "joiner_held": [
+        1
+      ],
+      "host_delay": 22,
+      "joiner_delay": 22,
+      "host_unix_ms": 1792102825269,
+      "joiner_unix_ms": 1792102825679
+    },
+    {
+      "frame": 57189,
+      "different_subsystems": [
+        "attachables"
+      ],
+      "host_held": [
+        1
+      ],
+      "joiner_held": [
+        1
+      ],
+      "host_delay": 22,
+      "joiner_delay": 22,
+      "host_unix_ms": 1792102825280,
+      "joiner_unix_ms": 1792102825705
+    },
+    {
+      "frame": 57190,
+      "different_subsystems": [
+        "attachables"
+      ],
+      "host_held": [
+        1
+      ],
+      "joiner_held": [
+        1
+      ],
+      "host_delay": 22,
+      "joiner_delay": 22,
+      "host_unix_ms": 1792102825292,
+      "joiner_unix_ms": 1792102825712
+    },
+    {
+      "frame": 57191,
+      "different_subsystems": [
+        "attachables"
+      ],
+      "host_held": [
+        1
+      ],
+      "joiner_held": [
+        1
+      ],
+      "host_delay": 22,
+      "joiner_delay": 22,
+      "host_unix_ms": 1792102825322,
+      "joiner_unix_ms": 1792102825737
+    }
+  ],
+  "limits": "Reported held-seat state and subsystem digests do not identify the divergent attachable UID or recover each applied input producer."
+}
