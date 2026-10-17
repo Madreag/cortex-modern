@@ -1679,6 +1679,8 @@ namespace RTE {
 		/// Whether voters decide for the group at a frame (the next one to prepare by default): a majority of the seats that vote there,
 		/// or on a tie the half the round's tie rule names.
 		bool PeerGroupHasAuthority(uint32_t voters, uint64_t frame = UINT64_MAX) const;
+		/// A bounded local hold can precede split arbitration. This permission never certifies unrelated inputs or roster changes.
+		bool PeerGroupMayHold(uint32_t voters, uint64_t frame) const;
 		/// The seats that vote at a frame (the next one to prepare by default), with voters narrowed to them; zero when no voter is a retained seat.
 		uint32_t PeerVotingOwners(uint32_t& voters, uint64_t frame = UINT64_MAX) const;
 		uint32_t PeerHeldSeatsAt(uint64_t frame) const;
@@ -1696,6 +1698,7 @@ namespace RTE {
 		bool PeerFrameGroupConfirms(uint32_t agreeing, uint32_t members, uint64_t frame) const;
 		void SendForwardedPeerInput(const NetLockstepFrame& input, uint8_t onlyPeer);
 		void CheckPeerFrameTie(uint64_t frame, uint32_t members, uint64_t nowMs);
+		void PollPeerFrameTies(uint64_t nowMs);
 		bool ProposePeerBridge(uint64_t frame, uint64_t nowMs, bool returningOnly = false);
 		bool ValidatePeerBridge(const NetHostMigrationMessage& proposal) const;
 		/// Whether this peer already voted a return of one of the proposal's seats at another frame that is still undecided: a held seat
@@ -1828,6 +1831,12 @@ namespace RTE {
 		std::optional<NetFrameTieRequest> m_PeerFrameTie;
 		uint64_t m_PeerFrameTieSinceMs = 0;
 		std::map<uint64_t, uint32_t> m_PeerFrameTieWinners;
+		struct PeerSplitArbitration {
+			NetFrameTieRequest request;
+			uint32_t owners = 0;
+			uint64_t holdFrame = 0;
+		};
+		std::map<uint64_t, PeerSplitArbitration> m_PeerSplitArbitrations;
 		uint64_t m_TestBlackoutFrame = UINT64_MAX, m_TestBlackoutDurationMs = 0;
 		std::optional<uint64_t> m_TestBlackoutAtMs;
 		bool m_TestBlackoutEnded = false;

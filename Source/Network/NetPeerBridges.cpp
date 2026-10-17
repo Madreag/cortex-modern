@@ -184,7 +184,7 @@ namespace RTE {
 		const bool cooperativeHold = proposal.preparedFrame == 0 && proposal.members.size() == 1 &&
 		    PeerGroupHasAuthority(proposal.connectedMask | SeatBit(proposal.members.front()), proposal.frame);
 		if (proposal.members.empty() || (proposal.preparedFrame == 4 ? !ValidatePeerCaptureBridge(proposal) : proposal.bytes.size() != NetHash32{}.size() + (proposal.preparedFrame == 1 ? 12 * proposal.members.size() : 0)) ||
-		    (!PeerGroupHasAuthority(proposal.connectedMask, proposal.frame) && !cooperativeHold) ||
+		    (!(proposal.preparedFrame == 0 ? PeerGroupMayHold(proposal.connectedMask, proposal.frame) : PeerGroupHasAuthority(proposal.connectedMask, proposal.frame)) && !cooperativeHold) ||
 		    (proposal.preparedFrame > 2 && proposal.preparedFrame != 4) || (proposal.connectedMask & SeatBit(m_Config.localPeerId)) == 0 || PeerBridgeHasInputConflict(proposal)) return false;
 		// A hold agreed ahead names a frame past a boundary every voter has applied, as a return does.
 		const bool ahead = proposal.preparedFrame != 0 || proposal.boundary < proposal.frame;
@@ -314,54 +314,6 @@ namespace RTE {
 			}
 		}
 		if (returningOnly && !proposal.members.empty() && !ownYield) return false;
-		if (!proposal.members.empty() && !ownYield) {
-			// Inputs are prepared ahead of play. An ordinary packet still in
-			// transit must not spend a directory request for every future tick:
-			// that leaves the real disconnected player waiting for the minute's
-			// allowance to renew. Allow the sender's normal transit and the
-			// scheduling bound first, then use the remaining buffered time for
-			// the referee so its decision does not postpone the AI stages.
-			std::optional<double> dueMs;
-			if (m_PeerPaceStartMs && frame >= m_PeerPaceStartFrame)
-				dueMs = *m_PeerPaceStartMs + (frame - m_PeerPaceStartFrame) * m_Config.simTickMs;
-			if (m_PeerConsumerAtMs && m_LastCompletedSimulationTick && frame > *m_LastCompletedSimulationTick)
-				dueMs = *m_PeerConsumerAtMs + (frame - *m_LastCompletedSimulationTick) * m_Config.simTickMs;
-			const double boundMs = m_Config.slowPlayerBoundTicks * m_Config.simTickMs;
-			double leadMs = std::numeric_limits<double>::max();
-			for (uint8_t peer: proposal.members) {
-				const auto stats = m_Stats.peers.find(peer);
-				uint32_t transitMs = stats != m_Stats.peers.end() ? stats->second.pingMs : 0;
-				const auto [wire, route] = PeerFrameRoute(peer);
-				if (wire && wire->IsPeerPingMeasured(route)) transitMs = std::max(transitMs, wire->GetPeerPingMs(route));
-				leadMs = std::min(leadMs, std::max(0.0, InputDelayAt(peer, frame) * m_Config.simTickMs - transitMs - boundMs));
-			}
-			if (m_ConsumerWaitingFrame == frame || (dueMs && nowMs + leadMs >= *dueMs))
-				CheckPeerFrameTie(frame, proposal.connectedMask, nowMs);
-		}
-		if (proposal.members.empty() && !returningOnly && !PeerInputAccepted(frame)) {
-			// A seat whose own input the other half stopped confirming is in the same split as the half missing input:
-			// once the confirmation is overdue and that half has stopped answering past the bound, it checks in too.
-			const uint32_t confirming = PeerInputVoters(frame, m_Config.localPeerId);
-			const auto sent = m_PeerInputSentAtMs.find(frame);
-			const uint64_t boundMs = static_cast<uint64_t>(std::ceil(m_Config.slowPlayerBoundTicks * m_Config.simTickMs));
-			bool overdue = sent != m_PeerInputSentAtMs.end() && PeerGroupIsRefereedHalf(confirming);
-			for (uint8_t peer = 1; overdue && peer <= m_Config.peerCount; ++peer) {
-				if ((confirming & SeatBit(peer)) != 0 || m_RemovedPeers.contains(peer) || IsSeatReleased(peer)) continue;
-				const auto stats = m_Stats.peers.find(peer);
-				uint64_t transitMs = stats != m_Stats.peers.end() ? stats->second.pingMs : 0;
-				const auto [wire, route] = PeerFrameRoute(peer);
-				if (wire && wire->IsPeerPingMeasured(route)) transitMs = std::max<uint64_t>(transitMs, wire->GetPeerPingMs(route));
-				// A stopped main loop keeps its link alive from another thread: neither its receipts of this machine's input nor its own
-				// inputs advance. Receipts alone stop too when this seat's inputs stop reaching it, and then it is this seat that went quiet.
-				uint64_t heard = LastAuthenticatedTraffic(peer);
-				if (const auto progress = m_PeerOwnReceiptProgress.find(peer); progress != m_PeerOwnReceiptProgress.end() && progress->second.through <= frame) {
-					const auto& arrivals = m_Stats.peers[peer].arrivals;
-					heard = std::min(heard, std::max(progress->second.advancedAtMs, arrivals.empty() ? 0 : arrivals.back().first));
-				}
-				overdue = nowMs >= sent->second + transitMs + boundMs && nowMs >= heard && nowMs - heard >= boundMs;
-			}
-			if (overdue) CheckPeerFrameTie(frame, confirming, nowMs);
-		}
 		if (proposal.members.empty()) {
 			// A return follows a capture already agreed ahead, so the new voter reads that capture from the committed tail.
 			for (const auto& [key, votes]: m_PeerBridgeVotes) if (key.second == 4 && key.first >= frame && votes.contains(m_Config.localPeerId)) return false;
@@ -504,7 +456,7 @@ namespace RTE {
 			}
 			// Past its inputs in flight by the round trip the proposal and its votes take and the bound, as a return is placed.
 			proposal.boundary = m_LastCompletedSimulationTick.value_or(frame - 1);
-			const bool needsOwnCoSign = !PeerGroupHasAuthority(proposal.connectedMask, frame);
+			const bool needsOwnCoSign = !PeerGroupMayHold(proposal.connectedMask, frame);
 			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
 				if (peer == m_Config.localPeerId || ((proposal.connectedMask & SeatBit(peer)) == 0 &&
 				    !(needsOwnCoSign && std::find(proposal.members.begin(), proposal.members.end(), peer) != proposal.members.end()))) continue;
@@ -545,7 +497,7 @@ namespace RTE {
 			else agreementMs = static_cast<uint64_t>(std::ceil(m_Config.simTickMs / 2));
 			// The consumer's bound is already on the deadline below. Charge this co-sign its round trip and a poll, not the bound
 			// twice: an early speculative vote would fence a healthy returner's first input while it is still normally in flight.
-			if (!PeerGroupHasAuthority(proposal.connectedMask, proposal.frame)) for (uint8_t peer: proposal.members) {
+			if (!PeerGroupMayHold(proposal.connectedMask, proposal.frame)) for (uint8_t peer: proposal.members) {
 				uint64_t rtt = m_Stats.peers[peer].pingMs;
 				const auto [wire, route] = PeerFrameRoute(peer);
 				if (wire && wire->IsPeerPingMeasured(route)) rtt = std::max<uint64_t>(rtt, wire->GetPeerPingMs(route));
@@ -598,11 +550,11 @@ namespace RTE {
 		// Reporting it as progress makes AdvanceReadyFrames spin on the same frame
 		// and prevents the wire from delivering the other voters' answers.
 		if (own != votes.end()) {
-			if (own->second.voterMask != 0 || !SameBridge(own->second, proposal) || !PeerGroupHasAuthority(proposal.connectedMask, proposal.frame))
+			if (own->second.voterMask != 0 || !SameBridge(own->second, proposal) || !PeerGroupMayHold(proposal.connectedMask, proposal.frame))
 				return m_PeerBridgeCertificates.contains({frame, 0});
 		}
 		if (VotedOtherPeerReturn(proposal)) return false;
-		const bool invitation = proposal.preparedFrame == 0 && !ownYield && !PeerGroupHasAuthority(proposal.connectedMask, proposal.frame);
+		const bool invitation = proposal.preparedFrame == 0 && !ownYield && !PeerGroupMayHold(proposal.connectedMask, proposal.frame);
 		// Asking the missing owner to consent is not a vote. Until it signs, a timely input must remain admissible: the owner
 		// may already have produced it and be unable to promise a cutoff. Only actual signatures can fence or certify a hold.
 		proposal.voterMask = invitation ? 0 : SeatBit(m_Config.localPeerId);
@@ -681,7 +633,8 @@ namespace RTE {
 			if (!NetHostMigrationCodec::Encode(vote, m_Config.migrationKey, bytes)) return;
 			voters |= SeatBit(peer); signedVotes.push_back(std::move(bytes));
 		}
-		if ((voters & required) != required || (proposal.preparedFrame == 3 ? !PeerAdminCertificateValid(proposal, voters) : !PeerGroupHasAuthority(voters, frame))) return;
+		if ((voters & required) != required || (proposal.preparedFrame == 3 ? !PeerAdminCertificateValid(proposal, voters) :
+		    proposal.preparedFrame == 0 ? !PeerGroupMayHold(voters, frame) : !PeerGroupHasAuthority(voters, frame))) return;
 		auto certificate = proposal;
 		certificate.type = NetHostMigrationMessageType::PeerBridgeCommit;
 		certificate.voterMask = voters;
@@ -758,9 +711,11 @@ namespace RTE {
 			for (uint8_t peer: agreed.members) if ((PeerRetainedSeatsAt(agreed.frame) & SeatBit(peer)) == 0) { refused("removed"); return; }
 		}
 		// A tie the referee decides is asked before the decision is set aside: its answer may already be there.
-		if (agreed.preparedFrame != 3 && !PeerGroupHasAuthority(voters, certificate.frame)) CheckPeerFrameTie(certificate.frame, voters, nowMs);
+		if (agreed.preparedFrame != 0 && agreed.preparedFrame != 3 && !PeerGroupHasAuthority(voters, certificate.frame))
+			CheckPeerFrameTie(certificate.frame, voters, nowMs);
 		const PeerDecisionKey decision{certificate.frame, DecisionKind(certificate)};
-		if (agreed.preparedFrame == 3 ? !PeerAdminCertificateValid(agreed, voters) : !PeerGroupHasAuthority(voters, certificate.frame)) {
+		if (agreed.preparedFrame == 3 ? !PeerAdminCertificateValid(agreed, voters) :
+		    agreed.preparedFrame == 0 ? !PeerGroupMayHold(voters, certificate.frame) : !PeerGroupHasAuthority(voters, certificate.frame)) {
 			m_AuthorityWaitSinceMs.try_emplace(decision, nowMs);
 			refused("certificate");
 			keep(); return;
@@ -794,6 +749,9 @@ namespace RTE {
 			    delay > NetLockstepCodec::c_MaxPeerInputDelayFrames || neutral < delay || neutral > NetLockstepCodec::c_MaxFutureFrameSkew || agreed.frame > UINT64_MAX - neutral) { refused("runway"); return; }
 			returnDelays[peer] = {static_cast<uint16_t>(delay), agreed.frame + neutral, incarnation};
 		}
+		// A hold, rather than a normally in-flight input or receipt, opens the arbitration question. Asking earlier can assign a
+		// healthy startup gap a permanent winner and then reuse that unrelated answer when a machine actually stops.
+		if (agreed.preparedFrame == 0) CheckPeerFrameTie(certificate.frame, voters, nowMs);
 		m_PeerBridgeCertificates.emplace(PeerDecisionKey{certificate.frame, DecisionKind(certificate)}, certificate);
 		if (agreed.preparedFrame == 4) {
 			NetHostMigrationMessage request;
@@ -819,6 +777,11 @@ namespace RTE {
 			if (peer == m_Config.localPeerId) PadAheadOfDelayRise();
 			DiagnosticLine() << "[net-frame-group] delay peer=" << static_cast<int>(peer) << " frame=" << agreed.frame << " ticks=" << agreed.completeFrom << " voters=" << voters << std::endl;
 			return;
+		}
+		if (agreed.preparedFrame == 0 && (agreed.connectedMask & SeatBit(m_Config.localPeerId)) != 0) {
+			const auto arbitration = m_PeerSplitArbitrations.find(PeerSplitEpoch(agreed.frame));
+			if (arbitration != m_PeerSplitArbitrations.end() && arbitration->second.holdFrame == 0)
+				arbitration->second.holdFrame = agreed.frame;
 		}
 		m_FrameGroupChanges[agreed.frame] = agreed.connectedMask;
 		for (uint8_t peer: agreed.members) m_PeerFrameHolds[peer][agreed.frame] = agreed.preparedFrame == 0;
