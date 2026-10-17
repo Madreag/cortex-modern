@@ -307,6 +307,10 @@ namespace RTE {
 				own.members = vote.members;
 				// The matching majority's committed history already excludes this seat.
 				own.committedHold = true;
+				DiagnosticLine() << "[net-peer-hold-trigger] local=" << static_cast<int>(m_Config.localPeerId)
+				    << " peer=" << static_cast<int>(m_Config.localPeerId) << " frame=" << own.fromFrame << " ai_frame=" << own.aiFrame
+				    << " now_ms=" << nowMs << " cause=certified_committed_tail donor=" << static_cast<int>(donor)
+				    << " tail_frame=" << frame << " members=" << vote.members << " voters=" << agreeing << std::endl;
 				m_PeerBridges.emplace(m_Config.localPeerId, std::move(own));
 				m_PeerFrameHolds[m_Config.localPeerId][m_Stats.nextFrame] = true;
 				++m_Stats.peers[m_Config.localPeerId].holds;
