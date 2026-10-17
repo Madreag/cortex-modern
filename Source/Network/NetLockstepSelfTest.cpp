@@ -796,6 +796,39 @@ namespace RTE {
 			return true;
 		}
 
+		static bool CaptureWireContract(std::string* error) {
+			NetHash32 key{}; key.fill(0x39);
+			NetHostMigrationMessage request;
+			request.type = NetHostMigrationMessageType::PeerCaptureRequest;
+			request.sessionId = 1; request.roundId = 77; request.generation = 1;
+			request.senderPeerId = request.successorPeerId = 1;
+			request.boundary = request.completeFrom = 1;
+			std::vector<uint8_t> bytes;
+			NetHostMigrationMessage decoded;
+			if (!NetHostMigrationCodec::Encode(request, key, bytes) || !NetHostMigrationCodec::Decode(bytes, key, decoded) ||
+			    decoded.type != request.type || decoded.roundId != request.roundId || decoded.completeFrom != request.completeFrom) {
+				*error = "the current capture request did not round trip"; return false;
+			}
+			// The older contract must refuse the new request even with a valid authentication tag.
+			bytes[4] = 6; bytes[5] = 0;
+			uint8_t mac[32]{};
+			if (!GetNetAuthCrypto().HmacSha256(key.data(), key.size(), bytes.data(), bytes.size() - sizeof(mac), mac)) {
+				*error = "the old-version negative could not be authenticated"; return false;
+			}
+			std::copy_n(mac, sizeof(mac), bytes.end() - sizeof(mac));
+			if (NetHostMigrationCodec::Decode(bytes, key, decoded)) {
+				*error = "the old migration contract accepted a private capture request"; return false;
+			}
+			NetIdentityDeterministicConfig previous;
+			previous.supportedLockstepCodecVersion = 48;
+			auto current = previous;
+			current.supportedLockstepCodecVersion = NetLockstepCodec::c_AdmissionVersion;
+			if (NetIdentity::HashDeterministicConfig(previous) == NetIdentity::HashDeterministicConfig(current)) {
+				*error = "capture control kept the older admission identity"; return false;
+			}
+			return true;
+		}
+
 		static bool HeldHostBaseCapture(std::string* error) {
 			std::array<Wire, 3> wires;
 			std::array<NetLockstepCoordinator, 3> peers;
@@ -30158,6 +30191,13 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "capture-wire-contract") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::CaptureWireContract(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS private_capture_has_a_distinct_wire_and_admission_contract" << std::endl;
+				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "held-host-base-capture") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::HeldHostBaseCapture(&error) || !SeatAdmissionServiceTest::HeldHostAdoptsBaseCapture(&error)) return fail(error);
@@ -30229,6 +30269,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::SilenceDoesNotChangeTheSendingRate, "a_silent_interval_does_not_lower_the_measured_sending_rate");
 		row(&SessionPlaneRecoveryTest::HoldInvitation, "an_unsigned_hold_invitation_never_fences_an_input");
 		row(&SessionPlaneRecoveryTest::OwnAheadHoldFence, "a_seat_co_signs_and_fences_its_own_future_hold");
+		row(&SessionPlaneRecoveryTest::CaptureWireContract, "private_capture_has_a_distinct_wire_and_admission_contract");
 		row(&SessionPlaneRecoveryTest::HeldHostBaseCapture, "held_host_names_a_private_base_through_the_playing_seats");
 		row(&SessionPlaneRecoveryTest::PendingDecisionsSurviveLocalTime, "pending_decisions_wait_for_authority_across_local_timeouts");
 		row(&SessionPlaneRecoveryTest::Boundary, "successor_refuses_unvalidated_boundary_before_publish");
