@@ -1498,7 +1498,10 @@ void AudioMan::PrepareCheckpointBackendValues() {
 		OwnCheckpointStorage(m_SoundEvents[player]);
 	}
 	OwnCheckpointStorage(m_PlayingVoices);
-	OwnCheckpointStorage(m_SoundChannelMinimumAudibleDistances);
+	{
+		std::scoped_lock lock(m_SoundChannelMinimumAudibleDistancesMutex);
+		OwnCheckpointStorage(m_SoundChannelMinimumAudibleDistances);
+	}
 	auto values = std::make_unique<CheckpointBackend>();
 	if (m_AudioEnabled) {
 		AudioCheckpoint::MixerLock mixer(m_AudioSystem);
