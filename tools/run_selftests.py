@@ -36,6 +36,7 @@ SELFTESTS = [
     "net-session",
     "net-lockstep",
     "net-session-plane",
+    "net-session-plane-hold-schedules",
     "net-input-acceptance",
     "net-input-acceptance-steady",
     "net-lockstep-released-claims",
@@ -514,8 +515,22 @@ def run_row_in_mode(options, make_run, name, case, sanitizer):
     else:
         walk = name == "preview-binding-exhaustive"
         budget = max(options.timeout, BINDING_WALK_SANITIZER_TIMEOUT.get(sanitizer, BINDING_WALK_TIMEOUT)) if walk else options.timeout
-        run = make_run(options.repo, BINDING_WALK_ARGS if walk else [f"-{name}-selftest"], case, budget,
-                       fixtures=BINDING_WALK_FIXTURES if walk else SELFTEST_FIXTURES.get(name))
+        row_env = None
+        plane = name in ("net-session-plane", "net-session-plane-hold-schedules")
+        driver = name == "net-session-plane-hold-schedules"
+        native_name = "net-session-plane" if plane else name
+        if plane:
+            # Keep every fixture and every requested seed, in separate 300 s suite rows.
+            # Four workers avoid starving the long sequential host-change fixture.
+            row_env = {"CC_TEST_HOLD_SCHEDULE_THREADS": os.environ.get(
+                "CC_TEST_HOLD_SCHEDULE_THREADS", str(min(4, os.cpu_count() or 1))),
+                "CC_TEST_HOLD_SCHEDULES": os.environ.get("CC_TEST_HOLD_SCHEDULES", "200" if driver else "0")}
+            if driver:
+                row_env["CC_TEST_SESSION_PLANE_CASE"] = "random_hold_schedules"
+                if int(row_env["CC_TEST_HOLD_SCHEDULES"]) <= 0:
+                    raise ValueError("the hold-schedule suite row requires at least one requested schedule")
+        run = make_run(options.repo, BINDING_WALK_ARGS if walk else [f"-{native_name}-selftest"], case, budget,
+                       fixtures=BINDING_WALK_FIXTURES if walk else SELFTEST_FIXTURES.get(name), env=row_env)
         try:
             record = run.start().finish()
         finally:
@@ -526,9 +541,15 @@ def run_row_in_mode(options, make_run, name, case, sanitizer):
             else ""
         )
         scored = score_selftest(
-            stdout, record.get("exit_code"), record.get("timed_out"), f"{name}-selftest"
+            stdout, record.get("exit_code"), record.get("timed_out"), f"{native_name}-selftest"
         )
         scored["binary"] = record.get("exe_sha256")
+        if driver:
+            completion = re.search(r"^\[net-session-plane-selftest\] random_hold_schedules schedules=(\d+) ran=(\d+) seeds=(\d+)\.\.(\d+)", stdout, re.M)
+            expected = int(row_env["CC_TEST_HOLD_SCHEDULES"])
+            scored["schedule_summary"] = completion.group(0) if completion else ""
+            if not completion or tuple(map(int, completion.group(1, 2))) != (expected, expected):
+                scored.update(**{"pass": False, "reason": f"random driver did not complete all {expected} requested schedules"})
         if walk:
             scored.update(budget_s=budget, elapsed_s=record.get("elapsed_seconds"), walked_classes=len(BINDING_WALK_CLASS.findall(stdout)))
     if name == "net-directory":
@@ -581,6 +602,11 @@ def self_test():
 
     rows, tail = plan_rows()
     expect(tail == ["net-match"] and "net-match" not in rows and len(rows) + len(tail) == len(SELFTESTS), "default: net-match runs last, the count is the suite's")
+    expect(rows.count("net-session-plane") == rows.count("net-session-plane-hold-schedules") == 1
+           and rows.index("net-session-plane-hold-schedules") == rows.index("net-session-plane") + 1,
+           "default retains fixed fixtures and the N=200 driver as separate budgeted rows")
+    expect(plan_rows(None, ["net-session-plane-hold-schedules"]) == (["net-session-plane-hold-schedules"], []),
+           "--only selects the complete hold-schedule driver")
     rows, tail = plan_rows("last")
     expect(tail == ["net-match", "script-graph"] and len(rows) + len(tail) == len(SELFTESTS) + 1, "--quiet-rows last: the tail adds script-graph")
     expect(plan_rows("only") == ([], ["net-match", "script-graph"]), "--quiet-rows only: the tail alone")

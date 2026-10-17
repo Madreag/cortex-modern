@@ -2355,15 +2355,18 @@ namespace RTE {
 				shapes = EnvironmentNumber("CC_TEST_HOLD_SCHEDULE_SHAPES", 8);
 				// Only minimization spends the time budget; every requested schedule must run.
 				budgetMs = EnvironmentNumber("CC_TEST_HOLD_SCHEDULE_BUDGET_S", 200) * 1000;
+				const bool driverSelected = selected && std::string_view(selected) == "random_hold_schedules";
+				// The separate suite driver keeps the saved schedule catalogue in its pool. Re-minimization
+				// is skipped only when one of those rows just reproduced the same failure group.
 				for (const auto& row: FixedScheduleRows()) {
-					if (selected && std::string_view(selected) != row.name) continue;
+					if (selected && !driverSelected && std::string_view(selected) != row.name) continue;
 					Schedule schedule;
 					if (!ParseSchedule(row.schedule, schedule)) { lines.push_back(std::string("FAIL ") + row.name + ": its schedule text does not parse"); fixedResults.emplace_back(row.name, false); continue; }
 					if (!schedule.endMs) schedule.endMs = ScheduleEndMs(schedule);
 					schedules.push_back(schedule); names.push_back(row.name);
 				}
 				fixedCount = schedules.size();
-				runRandom = !selected || std::string_view(selected) == "random_hold_schedules";
+				runRandom = count > 0 && (!selected || driverSelected);
 				if (runRandom) for (size_t index = 0; index < count; ++index) { schedules.push_back(GenerateSchedule(firstSeed + index)); names.emplace_back(); }
 				results.resize(schedules.size()); startupWaits.resize(schedules.size()); ran.assign(schedules.size(), false);
 			}
