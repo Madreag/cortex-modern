@@ -6803,9 +6803,10 @@ _EngineHandles.unreached = _UnreachedPieMenu and _UnreachedPieMenu:GetFirstPieSl
 }
 
 // A world capture fences the world on the simulation thread and walks the script graphs on the saver while the game plays on:
-// the next objects made take the slots a dropped device's slices freed, and a live slice nothing reaches can be freed before
-// the walk reaches its handle. Each is judged as it stood at the fence - the dropped slice is carried as gone though a new
-// menu holds its slot, the live one is refused by name though its slot is free when the walk gets there.
+// the next objects made take the slots a dropped device's slices freed or a gone target's released memory, and a live slice
+// nothing reaches can be freed before the walk reaches its handle. Each is judged as it stood at the fence - the dropped slice
+// is carried as gone and the waypoint as the position it read though new objects hold their memory, and the live slice is
+// refused by name though its slot is free when the walk gets there.
 static bool RunCaptureWindowSelfTest(LuaStateWrapper& lua) {
 	CheckpointNativeStorage::WorldAllocationScope world(true);
 	lua_State* const L = lua.GetLuaState();
@@ -6827,64 +6828,9 @@ static bool RunCaptureWindowSelfTest(LuaStateWrapper& lua) {
 	const auto named = [&refusal](const std::vector<std::string>& found) {
 		return std::any_of(found.begin(), found.end(), [&refusal](const std::string& problem) { return problem.find(refusal) != std::string::npos; });
 	};
-	// The managers' values move into the world's storage, as a match's autosave preparation moves them.
-	g_LuaMan.PrepareCheckpointValues();
-	// One world capture of this state: prepared off this thread as the saver prepares it, armed here as the simulation arms
-	// it, the moves made after the arm, then the walk on another thread with the saver's frozen reads.
-	const auto capture = [&](const std::function<void()>& inWindow, std::vector<std::string>& problems) {
-		using Root = CheckpointLua::Boundary::Root;
-		const std::array<const lua_State*, 1> heaps{L};
-		const std::array<const LuaStateWrapper*, 1> states{&lua};
-		const std::array roots{Root::Of(g_ActivityMan), Root::Of(g_LuaMan), Root::Of(g_MovableMan), Root::Of(g_SceneMan), Root::Of(g_TimerMan),
-		                       Root::Of(g_PrimitiveMan), Root::Of(g_PresetMan), Root::Of(lua)};
-		std::unique_ptr<CheckpointLua::Boundary> boundary;
-		try {
-			boundary = FloatingPointEnvironment::Async(std::launch::async, [&] {
-				CheckpointNativeStorage::CaptureScope allocations;
-				return CheckpointLua::Boundary::Prepare(heaps, roots);
-			}).get();
-		} catch (const std::exception& error) {
-			problems.emplace_back(std::string("the boundary was not prepared: ") + error.what());
-			return false;
-		}
-		if (!boundary->Arm()) {
-			problems.emplace_back("the prepared boundary refused to arm");
-			return false;
-		}
-		inWindow();
-		const auto simulation = std::this_thread::get_id();
-		return FloatingPointEnvironment::Async(std::launch::async, [&] {
-			try {
-				CheckpointNativeStorage::CaptureScope allocations;
-				const CheckpointNativeStorage::CoolingPause cooling;
-				boundary->Drain();
-				CheckpointNativeStorage::ReadScope pages(boundary->NativeViews());
-				RandomGenerator::CheckpointScope random;
-				MovableObject::CheckpointCounterScope counters;
-				auto snapshot = std::make_shared<CheckpointNativeSnapshot>();
-				CheckpointNativeSnapshot::BoundaryScope objects(snapshot);
-				snapshot->SealBoundary();
-				CheckpointNativeSnapshot::ReadScope saved(snapshot.get(), false);
-				g_MovableMan.RebuildCheckpointValues(*snapshot);
-				auto values = snapshot->ReadValues();
-				const auto views = CheckpointNativeStorage::CurrentViews();
-				values.insert(values.end(), views.roots.begin(), views.roots.end());
-				CheckpointNativeStorage::ReadScope managers({true, views.pages, values, views.privateValues, views.owner});
-				MovableMan::KnownObjectsScope known;
-				known.Copy();
-				MovableMan::ScriptHeldScope held(LuaStateWrapper::PreparedScriptHeldObjects(*boundary));
-				CheckpointWriter::BatchScope batches(true, true);
-				CheckpointWriter::CacheScope cache(nullptr);
-				std::vector<CheckpointText> graphs;
-				std::vector<CheckpointScope> scopes;
-				return LuaStateWrapper::CapturePreparedScriptGraphs(*boundary, states, snapshot, graphs, scopes, problems, simulation);
-			} catch (const ScriptGraphRefusal& refused) {
-				problems.insert(problems.end(), refused.problems.begin(), refused.problems.end());
-			} catch (const std::exception& error) {
-				problems.emplace_back(error.what());
-			}
-			return false;
-		}).get();
+	// One world capture through the prepared saver, as a match takes it; the moves are made after its boundary arms.
+	const auto capture = [](const std::function<void()>& beforeArm, const std::function<void()>& inWindow, std::vector<std::string>& problems) {
+		return g_ActivityMan.RunWorldCaptureWindow(beforeArm, inWindow, problems);
 	};
 	const bool planted = lua.RunScriptString(R"lua(
 _CaptureWindow = {}
@@ -6899,24 +6845,69 @@ function _CaptureWindow.holding(x)
 end
 _CaptureWindow.dropper, _CaptureWindow.gone = _CaptureWindow.holding(520)
 assert(_CaptureWindow.gone ~= nil, "a held Constructor put no options slice into its holder's menu")
-_CaptureWindow.dropper:UnequipArms()
 )lua") == 0;
-	// The dropped device's slice is free at the fence; a new holder's menu takes its slot before the walk.
-	const bool goneFreedAtFence = planted && freed(slice("gone"));
-	bool reusedInWindow = false, goneCaptured = false;
+	// The device is dropped once the saver is prepared, so its slice is free at the fence; a new holder's menu takes the slot
+	// before the walk.
+	bool goneFreedAtFence = false, reusedInWindow = false, goneCaptured = false;
 	std::vector<std::string> goneProblems;
-	if (goneFreedAtFence) {
+	if (planted) {
 		const void* gone = slice("gone");
-		goneCaptured = capture([&] {
+		goneCaptured = capture([&] { lua.RunScriptString("_CaptureWindow.dropper:UnequipArms()"); }, [&] {
+			goneFreedAtFence = freed(gone);
 			lua.RunScriptString("_CaptureWindow.taker = _CaptureWindow.holding(760)");
 			reusedInWindow = !freed(gone);
 		}, goneProblems);
 	}
 	const bool goneCarried = goneCaptured && !named(goneProblems);
 	if (!goneCarried) for (const std::string& problem: goneProblems) std::cout << "[capture-window-selftest] freed slice: " << problem << std::endl;
+	// A waypoint keeps a reference to its target's position (SharedBehaviors.GoToWpt); the target is gone and its memory kept for
+	// the waypoint's handles at the fence, then the live handles let go and new particles take the memory before the walk.
+	const bool waypointPlanted = lua.RunScriptString(R"lua(
+_CaptureWindow.gone = nil
+local target = CreateMOPixel("Spark Yellow 1", "Base.rte")
+target.Pos = Vector(610, 190)
+MovableMan:AddParticle(target)
+_CaptureWindow.targetUID = target.UniqueID
+_CaptureWindow.chaser = coroutine.create(function()
+	local Waypoint = {}
+	Waypoint.Pos = target.Pos
+	coroutine.yield()
+	return Waypoint.Pos.X
+end)
+assert(coroutine.resume(_CaptureWindow.chaser))
+)lua") == 0;
+	const Vector* position = nullptr;
+	if (waypointPlanted) {
+		lua_getglobal(L, "_CaptureWindow");
+		lua_getfield(L, -1, "targetUID");
+		const long uid = static_cast<long>(lua_tointeger(L, -1));
+		lua_pop(L, 2);
+		if (MovableObject* target = g_MovableMan.FindObjectByUniqueID(uid); target && g_MovableMan.RemoveParticle(target) == target) {
+			position = &target->GetPos();
+			delete target;
+		}
+	}
+	const auto held = [&position] {
+		return MovableObject::RetainedMemoryHolds(position, sizeof(Vector)) || CheckpointNativeStorage::FreeSlotHolds(position, sizeof(Vector)) ||
+		       Entity::ClassInfo::AnyPoolHolds(position, sizeof(Vector));
+	};
+	bool retainedAtFence = false, takenInWindow = false, vectorCaptured = false;
+	std::vector<std::string> vectorProblems;
+	if (position) {
+		vectorCaptured = capture([] {}, [&] {
+			retainedAtFence = MovableObject::RetainedMemoryHolds(position, sizeof(Vector));
+			lua.RunScriptString("_CaptureWindow.chaser = nil; collectgarbage('collect')");
+			LuabindObjectWrapper::ApplyQueuedEntityDeletions();
+			LuabindObjectWrapper::ApplyQueuedDeletions();
+			lua.RunScriptString("_CaptureWindow.fill = {}; for index = 1, 16 do _CaptureWindow.fill[index] = CreateMOPixel('Spark Yellow 1', 'Base.rte') end");
+			takenInWindow = !held();
+		}, vectorProblems);
+	}
+	const bool vectorCarried = vectorCaptured && vectorProblems.empty();
+	if (!vectorCarried) for (const std::string& problem: vectorProblems) std::cout << "[capture-window-selftest] gone vector: " << problem << std::endl;
 	// A live slice of a menu only the registry keeps is unreached at the fence; the menu is deleted before the walk.
 	lua.RunScriptString(R"lua(
-_CaptureWindow.gone = nil
+_CaptureWindow.fill = nil
 _UnreachedCaptureMenu = CreatePieMenu("Constructor Pie Menu", "Base.rte")
 _CaptureWindow.unreached = _UnreachedCaptureMenu and _UnreachedCaptureMenu:GetFirstPieSliceByPresetName("Constructor Order Construction")
 )lua");
@@ -6925,11 +6916,11 @@ _CaptureWindow.unreached = _UnreachedCaptureMenu and _UnreachedCaptureMenu:GetFi
 	lua_pushnil(L);
 	lua_setglobal(L, "_UnreachedCaptureMenu");
 	const void* unreached = slice("unreached");
-	const bool liveAtFence = unreached && !freed(unreached);
-	bool freedInWindow = false;
+	bool liveAtFence = false, freedInWindow = false;
 	std::vector<std::string> unreachedProblems;
-	if (liveAtFence) {
-		capture([&] {
+	if (unreached) {
+		capture([] {}, [&] {
+			liveAtFence = !freed(unreached);
 			luaL_unref(L, LUA_REGISTRYINDEX, kept);
 			kept = LUA_NOREF;
 			lua.RunScriptString("collectgarbage('collect')");
@@ -6942,9 +6933,10 @@ _CaptureWindow.unreached = _UnreachedCaptureMenu and _UnreachedCaptureMenu:GetFi
 	const bool unreachedRefused = named(unreachedProblems);
 	if (!unreachedRefused) for (const std::string& problem: unreachedProblems) std::cout << "[capture-window-selftest] unreached slice: " << problem << std::endl;
 	lua.RunScriptString("if _CaptureWindow then MovableMan:RemoveActor(_CaptureWindow.dropper); if _CaptureWindow.taker then MovableMan:RemoveActor(_CaptureWindow.taker) end end; _CaptureWindow = nil; collectgarbage()");
-	const bool passed = goneFreedAtFence && reusedInWindow && goneCarried && liveAtFence && freedInWindow && unreachedRefused;
+	const bool passed = goneFreedAtFence && reusedInWindow && goneCarried && retainedAtFence && takenInWindow && vectorCarried && liveAtFence && freedInWindow && unreachedRefused;
 	std::cout << "[capture-window-selftest] " << (passed ? "PASS" : "FAIL") << " planted=" << planted << " freed_at_fence=" << goneFreedAtFence << " reused_in_window=" << reusedInWindow
-	          << " freed_slice_carried=" << goneCarried << " live_at_fence=" << liveAtFence << " freed_in_window=" << freedInWindow << " unreached_refused_by_name=" << unreachedRefused << std::endl;
+	          << " freed_slice_carried=" << goneCarried << " retained_at_fence=" << retainedAtFence << " retained_taken_in_window=" << takenInWindow << " gone_vector_carried=" << vectorCarried
+	          << " live_at_fence=" << liveAtFence << " freed_in_window=" << freedInWindow << " unreached_refused_by_name=" << unreachedRefused << std::endl;
 	return passed;
 }
 

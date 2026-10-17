@@ -294,6 +294,11 @@ namespace RTE {
 		/// Plants a dead script upvalue, requests a save capture, and checks the player line.
 		bool RunSaveRefusalDiagnosisSelfTest();
 
+		/// Self-test seam: one world capture through the prepared saver, in a scripted world of the world's storage, with beforeArm run
+		/// once the saver is prepared and inWindow after the capture's boundary arms, before the saver reads anything. Whether the
+		/// capture was written; the problems its script graph refusal named, or the reason it was not taken or written.
+		bool RunWorldCaptureWindow(const std::function<void()>& beforeArm, const std::function<void()>& inWindow, std::vector<std::string>& problems);
+
 		/// Self-test of the activity flags' checkpoint scopes: this machine's pause-menu skip stays out of the shared state and its neighbours stay in.
 		/// @return The failure seen, or empty when the scopes hold.
 		static std::string CheckpointPerPeerSelfTestMismatch();

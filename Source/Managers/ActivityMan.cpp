@@ -2928,6 +2928,63 @@ bool ActivityMan::RunSaveRefusalDiagnosisSelfTest() {
 	return failures == 0;
 }
 
+bool ActivityMan::RunWorldCaptureWindow(const std::function<void()>& beforeArm, const std::function<void()>& inWindow, std::vector<std::string>& problems) {
+	// A match's world: its storage on, and a scripted activity and a scene with terrain made in that storage.
+	NativeWorldMode worldMode(true);
+	CheckpointNativeStorage::WorldAllocationScope worldValues(true);
+	auto priorActivity = std::move(m_Activity);
+	m_Activity.reset(new GAScripted());
+	m_Activity->SetActivityState(Activity::Running);
+	SceneMan::SceneSetAside originalScene;
+	g_SceneMan.SetAsideScene(originalScene);
+	SceneMan::SceneSetAside captureScene;
+	struct CaptureTerrain : SLTerrain {
+		CaptureTerrain() {
+			m_MainBitmap = create_bitmap_ex(8, 64, 64);
+			m_MainBitmapOwned = true;
+		}
+	};
+	auto* scene = new Scene();
+	scene->Create(new CaptureTerrain());
+	captureScene.scene = scene;
+	g_SceneMan.ReinstateScene(captureScene);
+	struct Restore {
+		ActivityMan& owner;
+		SceneMan::SceneSetAside& capture;
+		SceneMan::SceneSetAside& original;
+		std::unique_ptr<Activity>& prior;
+		~Restore() {
+			owner.DropPreparedAutosave();
+			g_SceneMan.SetAsideScene(capture);
+			g_SceneMan.ReinstateScene(original);
+			owner.m_Activity = std::move(prior);
+		}
+	} restore{*this, captureScene, originalScene, priorActivity};
+	PrepareAutosave();
+	if (!m_PreparedAutosave) {
+		problems.emplace_back("the saver was not prepared");
+		return false;
+	}
+	// Every record from here on is this capture's.
+	m_SaveRefusalRecords.clear();
+	bool written = false;
+	{
+		// The game's gate holds the saver at its first yield, before it reads anything, until the verdict is waited for.
+		SaverThreads::Gating gating;
+		beforeArm();
+		SaverThreads::CloseSlice();
+		if (!SaveAutosaveSnapshot("aaaaaaaa-0000-0000-0000-000000000002", 1)) {
+			problems.emplace_back("the capture was not taken: " + LastAutosaveRefusal().reason);
+			return false;
+		}
+		inWindow();
+		written = WaitForAutosaveVerdict();
+	}
+	for (const SaveRefusalRecord& record: m_SaveRefusalRecords) problems.push_back(record.problem);
+	if (!written && problems.empty()) problems.emplace_back("the capture was not written: " + LastAutosaveRefusal().reason);
+	return written;
+}
+
 bool ActivityMan::RunLoadSelfTest(const std::string& fileName, bool expectLoaded) {
 	if (!LoadGameToRestart("load_seed")) return false;
 	const Scene* stagedScene = m_PendingCheckpoint.scene.get();
