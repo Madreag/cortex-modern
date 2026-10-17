@@ -1,0 +1,180 @@
+{
+  "binary_sha256": "ed3e2774d2cb28e24bbec6df598696781c1bb1877f4e83ec0464aaac8f1a8d17",
+  "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/C-native-own-hold/01-30ms",
+  "whole_match_pass": false,
+  "reason": "Native host hold at606/AI727; both report desync750. Host exits1; the owning driver was interrupted after failure to close only its partner through its runner. No complete client tick trace, no completed B3 or whole-match claim.",
+  "checker_change": "Own-hold sentence now requires every documented word in LabelNetMatchStatus; only ordinary whitespace/line wrapping is normalized. Existing watch rules unchanged.",
+  "peers": {
+    "host": {
+      "stdout_sha256": "ac859eec5b73b6e83bdeec87c1de3d673dfc43d252244824976f3f5bf8da74f1",
+      "watches": [
+        {
+          "active_frames": 0,
+          "cost_us": 6713,
+          "flush": "periodic",
+          "frames": 536,
+          "offences": 0,
+          "rule": "sentence",
+          "state": "local_held",
+          "through_tick": 600,
+          "violations": 0,
+          "watch": "c-own-hold",
+          "worst_us": 331
+        },
+        {
+          "active_frames": 5,
+          "cost_us": 7313,
+          "flush": "final",
+          "frames": 563,
+          "offences": 0,
+          "rule": "sentence",
+          "state": "local_held",
+          "through_tick": 754,
+          "violations": 0,
+          "watch": "c-own-hold",
+          "worst_us": 331
+        }
+      ],
+      "holds": [
+        "[net-peer-hold-installed] local=1 peer=1 frame=606 ai_frame=727 voters=3 proposer=2 certificate_sender=1 next=606 displayed=600 now_ms=14989 cause=own_hold_consent"
+      ],
+      "triggers": [
+        "[net-peer-hold-trigger] local=1 peer=1 frame=606 ai_frame=727 now_ms=14956 cause=own_hold_consent requested_by=2 last_heard_ms=14956 last_progress_ms=0 received_through=0 delay_ticks=5 voters=1"
+      ],
+      "desyncs": [
+        "[lockstep] desync at frame 750 against Client (submitted 25, sent 25, compared 25)"
+      ]
+    },
+    "client": {
+      "stdout_sha256": "3a3068fc2c10ed4cf63b3bf40c8b28819a329ffa2c051d957025b90b08283ec0",
+      "watches": [
+        {
+          "active_frames": 0,
+          "cost_us": 6236,
+          "flush": "periodic",
+          "frames": 569,
+          "offences": 0,
+          "rule": "sentence",
+          "state": "local_held",
+          "through_tick": 600,
+          "violations": 0,
+          "watch": "c-own-hold",
+          "worst_us": 69
+        }
+      ],
+      "holds": [
+        "[net-peer-hold-installed] local=2 peer=1 frame=606 ai_frame=727 voters=3 proposer=2 certificate_sender=2 next=606 displayed=605 now_ms=13277 cause=peer_hold_proposal"
+      ],
+      "triggers": [
+        "[net-peer-hold-trigger] local=2 peer=1 frame=606 ai_frame=727 now_ms=13277 cause=peer_hold_proposal requested_by=1 last_heard_ms=13277 last_progress_ms=13139 received_through=605 delay_ticks=5 voters=2"
+      ],
+      "desyncs": [
+        "[lockstep] desync at frame 750 against Host (submitted 26, sent 26, compared 25)"
+      ]
+    }
+  },
+  "checks": {
+    "C-full-sentence-menu": {
+      "exe_sha256": "ed3e2774d2cb28e24bbec6df598696781c1bb1877f4e83ec0464aaac8f1a8d17",
+      "repo": "/home/erol/cortex-workers/session-plane-engineer",
+      "passed": 1,
+      "total": 1,
+      "quiet_rows": [],
+      "sanitizer": null,
+      "complete": true,
+      "running": null,
+      "results": {
+        "menu-automation": {
+          "pass": true,
+          "exit_code": 0,
+          "timed_out": false,
+          "pass_lines": 1,
+          "fail_lines": [],
+          "fatal": [],
+          "reason": "",
+          "binary": "ed3e2774d2cb28e24bbec6df598696781c1bb1877f4e83ec0464aaac8f1a8d17",
+          "row_elapsed_s": 0.6293987369863316,
+          "start_load": [
+            2.02197265625,
+            2.21533203125,
+            2.537109375
+          ],
+          "topology": "single-peer"
+        }
+      },
+      "topology": "single-box: not proof"
+    },
+    "C-full-sentence-ui": {
+      "exe_sha256": "ed3e2774d2cb28e24bbec6df598696781c1bb1877f4e83ec0464aaac8f1a8d17",
+      "repo": "/home/erol/cortex-workers/session-plane-engineer",
+      "passed": 1,
+      "total": 1,
+      "quiet_rows": [
+        "net-match"
+      ],
+      "sanitizer": null,
+      "complete": true,
+      "running": null,
+      "results": {
+        "net-match": {
+          "pass": true,
+          "exit_code": 0,
+          "timed_out": false,
+          "pass_lines": 1,
+          "fail_lines": [],
+          "fatal": [],
+          "reason": "",
+          "binary": "ed3e2774d2cb28e24bbec6df598696781c1bb1877f4e83ec0464aaac8f1a8d17",
+          "load_sensitive": true,
+          "box": {
+            "engines": [],
+            "builds": [],
+            "load": [
+              1.81,
+              2.13,
+              2.49
+            ]
+          },
+          "row_elapsed_s": 7.833036680007353,
+          "start_load": [
+            1.80859375,
+            2.1259765625,
+            2.4921875
+          ],
+          "topology": "single-box: not proof"
+        }
+      },
+      "topology": "single-box: not proof"
+    },
+    "B-live-fault-coordinator": {
+      "exe_sha256": "2c224533eea61753a91b2298b12829579f7d34591ab67ef60cce34e0560a0135",
+      "repo": "/home/erol/cortex-workers/session-plane-engineer",
+      "passed": 0,
+      "total": 1,
+      "quiet_rows": [],
+      "sanitizer": null,
+      "complete": true,
+      "running": null,
+      "results": {
+        "net-lockstep": {
+          "pass": false,
+          "exit_code": 1,
+          "timed_out": false,
+          "pass_lines": 2,
+          "fail_lines": [],
+          "fatal": [],
+          "reason": "exit_code=1",
+          "binary": "2c224533eea61753a91b2298b12829579f7d34591ab67ef60cce34e0560a0135",
+          "row_elapsed_s": 58.992681967967656,
+          "start_load": [
+            2.8623046875,
+            2.3681640625,
+            2.70849609375
+          ],
+          "topology": "single-box: not proof"
+        }
+      },
+      "topology": "single-box: not proof"
+    }
+  }
+}

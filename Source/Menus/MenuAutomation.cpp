@@ -252,6 +252,17 @@ namespace RTE::MenuAutomation {
 		else return false;
 		return true;
 	}
+	std::string NormalizedWords(const std::string& text) {
+		std::istringstream words(text);
+		std::string result, word;
+		while (words >> word) { result += ' '; result += word; }
+		return result + ' ';
+	}
+
+	bool CarriesSentence(const std::string& text, const std::string& sentence) {
+		return NormalizedWords(text).find(NormalizedWords(sentence)) != std::string::npos;
+	}
+
 	bool Text(GUIControl* control, std::string& text) {
 		if (!DisplayText(control, text)) return false;
 		text = Captured(Credential(control), text);
@@ -1680,13 +1691,14 @@ namespace RTE::MenuAutomation {
 				detail = "no shown line carries the text";
 			} else if (watch.rule == "forbid" && carries(watch.text)) {
 				detail = "a shown line carries the text";
-			} else if (watch.rule == "equals" || watch.rule == "contains" || watch.rule == "shown") {
+			} else if (watch.rule == "equals" || watch.rule == "contains" || watch.rule == "sentence" || watch.rule == "shown") {
 				GUIControl* control = WatchedControl(menu, watch.control);
 				std::string text;
 				const bool shown = control && Shown(control) && Text(control, text);
 				if (!shown) detail = watch.control + " is not shown";
 				else if (watch.rule == "equals" && text != watch.text) detail = watch.control + " reads " + Json(text).dump();
 				else if (watch.rule == "contains" && text.find(watch.text) == std::string::npos) detail = watch.control + " reads " + Json(text).dump();
+				else if (watch.rule == "sentence" && !CarriesSentence(text, watch.text)) detail = watch.control + " reads " + Json(text).dump();
 			} else if (watch.rule == "duplicates") {
 				detail = DuplicateLine(lines);
 			} else if (watch.rule == "rtt") {
@@ -2060,7 +2072,7 @@ namespace RTE::MenuAutomation {
 			if (mode == "start") {
 				TextWatch watch;
 				args >> watch.rule >> watch.state;
-				if (watch.rule == "equals" || watch.rule == "contains" || watch.rule == "shown") args >> watch.control;
+				if (watch.rule == "equals" || watch.rule == "contains" || watch.rule == "sentence" || watch.rule == "shown") args >> watch.control;
 				std::getline(args >> std::ws, watch.text);
 				// JSON preserves an exact multiline label in a one-line input script.
 				if (watch.text.starts_with("json:")) {
@@ -2068,9 +2080,9 @@ namespace RTE::MenuAutomation {
 					if (!text.is_string()) { observation = "invalid watch text JSON"; return false; }
 					watch.text = text.get<std::string>();
 				}
-				const bool textRule = watch.rule == "require" || watch.rule == "forbid" || watch.rule == "equals" || watch.rule == "contains";
+				const bool textRule = watch.rule == "require" || watch.rule == "forbid" || watch.rule == "equals" || watch.rule == "contains" || watch.rule == "sentence";
 				const bool known = textRule || watch.rule == "shown" || watch.rule == "duplicates" || watch.rule == "rtt" || watch.rule == "input_delay" || watch.rule == "layout" || watch.rule == "overlap" || watch.rule == "seat_rows";
-				if (!known || watch.state.empty() || (textRule && watch.text.empty()) || ((watch.rule == "equals" || watch.rule == "contains" || watch.rule == "shown") && watch.control.empty())) {
+				if (!known || watch.state.empty() || (textRule && watch.text.empty()) || ((watch.rule == "equals" || watch.rule == "contains" || watch.rule == "sentence" || watch.rule == "shown") && watch.control.empty())) {
 					observation = "unknown or incomplete watch";
 					return false;
 				}
@@ -2741,6 +2753,13 @@ namespace RTE::MenuAutomation {
 			passed = passed && value;
 			std::cout << "[menu-automation-selftest] " << (value ? "PASS" : "FAIL") << " " << label << " " << detail << std::endl;
 		};
+		{
+			const std::string sentence = "The AI is playing for you until you are back";
+			check("own_hold_probe_reads_the_whole_wrapped_sentence",
+			      CarriesSentence("The AI is playing for you\nuntil you are back\nInput delay 5 ticks / 83.3 ms", sentence) &&
+			      !CarriesSentence("until you are back", sentence) && !CarriesSentence("The AI is playing for you", sentence) &&
+			      !CarriesSentence("The AI is playing for you until you are backed", sentence), sentence);
+		}
 		{
 			// Chat uses the overlay's manager as its active menu; it is still one surface.
 			GUIControlManager menu, network, overlay;

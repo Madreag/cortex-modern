@@ -150,7 +150,7 @@ def reduce_peer(folder, peer, rtt, plan, lag_step=None):
     return result
 
 
-def launch_case(root, arm, repeat, port, exe_sha, size, lag_step=None, preview_cap=20):
+def launch_case(root, arm, repeat, port, exe_sha, size, lag_step=None, preview_cap=20, host_stall=None, dump_window=None):
     wait_quiet()
     scratch_bytes(root.parent)
     out = root / f'{repeat:02d}-{arm}'
@@ -159,13 +159,13 @@ def launch_case(root, arm, repeat, port, exe_sha, size, lag_step=None, preview_c
     input_pattern(script)
     plan = json.loads(script.with_name('input-schedule.json').read_text())
     watches = out / 'screen-watches.txt'
-    watches.write_text('b4-delay input_delay running\n', encoding='utf-8')
+    watches.write_text('b4-delay input_delay running\nc-own-hold sentence local_held LabelNetMatchStatus The AI is playing for you until you are back\n', encoding='utf-8')
     rtt = ARMS[arm]
     peers = ['sp'] if rtt is None else ['host', 'client']
     runs, receipts = {}, {}
     manifest = dict(started=stamp(), arm=arm, repeat=repeat, requested_rtt_ms=rtt, ticks=TICKS,
                     per_engine_lag_ms=0 if rtt is None else rtt // 2, headed=True, display=':0', size=size,
-                    lag_step=lag_step, local_prediction_max_ticks_setting=preview_cap,
+                    lag_step=lag_step, local_prediction_max_ticks_setting=preview_cap, host_stall=host_stall, dump_window=dump_window,
                     binary=str(engine_executable(REPO)), binary_sha256=exe_sha, quiet_samples=[])
     write_json(out / 'manifest.json', manifest)
     try:
@@ -175,6 +175,9 @@ def launch_case(root, arm, repeat, port, exe_sha, size, lag_step=None, preview_c
             flags = ['-seed', '42', '-max-ticks', str(TICKS), '-tick-hashes', '-out', str(trace),
                      '-input-script', str(script), '-feel-render-settings', str(run_out / 'runtime/Userdata/FeelRender.ini'),
                      '-feel-measure', str(run_out / 'feel')]
+            if dump_window:
+                flags += ['-controller-debug-dump', str(out / f'{peer}_controller.jsonl'),
+                          '-controller-debug-ticks', ':'.join(map(str, dump_window))]
             if rtt is None:
                 flags += ['-scenario', 'FeelBaseline']
             else:
@@ -183,6 +186,8 @@ def launch_case(root, arm, repeat, port, exe_sha, size, lag_step=None, preview_c
                           '-net-match-service-preset', 'Determinism FeelBaseline', '-net-match-service-module', 'UserScenes.rte',
                           '-net-match-auto-delay', '-net-fake-lag', str(rtt // 2),
                           '-net-reconnect-ticket', str(out / f'{peer}.ticket'), '-net-match-report', str(out / f'{peer}_report.json')]
+                if peer == 'host' and host_stall:
+                    flags += ['-net-test-live-stall', ':'.join(map(str, host_stall))]
                 flags += ['-net-host'] if peer == 'host' else ['-net-join', '127.0.0.1']
             environment = dict(CC_RUNNER_HEADED='1', DISPLAY=':0', CC_TEST_FEEL_HEADED='1', CCCP_TEST_SINGLE_SCREEN='1',
                                CCCP_TEST_SCREEN_WATCHES=str(watches), CC_TEST_VSYNC_OFF='1', PYTHONDONTWRITEBYTECODE='1')
@@ -191,6 +196,8 @@ def launch_case(root, arm, repeat, port, exe_sha, size, lag_step=None, preview_c
                 environment['CC_TEST_DELAY_APPLY_DETAILS'] = '1'
                 if lag_step:
                     environment['CC_TEST_FEEL_LAG_STEP'] = ':'.join(map(str, lag_step))
+            if dump_window:
+                environment['CC_SIM_DUMP'] = ':'.join(map(str, dump_window))
             expected = [trace, run_out / 'feel/raw.jsonl'] + ([out / f'{peer}_report.json'] if rtt is not None else [])
             run = make_run(REPO, flags, run_out, timeout=900, env=environment, expected=expected)
             runs[peer] = run
@@ -219,6 +226,15 @@ def launch_case(root, arm, repeat, port, exe_sha, size, lag_step=None, preview_c
             own = {run.record.get('pid') for run in runs.values()}
             live = contenders()
             manifest['quiet_samples'].append(dict(time=stamp(), foreign=[p for p in live if p['pid'] not in own], loadavg=os.getloadavg()))
+            failed = {peer: run.poll() for peer, run in runs.items() if run.poll() not in (None, 0)}
+            if failed:
+                manifest['peer_failure_abort'] = failed
+                # A failed peer can leave its partner trying to recover forever. Preserve the failure and
+                # close only these owned runner jobs; an aborted partner's missing evidence stays RED.
+                for run in runs.values():
+                    if run.poll() is None:
+                        run.close()
+                break
             time.sleep(1)
         for peer, run in runs.items():
             receipts[peer] = run.finish()
@@ -286,6 +302,10 @@ def main():
                         help='raise the 30 ms pair to 200 ms RTT at a live outgoing frame (use 600 100)')
     parser.add_argument('--preview-cap', type=int, default=20,
                         help='private legacy preview cap setting; bounded matches must still cover their whole delay')
+    parser.add_argument('--host-stall', type=int, nargs=2, metavar=('TICK', 'MILLISECONDS'),
+                        help='exercise the standard own-hold text watch through a live host stall')
+    parser.add_argument('--dump-window', type=int, nargs=2, metavar=('FROM_TICK', 'THROUGH_TICK'),
+                        help='retain per-object simulation and controller dumps for a failing handoff')
     args = parser.parse_args()
     if sys.platform != 'linux' or args.repeats < 1 or not 1024 <= args.port <= 49151:
         parser.error('requires Linux, positive repeats, and a lane-owned port below 49152')
@@ -295,6 +315,10 @@ def main():
         parser.error('the live rise requires --only 30ms and a frame in 180..900 with per-engine lag 100')
     if not 0 <= args.preview_cap <= 65535:
         parser.error('preview cap must be within 0..65535')
+    if args.host_stall and (args.only != ['30ms'] or not 180 <= args.host_stall[0] <= 900 or not 1 <= args.host_stall[1] <= 20000):
+        parser.error('the host-stall control requires --only 30ms, a tick in 180..900 and duration in 1..20000ms')
+    if args.dump_window and not 1 <= args.dump_window[0] <= args.dump_window[1] <= TICKS:
+        parser.error('dump window must be an ordered range inside the1200-tick run')
     os.environ.pop('CCCP_HEADLESS', None)
     os.environ.update(CC_RUNNER_HEADED='1', DISPLAY=':0', PYTHONDONTWRITEBYTECODE='1')
     root = args.out.resolve()
@@ -302,13 +326,13 @@ def main():
     binary_sha = sha(engine_executable(REPO))
     write_json(root / 'plan.json', dict(binary_sha256=binary_sha, source_head=subprocess.check_output(
         ['git', 'rev-parse', 'HEAD'], cwd=REPO, text=True).strip(), repeats=args.repeats, arms=args.only,
-        lag_step=args.lag_step, preview_cap=args.preview_cap,
+        lag_step=args.lag_step, preview_cap=args.preview_cap, host_stall=args.host_stall, dump_window=args.dump_window,
         single_player_repeat_noise='Range of repeated SP p50 values; fixed before looking at the network cases.',
         draw_boundary='Completed UploadFrame, including the software swap; no physical scanout claim.'))
     cases = []
     for repeat in range(1, args.repeats + 1):
         for arm in args.only:
-            case = launch_case(root, arm, repeat, args.port, binary_sha, args.size, args.lag_step, args.preview_cap)
+            case = launch_case(root, arm, repeat, args.port, binary_sha, args.size, args.lag_step, args.preview_cap, args.host_stall, args.dump_window)
             cases.append(case)
             write_json(root / 'results.json', summarize(cases, args.repeats, args.only))
             if not case['manifest']['complete']:
