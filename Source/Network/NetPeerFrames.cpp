@@ -188,6 +188,15 @@ namespace RTE {
 		return decision != m_PeerFrameTieWinners.end() && decision->second == agreeing;
 	}
 
+	bool NetLockstepCoordinator::PeerGroupMayHold(uint32_t voters, uint64_t frame) const {
+		if (PeerGroupHasAuthority(voters, frame)) return true;
+		const uint32_t owners = PeerVotingOwners(voters, frame);
+		if (!PeerTieRefereed(frame) || owners == 0 || 2 * std::popcount(voters) != std::popcount(owners)) return false;
+		const auto decision = m_PeerFrameTieWinners.find(PeerSplitEpoch(frame));
+		// The survivor's hold deadline belongs to the peer link. The directory subsequently arbitrates competing histories.
+		return decision == m_PeerFrameTieWinners.end() || decision->second == voters;
+	}
+
 	uint64_t NetLockstepCoordinator::PeerSplitEpoch(uint64_t frame) const {
 		// A seat held at the frame plays in neither half, so each new set of held seats names a new split for the referee.
 		uint32_t whole = PeerRetainedSeatsAt(frame);
@@ -239,18 +248,46 @@ namespace RTE {
 			if (asked == request) request = *m_PeerFrameTie;
 		}
 		if (!m_PeerFrameTie || *m_PeerFrameTie != request) { m_PeerFrameTie = request; m_PeerFrameTieSinceMs = nowMs; }
-		const auto reply = m_Config.frameTieReferee(request);
-		if (reply.state == NetFrameTieReply::State::Decided) {
-			uint32_t winner = 0;
-			for (uint16_t peer: reply.members) {
-				if (peer == 0 || peer > m_Config.peerCount || std::find(request.owners.begin(), request.owners.end(), peer) == request.owners.end()) return;
-				winner |= SeatBit(static_cast<uint8_t>(peer));
-			}
-			// The decided half is kept as the voting seats it holds, the form every authority check compares.
-			if (std::popcount(winner) * 2 == static_cast<int>(request.owners.size()) && 2 * std::popcount(winner & owners) == std::popcount(owners))
+		// Preserve the pre-hold electorate. Once the local hold is installed its absent seats no longer vote, but the outstanding
+		// directory question still refers to the original split and must keep being polled while the survivors play.
+		m_PeerSplitArbitrations.try_emplace(split, PeerSplitArbitration{request, owners, 0});
+		PollPeerFrameTies(nowMs);
+	}
+
+	void NetLockstepCoordinator::PollPeerFrameTies(uint64_t nowMs) {
+		if (!m_Config.frameTieReferee) return;
+		for (const auto& [split, arbitration]: m_PeerSplitArbitrations) {
+			const auto& request = arbitration.request;
+			const uint32_t owners = arbitration.owners;
+			if (!m_PeerFrameTieWinners.contains(split)) {
+				const auto reply = m_Config.frameTieReferee(request);
+				if (reply.state != NetFrameTieReply::State::Decided) continue;
+				uint32_t winner = 0;
+				bool valid = true;
+				for (uint16_t peer: reply.members) {
+					if (peer == 0 || peer > m_Config.peerCount || (winner & SeatBit(static_cast<uint8_t>(peer))) != 0 ||
+					    std::find(request.owners.begin(), request.owners.end(), peer) == request.owners.end()) { valid = false; break; }
+					winner |= SeatBit(static_cast<uint8_t>(peer));
+				}
+				// Keep the original voting seats even after the local hold changes the live electorate.
+				if (!valid || std::popcount(winner) * 2 != static_cast<int>(request.owners.size()) ||
+				    2 * std::popcount(winner & owners) != std::popcount(owners)) continue;
 				m_PeerFrameTieWinners.emplace(split, winner & owners);
+			}
+			const uint32_t winner = m_PeerFrameTieWinners.at(split), local = SeatBit(m_Config.localPeerId);
+			// A reader that never continued its own branch can still consume the committed tail. Only a live losing branch
+			// has history to replace, and it enters the existing private-image return without stopping any winning survivor.
+			if (arbitration.holdFrame == 0 || m_Stats.nextFrame <= arbitration.holdFrame) continue;
+			const uint32_t playing = PeerFrameMembersAt(arbitration.holdFrame) & owners;
+			if ((winner & local) == 0 && (playing & local) != 0 && (playing & winner) == 0) {
+				m_LocalSeatHeld = true; m_LocalHoldFrame = m_Stats.nextFrame;
+				m_State = NetLockstepState::Stopped;
+				m_Stats.timeoutReason = "PeerHeld:the directory selected the other split; returning through a private image";
+				DiagnosticLine() << "[net-split-arbitration] local=" << static_cast<int>(m_Config.localPeerId)
+				    << " split=" << split << " frame=" << m_Stats.nextFrame << " winners=" << winner << " now_ms=" << nowMs << " action=image_return" << std::endl;
+				return;
+			}
 		}
-		// Silence from an internet referee grants neither side permission to display new history.
 	}
 
 	bool NetLockstepCoordinator::PeerFrameBlackout(uint64_t nowMs) {
@@ -332,6 +369,8 @@ namespace RTE {
 	void NetLockstepCoordinator::TickPeerFrameGroups(uint64_t nowMs) {
 		TickPeerSessionWire(nowMs);
 		if (!UsesPeerFrameGroups() || !IsRunning()) return;
+		PollPeerFrameTies(nowMs);
+		if (!IsRunning()) return;
 		if (m_Config.peerSessionLinks && nowMs >= m_PeerPathLogAtMs) {
 			m_PeerPathLogAtMs = nowMs + 5000;
 			for (const auto& [peer, path]: m_PeerReceiptDelaySamples) {
@@ -439,6 +478,9 @@ namespace RTE {
 		m_PeerTailVotes.erase(m_PeerTailVotes.begin(), m_PeerTailVotes.lower_bound(m_Stats.nextFrame));
 		// The split in force keeps its name and its decision however long it lasts.
 		const uint64_t historyFloor = std::min(kept, PeerSplitEpoch(kept));
+		std::erase_if(m_PeerSplitArbitrations, [&](const auto& question) {
+			return question.first < historyFloor && m_PeerFrameTieWinners.contains(question.first);
+		});
 		for (auto* history: {&m_PeerFrameTieWinners, &m_FrameGroupChanges, &m_PeerSplitRenewals}) {
 			const auto floor = history->lower_bound(historyFloor);
 			if (floor != history->begin()) history->erase(history->begin(), std::prev(floor));
