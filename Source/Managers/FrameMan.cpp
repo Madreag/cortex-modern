@@ -482,7 +482,14 @@ bool FrameMan::FeelBeginDraw() {
 	if (const double capHz = FeelCapHz(); capHz > 0) {
 		const double now = FeelNowMS();
 		if (s_Feel.nextDrawMS > now) return false;
-		s_Feel.nextDrawMS = std::max(now, s_Feel.nextDrawMS) + 1000.0 / capHz;
+		if (ScenarioRunner::IsLockstepControllerSyncActive() && s_Feel.nextDrawMS > 0) {
+			// Preview work can cross a draw deadline. Keep the match's cadence anchored to its scheduled slots,
+			// skipping elapsed slots after a hitch instead of carrying every late draw into all later deadlines.
+			const double periodMS = 1000.0 / capHz;
+			s_Feel.nextDrawMS += (std::floor((now - s_Feel.nextDrawMS) / periodMS) + 1) * periodMS;
+		} else {
+			s_Feel.nextDrawMS = std::max(now, s_Feel.nextDrawMS) + 1000.0 / capHz;
+		}
 	}
 	if (!FeelRecordingEnabled()) return true;
 	const FeelCost cost;
