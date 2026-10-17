@@ -1390,7 +1390,7 @@ namespace RTE {
 							const auto key = std::make_tuple(decision.request.generation, decision.request.roundId, decision.request.configHash, decision.request.frame);
 							if (wasSplit && std::find(decision.reply.members.begin(), decision.reply.members.end(), id) == decision.reply.members.end() &&
 							    splitDecisions[id - 1].insert(key).second) {
-								lostAt[id - 1] = hub.now; lostFrame[id - 1] = world.applied + 1; imageNeeded[id - 1] = true;
+								lostAt[id - 1] = hub.now; lostFrame[id - 1] = peer.GetStats().nextFrame; imageNeeded[id - 1] = true;
 							}
 						}
 					}
@@ -1399,6 +1399,9 @@ namespace RTE {
 						const bool directLoser = !hub.row.internet && id != 1 && splitFrom[1][id];
 						const bool imageStop = peer.GetStats().timeoutReason.starts_with("PeerHeld:");
 						if (imageStop && (lostAt[id - 1] || directLoser || hub.row.imageReturn || HadMachineTrouble(id))) {
+							if (lostAt[id - 1] && (peer.GetResumeFrame() != lostFrame[id - 1] || world.applied + 1 != lostFrame[id - 1])) {
+								error = "authority ruling: losing peer " + std::to_string(id) + " stopped away from its engine decision frame " + std::to_string(lostFrame[id - 1]); return false;
+							}
 							FinishWait(id, world.applied + 1);
 							if (!imageAt[id - 1] || !imageNeeded[id - 1]) imageAt[id - 1] = hub.now;
 							imageNeeded[id - 1] = true;
