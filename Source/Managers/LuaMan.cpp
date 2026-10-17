@@ -4645,6 +4645,8 @@ struct RTE::LuaScriptGraphNativeCaptureData {
 	/// A stand-in for a slice the world copy does not read: never read itself, it keeps the slice's address for the graph.
 	void* UnreadSlice(const void* slice) const {
 		std::lock_guard lock(m_UnreadMutex);
+		// A binding can hand a stand-in back to the copy; it is already the slice's.
+		if (m_UnreadOriginals.contains(slice)) return const_cast<void*>(slice);
 		if (const auto found = m_UnreadByOriginal.find(slice); found != m_UnreadByOriginal.end()) return found->second;
 		void* standIn = &m_UnreadStandIns.emplace_back();
 		m_UnreadByOriginal.emplace(slice, standIn);
@@ -4656,6 +4658,20 @@ struct RTE::LuaScriptGraphNativeCaptureData {
 		{
 			std::lock_guard lock(m_UnreadMutex);
 			if (const auto found = m_UnreadOriginals.find(address); found != m_UnreadOriginals.end()) return found->second;
+		}
+		return CheckpointNativeStorage::Original(address);
+	}
+	/// Remembers the address a Vector the world copy made stands for; the read scope's index predates the copy.
+	void* NoteVectorCopy(void* copy, const void* source) const {
+		std::lock_guard lock(m_VectorSourcesMutex);
+		m_VectorSources.emplace(copy, CheckpointNativeStorage::Original(source));
+		return copy;
+	}
+	/// The Vector a handle names: a world copy's source, else the handle's original address.
+	const void* VectorSource(const void* address) const {
+		{
+			std::lock_guard lock(m_VectorSourcesMutex);
+			if (const auto found = m_VectorSources.find(address); found != m_VectorSources.end()) return found->second;
 		}
 		return CheckpointNativeStorage::Original(address);
 	}
@@ -4865,6 +4881,8 @@ private:
 	mutable std::deque<UnreadStandIn> m_UnreadStandIns;
 	mutable std::unordered_map<const void*, void*> m_UnreadByOriginal;
 	mutable std::unordered_map<const void*, const void*> m_UnreadOriginals;
+	mutable std::mutex m_VectorSourcesMutex;
+	mutable std::unordered_map<const void*, const void*> m_VectorSources;
 };
 static thread_local const LuaScriptGraphNativeCaptureData* s_GraphNativeCapture = nullptr;
 
@@ -5706,7 +5724,7 @@ static int ScriptGraphGoneVector(lua_State* L) {
 	auto* rep = luabind::detail::is_class_object(L, 1);
 	if (!rep || !rep->ptr() || (rep->flags() & luabind::detail::object_rep::owner) || !rep->crep() || rep->crep()->type() != LUABIND_TYPEID(Vector)) return 0;
 	if (rep->get_dependencies().is_valid() && ScriptGraphNativeAlive(L, rep)) return 0;
-	const void* original = CheckpointNativeStorage::Original(rep->ptr());
+	const void* original = s_GraphNativeCapture ? s_GraphNativeCapture->VectorSource(rep->ptr()) : CheckpointNativeStorage::Original(rep->ptr());
 	if (!MovableObject::RetainedMemoryHolds(original, sizeof(Vector)) && !CheckpointNativeStorage::FreeSlotHolds(original, sizeof(Vector)) &&
 	    !Entity::ClassInfo::AnyPoolHolds(original, sizeof(Vector)))
 		return 0;
@@ -8874,7 +8892,7 @@ bool LuaStateWrapper::CapturePreparedScriptGraphs(const CheckpointLua::Boundary&
 				}
 				const auto value = [&]<class T>(T*) -> void* { return CopyFrozenValue<T>(*snapshot, pointer); };
 				const auto id = bindings.Class(type)->type();
-				if (id == LUABIND_TYPEID(Vector)) return value(static_cast<Vector*>(nullptr));
+				if (id == LUABIND_TYPEID(Vector)) return LuaScriptGraphNativeCaptureScope::Current()->NoteVectorCopy(value(static_cast<Vector*>(nullptr)), pointer);
 				if (id == LUABIND_TYPEID(Timer)) return value(static_cast<Timer*>(nullptr));
 				if (id == LUABIND_TYPEID(Matrix)) return value(static_cast<Matrix*>(nullptr));
 				if (id == LUABIND_TYPEID(Box)) return value(static_cast<Box*>(nullptr));
