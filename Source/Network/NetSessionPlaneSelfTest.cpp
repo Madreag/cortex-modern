@@ -3796,7 +3796,7 @@ namespace RTE {
 				return ok ? 0 : 1;
 			}
 		}
-		DiagnosticLine() << "[net-session-plane-selftest] topology=single-box proof=false forced_rows=" << (selected ? 1 : rows.size() + 41 + FixedScheduleRows().size()) << std::endl;
+		DiagnosticLine() << "[net-session-plane-selftest] topology=single-box proof=false forced_rows=" << (selected ? 1 : rows.size() + 42 + FixedScheduleRows().size()) << std::endl;
 		// Every row runs on a pool of worker threads: a named row keeps its engine lines and is printed as soon as it ends, the longest
 		// rows started first; the random driver's rounds follow them in the same pool.
 		QuietLines quiet(std::cout);
@@ -3804,6 +3804,57 @@ namespace RTE {
 		std::vector<RowRun> named;
 		if (!selected || std::string_view(selected) == "host_hold_ai_authority_is_the_certified_frames")
 			named.push_back({"host_hold_ai_authority_is_the_certified_frames", CheckHostHoldAuthority});
+		if (!selected || std::string_view(selected) == "input_delay_uses_link_jitter_without_machine_receipt_cost") {
+			named.push_back({"input_delay_uses_link_jitter_without_machine_receipt_cost", [](std::string& error) {
+				struct Wire final : LoopbackTransport {
+					uint32_t rtt = 0;
+					uint32_t GetPeerPingMs(NetPeerId) const override { return rtt; }
+					bool Send(NetPeerId, NetTransportLane, const std::vector<uint8_t>&, std::string* = nullptr, bool* = nullptr) override { return true; }
+				};
+				for (const uint32_t rtt: {30U, 200U}) for (const uint32_t receiptMs: {rtt + 30, rtt + 250}) {
+					Wire wire; wire.rtt = rtt;
+					NetLockstepCoordinator peer;
+					peer.m_Config.sessionId = 0xB1D31A7;
+					peer.m_Config.matchConfig = NetMatchConfigUtil::MakeDefault(peer.m_Config.sessionId);
+					peer.m_Config.localPeerId = 2;
+					peer.m_Config.authorityPeerId = 1;
+					peer.m_Config.peerCount = 2;
+					peer.m_Config.startFrame = 1;
+					peer.m_Config.simTickMs = c_TestTickMs;
+					peer.m_Config.migrationKey.fill(0x39);
+					peer.m_Config.peerFrameGroups = peer.m_Config.adaptiveInputDelay = true;
+					peer.m_Config.inputDelayFrames = peer.m_Config.matchConfig.inputDelayFrames = 1;
+					peer.m_Config.peerInputDelayFrames = {{1, 1}, {2, 1}};
+					peer.m_Config.matchConfig.peerInputDelayFrames = {1, 1};
+					peer.m_Config.matchConfig.roundId = peer.m_RoundId = 77;
+					peer.m_RoundConfigHash = NetMatchConfigUtil::HashConfig(peer.m_Config.matchConfig);
+					peer.m_State = NetLockstepState::Running;
+					peer.m_Transport = &wire;
+					peer.m_RemotePeerIds = {1};
+					peer.m_RemoteTransports = {{1, 42}};
+					peer.m_LastCompletedSimulationTick = 4422;
+					peer.m_Stats.nextFrame = 4423;
+					peer.m_FrameGroupMembers = 3;
+					peer.m_MigrationHistory[4422] = {1, 2, 3};
+					peer.m_PeerReceiptDelaySamples[1].Observe(1000, receiptMs);
+					peer.TickPeerInputDelay(1000);
+					uint64_t proposed = 0;
+					for (const auto& [key, votes]: peer.m_PeerBridgeVotes)
+						if (key.second == 10 && votes.contains(2)) proposed = votes.at(2).completeFrom;
+					DiagnosticLine() << "[session-plane-link-delay] rtt_ms=" << rtt << " receipt_ms=" << receiptMs << " proposed_ticks=" << proposed;
+					if (proposed != (rtt == 30 ? 3U : 13U)) {
+						error = "a machine's receipt cost changed a stable measured link's delay: rtt=" + std::to_string(rtt) +
+						        " receipt=" + std::to_string(receiptMs) + " delay=" + std::to_string(proposed); return false;
+					}
+				}
+				NetInputDelayEstimator jitter;
+				for (uint64_t at = 1000; at < 6000; at += 100) jitter.Observe(at, at < 5500 || at == 5900 ? 30 : 45);
+				if (jitter.SenderRequiredFrames(c_TestTickMs, 3) != 4) { error = "recent p95 link jitter did not add its input margin"; return false; }
+				jitter.Observe(11000, 30);
+				if (jitter.SenderRequiredFrames(c_TestTickMs, 3) != 3) { error = "expired link jitter still inflated the input delay"; return false; }
+				return true;
+			}});
+		}
 		if (!selected || std::string_view(selected) == "directory_client_round_trip_allowances_and_refusals")
 			named.push_back({"directory_client_round_trip_allowances_and_refusals", CheckDirectoryClient});
 		if (!selected || std::string_view(selected) == "a_kept_hold_waits_for_its_own_directory_without_changing_history") {

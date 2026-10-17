@@ -488,15 +488,18 @@ namespace RTE {
 			auto& sample = m_PeerReceiptDelaySamples[peer];
 			sample.Observe(nowMs, 0);
 			const auto [wire, route] = PeerFrameRoute(peer);
-			// A receipt percentile already measures the complete round trip through the input and acceptance pumps. Its jitter and
-			// scheduling time are inside that measurement. Raw transport RTT alone needs one input-production tick beside it.
-			const bool transportMeasured = wire && wire->IsPeerPingMeasured(route);
-			const uint32_t transportMs = transportMeasured ? wire->GetPeerPingMs(route) : 0;
+			const uint32_t transportMs = wire && wire->IsPeerPingMeasured(route) ? wire->GetPeerPingMs(route) : 0;
+			// Zero is an absent RTT sample, as it is in the lobby's estimator. Receipts remain a fallback until the link is measured.
+			const bool transportMeasured = transportMs > 0;
 			if (sample.P95Ms() != 0 || transportMeasured) {
 				transportsMeasured &= transportMeasured;
 				const uint32_t receiptFrames = static_cast<uint32_t>(std::ceil(sample.P95Ms() / m_Config.simTickMs));
-				const uint32_t transportFrames = !transportMeasured ? 0U : static_cast<uint32_t>(std::ceil(transportMs / m_Config.simTickMs)) + 1;
-				paths.emplace_back(std::max(receiptFrames, transportFrames), transportMs);
+				auto& link = m_DelayEstimators[peer];
+				link.Observe(nowMs, transportMs);
+				// Receipt time includes both machines' simulation and catch-up. Only transport samples size a measured link;
+				// a machine that cannot feed that runway is handled by the seat's hold decision.
+				const uint32_t frames = transportMeasured ? link.SenderRequiredFrames(m_Config.simTickMs, m_Config.slowPlayerBoundTicks) : receiptFrames;
+				paths.emplace_back(frames, transportMs);
 			}
 		}
 		const size_t needed = std::popcount(m_FrameGroupMembers) - 1;

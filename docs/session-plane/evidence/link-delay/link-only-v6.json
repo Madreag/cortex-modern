@@ -1,0 +1,1442 @@
+{
+  "base_head": "7ad1e02ef9a2fa7cf3c7e5b3eb3b64ac9bf54492",
+  "source_diff": "diff --git a/Source/Menus/NetModerationGUI.cpp b/Source/Menus/NetModerationGUI.cpp\nindex 6c0e98c16..15ee8f8d9 100644\n--- a/Source/Menus/NetModerationGUI.cpp\n+++ b/Source/Menus/NetModerationGUI.cpp\n@@ -1800,7 +1800,7 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {\n \t\t};\n \t\tif (menuLobby) return \"In the lobby\";\n \t\tif (hostLost) return snapshot.statusText.starts_with(\"Changing hosts\") ? \"Changing hosts - the match picks up in a moment\" : \"Host lost - contacting the next host...\";\n-\t\t// The toast and the full-screen wait say the rest; the box's line never repeats theirs.\n+\t\t// The toast band suppresses this sentence when the status box already shows it.\n \t\tif (ownHeld) return NetPlayerPresentation::PlayingSummary(true, 0, {});\n \t\tif (resyncing) return \"Match repair in progress\";\n \t\tif (placing) {\n@@ -2536,6 +2536,11 @@ void NetModerationGUI::DrawMatchToasts(const std::string& screenLine) {\n \tstd::vector<size_t> indices;\n \tstd::vector<std::string> lines;\n \tconst auto sentence = [](const std::string& text) { return text.substr(0, text.find_last_not_of(\". \") + 1); };\n+\tstd::vector<std::string> statusLines;\n+\tif (m_StatusRect.visible && m_StatusWrap.active) {\n+\t\tstd::istringstream status(m_StatusWrap.source);\n+\t\tfor (std::string line; std::getline(status, line);) statusLines.push_back(sentence(line));\n+\t}\n \tconst uint8_t localPeer = ScenarioRunner::GetLockstepLocalPeerId();\n \tconst PauseMenuGUI* pauseMenu = g_MenuMan.GetActivePauseMenu();\n \tconst std::string menuSaveLine = pauseMenu ? pauseMenu->GetShownSaveLine() : std::string();\n@@ -2544,6 +2549,8 @@ void NetModerationGUI::DrawMatchToasts(const std::string& screenLine) {\n \t\t// A seat's toast reads its current state, so two events about one seat can read alike: the band shows that line once.\n \t\tstd::string line = ToastText(queued[index]);\n \t\tif (std::find(lines.begin(), lines.end(), line) != lines.end()) continue;\n+\t\t// The status box was drawn this frame. Its full sentences need only one visible copy, even when they wrap.\n+\t\tif (std::find(statusLines.begin(), statusLines.end(), sentence(line)) != statusLines.end()) continue;\n \t\t// The screen beneath shows its own line; the band does not read it out again, nor this seat's own state when that is the line.\n \t\tconst bool ownSeat = queued[index].senderPeerId == 0 || queued[index].senderPeerId == localPeer;\n \t\t// The wait's own screen already says this seat is on its way back.\ndiff --git a/Source/Network/NetMatchConfig.cpp b/Source/Network/NetMatchConfig.cpp\nindex 0aeb27e7c..fc538f65e 100644\n--- a/Source/Network/NetMatchConfig.cpp\n+++ b/Source/Network/NetMatchConfig.cpp\n@@ -278,11 +278,11 @@ namespace RTE {\n \n \tuint32_t NetInputDelayEstimator::SenderRequiredFrames(double tickMs, uint16_t bound, uint16_t floor) const {\n \t\tif (!std::isfinite(tickMs) || tickMs <= 0) return std::numeric_limits<uint32_t>::max();\n-\t\tconst uint32_t rtt = std::max(P95Ms(), m_Samples.empty() ? 0U : m_Samples.back().second);\n-\t\t// The RTT percentile already includes the link's jitter. One production tick covers a receipt delivered between samples;\n-\t\t// the combat wait bound belongs to a hold decision, never to every player's permanent input delay.\n+\t\tconst uint32_t rtt = m_Samples.empty() ? m_LastMeasuredRttMs : m_Samples.back().second;\n+\t\t// One production tick beside the measured round trip, plus the recent p95 jitter margin. Machine cost and the\n+\t\t// combat wait bound belong to a hold decision, never to every player's permanent input delay.\n \t\t(void)bound;\n-\t\treturn static_cast<uint32_t>(std::clamp(std::ceil(rtt / tickMs) + 1, static_cast<double>(floor), static_cast<double>(NetMatchConfigUtil::c_MaxInputDelayFrames)));\n+\t\treturn static_cast<uint32_t>(std::clamp(std::ceil(rtt / tickMs) + 1 + std::ceil(JitterMs() / tickMs), static_cast<double>(floor), static_cast<double>(NetMatchConfigUtil::c_MaxInputDelayFrames)));\n \t}\n \n \tnamespace {\ndiff --git a/Source/Network/NetPeerFrames.cpp b/Source/Network/NetPeerFrames.cpp\nindex b3dbc63ea..0515a924d 100644\n--- a/Source/Network/NetPeerFrames.cpp\n+++ b/Source/Network/NetPeerFrames.cpp\n@@ -488,15 +488,18 @@ namespace RTE {\n \t\t\tauto& sample = m_PeerReceiptDelaySamples[peer];\n \t\t\tsample.Observe(nowMs, 0);\n \t\t\tconst auto [wire, route] = PeerFrameRoute(peer);\n-\t\t\t// A receipt percentile already measures the complete round trip through the input and acceptance pumps. Its jitter and\n-\t\t\t// scheduling time are inside that measurement. Raw transport RTT alone needs one input-production tick beside it.\n-\t\t\tconst bool transportMeasured = wire && wire->IsPeerPingMeasured(route);\n-\t\t\tconst uint32_t transportMs = transportMeasured ? wire->GetPeerPingMs(route) : 0;\n+\t\t\tconst uint32_t transportMs = wire && wire->IsPeerPingMeasured(route) ? wire->GetPeerPingMs(route) : 0;\n+\t\t\t// Zero is an absent RTT sample, as it is in the lobby's estimator. Receipts remain a fallback until the link is measured.\n+\t\t\tconst bool transportMeasured = transportMs > 0;\n \t\t\tif (sample.P95Ms() != 0 || transportMeasured) {\n \t\t\t\ttransportsMeasured &= transportMeasured;\n \t\t\t\tconst uint32_t receiptFrames = static_cast<uint32_t>(std::ceil(sample.P95Ms() / m_Config.simTickMs));\n-\t\t\t\tconst uint32_t transportFrames = !transportMeasured ? 0U : static_cast<uint32_t>(std::ceil(transportMs / m_Config.simTickMs)) + 1;\n-\t\t\t\tpaths.emplace_back(std::max(receiptFrames, transportFrames), transportMs);\n+\t\t\t\tauto& link = m_DelayEstimators[peer];\n+\t\t\t\tlink.Observe(nowMs, transportMs);\n+\t\t\t\t// Receipt time includes both machines' simulation and catch-up. Only transport samples size a measured link;\n+\t\t\t\t// a machine that cannot feed that runway is handled by the seat's hold decision.\n+\t\t\t\tconst uint32_t frames = transportMeasured ? link.SenderRequiredFrames(m_Config.simTickMs, m_Config.slowPlayerBoundTicks) : receiptFrames;\n+\t\t\t\tpaths.emplace_back(frames, transportMs);\n \t\t\t}\n \t\t}\n \t\tconst size_t needed = std::popcount(m_FrameGroupMembers) - 1;\ndiff --git a/Source/Network/NetSessionPlaneSelfTest.cpp b/Source/Network/NetSessionPlaneSelfTest.cpp\nindex 213ec404b..3652f72f3 100644\n--- a/Source/Network/NetSessionPlaneSelfTest.cpp\n+++ b/Source/Network/NetSessionPlaneSelfTest.cpp\n@@ -3796,7 +3796,7 @@ namespace RTE {\n \t\t\t\treturn ok ? 0 : 1;\n \t\t\t}\n \t\t}\n-\t\tDiagnosticLine() << \"[net-session-plane-selftest] topology=single-box proof=false forced_rows=\" << (selected ? 1 : rows.size() + 41 + FixedScheduleRows().size()) << std::endl;\n+\t\tDiagnosticLine() << \"[net-session-plane-selftest] topology=single-box proof=false forced_rows=\" << (selected ? 1 : rows.size() + 42 + FixedScheduleRows().size()) << std::endl;\n \t\t// Every row runs on a pool of worker threads: a named row keeps its engine lines and is printed as soon as it ends, the longest\n \t\t// rows started first; the random driver's rounds follow them in the same pool.\n \t\tQuietLines quiet(std::cout);\n@@ -3804,6 +3804,57 @@ namespace RTE {\n \t\tstd::vector<RowRun> named;\n \t\tif (!selected || std::string_view(selected) == \"host_hold_ai_authority_is_the_certified_frames\")\n \t\t\tnamed.push_back({\"host_hold_ai_authority_is_the_certified_frames\", CheckHostHoldAuthority});\n+\t\tif (!selected || std::string_view(selected) == \"input_delay_uses_link_jitter_without_machine_receipt_cost\") {\n+\t\t\tnamed.push_back({\"input_delay_uses_link_jitter_without_machine_receipt_cost\", [](std::string& error) {\n+\t\t\t\tstruct Wire final : LoopbackTransport {\n+\t\t\t\t\tuint32_t rtt = 0;\n+\t\t\t\t\tuint32_t GetPeerPingMs(NetPeerId) const override { return rtt; }\n+\t\t\t\t\tbool Send(NetPeerId, NetTransportLane, const std::vector<uint8_t>&, std::string* = nullptr, bool* = nullptr) override { return true; }\n+\t\t\t\t};\n+\t\t\t\tfor (const uint32_t rtt: {30U, 200U}) for (const uint32_t receiptMs: {rtt + 30, rtt + 250}) {\n+\t\t\t\t\tWire wire; wire.rtt = rtt;\n+\t\t\t\t\tNetLockstepCoordinator peer;\n+\t\t\t\t\tpeer.m_Config.sessionId = 0xB1D31A7;\n+\t\t\t\t\tpeer.m_Config.matchConfig = NetMatchConfigUtil::MakeDefault(peer.m_Config.sessionId);\n+\t\t\t\t\tpeer.m_Config.localPeerId = 2;\n+\t\t\t\t\tpeer.m_Config.authorityPeerId = 1;\n+\t\t\t\t\tpeer.m_Config.peerCount = 2;\n+\t\t\t\t\tpeer.m_Config.startFrame = 1;\n+\t\t\t\t\tpeer.m_Config.simTickMs = c_TestTickMs;\n+\t\t\t\t\tpeer.m_Config.migrationKey.fill(0x39);\n+\t\t\t\t\tpeer.m_Config.peerFrameGroups = peer.m_Config.adaptiveInputDelay = true;\n+\t\t\t\t\tpeer.m_Config.inputDelayFrames = peer.m_Config.matchConfig.inputDelayFrames = 1;\n+\t\t\t\t\tpeer.m_Config.peerInputDelayFrames = {{1, 1}, {2, 1}};\n+\t\t\t\t\tpeer.m_Config.matchConfig.peerInputDelayFrames = {1, 1};\n+\t\t\t\t\tpeer.m_Config.matchConfig.roundId = peer.m_RoundId = 77;\n+\t\t\t\t\tpeer.m_RoundConfigHash = NetMatchConfigUtil::HashConfig(peer.m_Config.matchConfig);\n+\t\t\t\t\tpeer.m_State = NetLockstepState::Running;\n+\t\t\t\t\tpeer.m_Transport = &wire;\n+\t\t\t\t\tpeer.m_RemotePeerIds = {1};\n+\t\t\t\t\tpeer.m_RemoteTransports = {{1, 42}};\n+\t\t\t\t\tpeer.m_LastCompletedSimulationTick = 4422;\n+\t\t\t\t\tpeer.m_Stats.nextFrame = 4423;\n+\t\t\t\t\tpeer.m_FrameGroupMembers = 3;\n+\t\t\t\t\tpeer.m_MigrationHistory[4422] = {1, 2, 3};\n+\t\t\t\t\tpeer.m_PeerReceiptDelaySamples[1].Observe(1000, receiptMs);\n+\t\t\t\t\tpeer.TickPeerInputDelay(1000);\n+\t\t\t\t\tuint64_t proposed = 0;\n+\t\t\t\t\tfor (const auto& [key, votes]: peer.m_PeerBridgeVotes)\n+\t\t\t\t\t\tif (key.second == 10 && votes.contains(2)) proposed = votes.at(2).completeFrom;\n+\t\t\t\t\tDiagnosticLine() << \"[session-plane-link-delay] rtt_ms=\" << rtt << \" receipt_ms=\" << receiptMs << \" proposed_ticks=\" << proposed;\n+\t\t\t\t\tif (proposed != (rtt == 30 ? 3U : 13U)) {\n+\t\t\t\t\t\terror = \"a machine's receipt cost changed a stable measured link's delay: rtt=\" + std::to_string(rtt) +\n+\t\t\t\t\t\t        \" receipt=\" + std::to_string(receiptMs) + \" delay=\" + std::to_string(proposed); return false;\n+\t\t\t\t\t}\n+\t\t\t\t}\n+\t\t\t\tNetInputDelayEstimator jitter;\n+\t\t\t\tfor (uint64_t at = 1000; at < 6000; at += 100) jitter.Observe(at, at < 5500 || at == 5900 ? 30 : 45);\n+\t\t\t\tif (jitter.SenderRequiredFrames(c_TestTickMs, 3) != 4) { error = \"recent p95 link jitter did not add its input margin\"; return false; }\n+\t\t\t\tjitter.Observe(11000, 30);\n+\t\t\t\tif (jitter.SenderRequiredFrames(c_TestTickMs, 3) != 3) { error = \"expired link jitter still inflated the input delay\"; return false; }\n+\t\t\t\treturn true;\n+\t\t\t}});\n+\t\t}\n \t\tif (!selected || std::string_view(selected) == \"directory_client_round_trip_allowances_and_refusals\")\n \t\t\tnamed.push_back({\"directory_client_round_trip_allowances_and_refusals\", CheckDirectoryClient});\n \t\tif (!selected || std::string_view(selected) == \"a_kept_hold_waits_for_its_own_directory_without_changing_history\") {\ndiff --git a/tools/feel/session_delay.py b/tools/feel/session_delay.py\nindex 1f6043e6b..87a7ea2a5 100644\n--- a/tools/feel/session_delay.py\n+++ b/tools/feel/session_delay.py\n@@ -125,6 +125,8 @@ def reduce_peer(folder, peer, rtt, plan, lag_step=None):\n     preview_cost = preview.get('ms_total', 0) / preview['actor_ticks'] if preview.get('actor_ticks') else None\n     watches = watch_results(folder / peer / 'stdout.log')\n     delay_watches = [w for w in watches if w['watch'] == 'b4-delay']\n+    duplicate_watches = [w for w in watches if w['watch'] == 'screen-duplicates']\n+    own_hold_watches = [w for w in watches if w['watch'] == 'c-own-hold']\n     delay_values = [r['delay'] for r in frames if r['actors']]\n     limit = 16 if lag_step else 6 if rtt == 30 else 16 if rtt == 200 else 0\n     low_delay = [r['delay'] for r in frames if r['actors'] and lag_step and r['tick'] < lag_step[0]]\n@@ -141,6 +143,9 @@ def reduce_peer(folder, peer, rtt, plan, lag_step=None):\n                   rtt_samples=[dict(tick=r['tick'], peer=p['peer'], ping_ms=p['ping_ms'])\n                                for r in frames if r['tick'] % 60 == 0 for p in r.get('rtt', []) if not p['local']],\n                   captures=[r for r in rows if r['type'] == 'capture'], delay_watches=delay_watches,\n+                  duplicate_watches=duplicate_watches, own_hold_watches=own_hold_watches,\n+                  c_duplicates_pass=rtt is None or bool(duplicate_watches) and all(w['active_frames'] > 0 and w['violations'] == 0 for w in duplicate_watches),\n+                  c_own_hold_pass=all(w['violations'] == 0 for w in own_hold_watches),\n                   b1_delay_pass=bool(delay_values) and max(delay_values) <= limit and\n                                 (not lag_step or bool(low_delay) and max(low_delay) <= 6),\n                   b2_depth_pass=bool(owed) and not mismatches and not missing_state and (rtt is None or preview.get('enabled') and preview.get('previews', 0) > 0),\n@@ -159,7 +164,7 @@ def launch_case(root, arm, repeat, port, exe_sha, size, lag_step=None, preview_c\n     input_pattern(script)\n     plan = json.loads(script.with_name('input-schedule.json').read_text())\n     watches = out / 'screen-watches.txt'\n-    watches.write_text('b4-delay input_delay running\\nc-own-hold sentence local_held LabelNetMatchStatus The AI is playing for you until you are back\\n', encoding='utf-8')\n+    watches.write_text('b4-delay input_delay running\\nc-own-hold sentence local_held LabelNetMatchStatus The AI is playing for you until you are back\\nscreen-duplicates duplicates always\\n', encoding='utf-8')\n     rtt = ARMS[arm]\n     peers = ['sp'] if rtt is None else ['host', 'client']\n     runs, receipts = {}, {}\n@@ -280,13 +285,14 @@ def summarize(cases, repeats, selected):\n             judged.append(dict(arm=case['arm'], repeat=case['repeat'], peer=p['peer'], latency_ms=p['latency_ms'],\n                                latency_frames=p['latency_frames'], b3_pass=feel_pass,\n                                b1_delay_pass=p['b1_delay_pass'], b2_depth_pass=p['b2_depth_pass'], b4_overlay_pass=p['b4_overlay_pass'],\n+                               c_duplicates_pass=p['c_duplicates_pass'], c_own_hold_pass=p['c_own_hold_pass'],\n                                preview_ms_per_actor_tick=p['preview_ms_per_actor_tick'], delay_min=p['delay_min'], delay_max=p['delay_max']))\n     complete = repeats >= 3 and set(selected) == set(ARMS) and len(cases) == repeats * len(ARMS) and all(\n         c['manifest']['complete'] and c['manifest']['quiet'] and c['manifest']['binary_unchanged'] for c in cases)\n     rise_checks = [case['manifest']['live_resize'] for case in cases if case['manifest'].get('lag_step')]\n     return dict(complete=complete, single_player_repeat_noise=noise, rows=judged, live_resize_checks=rise_checks,\n                 pass_check=complete and coverage and all(r['pass_check'] for r in rise_checks) and\n-                           all(all(p[k] for k in ('b1_delay_pass', 'b2_depth_pass', 'b3_pass', 'b4_overlay_pass')) for p in judged),\n+                           all(all(p[k] for k in ('b1_delay_pass', 'b2_depth_pass', 'b3_pass', 'b4_overlay_pass', 'c_duplicates_pass', 'c_own_hold_pass')) for p in judged),\n                 definition='Existing feel.report.input_latencies: first completed presentation whose local actor changes aim/velocity in the requested direction and carries that input. Every missing response remains RED. Each network p50 must lie inside the measured single-player repeat p50 range, in milliseconds and presented frames; no added tolerance.',\n                 scope='Headed Linux local two-engine fake-RTT measurement, not a spread/relay proof or physical display scanout measurement.')\n \n",
+  "source_diff_sha256": "9a91f9919a0f4e194fec22bf62d831415a22cdfa59b3902183d760290125767e",
+  "binary_sha256": "aed0f41f8a77d697cdca6e71c7ae4a20ebe3c9c73657549b06dc125110f8e932",
+  "detector_stdout": "[net-session-plane-selftest] topology=single-box proof=false forced_rows=1\n[session-plane-link-delay] rtt_ms=30 receipt_ms=60 proposed_ticks=3\n[session-plane-link-delay] rtt_ms=30 receipt_ms=280 proposed_ticks=3\n[session-plane-link-delay] rtt_ms=200 receipt_ms=230 proposed_ticks=13\n[session-plane-link-delay] rtt_ms=200 receipt_ms=450 proposed_ticks=13\n[net-session-plane-selftest] PASS input_delay_uses_link_jitter_without_machine_receipt_cost\n[net-session-plane-selftest] saved_schedule_catalogue expected=108 ran=0\n[net-session-plane-selftest] 1 of 1 passed\n[net-session-plane-selftest] PASS\n",
+  "matrix": {
+    "complete": true,
+    "single_player_repeat_noise": {
+      "p50_min_ms": 31.51541699981317,
+      "p50_max_ms": 32.034281000029296,
+      "p50_spread_ms": 0.5188640002161264,
+      "frame_p50_min": 2,
+      "frame_p50_max": 2
+    },
+    "rows": [
+      {
+        "arm": "sp",
+        "repeat": 1,
+        "peer": "sp",
+        "latency_ms": {
+          "count": 32,
+          "p50": 31.764262000098825,
+          "p95": 113.34792099986225,
+          "p99": 138.63457399979234,
+          "max": 138.63457399979234
+        },
+        "latency_frames": {
+          "count": 32,
+          "p50": 2,
+          "p95": 7,
+          "p99": 9,
+          "max": 9
+        },
+        "b3_pass": true,
+        "b1_delay_pass": true,
+        "b2_depth_pass": true,
+        "b4_overlay_pass": true,
+        "c_duplicates_pass": true,
+        "c_own_hold_pass": true,
+        "preview_ms_per_actor_tick": null,
+        "delay_min": 0,
+        "delay_max": 0
+      },
+      {
+        "arm": "30ms",
+        "repeat": 1,
+        "peer": "host",
+        "latency_ms": {
+          "count": 32,
+          "p50": 30.44246800011024,
+          "p95": 113.42466700030491,
+          "p99": 126.34000599989668,
+          "max": 126.34000599989668
+        },
+        "latency_frames": {
+          "count": 32,
+          "p50": 2,
+          "p95": 7,
+          "p99": 7,
+          "max": 7
+        },
+        "b3_pass": false,
+        "b1_delay_pass": true,
+        "b2_depth_pass": true,
+        "b4_overlay_pass": true,
+        "c_duplicates_pass": true,
+        "c_own_hold_pass": true,
+        "preview_ms_per_actor_tick": 0.786486387721542,
+        "delay_min": 4,
+        "delay_max": 5
+      },
+      {
+        "arm": "30ms",
+        "repeat": 1,
+        "peer": "client",
+        "latency_ms": {
+          "count": 32,
+          "p50": 31.44818100007251,
+          "p95": 97.26039500022307,
+          "p99": 99.24772799992934,
+          "max": 99.24772799992934
+        },
+        "latency_frames": {
+          "count": 32,
+          "p50": 2,
+          "p95": 6,
+          "p99": 6,
+          "max": 6
+        },
+        "b3_pass": false,
+        "b1_delay_pass": true,
+        "b2_depth_pass": true,
+        "b4_overlay_pass": true,
+        "c_duplicates_pass": true,
+        "c_own_hold_pass": true,
+        "preview_ms_per_actor_tick": 0.8139293680297397,
+        "delay_min": 4,
+        "delay_max": 5
+      },
+      {
+        "arm": "200ms",
+        "repeat": 1,
+        "peer": "host",
+        "latency_ms": {
+          "count": 32,
+          "p50": 32.12763899983838,
+          "p95": 98.93977299984545,
+          "p99": 146.51277699973434,
+          "max": 146.51277699973434
+        },
+        "latency_frames": {
+          "count": 32,
+          "p50": 2,
+          "p95": 6,
+          "p99": 8,
+          "max": 8
+        },
+        "b3_pass": false,
+        "b1_delay_pass": true,
+        "b2_depth_pass": true,
+        "b4_overlay_pass": true,
+        "c_duplicates_pass": true,
+        "c_own_hold_pass": true,
+        "preview_ms_per_actor_tick": 0.26050159744408946,
+        "delay_min": 15,
+        "delay_max": 16
+      },
+      {
+        "arm": "200ms",
+        "repeat": 1,
+        "peer": "client",
+        "latency_ms": {
+          "count": 32,
+          "p50": 31.478877999819815,
+          "p95": 99.01743299979717,
+          "p99": 131.72159299999475,
+          "max": 131.72159299999475
+        },
+        "latency_frames": {
+          "count": 32,
+          "p50": 2,
+          "p95": 6,
+          "p99": 8,
+          "max": 8
+        },
+        "b3_pass": false,
+        "b1_delay_pass": true,
+        "b2_depth_pass": true,
+        "b4_overlay_pass": true,
+        "c_duplicates_pass": true,
+        "c_own_hold_pass": true,
+        "preview_ms_per_actor_tick": 0.2596111949956859,
+        "delay_min": 15,
+        "delay_max": 16
+      },
+      {
+        "arm": "sp",
+        "repeat": 2,
+        "peer": "sp",
+        "latency_ms": {
+          "count": 32,
+          "p50": 32.034281000029296,
+          "p95": 112.22245300002396,
+          "p99": 139.2366289999336,
+          "max": 139.2366289999336
+        },
+        "latency_frames": {
+          "count": 32,
+          "p50": 2,
+          "p95": 7,
+          "p99": 9,
+          "max": 9
+        },
+        "b3_pass": true,
+        "b1_delay_pass": true,
+        "b2_depth_pass": true,
+        "b4_overlay_pass": true,
+        "c_duplicates_pass": true,
+        "c_own_hold_pass": true,
+        "preview_ms_per_actor_tick": null,
+        "delay_min": 0,
+        "delay_max": 0
+      },
+      {
+        "arm": "30ms",
+        "repeat": 2,
+        "peer": "host",
+        "latency_ms": {
+          "count": 32,
+          "p50": 34.1935100001283,
+          "p95": 129.41095100017264,
+          "p99": 132.01982499985024,
+          "max": 132.01982499985024
+        },
+        "latency_frames": {
+          "count": 32,
+          "p50": 2,
+          "p95": 7,
+          "p99": 8,
+          "max": 8
+        },
+        "b3_pass": false,
+        "b1_delay_pass": true,
+        "b2_depth_pass": true,
+        "b4_overlay_pass": true,
+        "c_duplicates_pass": true,
+        "c_own_hold_pass": true,
+        "preview_ms_per_actor_tick": 0.8584694304857622,
+        "delay_min": 4,
+        "delay_max": 4
+      },
+      {
+        "arm": "30ms",
+        "repeat": 2,
+        "peer": "client",
+        "latency_ms": {
+          "count": 32,
+          "p50": 31.51455600000918,
+          "p95": 114.479187999852,
+          "p99": 130.47989999968559,
+          "max": 130.47989999968559
+        },
+        "latency_frames": {
+          "count": 32,
+          "p50": 2,
+          "p95": 7,
+          "p99": 8,
+          "max": 8
+        },
+        "b3_pass": false,
+        "b1_delay_pass": true,
+        "b2_depth_pass": true,
+        "b4_overlay_pass": true,
+        "c_duplicates_pass": true,
+        "c_own_hold_pass": true,
+        "preview_ms_per_actor_tick": 0.882142259414226,
+        "delay_min": 4,
+        "delay_max": 4
+      },
+      {
+        "arm": "200ms",
+        "repeat": 2,
+        "peer": "host",
+        "latency_ms": {
+          "count": 32,
+          "p50": 33.274720000103116,
+          "p95": 99.02418000018224,
+          "p99": 149.46493700006977,
+          "max": 149.46493700006977
+        },
+        "latency_frames": {
+          "count": 32,
+          "p50": 2,
+          "p95": 5,
+          "p99": 9,
+          "max": 9
+        },
+        "b3_pass": false,
+        "b1_delay_pass": true,
+        "b2_depth_pass": true,
+        "b4_overlay_pass": true,
+        "c_duplicates_pass": true,
+        "c_own_hold_pass": true,
+        "preview_ms_per_actor_tick": 0.2757064171122995,
+        "delay_min": 15,
+        "delay_max": 16
+      },
+      {
+        "arm": "200ms",
+        "repeat": 2,
+        "peer": "client",
+        "latency_ms": {
+          "count": 32,
+          "p50": 31.971558999735862,
+          "p95": 97.58467900007963,
+          "p99": 132.82517899991944,
+          "max": 132.82517899991944
+        },
+        "latency_frames": {
+          "count": 32,
+          "p50": 2,
+          "p95": 6,
+          "p99": 8,
+          "max": 8
+        },
+        "b3_pass": true,
+        "b1_delay_pass": true,
+        "b2_depth_pass": true,
+        "b4_overlay_pass": true,
+        "c_duplicates_pass": true,
+        "c_own_hold_pass": true,
+        "preview_ms_per_actor_tick": 0.2623406040268456,
+        "delay_min": 15,
+        "delay_max": 15
+      },
+      {
+        "arm": "sp",
+        "repeat": 3,
+        "peer": "sp",
+        "latency_ms": {
+          "count": 32,
+          "p50": 31.51541699981317,
+          "p95": 112.68137999996543,
+          "p99": 138.2915469999425,
+          "max": 138.2915469999425
+        },
+        "latency_frames": {
+          "count": 32,
+          "p50": 2,
+          "p95": 7,
+          "p99": 9,
+          "max": 9
+        },
+        "b3_pass": true,
+        "b1_delay_pass": true,
+        "b2_depth_pass": true,
+        "b4_overlay_pass": true,
+        "c_duplicates_pass": true,
+        "c_own_hold_pass": true,
+        "preview_ms_per_actor_tick": null,
+        "delay_min": 0,
+        "delay_max": 0
+      },
+      {
+        "arm": "30ms",
+        "repeat": 3,
+        "peer": "host",
+        "latency_ms": {
+          "count": 32,
+          "p50": 32.23829699959606,
+          "p95": 115.27948100026697,
+          "p99": 115.85038600023836,
+          "max": 115.85038600023836
+        },
+        "latency_frames": {
+          "count": 32,
+          "p50": 2,
+          "p95": 7,
+          "p99": 7,
+          "max": 7
+        },
+        "b3_pass": false,
+        "b1_delay_pass": true,
+        "b2_depth_pass": true,
+        "b4_overlay_pass": true,
+        "c_duplicates_pass": true,
+        "c_own_hold_pass": true,
+        "preview_ms_per_actor_tick": 0.8141654330125833,
+        "delay_min": 4,
+        "delay_max": 5
+      },
+      {
+        "arm": "30ms",
+        "repeat": 3,
+        "peer": "client",
+        "latency_ms": {
+          "count": 32,
+          "p50": 31.95103699993342,
+          "p95": 97.38034200016409,
+          "p99": 99.63901899987832,
+          "max": 99.63901899987832
+        },
+        "latency_frames": {
+          "count": 32,
+          "p50": 2,
+          "p95": 6,
+          "p99": 6,
+          "max": 6
+        },
+        "b3_pass": true,
+        "b1_delay_pass": true,
+        "b2_depth_pass": true,
+        "b4_overlay_pass": true,
+        "c_duplicates_pass": true,
+        "c_own_hold_pass": true,
+        "preview_ms_per_actor_tick": 0.807249953609204,
+        "delay_min": 4,
+        "delay_max": 5
+      },
+      {
+        "arm": "200ms",
+        "repeat": 3,
+        "peer": "host",
+        "latency_ms": {
+          "count": 32,
+          "p50": 32.718685999978334,
+          "p95": 104.47920099971816,
+          "p99": 146.71081200009212,
+          "max": 146.71081200009212
+        },
+        "latency_frames": {
+          "count": 32,
+          "p50": 2,
+          "p95": 5,
+          "p99": 8,
+          "max": 8
+        },
+        "b3_pass": false,
+        "b1_delay_pass": true,
+        "b2_depth_pass": true,
+        "b4_overlay_pass": true,
+        "c_duplicates_pass": true,
+        "c_own_hold_pass": true,
+        "preview_ms_per_actor_tick": 0.2766086399316495,
+        "delay_min": 15,
+        "delay_max": 16
+      },
+      {
+        "arm": "200ms",
+        "repeat": 3,
+        "peer": "client",
+        "latency_ms": {
+          "count": 32,
+          "p50": 32.61328499997035,
+          "p95": 93.23650400014594,
+          "p99": 127.54109300021082,
+          "max": 127.54109300021082
+        },
+        "latency_frames": {
+          "count": 32,
+          "p50": 2,
+          "p95": 4,
+          "p99": 7,
+          "max": 7
+        },
+        "b3_pass": false,
+        "b1_delay_pass": true,
+        "b2_depth_pass": true,
+        "b4_overlay_pass": true,
+        "c_duplicates_pass": true,
+        "c_own_hold_pass": true,
+        "preview_ms_per_actor_tick": 0.2747727272727273,
+        "delay_min": 15,
+        "delay_max": 15
+      }
+    ],
+    "live_resize_checks": [],
+    "pass_check": false,
+    "definition": "Existing feel.report.input_latencies: first completed presentation whose local actor changes aim/velocity in the requested direction and carries that input. Every missing response remains RED. Each network p50 must lie inside the measured single-player repeat p50 range, in milliseconds and presented frames; no added tolerance.",
+    "scope": "Headed Linux local two-engine fake-RTT measurement, not a spread/relay proof or physical display scanout measurement."
+  },
+  "runs": [
+    {
+      "started": "2026-10-17 10:35:38 AM MST",
+      "arm": "200ms",
+      "repeat": 1,
+      "requested_rtt_ms": 200,
+      "ticks": 1200,
+      "per_engine_lag_ms": 100,
+      "headed": true,
+      "display": ":0",
+      "size": [
+        960,
+        540
+      ],
+      "lag_step": null,
+      "local_prediction_max_ticks_setting": 20,
+      "host_stall": null,
+      "dump_window": null,
+      "binary": "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand",
+      "binary_sha256": "aed0f41f8a77d697cdca6e71c7ae4a20ebe3c9c73657549b06dc125110f8e932",
+      "quiet": true,
+      "binary_unchanged": true,
+      "complete": true,
+      "finished": "2026-10-17 10:36:17 AM MST",
+      "peer_hashes": {
+        "first": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-link-only-repeat-matrix/01-200ms/host_trace.json",
+        "second": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-link-only-repeat-matrix/01-200ms/client_trace.json",
+        "cross_peer": true,
+        "sim_gated_pass": true,
+        "existing_comparator": {
+          "compared_ticks": 1200,
+          "first_divergence": null,
+          "divergent_subsystems": [],
+          "reasons": [],
+          "paused_ticks": 0,
+          "per_peer_excluded": [
+            "controller_route"
+          ],
+          "host_info": {
+            "run": {
+              "final_total_hash": "92486c4c0123264d2ea7d1d61bf1b4838eccddedd617852d3e12d95917883c7c",
+              "numeric": {
+                "__wall_seconds": 22.221742259,
+                "final_tick": 1200.0
+              },
+              "passed": true,
+              "scenario": "P4 Alpha Duel",
+              "seed": 42,
+              "sim_config": {
+                "ai_update_interval": "2",
+                "automatic_gold_deposit": "1",
+                "crab_bombs": "off",
+                "delta_time_bits": "0x3c888865",
+                "enabled_global_scripts": "",
+                "mo_subtraction": "1",
+                "particle_settling": "1",
+                "pathfinder_grid_node_size": "24",
+                "recommended_moid_count": "512"
+              },
+              "strings": {
+                "completion": "completed",
+                "completion_reason": "the match ran to its end",
+                "scenario": "FeelBaseline"
+              },
+              "ticks": 1200
+            }
+          },
+          "client_info": {
+            "run": {
+              "final_total_hash": "92486c4c0123264d2ea7d1d61bf1b4838eccddedd617852d3e12d95917883c7c",
+              "numeric": {
+                "__wall_seconds": 22.334430811,
+                "final_tick": 1200.0
+              },
+              "passed": true,
+              "scenario": "P4 Alpha Duel",
+              "seed": 42,
+              "sim_config": {
+                "ai_update_interval": "2",
+                "automatic_gold_deposit": "1",
+                "crab_bombs": "off",
+                "delta_time_bits": "0x3c888865",
+                "enabled_global_scripts": "",
+                "mo_subtraction": "1",
+                "particle_settling": "1",
+                "pathfinder_grid_node_size": "24",
+                "recommended_moid_count": "512"
+              },
+              "strings": {
+                "completion": "completed",
+                "completion_reason": "the match ran to its end",
+                "scenario": "FeelBaseline"
+              },
+              "ticks": 1200
+            }
+          },
+          "client_away_ticks": 0,
+          "client_replayed_ticks": 0,
+          "subsystem_sets_seen": [
+            [
+              "actor_timers",
+              "actors",
+              "attachables",
+              "carve_math",
+              "controller",
+              "controller_route",
+              "funds",
+              "lua_state",
+              "particles",
+              "rot_angle",
+              "rot_angvel",
+              "scene",
+              "sim_rng",
+              "terrain",
+              "tick"
+            ],
+            [
+              "actor_timers",
+              "actors",
+              "attachables",
+              "carve_math",
+              "controller",
+              "controller_route",
+              "funds",
+              "lua_state",
+              "rot_angle",
+              "rot_angvel",
+              "scene",
+              "sim_rng",
+              "terrain",
+              "tick"
+            ],
+            [
+              "actor_timers",
+              "actors",
+              "attachables",
+              "controller",
+              "controller_route",
+              "funds",
+              "lua_state",
+              "rot_angle",
+              "rot_angvel",
+              "scene",
+              "sim_rng",
+              "terrain",
+              "tick"
+            ]
+          ],
+          "coverage": "active core hashes; paused ticks cover the same census, per-object subsystems only when the world holds objects"
+        },
+        "all_tick_hashes_identical": true,
+        "first_full_row_difference": null,
+        "pass": true
+      }
+    },
+    {
+      "started": "2026-10-17 10:34:57 AM MST",
+      "arm": "30ms",
+      "repeat": 1,
+      "requested_rtt_ms": 30,
+      "ticks": 1200,
+      "per_engine_lag_ms": 15,
+      "headed": true,
+      "display": ":0",
+      "size": [
+        960,
+        540
+      ],
+      "lag_step": null,
+      "local_prediction_max_ticks_setting": 20,
+      "host_stall": null,
+      "dump_window": null,
+      "binary": "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand",
+      "binary_sha256": "aed0f41f8a77d697cdca6e71c7ae4a20ebe3c9c73657549b06dc125110f8e932",
+      "quiet": true,
+      "binary_unchanged": true,
+      "complete": true,
+      "finished": "2026-10-17 10:35:34 AM MST",
+      "peer_hashes": {
+        "first": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-link-only-repeat-matrix/01-30ms/host_trace.json",
+        "second": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-link-only-repeat-matrix/01-30ms/client_trace.json",
+        "cross_peer": true,
+        "sim_gated_pass": true,
+        "existing_comparator": {
+          "compared_ticks": 1200,
+          "first_divergence": null,
+          "divergent_subsystems": [],
+          "reasons": [],
+          "paused_ticks": 0,
+          "per_peer_excluded": [
+            "controller_route"
+          ],
+          "host_info": {
+            "run": {
+              "final_total_hash": "8c6a349560573acf4bc22dbe3d3cd967c13ebdf0ce8ca7d33770c9bb66eede3b",
+              "numeric": {
+                "__wall_seconds": 22.047114832,
+                "final_tick": 1200.0
+              },
+              "passed": true,
+              "scenario": "P4 Alpha Duel",
+              "seed": 42,
+              "sim_config": {
+                "ai_update_interval": "2",
+                "automatic_gold_deposit": "1",
+                "crab_bombs": "off",
+                "delta_time_bits": "0x3c888865",
+                "enabled_global_scripts": "",
+                "mo_subtraction": "1",
+                "particle_settling": "1",
+                "pathfinder_grid_node_size": "24",
+                "recommended_moid_count": "512"
+              },
+              "strings": {
+                "completion": "completed",
+                "completion_reason": "the match ran to its end",
+                "scenario": "FeelBaseline"
+              },
+              "ticks": 1200
+            }
+          },
+          "client_info": {
+            "run": {
+              "final_total_hash": "8c6a349560573acf4bc22dbe3d3cd967c13ebdf0ce8ca7d33770c9bb66eede3b",
+              "numeric": {
+                "__wall_seconds": 22.12208327,
+                "final_tick": 1200.0
+              },
+              "passed": true,
+              "scenario": "P4 Alpha Duel",
+              "seed": 42,
+              "sim_config": {
+                "ai_update_interval": "2",
+                "automatic_gold_deposit": "1",
+                "crab_bombs": "off",
+                "delta_time_bits": "0x3c888865",
+                "enabled_global_scripts": "",
+                "mo_subtraction": "1",
+                "particle_settling": "1",
+                "pathfinder_grid_node_size": "24",
+                "recommended_moid_count": "512"
+              },
+              "strings": {
+                "completion": "completed",
+                "completion_reason": "the match ran to its end",
+                "scenario": "FeelBaseline"
+              },
+              "ticks": 1200
+            }
+          },
+          "client_away_ticks": 0,
+          "client_replayed_ticks": 0,
+          "subsystem_sets_seen": [
+            [
+              "actor_timers",
+              "actors",
+              "attachables",
+              "carve_math",
+              "controller",
+              "controller_route",
+              "funds",
+              "lua_state",
+              "particles",
+              "rot_angle",
+              "rot_angvel",
+              "scene",
+              "sim_rng",
+              "terrain",
+              "tick"
+            ],
+            [
+              "actor_timers",
+              "actors",
+              "attachables",
+              "carve_math",
+              "controller",
+              "controller_route",
+              "funds",
+              "lua_state",
+              "rot_angle",
+              "rot_angvel",
+              "scene",
+              "sim_rng",
+              "terrain",
+              "tick"
+            ],
+            [
+              "actor_timers",
+              "actors",
+              "attachables",
+              "controller",
+              "controller_route",
+              "funds",
+              "lua_state",
+              "rot_angle",
+              "rot_angvel",
+              "scene",
+              "sim_rng",
+              "terrain",
+              "tick"
+            ]
+          ],
+          "coverage": "active core hashes; paused ticks cover the same census, per-object subsystems only when the world holds objects"
+        },
+        "all_tick_hashes_identical": true,
+        "first_full_row_difference": null,
+        "pass": true
+      }
+    },
+    {
+      "started": "2026-10-17 10:34:21 AM MST",
+      "arm": "sp",
+      "repeat": 1,
+      "requested_rtt_ms": null,
+      "ticks": 1200,
+      "per_engine_lag_ms": 0,
+      "headed": true,
+      "display": ":0",
+      "size": [
+        960,
+        540
+      ],
+      "lag_step": null,
+      "local_prediction_max_ticks_setting": 20,
+      "host_stall": null,
+      "dump_window": null,
+      "binary": "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand",
+      "binary_sha256": "aed0f41f8a77d697cdca6e71c7ae4a20ebe3c9c73657549b06dc125110f8e932",
+      "quiet": true,
+      "binary_unchanged": true,
+      "complete": true,
+      "finished": "2026-10-17 10:34:50 AM MST"
+    },
+    {
+      "started": "2026-10-17 10:37:38 AM MST",
+      "arm": "200ms",
+      "repeat": 2,
+      "requested_rtt_ms": 200,
+      "ticks": 1200,
+      "per_engine_lag_ms": 100,
+      "headed": true,
+      "display": ":0",
+      "size": [
+        960,
+        540
+      ],
+      "lag_step": null,
+      "local_prediction_max_ticks_setting": 20,
+      "host_stall": null,
+      "dump_window": null,
+      "binary": "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand",
+      "binary_sha256": "aed0f41f8a77d697cdca6e71c7ae4a20ebe3c9c73657549b06dc125110f8e932",
+      "quiet": true,
+      "binary_unchanged": true,
+      "complete": true,
+      "finished": "2026-10-17 10:38:18 AM MST",
+      "peer_hashes": {
+        "first": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-link-only-repeat-matrix/02-200ms/host_trace.json",
+        "second": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-link-only-repeat-matrix/02-200ms/client_trace.json",
+        "cross_peer": true,
+        "sim_gated_pass": true,
+        "existing_comparator": {
+          "compared_ticks": 1200,
+          "first_divergence": null,
+          "divergent_subsystems": [],
+          "reasons": [],
+          "paused_ticks": 0,
+          "per_peer_excluded": [
+            "controller_route"
+          ],
+          "host_info": {
+            "run": {
+              "final_total_hash": "17d5483733003a804ed7eb63cebe669e2afb17862d43b9fef6f680b661ee2304",
+              "numeric": {
+                "__wall_seconds": 22.235967048,
+                "final_tick": 1200.0
+              },
+              "passed": true,
+              "scenario": "P4 Alpha Duel",
+              "seed": 42,
+              "sim_config": {
+                "ai_update_interval": "2",
+                "automatic_gold_deposit": "1",
+                "crab_bombs": "off",
+                "delta_time_bits": "0x3c888865",
+                "enabled_global_scripts": "",
+                "mo_subtraction": "1",
+                "particle_settling": "1",
+                "pathfinder_grid_node_size": "24",
+                "recommended_moid_count": "512"
+              },
+              "strings": {
+                "completion": "completed",
+                "completion_reason": "the match ran to its end",
+                "scenario": "FeelBaseline"
+              },
+              "ticks": 1200
+            }
+          },
+          "client_info": {
+            "run": {
+              "final_total_hash": "17d5483733003a804ed7eb63cebe669e2afb17862d43b9fef6f680b661ee2304",
+              "numeric": {
+                "__wall_seconds": 22.332949583,
+                "final_tick": 1200.0
+              },
+              "passed": true,
+              "scenario": "P4 Alpha Duel",
+              "seed": 42,
+              "sim_config": {
+                "ai_update_interval": "2",
+                "automatic_gold_deposit": "1",
+                "crab_bombs": "off",
+                "delta_time_bits": "0x3c888865",
+                "enabled_global_scripts": "",
+                "mo_subtraction": "1",
+                "particle_settling": "1",
+                "pathfinder_grid_node_size": "24",
+                "recommended_moid_count": "512"
+              },
+              "strings": {
+                "completion": "completed",
+                "completion_reason": "the match ran to its end",
+                "scenario": "FeelBaseline"
+              },
+              "ticks": 1200
+            }
+          },
+          "client_away_ticks": 0,
+          "client_replayed_ticks": 0,
+          "subsystem_sets_seen": [
+            [
+              "actor_timers",
+              "actors",
+              "attachables",
+              "carve_math",
+              "controller",
+              "controller_route",
+              "funds",
+              "lua_state",
+              "particles",
+              "rot_angle",
+              "rot_angvel",
+              "scene",
+              "sim_rng",
+              "terrain",
+              "tick"
+            ],
+            [
+              "actor_timers",
+              "actors",
+              "attachables",
+              "carve_math",
+              "controller",
+              "controller_route",
+              "funds",
+              "lua_state",
+              "rot_angle",
+              "rot_angvel",
+              "scene",
+              "sim_rng",
+              "terrain",
+              "tick"
+            ],
+            [
+              "actor_timers",
+              "actors",
+              "attachables",
+              "controller",
+              "controller_route",
+              "funds",
+              "lua_state",
+              "rot_angle",
+              "rot_angvel",
+              "scene",
+              "sim_rng",
+              "terrain",
+              "tick"
+            ]
+          ],
+          "coverage": "active core hashes; paused ticks cover the same census, per-object subsystems only when the world holds objects"
+        },
+        "all_tick_hashes_identical": true,
+        "first_full_row_difference": null,
+        "pass": true
+      }
+    },
+    {
+      "started": "2026-10-17 10:36:57 AM MST",
+      "arm": "30ms",
+      "repeat": 2,
+      "requested_rtt_ms": 30,
+      "ticks": 1200,
+      "per_engine_lag_ms": 15,
+      "headed": true,
+      "display": ":0",
+      "size": [
+        960,
+        540
+      ],
+      "lag_step": null,
+      "local_prediction_max_ticks_setting": 20,
+      "host_stall": null,
+      "dump_window": null,
+      "binary": "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand",
+      "binary_sha256": "aed0f41f8a77d697cdca6e71c7ae4a20ebe3c9c73657549b06dc125110f8e932",
+      "quiet": true,
+      "binary_unchanged": true,
+      "complete": true,
+      "finished": "2026-10-17 10:37:34 AM MST",
+      "peer_hashes": {
+        "first": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-link-only-repeat-matrix/02-30ms/host_trace.json",
+        "second": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-link-only-repeat-matrix/02-30ms/client_trace.json",
+        "cross_peer": true,
+        "sim_gated_pass": true,
+        "existing_comparator": {
+          "compared_ticks": 1200,
+          "first_divergence": null,
+          "divergent_subsystems": [],
+          "reasons": [],
+          "paused_ticks": 0,
+          "per_peer_excluded": [
+            "controller_route"
+          ],
+          "host_info": {
+            "run": {
+              "final_total_hash": "038740e96a27a8a0bd810f804afc9c655ed0c402b136f5414278bddadf744326",
+              "numeric": {
+                "__wall_seconds": 22.039045393,
+                "final_tick": 1200.0
+              },
+              "passed": true,
+              "scenario": "P4 Alpha Duel",
+              "seed": 42,
+              "sim_config": {
+                "ai_update_interval": "2",
+                "automatic_gold_deposit": "1",
+                "crab_bombs": "off",
+                "delta_time_bits": "0x3c888865",
+                "enabled_global_scripts": "",
+                "mo_subtraction": "1",
+                "particle_settling": "1",
+                "pathfinder_grid_node_size": "24",
+                "recommended_moid_count": "512"
+              },
+              "strings": {
+                "completion": "completed",
+                "completion_reason": "the match ran to its end",
+                "scenario": "FeelBaseline"
+              },
+              "ticks": 1200
+            }
+          },
+          "client_info": {
+            "run": {
+              "final_total_hash": "038740e96a27a8a0bd810f804afc9c655ed0c402b136f5414278bddadf744326",
+              "numeric": {
+                "__wall_seconds": 22.117696182,
+                "final_tick": 1200.0
+              },
+              "passed": true,
+              "scenario": "P4 Alpha Duel",
+              "seed": 42,
+              "sim_config": {
+                "ai_update_interval": "2",
+                "automatic_gold_deposit": "1",
+                "crab_bombs": "off",
+                "delta_time_bits": "0x3c888865",
+                "enabled_global_scripts": "",
+                "mo_subtraction": "1",
+                "particle_settling": "1",
+                "pathfinder_grid_node_size": "24",
+                "recommended_moid_count": "512"
+              },
+              "strings": {
+                "completion": "completed",
+                "completion_reason": "the match ran to its end",
+                "scenario": "FeelBaseline"
+              },
+              "ticks": 1200
+            }
+          },
+          "client_away_ticks": 0,
+          "client_replayed_ticks": 0,
+          "subsystem_sets_seen": [
+            [
+              "actor_timers",
+              "actors",
+              "attachables",
+              "carve_math",
+              "controller",
+              "controller_route",
+              "funds",
+              "lua_state",
+              "particles",
+              "rot_angle",
+              "rot_angvel",
+              "scene",
+              "sim_rng",
+              "terrain",
+              "tick"
+            ],
+            [
+              "actor_timers",
+              "actors",
+              "attachables",
+              "carve_math",
+              "controller",
+              "controller_route",
+              "funds",
+              "lua_state",
+              "rot_angle",
+              "rot_angvel",
+              "scene",
+              "sim_rng",
+              "terrain",
+              "tick"
+            ],
+            [
+              "actor_timers",
+              "actors",
+              "attachables",
+              "controller",
+              "controller_route",
+              "funds",
+              "lua_state",
+              "rot_angle",
+              "rot_angvel",
+              "scene",
+              "sim_rng",
+              "terrain",
+              "tick"
+            ]
+          ],
+          "coverage": "active core hashes; paused ticks cover the same census, per-object subsystems only when the world holds objects"
+        },
+        "all_tick_hashes_identical": true,
+        "first_full_row_difference": null,
+        "pass": true
+      }
+    },
+    {
+      "started": "2026-10-17 10:36:22 AM MST",
+      "arm": "sp",
+      "repeat": 2,
+      "requested_rtt_ms": null,
+      "ticks": 1200,
+      "per_engine_lag_ms": 0,
+      "headed": true,
+      "display": ":0",
+      "size": [
+        960,
+        540
+      ],
+      "lag_step": null,
+      "local_prediction_max_ticks_setting": 20,
+      "host_stall": null,
+      "dump_window": null,
+      "binary": "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand",
+      "binary_sha256": "aed0f41f8a77d697cdca6e71c7ae4a20ebe3c9c73657549b06dc125110f8e932",
+      "quiet": true,
+      "binary_unchanged": true,
+      "complete": true,
+      "finished": "2026-10-17 10:36:50 AM MST"
+    },
+    {
+      "started": "2026-10-17 10:39:38 AM MST",
+      "arm": "200ms",
+      "repeat": 3,
+      "requested_rtt_ms": 200,
+      "ticks": 1200,
+      "per_engine_lag_ms": 100,
+      "headed": true,
+      "display": ":0",
+      "size": [
+        960,
+        540
+      ],
+      "lag_step": null,
+      "local_prediction_max_ticks_setting": 20,
+      "host_stall": null,
+      "dump_window": null,
+      "binary": "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand",
+      "binary_sha256": "aed0f41f8a77d697cdca6e71c7ae4a20ebe3c9c73657549b06dc125110f8e932",
+      "quiet": true,
+      "binary_unchanged": true,
+      "complete": true,
+      "finished": "2026-10-17 10:40:18 AM MST",
+      "peer_hashes": {
+        "first": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-link-only-repeat-matrix/03-200ms/host_trace.json",
+        "second": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-link-only-repeat-matrix/03-200ms/client_trace.json",
+        "cross_peer": true,
+        "sim_gated_pass": true,
+        "existing_comparator": {
+          "compared_ticks": 1200,
+          "first_divergence": null,
+          "divergent_subsystems": [],
+          "reasons": [],
+          "paused_ticks": 0,
+          "per_peer_excluded": [
+            "controller_route"
+          ],
+          "host_info": {
+            "run": {
+              "final_total_hash": "17d5483733003a804ed7eb63cebe669e2afb17862d43b9fef6f680b661ee2304",
+              "numeric": {
+                "__wall_seconds": 22.240336274,
+                "final_tick": 1200.0
+              },
+              "passed": true,
+              "scenario": "P4 Alpha Duel",
+              "seed": 42,
+              "sim_config": {
+                "ai_update_interval": "2",
+                "automatic_gold_deposit": "1",
+                "crab_bombs": "off",
+                "delta_time_bits": "0x3c888865",
+                "enabled_global_scripts": "",
+                "mo_subtraction": "1",
+                "particle_settling": "1",
+                "pathfinder_grid_node_size": "24",
+                "recommended_moid_count": "512"
+              },
+              "strings": {
+                "completion": "completed",
+                "completion_reason": "the match ran to its end",
+                "scenario": "FeelBaseline"
+              },
+              "ticks": 1200
+            }
+          },
+          "client_info": {
+            "run": {
+              "final_total_hash": "17d5483733003a804ed7eb63cebe669e2afb17862d43b9fef6f680b661ee2304",
+              "numeric": {
+                "__wall_seconds": 22.325897243,
+                "final_tick": 1200.0
+              },
+              "passed": true,
+              "scenario": "P4 Alpha Duel",
+              "seed": 42,
+              "sim_config": {
+                "ai_update_interval": "2",
+                "automatic_gold_deposit": "1",
+                "crab_bombs": "off",
+                "delta_time_bits": "0x3c888865",
+                "enabled_global_scripts": "",
+                "mo_subtraction": "1",
+                "particle_settling": "1",
+                "pathfinder_grid_node_size": "24",
+                "recommended_moid_count": "512"
+              },
+              "strings": {
+                "completion": "completed",
+                "completion_reason": "the match ran to its end",
+                "scenario": "FeelBaseline"
+              },
+              "ticks": 1200
+            }
+          },
+          "client_away_ticks": 0,
+          "client_replayed_ticks": 0,
+          "subsystem_sets_seen": [
+            [
+              "actor_timers",
+              "actors",
+              "attachables",
+              "carve_math",
+              "controller",
+              "controller_route",
+              "funds",
+              "lua_state",
+              "particles",
+              "rot_angle",
+              "rot_angvel",
+              "scene",
+              "sim_rng",
+              "terrain",
+              "tick"
+            ],
+            [
+              "actor_timers",
+              "actors",
+              "attachables",
+              "carve_math",
+              "controller",
+              "controller_route",
+              "funds",
+              "lua_state",
+              "rot_angle",
+              "rot_angvel",
+              "scene",
+              "sim_rng",
+              "terrain",
+              "tick"
+            ],
+            [
+              "actor_timers",
+              "actors",
+              "attachables",
+              "controller",
+              "controller_route",
+              "funds",
+              "lua_state",
+              "rot_angle",
+              "rot_angvel",
+              "scene",
+              "sim_rng",
+              "terrain",
+              "tick"
+            ]
+          ],
+          "coverage": "active core hashes; paused ticks cover the same census, per-object subsystems only when the world holds objects"
+        },
+        "all_tick_hashes_identical": true,
+        "first_full_row_difference": null,
+        "pass": true
+      }
+    },
+    {
+      "started": "2026-10-17 10:38:57 AM MST",
+      "arm": "30ms",
+      "repeat": 3,
+      "requested_rtt_ms": 30,
+      "ticks": 1200,
+      "per_engine_lag_ms": 15,
+      "headed": true,
+      "display": ":0",
+      "size": [
+        960,
+        540
+      ],
+      "lag_step": null,
+      "local_prediction_max_ticks_setting": 20,
+      "host_stall": null,
+      "dump_window": null,
+      "binary": "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand",
+      "binary_sha256": "aed0f41f8a77d697cdca6e71c7ae4a20ebe3c9c73657549b06dc125110f8e932",
+      "quiet": true,
+      "binary_unchanged": true,
+      "complete": true,
+      "finished": "2026-10-17 10:39:34 AM MST",
+      "peer_hashes": {
+        "first": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-link-only-repeat-matrix/03-30ms/host_trace.json",
+        "second": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-link-only-repeat-matrix/03-30ms/client_trace.json",
+        "cross_peer": true,
+        "sim_gated_pass": true,
+        "existing_comparator": {
+          "compared_ticks": 1200,
+          "first_divergence": null,
+          "divergent_subsystems": [],
+          "reasons": [],
+          "paused_ticks": 0,
+          "per_peer_excluded": [
+            "controller_route"
+          ],
+          "host_info": {
+            "run": {
+              "final_total_hash": "ab865924880b52718bf20d363757d4946188d8a6d4d937d9e566156398782f4d",
+              "numeric": {
+                "__wall_seconds": 21.989689518,
+                "final_tick": 1200.0
+              },
+              "passed": true,
+              "scenario": "P4 Alpha Duel",
+              "seed": 42,
+              "sim_config": {
+                "ai_update_interval": "2",
+                "automatic_gold_deposit": "1",
+                "crab_bombs": "off",
+                "delta_time_bits": "0x3c888865",
+                "enabled_global_scripts": "",
+                "mo_subtraction": "1",
+                "particle_settling": "1",
+                "pathfinder_grid_node_size": "24",
+                "recommended_moid_count": "512"
+              },
+              "strings": {
+                "completion": "completed",
+                "completion_reason": "the match ran to its end",
+                "scenario": "FeelBaseline"
+              },
+              "ticks": 1200
+            }
+          },
+          "client_info": {
+            "run": {
+              "final_total_hash": "ab865924880b52718bf20d363757d4946188d8a6d4d937d9e566156398782f4d",
+              "numeric": {
+                "__wall_seconds": 22.113952258,
+                "final_tick": 1200.0
+              },
+              "passed": true,
+              "scenario": "P4 Alpha Duel",
+              "seed": 42,
+              "sim_config": {
+                "ai_update_interval": "2",
+                "automatic_gold_deposit": "1",
+                "crab_bombs": "off",
+                "delta_time_bits": "0x3c888865",
+                "enabled_global_scripts": "",
+                "mo_subtraction": "1",
+                "particle_settling": "1",
+                "pathfinder_grid_node_size": "24",
+                "recommended_moid_count": "512"
+              },
+              "strings": {
+                "completion": "completed",
+                "completion_reason": "the match ran to its end",
+                "scenario": "FeelBaseline"
+              },
+              "ticks": 1200
+            }
+          },
+          "client_away_ticks": 0,
+          "client_replayed_ticks": 0,
+          "subsystem_sets_seen": [
+            [
+              "actor_timers",
+              "actors",
+              "attachables",
+              "carve_math",
+              "controller",
+              "controller_route",
+              "funds",
+              "lua_state",
+              "particles",
+              "rot_angle",
+              "rot_angvel",
+              "scene",
+              "sim_rng",
+              "terrain",
+              "tick"
+            ],
+            [
+              "actor_timers",
+              "actors",
+              "attachables",
+              "carve_math",
+              "controller",
+              "controller_route",
+              "funds",
+              "lua_state",
+              "rot_angle",
+              "rot_angvel",
+              "scene",
+              "sim_rng",
+              "terrain",
+              "tick"
+            ],
+            [
+              "actor_timers",
+              "actors",
+              "attachables",
+              "controller",
+              "controller_route",
+              "funds",
+              "lua_state",
+              "rot_angle",
+              "rot_angvel",
+              "scene",
+              "sim_rng",
+              "terrain",
+              "tick"
+            ]
+          ],
+          "coverage": "active core hashes; paused ticks cover the same census, per-object subsystems only when the world holds objects"
+        },
+        "all_tick_hashes_identical": true,
+        "first_full_row_difference": null,
+        "pass": true
+      }
+    },
+    {
+      "started": "2026-10-17 10:38:22 AM MST",
+      "arm": "sp",
+      "repeat": 3,
+      "requested_rtt_ms": null,
+      "ticks": 1200,
+      "per_engine_lag_ms": 0,
+      "headed": true,
+      "display": ":0",
+      "size": [
+        960,
+        540
+      ],
+      "lag_step": null,
+      "local_prediction_max_ticks_setting": 20,
+      "host_stall": null,
+      "dump_window": null,
+      "binary": "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand",
+      "binary_sha256": "aed0f41f8a77d697cdca6e71c7ae4a20ebe3c9c73657549b06dc125110f8e932",
+      "quiet": true,
+      "binary_unchanged": true,
+      "complete": true,
+      "finished": "2026-10-17 10:38:51 AM MST"
+    }
+  ],
+  "remaining": "B1 slow-host survivor stalls and live resize still need current-binary checks; B3 remains RED. C duplicate watch passes ordinary play, but the own-held path still needs its native repeat."
+}

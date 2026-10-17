@@ -278,11 +278,11 @@ namespace RTE {
 
 	uint32_t NetInputDelayEstimator::SenderRequiredFrames(double tickMs, uint16_t bound, uint16_t floor) const {
 		if (!std::isfinite(tickMs) || tickMs <= 0) return std::numeric_limits<uint32_t>::max();
-		const uint32_t rtt = std::max(P95Ms(), m_Samples.empty() ? 0U : m_Samples.back().second);
-		// The RTT percentile already includes the link's jitter. One production tick covers a receipt delivered between samples;
-		// the combat wait bound belongs to a hold decision, never to every player's permanent input delay.
+		const uint32_t rtt = m_Samples.empty() ? m_LastMeasuredRttMs : m_Samples.back().second;
+		// One production tick beside the measured round trip, plus the recent p95 jitter margin. Machine cost and the
+		// combat wait bound belong to a hold decision, never to every player's permanent input delay.
 		(void)bound;
-		return static_cast<uint32_t>(std::clamp(std::ceil(rtt / tickMs) + 1, static_cast<double>(floor), static_cast<double>(NetMatchConfigUtil::c_MaxInputDelayFrames)));
+		return static_cast<uint32_t>(std::clamp(std::ceil(rtt / tickMs) + 1 + std::ceil(JitterMs() / tickMs), static_cast<double>(floor), static_cast<double>(NetMatchConfigUtil::c_MaxInputDelayFrames)));
 	}
 
 	namespace {
