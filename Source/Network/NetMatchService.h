@@ -448,6 +448,7 @@ namespace RTE {
 			bool hostProvisional = false; //!< Host: it reaches no majority, so its play may not be the match's and nothing is written.
 		};
 		struct AutosaveTickOutput {
+			bool requestPrivateBase = false; //!< Held host: ask the playing voters to agree a base capture, without naming a tick on held input.
 			bool capture = false; //!< This peer captures at this tick.
 			bool manual = false; //!< The capture is one the host asked for by hand.
 			std::vector<CheckpointNote> send; //!< Entries this peer puts on its committed stream.
@@ -1120,8 +1121,8 @@ namespace RTE {
 		void RefuseReturnerLocked(NetPeerId connection, const std::string& reason, const std::string& text);
 		/// Client: points the ticket at a successor and rejoins it.
 		bool RejoinSuccessorRoute(const NetMatchServiceRequest& route, std::string* error);
-		/// Host: seals the successor capsule for a returning peer and sends it after the config, as a lobby round does.
-		void SendSuccessorCapsuleToLocked(uint8_t member);
+		/// Host: seals the successor capsule for a returning peer and sends it after the config, as a lobby round does; false until it went.
+		bool SendSuccessorCapsuleToLocked(uint8_t member);
 		/// Bounds a returning seat's wait on the private capture's writer: one fresh capture, then the seat stays with the AI.
 		void BoundPrivateImageWait(uint64_t nowMs);
 		void DriveWorldJoinClient(uint64_t nowMs);
@@ -1540,6 +1541,7 @@ namespace RTE {
 		uint32_t m_MatchAutosaveSeconds = 0; //!< The cadence the round agreed on, read once so the tick path never chases the runner.
 		int64_t m_NextAutosaveSimTime = -1;
 		int64_t m_LastAutosaveSimTime = -1;
+		int64_t m_CaptureAnchorSimTime = -1; //!< When this peer last took a capture, or first counted toward one.
 		AutosaveIdentity m_AutosaveIdentity; //!< What every checkpoint of this match is stamped with.
 		/// The agreed rewind point; a worker thread names it, and every capture in flight shares it so
 		/// retention reads the live value instead of the one the capture started with.
@@ -1998,6 +2000,7 @@ namespace RTE {
 		bool m_PrivateImageRecaptured = false; //!< Host: this wait already took its one fresh base.
 		bool m_PrivateImageSeatHeld = false;
 		std::map<NetPeerId, std::string> m_PrivateTransferHeldReasons; //!< Host: why a returner's image has not left, reported once per reason.
+		std::set<NetPeerId> m_SuccessorCapsulesOwed; //!< Host: the returners sent a config whose successor capsule has not gone yet.
 		static constexpr uint64_t c_ReturnerLinkSettleMs = 1000; //!< How long a returner's round trip still carries our image's queue after it lands.
 		std::map<NetPeerId, uint64_t> m_ReturnerLinkSettlesMs; //!< Host: until when each returner's link still carries the image we sent it.
 		const char* m_PrivateBaseHeldReason = nullptr; //!< Host: why the last pass could not take a base, reported once per reason.

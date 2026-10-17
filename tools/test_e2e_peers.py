@@ -387,10 +387,10 @@ class JoinerBoxTest(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.boxes = self.root / "boxes.json"
         self.boxes.write_text(json.dumps({"boxes": [
-            dict(name="Ally", os="win32", hostname="Erol-Ally7", ssh="ally-ts", repo="C:/tree", scratch="C:/mx", python="python"),
-            dict(name="Mac", os="darwin", hostname="Erol-Mac", ssh="bro", repo="/mac/tree", scratch="/mac/mx", python="/usr/bin/python3",
+            dict(name="Node", os="win32", hostname="Test-Node7", ssh="node-ts", repo="C:/tree", scratch="C:/mx", python="python"),
+            dict(name="Mac", os="darwin", hostname="Test-Mac", ssh="mac", repo="/mac/tree", scratch="/mac/mx", python="/usr/bin/python3",
                  binary="build-gcc/CortexCommand"),
-            dict(name="Linux", os="linux", hostname="ubuntu", ssh="3090-ts", repo="/linux/tree", scratch="/linux/mx",
+            dict(name="Linux", os="linux", hostname="ubuntu", ssh="unix-ts", repo="/linux/tree", scratch="/linux/mx",
                  python="/usr/bin/python3", binary="build-gcc/CortexCommand")]}))
 
     def tearDown(self):
@@ -398,16 +398,16 @@ class JoinerBoxTest(unittest.TestCase):
 
     def test_mac_and_linux_joiners(self):
         for joiner in ("Mac", "Linux"):
-            self.assertEqual(peers.selected_boxes("host=Ally,joiner=" + joiner, self.boxes)["joiner"]["name"], joiner)
+            self.assertEqual(peers.selected_boxes("host=Node,joiner=" + joiner, self.boxes)["joiner"]["name"], joiner)
 
     def test_only_a_windows_host(self):
         with self.assertRaisesRegex(ValueError, "needs a Windows host"):
             peers.selected_boxes("host=Linux,joiner=Mac", self.boxes)
         with self.assertRaisesRegex(ValueError, "needs a Windows host"):
-            peers.selected_boxes("host=Mac,joiner=Ally", self.boxes)
+            peers.selected_boxes("host=Mac,joiner=Node", self.boxes)
 
     def test_linux_player_script(self):
-        box = peers.selected_boxes("host=Ally,joiner=Linux", self.boxes)["joiner"]
+        box = peers.selected_boxes("host=Node,joiner=Linux", self.boxes)["joiner"]
         request = self.root / "request.json"
         request.write_text(json.dumps(dict(out="/linux/mx/s10-run0-1")))
         with mock.patch.object(peers, "ssh"), mock.patch.object(peers, "copy_file"), \
@@ -420,10 +420,10 @@ class JoinerBoxTest(unittest.TestCase):
         self.assertIn('export DISPLAY="${DISPLAY:-:0}"', script)
 
     def test_the_collectors_own_box_plays_without_ssh(self):
-        box = dict(peers.selected_boxes("host=Ally,joiner=Linux", self.boxes)["joiner"], ssh="local")
+        box = dict(peers.selected_boxes("host=Node,joiner=Linux", self.boxes)["joiner"], ssh="local")
         self.assertEqual(peers.remote_command(box, ["/usr/bin/python3", "tool.py", "--pack", Path("/linux/mx/request.json")]),
                          ["/usr/bin/python3", "tool.py", "--pack", "/linux/mx/request.json"])
-        self.assertEqual(peers.remote_command(dict(box, ssh="3090-ts"), ["python3", "a b"])[-2:], ["3090-ts", "python3 'a b'"])
+        self.assertEqual(peers.remote_command(dict(box, ssh="unix-ts"), ["python3", "a b"])[-2:], ["unix-ts", "python3 'a b'"])
         source, copied, back = self.root / "source.json", self.root / "copied.json", self.root / "back.json"
         source.write_text("{}")
         peers.copy_file(box, source, copied)
@@ -487,7 +487,7 @@ class JoinerBoxTest(unittest.TestCase):
 class WindowsJoinersTest(unittest.TestCase):
     """Four players on four Windows boxes: every joiner plays through its own box's game task, each on its own engine host."""
 
-    BOXES = [("EROL-PC", "EROL-PC", "erol-pc"), ("Ally", "Erol-Ally7", "ally-ts"), ("EDITH", "EDITH", "edith-ts"), ("Z13", "Erol-Tablet", "z13-ts")]
+    BOXES = [("TEST-PC", "TEST-PC", "test-pc"), ("Node", "Test-Node7", "node-ts"), ("BOX-C", "BOX-C", "box-c-ts"), ("PAD", "Test-Tablet", "pad-ts")]
 
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -504,26 +504,26 @@ class WindowsJoinersTest(unittest.TestCase):
                  session_dir="C:/session1", task="cortex-session1") for name, host, alias in boxes]}))
 
     def test_windows_joiners_play_through_their_own_box(self):
-        boxes = peers.selected_boxes("host=EROL-PC,joiner1=Ally,joiner2=EDITH,joiner3=Z13", self.boxes)
+        boxes = peers.selected_boxes("host=TEST-PC,joiner1=Node,joiner2=BOX-C,joiner3=PAD", self.boxes)
         self.assertEqual(list(boxes), ["host", "joiner1", "joiner2", "joiner3"])
-        self.assertEqual([box["name"] for box in boxes.values()], ["EROL-PC", "Ally", "EDITH", "Z13"])
+        self.assertEqual([box["name"] for box in boxes.values()], ["TEST-PC", "Node", "BOX-C", "PAD"])
         request = self.root / "request.json"
-        request.write_text(json.dumps(dict(out="C:/ally-ts/mx/s11-run0-1")))
+        request.write_text(json.dumps(dict(out="C:/node-ts/mx/s11-run0-1")))
         with mock.patch.object(peers, "ssh"), mock.patch.object(peers, "copy_file"), \
                 mock.patch.object(peers.subprocess, "Popen") as popen:
             peers.launch(boxes["joiner1"], request, None)
         command = popen.call_args.args[0]
-        self.assertEqual(command[-2:], ["ally-ts", "pwsh -NoProfile -File C:/ally-ts/tree/tools/e2e/peer_box.ps1 -Request C:/ally-ts/mx/s11-run0-1/request.json"])
+        self.assertEqual(command[-2:], ["node-ts", "pwsh -NoProfile -File C:/node-ts/tree/tools/e2e/peer_box.ps1 -Request C:/node-ts/mx/s11-run0-1/request.json"])
         self.assertFalse(peers.headed_box(boxes["joiner2"]))
 
     def test_each_player_needs_its_own_engine_host(self):
         with self.assertRaisesRegex(ValueError, "a different box for each player"):
-            peers.selected_boxes("host=EROL-PC,joiner1=Ally,joiner2=Ally", self.boxes)
+            peers.selected_boxes("host=TEST-PC,joiner1=Node,joiner2=Node", self.boxes)
         with self.assertRaisesRegex(ValueError, "a different box for each player"):
-            peers.selected_boxes("joiner1=Ally,joiner2=EDITH", self.boxes)
-        self.write_boxes([*self.BOXES[:3], ("Z13", "EDITH", "z13-ts")])
+            peers.selected_boxes("joiner1=Node,joiner2=BOX-C", self.boxes)
+        self.write_boxes([*self.BOXES[:3], ("PAD", "BOX-C", "pad-ts")])
         with self.assertRaisesRegex(ValueError, "two assignments name one engine host"):
-            peers.selected_boxes("host=EROL-PC,joiner1=Ally,joiner2=EDITH,joiner3=Z13", self.boxes)
+            peers.selected_boxes("host=TEST-PC,joiner1=Node,joiner2=BOX-C,joiner3=PAD", self.boxes)
 
     def capture(self, hosts=None):
         hosts = hosts or {role: role + "-computer" for role in ("host", "joiner1", "joiner2", "joiner3")}
@@ -613,18 +613,18 @@ class WindowsJoinersTest(unittest.TestCase):
         self.assertEqual(seen["PROBE_DIR_joiner1"], self.root / "native-joiner2" / "run0" / "joiner1-stage/probe")
 
     def test_a_run_name_that_puts_windows_game_files_past_the_path_limit_is_refused(self):
-        boxes = peers.selected_boxes("host=EROL-PC,joiner1=Ally,joiner2=EDITH,joiner3=Z13", self.boxes)
-        roots = {"EROL-PC": "C:/cortex-project/mx/scene-peers-desync", "Ally": "C:/cortex-project/mx/two-box-harness",
-                 "EDITH": "D:/mx/two-box-harness", "Z13": "C:/cortex-project/mx/scene-peers-desync"}
-        # The Z13's joiner of fe5db-erolpc-ally-mac-z13-4p1 could not read this 125-character Data file at 260 characters.
+        boxes = peers.selected_boxes("host=TEST-PC,joiner1=Node,joiner2=BOX-C,joiner3=PAD", self.boxes)
+        roots = {"TEST-PC": "C:/sample-project/mx/scene-peers-desync", "Node": "C:/sample-project/mx/two-box-harness",
+                 "BOX-C": "W:/mx/two-box-harness", "PAD": "C:/sample-project/mx/scene-peers-desync"}
+        # The PAD's joiner of fe5db-testpc-node-mac-pad-4p1 could not read this 125-character Data file at 260 characters.
         longest = len("Data/Browncoats.rte/Scenes/Objects/BunkerSystems/RefineryAuthorizationConsole/RefineryAuthorizationConsolePieSliceActions.lua")
-        for run in ("fe5db-erolpc-ally-mac-z13-4p1", "fe5db-4p2"):
+        for run in ("fe5db-testpc-node-mac-pad-4p1", "fe5db-4p2"):
             for box in boxes.values():
                 box["scratch"] = roots[box["name"]] + "/" + run
             if run == "fe5db-4p2":
                 peers.check_windows_paths(boxes, run, "run0", Path("."), longest)
                 continue
-            with self.assertRaisesRegex(ValueError, "^Z13: the joiner3's game files would reach 260 characters"):
+            with self.assertRaisesRegex(ValueError, "^PAD: the joiner3's game files would reach 260 characters"):
                 peers.check_windows_paths(boxes, run, "run0", Path("."), longest)
         self.assertEqual(peers.longest_data_path(Path(peers.__file__).resolve().parents[1]), longest)
 
@@ -696,9 +696,9 @@ class LobbyIdentityTest(unittest.TestCase):
         root = Path(temporary.name)
         boxes = root / "boxes.json"
         boxes.write_text(json.dumps({"boxes": [
-            dict(name="EROL-PC", os="win32", hostname="EROL-PC", ssh="erol-pc", repo="C:/t", scratch="C:/mx", python="python", session_dir="C:/s", task="t"),
-            dict(name="Ally", os="win32", hostname="Erol-Ally7", ssh="ally-ts", repo="C:/t", scratch="C:/mx", python="python", session_dir="C:/s", task="t")]}))
-        args = SimpleNamespace(scenario="fight15-s13", peer_boxes="host=EROL-PC,joiner1=Ally", boxes_file=boxes, port=49436, engine_env=[],
+            dict(name="TEST-PC", os="win32", hostname="TEST-PC", ssh="test-pc", repo="C:/t", scratch="C:/mx", python="python", session_dir="C:/s", task="t"),
+            dict(name="Node", os="win32", hostname="Test-Node7", ssh="node-ts", repo="C:/t", scratch="C:/mx", python="python", session_dir="C:/s", task="t")]}))
+        args = SimpleNamespace(scenario="fight15-s13", peer_boxes="host=TEST-PC,joiner1=Node", boxes_file=boxes, port=49436, engine_env=[],
                                out=root / "s13-held", repo=Path(peers.__file__).resolve().parents[1])
         held = ValueError("port 49436 is held by another lobby in directory.broserver.com: Captain (Skirmish Defense, session x)")
         with mock.patch.object(peers.video, "source_evidence", return_value={"dirty": False, "tip": "0" * 40}), \

@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <unordered_map>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -37,6 +38,11 @@ namespace RTE {
 
 	public:
 		std::string SaveCheckpoint() const;
+		/// The fields SaveCheckpoint writes, as values: equal tuples always write the same text.
+		auto CheckpointObservedFields() const {
+			return std::tuple(std::string(m_DataPath), std::string(m_DataPathExtension), std::string(m_DataPathWithoutExtension), m_DataPathIsImageFile, m_ImageFileInfo,
+			                  std::string(m_FormattedReaderPosition), std::string(m_DataPathAndReaderPosition), m_DataModuleID, m_IsMemoryPNG);
+		}
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 		SerializableClassNameGetter;
 		SerializableOverrideMethods;

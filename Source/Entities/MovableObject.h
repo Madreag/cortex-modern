@@ -1263,6 +1263,8 @@ namespace RTE {
 			MovableObject* object = nullptr; //!< The object the record belongs to.
 			Entity::ClassInfo* pool = nullptr; //!< The class pool the memory returns to.
 			void* memory = nullptr; //!< The deleted object's memory.
+			LuaHandles* retainedPrevious = nullptr; //!< The retained list's neighbours while the memory waits for its last handle.
+			LuaHandles* retainedNext = nullptr;
 		};
 
 		/// Notes one more Lua handle naming this object or one of its fields.
@@ -1280,6 +1282,9 @@ namespace RTE {
 		/// Gets how many deleted objects' memory Lua handles keep out of their pools now.
 		/// @return The count of retained memory blocks.
 		static int GetRetainedPoolMemoryCount() { return s_RetainedPoolMemory.load(std::memory_order_relaxed); }
+
+		/// Whether bytes at an address lie in a deleted object's memory that Lua handles keep out of its pool.
+		static bool RetainedMemoryHolds(const void* address, size_t bytes);
 
 		/// Gets the highest saved UniqueID this thread has read since the last call, and starts the count again.
 		/// @return The highest saved UniqueID read, or 0 when none was.

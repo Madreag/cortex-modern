@@ -26,11 +26,11 @@ for peer,(role,p) in enumerate(roots.items(),1):
                                  'reconnect':{'moderation':seats},'last_match':{'result':'Match ended by host','running_ticks':12100}})
  lines=['[net-ice] connected connection=1 after_ms=100 route=relay','[net-ice] connected connection=2 after_ms=100 route=relay',f'[net-match] brain placement committed: seat={peer-1} frame=5 unix_ms={epoch+83}']
  lines += [f'[net-match] brain placement applied: seat={seat} frame=38 unix_ms={epoch+633}' for seat in range(3)]
- at=235000 if role=='ally' else 201800 if role=='linux' else 201900
+ at=235000 if role=='host' else 201800 if role=='linux' else 201900
  lines += [f'[menu-script] exit unix_ms={epoch+at} lockstep_frame=12100 peer={peer}']
- if role!='ally':
+ if role!='host':
   lines += ['[menu-script] open_local_pause the match menu PASS', '[menu-script] activate ButtonLeaveMatch PASS', '[menu-script] activate ButtonLeaveConfirm PASS', f'[net-match-leave] peer={peer} frame=12100 now_ms=201666 reason=Match left']
- if role=='ally':
+ if role=='host':
   lines+=['[net-link-blackout] begin peer=1 frame=600 duration_ms=8000 now_ms=10000 unix_ms='+str(epoch+10000)+' directory=dark',
           '[net-link-blackout] end peer=1 elapsed_ms=8000 now_ms=18000 unix_ms='+str(epoch+18000)]
   lines += [f'[net-peer-departure] peer={remote} frame=12128 now_ms=202000 unix_ms={epoch+202000} source=round-notice' for remote in (2,3)]
@@ -63,12 +63,12 @@ def mutate(name,role,filename,change,needle):
   else:p.write_bytes(changed)
   check(name,False,needle)
  finally:p.write_bytes(old)
-mutate('missing_host_report','ally','engine/match-report.json',lambda b:None,'match-report.json: FileNotFoundError')
+mutate('missing_host_report','host','engine/match-report.json',lambda b:None,'match-report.json: FileNotFoundError')
 mutate('malformed_report','linux','engine/match-report.json',lambda b:b'{broken','match-report.json: JSONDecodeError')
 mutate('missing_participant','mac','participant-result.json',lambda b:None,'participant-result.json: FileNotFoundError')
-mutate('nonzero_host_exit','ally','participant-result.json',lambda b:b.replace(b'"exit_code": 0',b'"exit_code": 1'),'participant/probe/exit failed')
-mutate('late_leave','ally','engine/stdout.log',lambda b:b.replace(b'now_ms=202000',b'now_ms=212100'),'leave not noted within ten seconds')
-mutate('no_host_terminal_event','ally','engine/stdout.log',lambda b:b'\n'.join(l for l in b.splitlines() if b'all-remote-ended' not in l),'host did not complete within ten seconds')
+mutate('nonzero_host_exit','host','participant-result.json',lambda b:b.replace(b'"exit_code": 0',b'"exit_code": 1'),'participant/probe/exit failed')
+mutate('late_leave','host','engine/stdout.log',lambda b:b.replace(b'now_ms=202000',b'now_ms=212100'),'leave not noted within ten seconds')
+mutate('no_host_terminal_event','host','engine/stdout.log',lambda b:b'\n'.join(l for l in b.splitlines() if b'all-remote-ended' not in l),'host did not complete within ten seconds')
 def rows_change(b,change):
  rows=[json.loads(x) for x in b.decode().splitlines()]
  change(rows)
@@ -83,7 +83,7 @@ try:
  linuxlive.write_bytes(rows_change(saved[linuxlive],lambda rows:rows[-1].update(total='linux_departed')))
  result=check('leaver_final_tick_and_surviving_ticks',True)
  assert result['common_ticks']==12097 and result['compared_ticks']==12099
- assert result['hash_coverage'][-1]=={'first_tick':12098,'last_tick':12099,'ticks':2,'roles':['ally','linux']}
+ assert result['hash_coverage'][-1]=={'first_tick':12098,'last_tick':12099,'ticks':2,'roles':['host','linux']}
  assert result['hash_exclusions']['mac']['rows']==3 and result['hash_exclusions']['linux']['rows']==1
  entry=checks[-1]
  entry.update(hash_coverage=result['hash_coverage'],hash_exclusions=result['hash_exclusions'])
@@ -122,16 +122,16 @@ try:
  assert entry['cases'][-1]['in_play_tps']>=59.9
  assert all(window['tps']>=59.9 for window in entry['cases'][-1]['consecutive_60s'])
 finally:live.write_bytes(old)
-mutate('host_never_returns','ally','engine/live.jsonl',lambda b:rows_change(b,lambda rows:[r.update(ai_held_peer_ids=[1]) for r in rows if r['tick']>=724]),'host never returned')
+mutate('host_never_returns','host','engine/live.jsonl',lambda b:rows_change(b,lambda rows:[r.update(ai_held_peer_ids=[1]) for r in rows if r['tick']>=724]),'host never returned')
 mutate('quorum_receipt_stuck','linux','engine/live.jsonl',lambda b:rows_change(b,lambda rows:[r.update(input_accepted_through=1599) for r in rows if r['tick']>=2000]),'acceptance stopped advancing')
 mutate('delay_exceeds_bound','mac','engine/live.jsonl',lambda b:rows_change(b,lambda rows:rows[1999].update(input_delay_ticks=37)),'1..36 tick bound')
-mutate('unintended_healthy_hold','ally','engine/live.jsonl',lambda b:rows_change(b,lambda rows:rows[1999].update(ai_held_peer_ids=[3])),'unintended healthy seat hold')
+mutate('unintended_healthy_hold','host','engine/live.jsonl',lambda b:rows_change(b,lambda rows:rows[1999].update(ai_held_peer_ids=[3])),'unintended healthy seat hold')
 mutate('missing_input_progress','linux','engine/live.jsonl',lambda b:rows_change(b,lambda rows:[r.pop('input_accepted_through') for r in rows]),'per-tick input progress evidence')
 mutate('short_full_match','mac','engine/live.jsonl',lambda b:rows_change(b,lambda rows:rows.__delitem__(slice(11999,None))),'insufficient common full-match ticks')
 mutate('transport_drop','mac','engine/stdout.log',lambda b:b+b'\n[net-transport] closed peer=1 reason=Connection dropped\n','transport connection dropped')
 mutate('reliable_overflow','linux','engine/stdout.log',lambda b:b+b'\n1048336 reliable bytes buffered\n','reliable receive buffer overflow')
 mutate('host_held_again','mac','engine/live.jsonl',lambda b:rows_change(b,lambda rows:rows[1999].update(ai_held_peer_ids=[1])),'became held again')
-mutate('late_return','ally','engine/live.jsonl',lambda b:rows_change(b,lambda rows:[r.update(ai_held_peer_ids=[1]) for r in rows if 724<=r['tick']<=1800]),'return not observed within ten seconds')
+mutate('late_return','host','engine/live.jsonl',lambda b:rows_change(b,lambda rows:[r.update(ai_held_peer_ids=[1]) for r in rows if 724<=r['tick']<=1800]),'return not observed within ten seconds')
 mutate('changed_common_hash','linux','engine/live.jsonl',lambda b:rows_change(b,lambda rows:rows[999].update(total='wrong')),'total hash mismatch')
 # A block is the engine's own wait for another seat's input: at most 50 ms, once per spike, never on two consecutive ticks.
 # A wait lengthens its frame and writes its line; a frame of the box's own (presentation, the OS) lengthens only the frame.
@@ -158,15 +158,15 @@ try:
  assert result['details']['linux']['blackout_blocks']==[{'frame':628,'block_ms':3}]
 finally:log.write_bytes(oldlog)
 # The host blackout takes the directory with the link; a link-only lever or a line from before the lever named it proves a joiner outage.
-mutate('link_only_blackout_is_not_a_host_blackout','ally','engine/stdout.log',lambda b:b.replace(b'directory=dark',b'directory=up'),'blackout left the host reaching the directory')
-mutate('blackout_line_without_its_directory','ally','engine/stdout.log',lambda b:b.replace(b' directory=dark',b''),'blackout left the host reaching the directory')
+mutate('link_only_blackout_is_not_a_host_blackout','host','engine/stdout.log',lambda b:b.replace(b'directory=dark',b'directory=up'),'blackout left the host reaching the directory')
+mutate('blackout_line_without_its_directory','host','engine/stdout.log',lambda b:b.replace(b' directory=dark',b''),'blackout left the host reaching the directory')
 outside=roots['linux']/'engine/live.jsonl';old=outside.read_bytes()
 try:
  outside.write_bytes(rows_change(old,lambda rows:[r.update(wall_ms=r['wall_ms']+max(0,125-(r['tick']-2000)*15)) for r in rows if 2000<=r['tick']<=2009]))
  check('nonblackout_pause_is_measured',True)
  assert proof.score(roots)['details']['linux']['steady_gaps_over_100ms']
 finally:outside.write_bytes(old)
-mutate('missing_host_round_wait','ally','engine/stdout.log',lambda b:b'\n'.join(l for l in b.splitlines() if b'round-ended -> OK' not in l),'host exit did not follow both joiner departures')
+mutate('missing_host_round_wait','host','engine/stdout.log',lambda b:b'\n'.join(l for l in b.splitlines() if b'round-ended -> OK' not in l),'host exit did not follow both joiner departures')
 mutate('missing_exit_timestamp','linux','engine/stdout.log',lambda b:b'\n'.join(l for l in b.splitlines() if b'[menu-script] exit' not in l),'missing unique engine exit')
 mutate('missing_real_leave','mac','engine/stdout.log',lambda b:b'\n'.join(l for l in b.splitlines() if b'net-match-leave' not in l),'missing unique in-match Leave')
 mutate('missing_leave_gesture','linux','engine/stdout.log',lambda b:b'\n'.join(l for l in b.splitlines() if b'ButtonLeaveConfirm' not in l),'missing completed real gesture')
@@ -181,7 +181,7 @@ for role,offset in [('linux',900000),('mac',-600000)]:
  try:
   p.write_bytes(changed);check('unsynchronized_utc_'+role,True)
  finally:p.write_bytes(old)
-for role,offset in [('ally',7000000),('linux',9000000),('mac',11000000)]:
+for role,offset in [('host',7000000),('linux',9000000),('mac',11000000)]:
  log=roots[role]/'engine/stdout.log';live=roots[role]/'engine/live.jsonl'
  oldlog,oldlive=log.read_bytes(),live.read_bytes()
  try:
@@ -189,32 +189,32 @@ for role,offset in [('ally',7000000),('linux',9000000),('mac',11000000)]:
   live.write_bytes(rows_change(oldlive,lambda rows:[r.update(net_clock_ms=r['net_clock_ms']+offset) for r in rows]))
   check('independent_monotonic_origin_'+role,True)
  finally:log.write_bytes(oldlog);live.write_bytes(oldlive)
-p=roots['ally']/'participant-result.json';old=p.read_bytes()
+p=roots['host']/'participant-result.json';old=p.read_bytes()
 try:
  d=json.loads(old);d.update(pass_=False,timed_out=True,exit_code=124);p.write_text(json.dumps(d))
  result=proof.score(roots)
- assert not result['pass'] and result['details']['ally']['rate_status']=='unscored_truncated'
+ assert not result['pass'] and result['details']['host']['rate_status']=='unscored_truncated'
  assert not any('full-match rate' in e for e in result['errors'])
  checks.append({'name':'truncation_is_not_scored_as_slow_pacing','pass':True,'expected_verdict':False})
 finally:p.write_bytes(old)
 
 # Leave notices and the host's own end have separate deadlines.
-p=roots['ally']/'engine/stdout.log';old=p.read_bytes()
+p=roots['host']/'engine/stdout.log';old=p.read_bytes()
 try:
  p.write_bytes(old.replace(b'peer=2 frame=12128 now_ms=202000',b'peer=2 frame=12128 now_ms=201630'))
  result=check('leave_notice_before_matching_host_display',True)
  assert result['leave_test']['leaves']['linux']['notice_ms']==-36
 finally:p.write_bytes(old)
-mutate('leave_notice_before_its_input_range','ally','engine/stdout.log',lambda b:b.replace(b'peer=2 frame=12128 now_ms=202000',b'peer=2 frame=12128 now_ms=200000'),'leave not noted within ten seconds')
-mutate('remote_close_is_not_a_leave_notice','ally','engine/stdout.log',lambda b:b.replace(b'source=round-notice',b'source=remote-close'),'leave not noted within ten seconds')
-mutate('seat_not_retained_after_leave','ally','engine/match-report.json',lambda b:b.replace(b'"held_for_reclaim": true',b'"held_for_reclaim": false'),'leave did not retain its AI seat')
-mutate('seat_closed_after_leave','ally','engine/match-report.json',lambda b:b.replace(b'"closed": false',b'"closed": true'),'leave did not retain its AI seat')
-mutate('missing_host_end_request','ally','engine/stdout.log',lambda b:b'\n'.join(line for line in b.splitlines() if b'the host ends the round' not in line),'missing unique host End Match request')
-mutate('missing_host_end_gesture','ally','engine/stdout.log',lambda b:b'\n'.join(line for line in b.splitlines() if b'activate ButtonEndMatch' not in line),'missing unique host End Match gesture')
-mutate('silent_peer_timing_disabled','ally','engine/match-report.json',lambda b:b.replace(b'"peer_silence_leave_ms": 10000',b'"peer_silence_leave_ms": 0'),'silent-peer timing')
-mutate('silent_peer_timing_unbounded','ally','engine/match-report.json',lambda b:b.replace(b'"peer_silence_leave_ms": 10000',b'"peer_silence_leave_ms": 10001'),'silent-peer timing')
+mutate('leave_notice_before_its_input_range','host','engine/stdout.log',lambda b:b.replace(b'peer=2 frame=12128 now_ms=202000',b'peer=2 frame=12128 now_ms=200000'),'leave not noted within ten seconds')
+mutate('remote_close_is_not_a_leave_notice','host','engine/stdout.log',lambda b:b.replace(b'source=round-notice',b'source=remote-close'),'leave not noted within ten seconds')
+mutate('seat_not_retained_after_leave','host','engine/match-report.json',lambda b:b.replace(b'"held_for_reclaim": true',b'"held_for_reclaim": false'),'leave did not retain its AI seat')
+mutate('seat_closed_after_leave','host','engine/match-report.json',lambda b:b.replace(b'"closed": false',b'"closed": true'),'leave did not retain its AI seat')
+mutate('missing_host_end_request','host','engine/stdout.log',lambda b:b'\n'.join(line for line in b.splitlines() if b'the host ends the round' not in line),'missing unique host End Match request')
+mutate('missing_host_end_gesture','host','engine/stdout.log',lambda b:b'\n'.join(line for line in b.splitlines() if b'activate ButtonEndMatch' not in line),'missing unique host End Match gesture')
+mutate('silent_peer_timing_disabled','host','engine/match-report.json',lambda b:b.replace(b'"peer_silence_leave_ms": 10000',b'"peer_silence_leave_ms": 0'),'silent-peer timing')
+mutate('silent_peer_timing_unbounded','host','engine/match-report.json',lambda b:b.replace(b'"peer_silence_leave_ms": 10000',b'"peer_silence_leave_ms": 10001'),'silent-peer timing')
 
-report=roots['ally']/'engine/match-report.json';log=roots['ally']/'engine/stdout.log';live=roots['ally']/'engine/live.jsonl'
+report=roots['host']/'engine/match-report.json';log=roots['host']/'engine/stdout.log';live=roots['host']/'engine/live.jsonl'
 oldreport,oldlog,oldlive=report.read_bytes(),log.read_bytes(),live.read_bytes()
 try:
  rows=[json.loads(line) for line in oldlive.decode().splitlines()]
@@ -246,8 +246,8 @@ try:
  registered=b'[net-directory] registered session_id=synthetic-round heartbeat_s=5\n'
  log.write_bytes(registered+oldlog+b'[net-directory] state: registered -> deleting\n')
  result=check('completed_round_listing_from_ordered_registration',True)
- assert result['details']['ally']['listing_source']=='ordered registration log before round end'
- assert result['details']['ally']['completed_report_retained'] is False
+ assert result['details']['host']['listing_source']=='ordered registration log before round end'
+ assert result['details']['host']['completed_report_retained'] is False
  log.write_bytes(oldlog)
  check('no_listing_acknowledgment',False,'no confirmed public listing at round end')
  log.write_bytes(registered+b'[net-directory] state: registered -> deleting\n'+oldlog)
@@ -256,9 +256,9 @@ try:
  value['last_match']['running_ticks']=12099;report.write_text(json.dumps(value))
  check('listing_end_must_name_completed_round',False,'no confirmed public listing at round end')
 finally:report.write_bytes(oldreport);log.write_bytes(oldlog)
-mutate('explicit_unlisted_round_snapshot','ally','engine/match-report.json',lambda b:b.replace(b'"confirmed_listed": true',b'"confirmed_listed": false'),'no confirmed public listing at round end')
+mutate('explicit_unlisted_round_snapshot','host','engine/match-report.json',lambda b:b.replace(b'"confirmed_listed": true',b'"confirmed_listed": false'),'no confirmed public listing at round end')
 # The leaver's last input lands up to the delay bound past the leave; the round notes the first frame without it.
-live=roots['linux']/'engine/live.jsonl';log=roots['ally']/'engine/stdout.log'
+live=roots['linux']/'engine/live.jsonl';log=roots['host']/'engine/stdout.log'
 oldlive,oldlog=live.read_bytes(),log.read_bytes()
 try:
  live.write_bytes(rows_change(oldlive,lambda rows:[r.update(input_delay_ticks=36) for r in rows if r['tick']>=12000]))
@@ -269,14 +269,14 @@ try:
  check('leave_noted_past_its_last_input',False,'linux leave not noted within ten seconds')
 finally:live.write_bytes(oldlive);log.write_bytes(oldlog)
 # A seat the round bridged has its own input replaced until its return; acceptance outside a bridge still advances with play.
-live=roots['ally']/'engine/live.jsonl';log=roots['ally']/'engine/stdout.log'
+live=roots['host']/'engine/live.jsonl';log=roots['host']/'engine/stdout.log'
 oldlive,oldlog=live.read_bytes(),log.read_bytes()
 bridge=b'[net-frame-group] bridge frame=5000 members=6 voters=6\n';back=b'[net-frame-group] return frame=5089 members=7 voters=6\n'
 try:
  live.write_bytes(rows_change(oldlive,lambda rows:[r.update(input_accepted_through=4999) for r in rows if 5000<=r['tick']<5044]))
  log.write_bytes(oldlog+bridge+back)
  result=check('host_seat_bridged_after_return_resumes_acceptance',True)
- assert result['details']['ally']['own_seat_bridges_after_return']==[[5000,5089]]
+ assert result['details']['host']['own_seat_bridges_after_return']==[[5000,5089]]
  log.write_bytes(oldlog)
  check('acceptance_lag_without_a_bridge',False,'acceptance stopped advancing')
  log.write_bytes(oldlog+bridge)
@@ -307,9 +307,9 @@ finally:log.write_bytes(oldlog);live.write_bytes(oldlive)
 def frame_window(first,fps=b'60.00',frames=b'60',p95=b'17.20'):
  return b'first_tick=%d tick=%d frames=%s wall_ms=1000.0 fps=%s interval_p50_ms=16.67 interval_p95_ms=%s'%(first,first+60,frames,fps,p95)
 mutate('slow_frames_in_play','mac','engine/stdout.log',lambda b:b.replace(frame_window(3041),frame_window(3041,b'30.00',b'30')),'mac: 1 of')
-mutate('uneven_frames_in_play','linux','engine/stdout.log',lambda b:b.replace(frame_window(5021),frame_window(5021,p95=b'35.00')),'interval p95 over 20.8 ms')
+mutate('uneven_frames_in_play','linux','engine/stdout.log',lambda b:b.replace(frame_window(5021),frame_window(5021,p95=b'35.00')),'interval p95 over 1.25 frame periods')
 mutate('missing_frame_windows','linux','engine/stdout.log',lambda b:b'\n'.join(l for l in b.splitlines() if not l.startswith(b'[frame-pace]')),'linux: no drawn-frame windows in the match')
-log=roots['ally']/'engine/stdout.log';oldlog=log.read_bytes()
+log=roots['host']/'engine/stdout.log';oldlog=log.read_bytes()
 try:
  log.write_bytes(oldlog.replace(frame_window(641),frame_window(641,b'30.00',b'30')))
  check('slow_frames_inside_the_host_blackout_are_its_policy',True)

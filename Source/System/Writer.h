@@ -44,6 +44,8 @@ namespace RTE {
 			return std::tuple(value.m_Rotation, CheckpointField(value.m_Flipped), CheckpointField(value.m_Elements), value.m_ElementsUpdated);
 		} else if constexpr (requires { value.GetR(); value.GetG(); value.GetB(); value.GetIndex(); }) {
 			return std::tuple(value.GetR(), value.GetG(), value.GetB(), value.GetIndex());
+		} else if constexpr (requires { value.CheckpointObservedFields(); }) {
+			return value.CheckpointObservedFields();
 		} else if constexpr (requires { value.GetDataPath(); }) {
 			return CheckpointFieldText([&value] { return value.SaveCheckpoint(); });
 		} else if constexpr (requires { value.get(); }) {
@@ -52,6 +54,9 @@ namespace RTE {
 			return value.CheckpointStampValue();
 		} else if constexpr (requires { value.m_SavedNumbers.m_Data; value.m_SavedStrings.m_Data; value.m_SavedEncodedStrings.m_Data; }) {
 			return std::tuple(value.m_SavedNumbers.m_Data, value.m_SavedStrings.m_Data, value.m_SavedEncodedStrings.m_Data);
+		} else if constexpr (requires { typename Value::PreparedMirror; value.Value(); }) {
+			// A checkpoint string compares by its text; a copy of it would also build its storage mirror.
+			return std::string(value.Value());
 		} else {
 			return value;
 		}

@@ -21,6 +21,63 @@ class ProofMarking(unittest.TestCase):
             result = json.loads((Path(temporary) / 'result.json').read_text())
         self.assertEqual(result['topology'], 'single-box: not proof')
         self.assertEqual((result['passed'], result['total']), (count, count))
+
+
+class FreshFixedFailureReport(unittest.TestCase):
+    STDOUT = ("[net-session-plane-selftest] FAIL saved_seed_7: seed=7 property=histories kind=return\n"
+              "[net-session-plane-selftest] saved_schedule_group name=saved_seed_7 group=histories:return:2:direct\n"
+              "[net-session-plane-selftest] saved_schedule_catalogue expected=108 ran=108\n"
+              "[net-session-plane-selftest] FAIL\n")
+
+    def options(self, root):
+        from types import SimpleNamespace
+        return SimpleNamespace(_suite_exe_sha256="current-binary", _suite_root=root)
+
+    def record(self, **changes):
+        return {"exit_code": 1, "timed_out": False, "exe_sha256": "current-binary", **changes}
+
+    def test_driver_always_includes_fresh_fixed_prerequisite(self):
+        self.assertEqual(runner.plan_rows(None, ["net-session-plane-hold-schedules"]),
+                         (["net-session-plane", "net-session-plane-hold-schedules"], []))
+
+    def test_red_fixed_collection_supplies_index_without_changing_its_result(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            options = self.options(root)
+            proof = runner.save_fixed_failure_report(options, root, self.STDOUT, self.record())
+            self.assertEqual(runner.current_fixed_failure_report(options), proof)
+            self.assertEqual(proof["saved_cases_ran"], 108)
+            self.assertIn("histories:return:2:direct\tsaved_seed_7\n", Path(proof["path"]).read_text())
+            self.assertFalse(runner.score_selftest(self.STDOUT, 1, False, "net-session-plane-selftest")["pass"])
+
+    def test_partial_timeout_wrong_binary_or_missing_closing_cannot_supply_index(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for stdout, record in [(self.STDOUT.replace("ran=108", "ran=107"), self.record()),
+                                   (self.STDOUT, self.record(timed_out=True)),
+                                   (self.STDOUT, self.record(exe_sha256="older-binary")),
+                                   (self.STDOUT.rsplit("[net-session-plane-selftest] FAIL", 1)[0], self.record())]:
+                with self.subTest(stdout=stdout, record=record), self.assertRaises(ValueError):
+                    runner.save_fixed_failure_report(self.options(root), root, stdout, record)
+
+    def test_missing_proof_changed_report_or_different_invocation_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            options = self.options(root)
+            with self.assertRaises(ValueError):
+                runner.current_fixed_failure_report(options)
+            proof = runner.save_fixed_failure_report(options, root, self.STDOUT, self.record())
+            options._suite_root = root / "other-invocation"
+            with self.assertRaises(ValueError):
+                runner.current_fixed_failure_report(options)
+            options._suite_root = root
+            options._suite_exe_sha256 = "new-binary"
+            with self.assertRaises(ValueError):
+                runner.current_fixed_failure_report(options)
+            options._suite_exe_sha256 = "current-binary"
+            Path(proof["path"]).write_text("hold-fixed-groups-v1\n")
+            with self.assertRaises(ValueError):
+                runner.current_fixed_failure_report(options)
 TIMING = f"{TAG} FAIL threaded_synced_update_pass_timing registered=1024 states=32 before_us=30171 after_us=32740 added_us=2569 budget_us=150 delta_pct=8.51"
 LOADED = f"{TAG} FAIL threaded_synced_update_pass_timing_under_load registered=5000 states=32 before_us=1219 after_us=5180 added_us=3961 budget_us=732"
 

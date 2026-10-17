@@ -472,6 +472,18 @@ namespace RTE {
 #pragma region MultiThreading
 		/// Gets the mutex to lock this lua state. A frozen capture's page copy lands before anyone may take it.
 		std::recursive_mutex& GetMutex() { WaitFrozenCopy(); return m_Mutex; };
+
+		/// Test lever CCCP_TEST_FAULT_TICKS: the checkpoint heap's write faults since the last call (see HeapOwner::TakeTickFaults).
+		std::array<uint32_t, 5> TakeHeapTickFaults();
+
+		/// Test lever CCCP_TEST_FAULT_TICKS: see HeapOwner::TakeFirstTickWrites.
+		std::array<uint32_t, 2> TakeHeapFirstTickWrites();
+
+		/// Tells the checkpoint heap the bytes in use before and after a full collection.
+		void NoteFullCollection(size_t before, size_t after);
+
+		/// Gives the checkpoint heap's free memory back to the system once its collector step has freed it; under the state's lock.
+		void TrimHeap();
 #pragma endregion
 
 #pragma region
@@ -970,6 +982,10 @@ namespace RTE {
 		/// Test lever CCCP_TEST_FAULT_TICKS: the Lua heap write faults taken since the last call, and their microseconds.
 		static std::pair<uint64_t, uint64_t> TakeHeapFaultTally();
 
+		/// Test lever CCCP_TEST_FAULT_TICKS: each faulting heap since the last call, as " slot:script faults+collector faults/runs
+		/// copied at its boundary/hot runs recorded since", with "w" when its boundary copied it whole.
+		static std::string TakeHeapFaultsByState();
+
 		/// Reseeds every Lua state's RNG, deriving an independent per-state seed from baseSeed.
 		void SeedAllLuaRNGs(uint64_t baseSeed);
 
@@ -983,6 +999,12 @@ namespace RTE {
 		void CollectGarbageForCheckpoint();
 		/// The heap every Lua state holds, live and uncollected, in bytes.
 		long long GetTotalHeapBytes();
+		/// The tracked Lua heaps' committed pages and their copy buffers, mapped and idle, for the memory census.
+		static std::string CheckpointHeapCensus();
+		/// Test lever CCCP_TEST_STALE_ACTIVITY: names the Lua paths of activity values that are neither the running activity nor a preset.
+		void NameStaleActivityValues();
+		/// Test lever CCCP_TEST_PIE_SLICE_HANDLES: every state keeps live slices no actor's pie menu holds, for the world capture.
+		void PlantPieSliceHandles();
 		/// The heap every Lua state's collector found live when it last finished marking, less what it swept since, in bytes.
 		long long GetTotalHeapLiveBytes();
 

@@ -26,7 +26,7 @@ namespace RTE::NetPlayerPresentation {
 	}
 
 	inline std::string PlayingSummary(bool ownHeld, size_t away, const std::string& awayName) {
-		if (ownHeld) return "The AI is playing for you";
+		if (ownHeld) return "The AI is playing for you until you are back";
 		return away == 0 ? "Everyone is playing" : away == 1 ? awayName + " is away" : std::to_string(away) + " players are away";
 	}
 

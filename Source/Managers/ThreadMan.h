@@ -9,6 +9,7 @@
 #include "BS_thread_pool.hpp"
 #include "FloatingPointEnvironment.h"
 #include "CheckpointFailure.h"
+#include "SaverThreadMark.h"
 
 #include <algorithm>
 #include <atomic>
@@ -32,10 +33,10 @@ namespace RTE {
 		static void Enter();
 
 		/// Marks the calling thread the saver's without lowering it, for a thread the simulation may wait on.
-		static void Mark() noexcept { s_Current = true; }
+		static void Mark() noexcept { SaverThreadMark::Set(); }
 
 		/// Whether the calling thread is one of the saver's.
-		static bool Current() noexcept { return s_Current; }
+		static bool Current() noexcept { return SaverThreadMark::current; }
 
 		/// Whether a game loop is handing the savers its idle time.
 		static bool Gated() noexcept { return s_Gating.load(std::memory_order_relaxed) > 0; }
@@ -44,15 +45,27 @@ namespace RTE {
 		static BS::thread_pool& Pool();
 
 		/// The saver's pool when a saver thread asks, else the pool asked for.
-		static BS::thread_pool& PoolFor(BS::thread_pool& pool) { return s_Current ? Pool() : pool; }
+		static BS::thread_pool& PoolFor(BS::thread_pool& pool) { return SaverThreadMark::current ? Pool() : pool; }
 
 		/// While the game runs, the saver's threads work only in its idle time: the game loop opens a slice when a tick's work
 		/// is done and closes it when the next tick starts, and a saver thread calls this where it holds nothing the game needs
 		/// and waits here while no slice is open. A game that is never idle gets a save that takes longer, never a slower tick.
 		static void YieldToGame() {
-			if (!s_Current || !s_Gating.load(std::memory_order_relaxed) || s_Lent.load(std::memory_order_relaxed) > 0) return;
+			if (!SaverThreadMark::current || t_Ungated || !s_Gating.load(std::memory_order_relaxed) || s_Lent.load(std::memory_order_relaxed) > 0) return;
 			CheckSlice();
 		}
+
+		/// Saver work on the calling thread that goes on beside the game instead of waiting for its idle time: copying a heap
+		/// the ticks after a boundary write all over costs the game less than its own write faults on it would.
+		class UngatedScope {
+		public:
+			UngatedScope() noexcept : m_Was(t_Ungated) { t_Ungated = true; }
+			~UngatedScope() { t_Ungated = m_Was; }
+			UngatedScope(const UngatedScope&) = delete;
+			UngatedScope& operator=(const UngatedScope&) = delete;
+		private:
+			bool m_Was;
+		};
 
 		/// The game loop's side: the saver may work until the given steady-clock microsecond.
 		static void OpenSlice(int64_t untilUs);
@@ -69,6 +82,9 @@ namespace RTE {
 
 		/// The steady clock in microseconds, as the slices are measured.
 		static int64_t NowUs() noexcept;
+
+		/// The ticks the game loop has started, for saver work keyed on the ticks right after a boundary.
+		static uint64_t TickStarts() noexcept { return s_TickStarts.load(std::memory_order_relaxed); }
 
 		/// Game work that runs across ticks (a path solve, a horizon job) counts from its submission to its end, and savers
 		/// stay parked while any is in flight: the time between ticks is not idle while it runs, and a saver beside it on the
@@ -107,12 +123,13 @@ namespace RTE {
 		static void CheckSlice();
 		static void WaitForSlice();
 
-		static inline thread_local bool s_Current = false;
 		static inline thread_local bool s_Lowered = false;
+		static inline thread_local bool t_Ungated = false;
 		static inline std::atomic<int> s_Gating{0};
 		static inline std::atomic<int> s_Lent{0};
 		static inline std::atomic<int64_t> s_SliceEndUs{0};
 		static inline std::atomic<int64_t> s_ClosedAtUs{0};
+		static inline std::atomic<uint64_t> s_TickStarts{0};
 		static inline std::atomic<int> s_GameWork{0};
 		static inline std::atomic<bool> s_SliceLent{false};
 		static inline std::atomic<int> s_Parked{0};

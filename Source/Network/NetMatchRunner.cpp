@@ -941,6 +941,7 @@ namespace RTE {
 			lockstepConfig.initialDelayChanges = m_PrivateJoinConfig->initialDelayChanges;
 			lockstepConfig.initialSeatHolds = m_PrivateJoinConfig->initialSeatHolds;
 			lockstepConfig.initialSeatReclaims = m_PrivateJoinConfig->initialSeatReclaims;
+			lockstepConfig.initialPeerStartTerms = m_PrivateJoinConfig->initialPeerStartTerms;
 			lockstepConfig.seatStateThroughFrame = m_PrivateJoinConfig->seatStateThroughFrame;
 			lockstepConfig.peerIncarnations = m_PrivateJoinConfig->peerIncarnations;
 			lockstepConfig.activePeerIds.clear();

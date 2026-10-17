@@ -419,6 +419,8 @@ namespace RTE {
 		}
 
 		bool WaitUntil(double timeoutMs, const std::function<void()>& pump, const std::function<bool()>& done) {
+			// Starting a transport installs its diagnostics; this fixture observes the offered candidates through its own sink.
+			SteamNetworkingUtils()->SetDebugOutputFunction(static_cast<ESteamNetworkingSocketsDebugOutputType>(c_LogLevel), GnsDebugOutput);
 			const double deadline = ElapsedMs() + timeoutMs;
 			while (!done()) {
 				if (ElapsedMs() > deadline) {
@@ -507,6 +509,17 @@ namespace RTE {
 				return "a 64-byte message arrived altered";
 			}
 			Say("host received the joiner's 64 bytes intact; joiner received the host's 64 bytes intact");
+			for (Side* side: {&host, &joiner}) {
+				SteamNetworkingMicroseconds sent = 0, received = 0;
+				const auto connection = side->transport.GetPeerConnectionInfo(side->peer).connectionId;
+				if (!SteamNetworkingSockets_GetConnectionPacketTimes(connection, &sent, &received) || sent <= 0 || received <= 0 ||
+				    sent > SteamNetworkingUtils()->GetLocalTimestamp() || received > SteamNetworkingUtils()->GetLocalTimestamp())
+					return std::string(side->name) + " has no valid packet timestamps after the exchange";
+			}
+			SteamNetworkingMicroseconds invalidSent = 1, invalidReceived = 1;
+			if (SteamNetworkingSockets_GetConnectionPacketTimes(k_HSteamNetConnection_Invalid, &invalidSent, &invalidReceived) || invalidSent || invalidReceived)
+				return "an invalid connection returned packet timestamps";
+			Say("PASS actual_packet_timestamps_after_exchange");
 
 			PrintConnection(joiner);
 			PrintConnection(host);

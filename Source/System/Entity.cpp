@@ -30,7 +30,11 @@
 #include <memory>
 #include <optional>
 #include <thread>
+#include <type_traits>
 #include <utility>
+#include <iostream>
+#include <limits>
+#include <new>
 
 namespace RTE {
 	namespace {
@@ -146,8 +150,10 @@ namespace RTE {
 		return m_UIDs.Find(uid).value_or(nullptr);
 	}
 	struct CheckpointNativeSnapshot::Pixel : CheckpointNativeAllocated {
-		mutable BITMAP bitmap{};
-		GFX_VTABLE table{};
+		/// The frozen header with its own table beside it and its owner, so a reader holding only the header finds the pixels.
+		struct Header { BITMAP bitmap; GFX_VTABLE table; const Pixel* owner; };
+		static_assert(std::is_standard_layout_v<Header>);
+		mutable Header header{};
 		mutable CheckpointVector<uint8_t*> lines;
 		std::shared_ptr<const BitmapSnapshot> snapshot;
 		const BITMAP* loaded = nullptr;
@@ -178,34 +184,34 @@ namespace RTE {
 			std::call_once(ready, [this] {
 				bytes = loaded ? Rows(loaded, rowBytes) : snapshot->PixelBytes();
 				const size_t stride = loaded ? rowBytes : snapshot->rowBytes;
-				lines.resize(bitmap.h);
+				lines.resize(header.bitmap.h);
 				if (CheckpointNativeStorage::Reading() && !bytes.empty()) {
 					CheckpointNativeStorage::RememberPrivate(bytes.data(), bytes.size());
 					privateRows = true;
 				}
 				for (size_t row = 0; row < lines.size(); ++row) lines[row] = reinterpret_cast<uint8_t*>(bytes.data()) + row * stride;
-				bitmap.line = lines.data();
+				header.bitmap.line = lines.data();
 				materialized.store(true, std::memory_order_release);
 			});
 		}
 	};
 	BITMAP* CheckpointNativeSnapshot::Freeze(BITMAP* source) {
 		if (!source) return nullptr;
-		if (const auto known = m_Bitmaps.Find(source)) return &(*known)->bitmap;
+		if (const auto known = m_Bitmaps.Find(source)) return &(*known)->header.bitmap;
 		const BITMAP* address = static_cast<const BITMAP*>(CheckpointNativeStorage::Original(source));
 		auto& recent = Recent<1>(source);
 		if (recent.first == source) return static_cast<BITMAP*>(recent.second);
 		if (const auto* known = m_BitmapSources.FindStored(source)) {
-			recent = {source, &(*known)->bitmap};
-			return &(*known)->bitmap;
+			recent = {source, &(*known)->header.bitmap};
+			return &(*known)->header.bitmap;
 		}
 		CheckpointCloneCost cost("BITMAP");
 		source = const_cast<BITMAP*>(static_cast<const BITMAP*>(CheckpointNativeStorage::View(source, sizeof(BITMAP))));
 		auto pixel = std::shared_ptr<Pixel>(new Pixel());
-		pixel->bitmap = *source; pixel->table = *source->vtable;
-		pixel->bitmap.vtable = &pixel->table;
-		pixel->bitmap.line = nullptr;
-		pixel->bitmap.dat = nullptr; pixel->bitmap.extra = nullptr;
+		pixel->header = {*source, *source->vtable, pixel.get()};
+		pixel->header.bitmap.vtable = &pixel->header.table;
+		pixel->header.bitmap.line = nullptr;
+		pixel->header.bitmap.dat = nullptr; pixel->header.bitmap.extra = nullptr;
 		{
 			CheckpointCloneCost paths("bitmap paths");
 			for (int depth = 0; depth < 2; ++depth) {
@@ -224,9 +230,9 @@ namespace RTE {
 		}
 		// Another thread freezing an owner of the same image may have frozen it first; its copy is the one kept.
 		const auto [kept, claimed] = m_BitmapSources.TryEmplace(source, pixel);
-		if (claimed) m_Bitmaps.InsertOrAssign(&pixel->bitmap, pixel);
-		recent = {source, &kept->bitmap};
-		return &kept->bitmap;
+		if (claimed) m_Bitmaps.InsertOrAssign(&pixel->header.bitmap, pixel);
+		recent = {source, &kept->header.bitmap};
+		return &kept->header.bitmap;
 	}
 	BITMAP* CheckpointNativeSnapshot::ReadBitmap(const BITMAP* source) {
 		BITMAP* bitmap = Freeze(const_cast<BITMAP*>(source));
@@ -239,8 +245,8 @@ namespace RTE {
 	}
 	void CheckpointNativeSnapshot::AppendBitmapReadValues(std::vector<CheckpointNativeStorage::RootRange>& roots) const {
 		m_BitmapSources.ForEach([&](const BITMAP* source, const std::shared_ptr<Pixel>& pixel) {
-			roots.push_back({source, &pixel->bitmap, sizeof(BITMAP), true});
-			roots.push_back({&pixel->table, &pixel->table, sizeof(pixel->table), true});
+			roots.push_back({source, &pixel->header.bitmap, sizeof(BITMAP), true});
+			roots.push_back({&pixel->header.table, &pixel->header.table, sizeof(pixel->header.table), true});
 			if (pixel->materialized.load(std::memory_order_acquire)) {
 				roots.push_back({pixel->lines.data(), pixel->lines.data(), pixel->lines.size() * sizeof(uint8_t*), true});
 				roots.push_back({pixel->bytes.data(), pixel->bytes.data(), pixel->bytes.size(), true});
@@ -252,6 +258,13 @@ namespace RTE {
 		if (!found) found = m_Bitmaps.Find(bitmap);
 		if (!found) return {};
 		return std::pair{(*found)->snapshot, (*found)->Text()};
+	}
+	std::optional<std::shared_ptr<const BitmapSnapshot>> CheckpointNativeSnapshot::FrozenPixels(const BITMAP* bitmap) {
+		// A frozen header's table is the copy beside it; no allegro bitmap keeps its table there.
+		if (!bitmap || reinterpret_cast<const std::byte*>(bitmap->vtable) != reinterpret_cast<const std::byte*>(bitmap) + offsetof(Pixel::Header, table)) return {};
+		const Pixel* pixel = reinterpret_cast<const Pixel::Header*>(bitmap)->owner;
+		// A loaded image keeps its pixels while it is loaded.
+		return pixel->snapshot || !pixel->loaded ? pixel->snapshot : BitmapSnapshot::Capture(pixel->loaded);
 	}
 	std::optional<const std::string*> CheckpointNativeSnapshot::BitmapPath(const BITMAP* bitmap, int& depth) const {
 		auto found = m_BitmapSources.Find(bitmap);
@@ -384,8 +397,16 @@ namespace RTE {
 		const auto& scripts = (*reference)->scripts;
 		return std::find(scripts.begin(), scripts.end(), path) != scripts.end();
 	}
+	void CheckpointNativeSnapshot::RefuseUnreadableObject(const Entity* view, const Entity* source, const std::bad_typeid& error) {
+		const std::string chain = CheckpointCloneCost::DescribeOpen();
+		throw std::runtime_error(std::format("an object frozen at {} (live {}, in the pools {}) met an unreadable class: {}{}", static_cast<const void*>(view),
+		    static_cast<const void*>(source), CheckpointNativeStorage::Owns(source), error.what(), chain.empty() ? std::string{} : ", freezing " + chain));
+	}
 	Entity* Entity::FreezeCheckpointNative(CheckpointNativeSnapshot&) const {
-		throw UnsupportedCheckpointNative("native checkpoint snapshot is not implemented for " + GetClassName());
+		// An object being destroyed answers as its base class, so the refusal says where it lay.
+		throw UnsupportedCheckpointNative(std::format("native checkpoint snapshot is not implemented for {} (address {}, live {}, in the pools {})", GetClassName(),
+		    static_cast<const void*>(this), CheckpointNativeStorage::Original(this), CheckpointNativeStorage::Owns(CheckpointNativeStorage::Original(this))) +
+		    (CheckpointCloneCost::DescribeOpen().empty() ? std::string{} : ", freezing " + CheckpointCloneCost::DescribeOpen()));
 	}
 	void CheckpointNativeSnapshot::AssignEntity(Entity& target, const Entity& source) {
 		target.m_FrozenCheckpointNative = true;
@@ -513,7 +534,10 @@ namespace RTE {
 	std::string Entity::SaveCheckpoint() const {
 		CheckpointWriter archive("Entity1");
 		archive(m_PresetName, m_CopiedFromPresetName, m_PresetDescription, m_FormattedReaderPosition, m_IsOriginalPreset, m_DefinedInModule, m_RandomWeight);
-		archive(std::set<std::string>(m_Groups.begin(), m_Groups.end()));
+		// Saved through its frozen page, the groups are read as the boundary left them.
+		std::set<std::string> groups;
+		for (const CheckpointString& group: CheckpointValues(m_Groups)) groups.insert(group.Value());
+		archive(groups);
 		return archive.Text();
 	}
 
@@ -852,8 +876,12 @@ namespace RTE {
 
 		// If concrete class, fill up the pool with pre-allocated memory blocks the size of the type
 		if (m_Allocate && fillAmount > 0) {
+			m_AllocatedPool.reserve(m_AllocatedPool.size() + static_cast<size_t>(fillAmount));
 			for (int i = 0; i < fillAmount; ++i) {
-				m_AllocatedPool.push_back(m_Allocate());
+				// A refused allocation stops the refill: no null block ever reaches the pool.
+				void* memory = m_Allocate();
+				if (!memory) throw std::bad_alloc();
+				m_AllocatedPool.push_back(memory);
 			}
 		}
 #endif
@@ -964,15 +992,74 @@ namespace RTE {
 	}
 
 	void Entity::ClassInfo::ReleaseUnusedPoolMemory() {
+		while (ReleaseUnusedPoolMemory(std::numeric_limits<size_t>::max())) {}
+	}
+
+	bool Entity::ClassInfo::ReleaseUnusedPoolMemory(size_t budget) {
 		for (ClassInfo* info = s_ClassHead; info; info = info->m_NextClass) {
 			if (!info->IsConcrete()) continue;
 			std::lock_guard lock(info->m_Mutex);
 			const size_t reserve = static_cast<size_t>(info->m_PoolAllocBlockCount > 0 ? info->m_PoolAllocBlockCount : 10) * 2;
+			if (info->m_AllocatedPool.size() <= reserve) continue;
 			while (info->m_AllocatedPool.size() > reserve) {
+				if (budget == 0) return true;
 				info->m_Deallocate(info->m_AllocatedPool.back());
 				info->m_AllocatedPool.pop_back();
+				--budget;
 			}
+			info->m_AllocatedPool.shrink_to_fit();
 		}
+		return false;
+	}
+
+	bool Entity::ClassInfo::PoolHolds(const void* address, size_t bytes) const {
+		const auto* at = static_cast<const std::byte*>(address);
+		std::lock_guard lock(m_Mutex);
+		return std::any_of(m_AllocatedPool.begin(), m_AllocatedPool.end(), [&](const void* block) {
+			const auto* first = static_cast<const std::byte*>(block);
+			return at >= first && at + bytes <= first + m_InstanceBytes;
+		});
+	}
+
+	bool Entity::ClassInfo::AnyPoolHolds(const void* address, size_t bytes) {
+		for (const ClassInfo* info = s_ClassHead; info; info = info->m_NextClass) if (info->IsConcrete() && info->PoolHolds(address, bytes)) return true;
+		return false;
+	}
+
+	bool Entity::ClassInfo::RunPoolExhaustionSelfTest() {
+		auto* info = const_cast<ClassInfo*>(GetClass("MOPixel"));
+		if (!info) {
+			std::cout << "[pool-exhaustion-selftest] FAIL no MOPixel class" << std::endl;
+			return false;
+		}
+		// The classic pools serve only when the world's storage is off, as in single player.
+		CheckpointNativeStorage::WorldAllocationScope classic(false);
+		std::vector<void*> pooled;
+		MemoryAllocate allocate;
+		{
+			std::lock_guard lock(info->m_Mutex);
+			pooled.swap(info->m_AllocatedPool);
+			allocate = std::exchange(info->m_Allocate, [] { return static_cast<void*>(nullptr); });
+		}
+		bool refused = false, handedNull = false;
+		try {
+			void* memory = info->GetPoolMemory();
+			handedNull = memory == nullptr;
+			if (memory) info->ReturnPoolMemory(memory);
+			else {
+				std::lock_guard lock(info->m_Mutex);
+				--info->m_InstancesInUse;
+			}
+		} catch (const std::bad_alloc&) { refused = true; }
+		{
+			std::lock_guard lock(info->m_Mutex);
+			info->m_Allocate = std::move(allocate);
+			std::erase(info->m_AllocatedPool, nullptr);
+			info->m_AllocatedPool.insert(info->m_AllocatedPool.end(), pooled.begin(), pooled.end());
+		}
+		const bool passed = refused && !handedNull;
+		std::cout << "[pool-exhaustion-selftest] " << (passed ? "PASS" : "FAIL") << " refused=" << refused << " handed_null=" << handedNull << std::endl;
+		return passed;
 	}
 
 	void Entity::ClassInfo::DumpPoolMemoryInfo(const Writer& fileWriter) {

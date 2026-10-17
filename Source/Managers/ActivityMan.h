@@ -46,6 +46,11 @@ namespace RTE {
 		/// Prepares saved strings before the multiplayer page inventory is built.
 		void PrepareCheckpointValues();
 		void NotifyCheckpointTick();
+		/// How far the next capture is: within a few seconds the prepared capture commits and warms its copies, further away it
+		/// holds address space only.
+		void ExpectAutosave(double seconds);
+		/// A capture comes now, with no tick for the saver to warm ahead: warms the prepared capture and waits for it.
+		bool WarmAutosaveNow();
 #pragma region Creation
 		/// Constructor method used to instantiate an ActivityMan object in system memory. Create() should be called before using the object.
 		ActivityMan();

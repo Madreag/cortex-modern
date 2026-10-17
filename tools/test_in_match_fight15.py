@@ -59,8 +59,10 @@ def native_case(repo, root, row, size, exe=None):
     pictures = []
     for path in sorted((Path(run.cwd) / "ScreenShots").glob("fight15_" + row + "_*.png")):
         with Image.open(path) as shot:
+            rgb = shot.convert("RGB")
+            pixels = rgb.get_flattened_data() if hasattr(rgb, "get_flattened_data") else rgb.getdata()
             pictures.append({"path": str(path), "size": list(shot.size),
-                             "ink_pixels": sum(pixel != (0, 0, 0) for pixel in shot.convert("RGB").get_flattened_data())})
+                             "ink_pixels": sum(pixel != (0, 0, 0) for pixel in pixels)})
     return {"exit_code": record.get("exit_code"), "timed_out": record.get("timed_out"),
             "evidence_complete": record.get("evidence_complete"), "passes": passes,
             "fails": fails, "lines": lines, "size": size, "close_to_exit_ms": close_ms, "shutdown_phases": phases,

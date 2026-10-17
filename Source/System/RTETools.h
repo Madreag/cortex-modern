@@ -1,6 +1,8 @@
 #pragma once
 
 #include "CheckpointNativeStorage.h"
+#include "CheckpointActivity.h"
+#include "NoInline.h"
 
 #include "DeterministicMath.h"
 
@@ -15,6 +17,7 @@
 #include <string_view>
 #include <type_traits>
 #include <cmath>
+#include <atomic>
 #include <utility>
 
 namespace RTE {
@@ -39,15 +42,16 @@ namespace RTE {
 		std::unique_ptr<State> m_OwnedValues;
 		static thread_local State* s_CaptureSim;
 		static thread_local State* s_CaptureRender;
-		State* PrivateValues() const;
+		static inline std::atomic<int> s_CaptureScopes{0}; //!< Snapshot construction scopes open on all threads.
+		RTE_NOINLINE State* PrivateValues() const;
 		State& CheckpointValues() {
-			if (auto* local = PrivateValues()) return *local;
+			if (s_CaptureScopes.load(std::memory_order_relaxed) != 0) if (auto* local = PrivateValues()) return *local;
 			if (CheckpointNativeStorage::Reading() && (m_OwnedValues || CheckpointNativeStorage::IsView(this)))
 				throw std::logic_error("a frozen generator cannot change the live random stream");
 			return m_OwnedValues ? *m_OwnedValues : m_OrdinaryValues;
 		}
 		const State& CheckpointValues() const {
-			if (auto* local = PrivateValues()) return *local;
+			if (s_CaptureScopes.load(std::memory_order_relaxed) != 0) if (auto* local = PrivateValues()) return *local;
 			return m_OwnedValues ? *CheckpointNativeStorage::Source(m_OwnedValues.get()) : m_OrdinaryValues;
 		}
 		// The engine as a draw finds it: a pending seed is applied first.

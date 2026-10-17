@@ -102,6 +102,8 @@ bool RTE::CheckpointLua::BindingLease::Current() const noexcept { return m_Gener
 #include <atomic>
 #include <algorithm>
 #include <cctype>
+#include <cstddef>
+#include <deque>
 #include <list>
 #include <cmath>
 #include <charconv>
@@ -1770,8 +1772,12 @@ local function visitUserdata(value, ctx)
 	if kind == "area-ref" or (kind == "copy" and native[2] == "Area") then
 		for index, address in ipairs(_ScriptGraphAreaBoxes(value)) do ctx.areaBoxes[address] = { owner = value, index = index } end
 	end
+	if kind == "copy" and (native[2] == "PieMenu" or native[2] == "PieSlice") then
+		local slices = _ScriptGraphPieSlices(value)
+		for index = 1, #slices, 2 do ctx.pieSlices[slices[index]] = { owner = value, path = slices[index + 1] } end
+	end
 	if kind == "vector" then
-		return userdataNode(value, ctx, "v" .. numberText(value.X) .. "," .. numberText(value.Y) .. ";")
+		return userdataNode(value, ctx, (native[2] and "W" or "v") .. numberText(value.X) .. "," .. numberText(value.Y) .. ";")
 	elseif kind == "alarm" then
 		return userdataNode(value, ctx, "c" .. "n" .. numberText(value.ScenePos.X) .. ";n" .. numberText(value.ScenePos.Y) .. ";n" .. outputNumber(value.Team) .. ";n" .. numberText(value.Range) .. ";")
 	elseif kind == "module-ref" then
@@ -1846,7 +1852,15 @@ local function visitUserdata(value, ctx)
 		ctx.boxRefs[#ctx.boxRefs + 1] = { value = value, id = id, address = native[2], constant = native[3], instance = instance }
 		return reference(ctx, id)
 	elseif kind == "preset" then
-		return userdataNode(value, ctx, "p" .. stringToken(native[2]) .. stringToken(native[3]) .. stringToken(native[4]))
+		return userdataNode(value, ctx, "p" .. stringToken(native[2]) .. stringToken(native[3]) .. stringToken(native[4]) .. (native[5] and ("h" .. stringToken(native[5])) or ""))
+	elseif kind == "pie-slice-ref" then
+		-- Named after the walk, once every script-owned menu has said which slices it holds.
+		local id = birthId(ctx, value, "PieSlice reference")
+		if not id then return "z;" end
+		ctx.ids[value] = id
+		local instance = visit(_ScriptGraphInstance(value), ctx)
+		ctx.sliceRefs[#ctx.sliceRefs + 1] = { value = value, id = id, address = native[2], constant = native[3], freed = native[4], instance = instance }
+		return reference(ctx, id)
 	elseif kind == "named" then
 		return userdataNode(value, ctx, pathToken(ctx.paths[value]))
 	elseif kind == "lua-class" then
@@ -1882,6 +1896,9 @@ local function visitUserdata(value, ctx)
 			noteNode(ctx, id, "U" .. outputNumber(id) .. ";k" .. visit(owner, ctx) .. "n" .. outputNumber(index) .. ";" .. (constant and "t;" or "f;") .. "I" .. visit(_ScriptGraphInstance(value), ctx))
 			return reference(ctx, id)
 		end
+		-- A reference the script kept past the end of what it points into: the value it reads through it, as a vector of its own.
+		local goneX, goneY, goneConstant = _ScriptGraphGoneVector(value)
+		if goneX then return userdataNode(value, ctx, (goneConstant and "W" or "v") .. numberText(goneX) .. "," .. numberText(goneY) .. ";") end
 		problem(ctx, "a " .. kind .. " into an engine object that no known property exposes")
 		return "z;"
 	end
@@ -2110,7 +2127,7 @@ serializeGraph = function(roots, rebuildEverything, captureSerial)
 	phase("paths")
 	local callbacks = rawget(_G, "_ScriptGraphCallbacks")
 	local scratchBase = base >= PEER_BIRTH_BAND and callbacks and callbacks.liveSerial or base
-	local ctx = { ids = {}, cells = {}, rootCells = {}, nodes = {}, order = {}, defined = {}, refs = {}, chunks = {}, base = base, scratchBase = scratchBase, scratch = 0, count = 0, problems = {}, paths = paths, engine = engine, areaBoxes = {}, boxRefs = {}, ownedPointers = {}, openUpvalues = _ScriptGraphOpenUpvalues and _ScriptGraphOpenUpvalues() or {} }
+	local ctx = { ids = {}, cells = {}, rootCells = {}, nodes = {}, order = {}, defined = {}, refs = {}, chunks = {}, base = base, scratchBase = scratchBase, scratch = 0, count = 0, problems = {}, paths = paths, engine = engine, areaBoxes = {}, boxRefs = {}, pieSlices = {}, sliceRefs = {}, ownedPointers = {}, openUpvalues = _ScriptGraphOpenUpvalues and _ScriptGraphOpenUpvalues() or {} }
 	local chunks, rootIds, uids = {}, {}, {}
 	local reused, rewritten, uncacheable = 0, 0, 0
 	local globalReused, globalUnwatched = true, false
@@ -2152,13 +2169,14 @@ serializeGraph = function(roots, rebuildEverything, captureSerial)
 			for id in pairs(kept.refs) do ctx.refs[id] = true end
 			for pointer, object in pairs(kept.owned) do ctx.ownedPointers[pointer] = object; _ScriptGraphNoteCarried(object) end
 			for address, link in pairs(kept.areas) do ctx.areaBoxes[address] = link end
+			for address, link in pairs(kept.slices) do ctx.pieSlices[address] = link end
 			ctx.count = ctx.count + #kept.order
 			ctx.chunks[#ctx.chunks + 1] = kept.text
 			chunks[key] = kept
 			return kept.token, true, false
 		end
 		_ScriptGraphBeginRoot(uid, part)
-		local firstNode, firstBox = #ctx.order + 1, #ctx.boxRefs
+		local firstNode, firstBox, firstSlice = #ctx.order + 1, #ctx.boxRefs, #ctx.sliceRefs
 		local outerRefs = ctx.refs
 		local outerCells = ctx.rootCells
 		ctx.refs, ctx.rootUnwatched, ctx.rootCells = {}, false, {}
@@ -2166,8 +2184,9 @@ serializeGraph = function(roots, rebuildEverything, captureSerial)
 		local refs, unwatched, cells = ctx.refs, ctx.rootUnwatched, ctx.rootCells
 		ctx.rootCells = outerCells
 		if #ctx.boxRefs > firstBox then unwatched = unwatched or "deferred Box owner" end
+		if #ctx.sliceRefs > firstSlice then unwatched = unwatched or "deferred PieSlice owner" end
 		ctx.refs = outerRefs
-		local text, order, owned, areas = {}, {}, {}, {}
+		local text, order, owned, areas, slices = {}, {}, {}, {}, {}
 		local defines = {}
 		for index = firstNode, #ctx.order do
 			local id = ctx.order[index]
@@ -2178,9 +2197,12 @@ serializeGraph = function(roots, rebuildEverything, captureSerial)
 		for address, link in pairs(ctx.areaBoxes) do
 			if defines[ctx.ids[link.owner]] then areas[address] = setmetatable({ owner = link.owner, index = link.index }, { __mode = "v" }) end
 		end
+		for address, link in pairs(ctx.pieSlices) do
+			if defines[ctx.ids[link.owner]] then slices[address] = setmetatable({ owner = link.owner, path = link.path }, { __mode = "v" }) end
+		end
 		local written = { token = token, order = order, refs = refs, text = concatenate(text), cacheable = not unwatched, unwatched = unwatched, cells = cells,
 		                  source = setmetatable({ value }, { __mode = "v" }), values = setmetatable({}, { __mode = "v" }),
-		                  owned = setmetatable(owned, { __mode = "v" }), areas = areas, envs = setmetatable({}, { __mode = "v" }) }
+		                  owned = setmetatable(owned, { __mode = "v" }), areas = areas, slices = slices, envs = setmetatable({}, { __mode = "v" }) }
 		chunks[key] = written
 		ctx.chunks[#ctx.chunks + 1] = written.text
 		return token, false, unwatched
@@ -2281,6 +2303,17 @@ serializeGraph = function(roots, rebuildEverything, captureSerial)
 		end
 		if link then noteNode(ctx, ref.id, "U" .. outputNumber(ref.id) .. ";b" .. visit(link.owner, ctx) .. "n" .. outputNumber(link.index) .. ";" .. (ref.constant and "t;" or "f;") .. "I" .. ref.instance)
 		else problem(ctx, "a Box reference whose owning Area is missing"); noteNode(ctx, ref.id, "U" .. outputNumber(ref.id) .. ";z;I" .. ref.instance) end
+	end
+	for _, ref in ipairs(ctx.sliceRefs) do
+		local link = ctx.pieSlices[ref.address]
+		if link then
+			noteNode(ctx, ref.id, "U" .. outputNumber(ref.id) .. ";x" .. visit(link.owner, ctx) .. stringToken("pie-slice:" .. link.path) .. "n" .. outputNumber(0) .. ";" .. (ref.constant and "t;" or "f;") .. "I" .. ref.instance)
+		elseif ref.freed then
+			noteNode(ctx, ref.id, "U" .. outputNumber(ref.id) .. ";D" .. stringToken("PieSlice") .. "I" .. ref.instance)
+		else
+			problem(ctx, "a PieSlice that no actor's pie menu, script's own pie menu or preset holds")
+			noteNode(ctx, ref.id, "U" .. outputNumber(ref.id) .. ";z;I" .. ref.instance)
+		end
 	end
 	phase("boxes")
 	local rng = _ScriptGraphRandomState and stringToken(_ScriptGraphRandomState()) or "z;"
@@ -2404,10 +2437,10 @@ local function newReader(text)
 			local token = { t = "ref", id = self:integer(self:readUntil(";"), 1) }
 			self.references[#self.references + 1] = token
 			return token
-		elseif c == "v" then
+		elseif c == "v" or c == "W" then
 			local x, y = string.match(self:readUntil(";"), "^([^,]+),([^,]+)$")
 			if not x then self:bad("invalid vector") end
-			return { t = "vector", x = self:number(x), y = self:number(y) }
+			return { t = "vector", x = self:number(x), y = self:number(y), constant = c == "W" }
 		elseif c == "m" then
 			local a, b, c2, d = string.match(self:readUntil(";"), "^([^,]+),([^,]+),([^,]+),([^,]+)$")
 			if not a then self:bad("invalid timer") end
@@ -2439,7 +2472,10 @@ local function newReader(text)
 			if count == 0 then self:bad("empty native path") end
 			for i = 1, count do segments[i] = self:readString() end
 			return { t = "path", segments = segments }
-		elseif c == "p" then return { t = "preset", class = self:readString(), preset = self:readString(), module = self:readString() }
+		elseif c == "p" then
+			local token = { t = "preset", class = self:readString(), preset = self:readString(), module = self:readString() }
+			if self:peek() == "h" then self:expect("h"); token.held = self:readString() end
+			return token
 		elseif c == "A" then self:expect(";") return { t = "activity" }
 		elseif c == "G" then return { t = "global-script", index = self:integer(self:readUntil(";"), 1) }
 		elseif c == "S" then self:expect(";") return { t = "scene" }
@@ -2816,7 +2852,9 @@ function Graph.deserialize(text, reuseHeld, adoptRoots)
 			return controller
 		elseif t == "vector" then
 			local vector = held or Vector()
+			if held then _ScriptGraphConstant(vector, false) end
 			vector.X, vector.Y = token.x, token.y
+			if token.constant then _ScriptGraphConstant(vector, true) end
 			return vector
 		elseif t == "alarm" then
 			local alarm = held or AlarmEvent()
@@ -2839,6 +2877,7 @@ function Graph.deserialize(text, reuseHeld, adoptRoots)
 		elseif t == "preset" then
 			local preset = PresetMan:GetPreset(token.class, token.preset, token.module)
 			if preset == nil then note("the preset " .. token.class .. " " .. token.preset .. " of " .. token.module .. " is missing") end
+			if preset ~= nil and token.held then preset = _ScriptGraphPresetAs(preset, token.held) end
 			return preset
 		elseif t == "material" then return SceneMan:GetMaterialFromID(token.index)
 		elseif t == "activity" then
@@ -4402,6 +4441,107 @@ static std::vector<const void*> LoadedPresets(const char* type) {
 // The loaded activity presets by address; a class global bound to anything else names an instance that is gone.
 static std::vector<const void*> LoadedActivityPresets() { return LoadedPresets("Activity"); }
 
+// Test lever CCCP_TEST_STALE_ACTIVITY: the paths in a state's globals and registry of activity values that are neither the running
+// activity nor a loaded preset; only the values' pointers are read.
+static void NameStaleActivityValues(lua_State* L, const std::string& stateName) {
+	const void* const running = g_ActivityMan.GetActivity();
+	const std::vector<const void*> presets = LoadedActivityPresets();
+	std::unordered_set<const void*> seen;
+	int named = 0;
+	std::function<void(int, const std::string&, int)> walk;
+	const auto value = [&](int index, const std::string& path, int depth) {
+		// A level pushes up to three values; a walk that cannot reserve them stops there.
+		if (!lua_checkstack(L, 4)) return;
+		if (lua_istable(L, index)) {
+			walk(index, path, depth + 1);
+		} else if (lua_isfunction(L, index)) {
+			if (depth > 8 || !seen.insert(lua_topointer(L, index)).second) return;
+			for (int upvalue = 1; lua_getupvalue(L, index, upvalue); ++upvalue) {
+				walk(lua_gettop(L), path + "<upvalue " + std::to_string(upvalue) + ">", depth + 1);
+				lua_pop(L, 1);
+			}
+		} else if (auto* rep = luabind::detail::is_class_object(L, index)) {
+			if (ClassDerivesFrom(rep->crep(), "Activity") && rep->ptr() != running && !std::binary_search(presets.begin(), presets.end(), rep->ptr()) && named++ < 16)
+				System::PrintDiagnosticLine(std::format("[stale-activity] state={} path={} class={} address={}", stateName, path, rep->crep()->name(), rep->ptr()));
+			if (rep->get_lua_table().is_valid() && depth <= 8) {
+				rep->get_lua_table().get(L);
+				walk(lua_gettop(L), path + "<members>", depth + 1);
+				lua_pop(L, 1);
+			}
+		}
+	};
+	walk = [&](int index, const std::string& path, int depth) {
+		if (!lua_istable(L, index)) { value(index, path, depth); return; }
+		if (depth > 8 || named >= 16 || !lua_checkstack(L, 4) || !seen.insert(lua_topointer(L, index)).second) return;
+		lua_pushnil(L);
+		while (lua_next(L, index) != 0) {
+			std::string key;
+			if (lua_type(L, -2) == LUA_TSTRING) key = "." + std::string(lua_tostring(L, -2));
+			else if (lua_type(L, -2) == LUA_TNUMBER) key = "[" + std::to_string(lua_tonumber(L, -2)) + "]";
+			else key = std::string("[") + lua_typename(L, lua_type(L, -2)) + "]";
+			value(lua_gettop(L), path + key, depth);
+			lua_pop(L, 1);
+		}
+	};
+	lua_pushvalue(L, LUA_GLOBALSINDEX);
+	walk(lua_gettop(L), "_G", 0);
+	lua_pop(L, 1);
+	lua_pushvalue(L, LUA_REGISTRYINDEX);
+	walk(lua_gettop(L), "registry", 0);
+	lua_pop(L, 1);
+}
+
+void LuaMan::NameStaleActivityValues() {
+	const auto name = [](LuaStateWrapper& state, const std::string& stateName) {
+		std::lock_guard<std::recursive_mutex> lock(state.GetMutex());
+		if (state.GetLuaState()) ::NameStaleActivityValues(state.GetLuaState(), stateName);
+	};
+	name(m_MasterScriptState, "master");
+	for (size_t index = 0; index < m_ScriptStates.size(); ++index) name(m_ScriptStates[index], "threaded" + std::to_string(index));
+}
+
+// Every slice of a pie menu tree with its place in it ("menu/2/0"), read through the frozen view during a capture.
+template<class Visit> static void ForEachPieSlice(const PieMenu* menu, const std::string& path, Visit& visit) {
+	if (!menu) return;
+	size_t index = 0;
+	for (const PieSlice* slice: CheckpointValues(CheckpointNativeStorage::Source(menu)->GetPieSlices())) {
+		const std::string place = path + "/" + std::to_string(index++);
+		if (!slice) continue;
+		visit(CheckpointNativeStorage::Original(slice), place);
+		ForEachPieSlice(CheckpointNativeStorage::Source(slice)->GetSubPieMenu(), place, visit);
+	}
+}
+
+// Whether a slice's memory is back in its pool - a slot a native pool holds free or a block the class pool holds returned.
+static bool PieSliceFreed(const void* slice) {
+	const Entity::ClassInfo* type = Entity::ClassInfo::GetClass("PieSlice");
+	const size_t bytes = type ? type->CheckpointInstanceBytes() : 0;
+	return bytes && (CheckpointNativeStorage::FreeSlotHolds(slice, bytes) || type->PoolHolds(slice, bytes));
+}
+
+void LuaMan::PlantPieSliceHandles() {
+	static constexpr const char* plant = R"lua(
+_F5LeverSlices = {}
+_F5LeverSlices.menu = CreatePieMenu("Constructor Pie Menu", "Base.rte")
+_F5LeverSlices.menuSlice = _F5LeverSlices.menu and _F5LeverSlices.menu:GetFirstPieSliceByPresetName("Constructor Spray Mode")
+_F5LeverSlices.options = CreatePieSlice("Constructor Options", "Base.rte")
+_F5LeverSlices.subSlice = _F5LeverSlices.options and _F5LeverSlices.options.SubPieMenu and _F5LeverSlices.options.SubPieMenu:GetFirstPieSliceByPresetName("Constructor Cancel Construction")
+_F5LeverSlices.presetEntity = PresetMan:GetPreset("PieSlice", "Menu", "Base.rte")
+_F5LeverSlices.presetSlice = _F5LeverSlices.presetEntity and ToPieSlice(_F5LeverSlices.presetEntity)
+assert(_F5LeverSlices.menuSlice and _F5LeverSlices.subSlice and _F5LeverSlices.presetSlice)
+)lua";
+	int planted = 0, states = 0;
+	const auto into = [&](LuaStateWrapper& state) {
+		std::lock_guard<std::recursive_mutex> lock(state.GetMutex());
+		if (!state.GetLuaState()) return;
+		++states;
+		if (state.RunScriptString(plant) == 0) ++planted;
+	};
+	into(m_MasterScriptState);
+	for (size_t index = 0; index < m_ScriptStates.size(); ++index) into(m_ScriptStates[index]);
+	System::PrintDiagnosticLine(std::format("[pie-slice-lever] planted={} states={}", planted, states));
+}
+
 struct RTE::LuaScriptGraphNativeCaptureData {
 	mutable std::thread::id captureThread = std::this_thread::get_id();
 	/// The objects that existed when the capture began, copied by the first question asked of them.
@@ -4437,9 +4577,9 @@ struct RTE::LuaScriptGraphNativeCaptureData {
 				for (int player = 0; player < Players::MaxPlayerCount; ++player) {
 					add(activity->GetPlayerController(player));
 					if (const auto* game = dynamic_cast<const GameActivity*>(activity)) {
-						add(game->GetBuyGUI(player)); add(game->GetEditorGUI(player));
-						add(game->GetBanner(GameActivity::YELLOW, player)); add(game->GetBanner(GameActivity::RED, player));
-						if (auto* editor = game->GetEditorGUI(player)) {
+						const GameActivity::SeatInterfaces seat = game->CapturedSeatInterfaces(player);
+						add(seat.buy); add(seat.editor); add(seat.yellow); add(seat.red);
+						if (auto* editor = seat.editor) {
 							add(editor->GetCheckpointPieMenu());
 							const auto parts = [this, &add](const Entity* root) {
 								add(root);
@@ -4462,6 +4602,12 @@ struct RTE::LuaScriptGraphNativeCaptureData {
 		});
 		return m_Special.contains(address) || g_PrimitiveMan.FindCheckpointPrimitive(address) >= 0 || g_PrimitiveMan.FindCheckpointVertex(address) >= 0;
 	}
+	/// Whether an activity value names one that still exists: the running activity, the one the checkpoint started from, or a
+	/// loaded preset; only the pointer is read.
+	bool LiveActivity(const void* address) const {
+		address = CheckpointNativeStorage::Original(address);
+		return address == m_RunningActivity || address == m_StartActivity || ActivityPreset(address);
+	}
 	/// Whether an address is a loaded activity preset; only the pointer is read.
 	bool ActivityPreset(const void* address) const {
 		address = CheckpointNativeStorage::Original(address);
@@ -4480,6 +4626,38 @@ struct RTE::LuaScriptGraphNativeCaptureData {
 		if (HasOwnerIndex()) return Find(m_Owners.vectors, address);
 		if (CheckpointNativeSnapshot::Boundary()) if (const auto* field = DirectVectorOwner(address)) return field;
 		return Find(Owners().vectors, address);
+	}
+	/// Where a pie slice lives: the known actor whose pie menu tree holds it and the slice indices down to it ("menu/2/0").
+	struct PieSlicePlace {
+		const Actor* owner;
+		std::string path;
+	};
+	const PieSlicePlace* PieSliceOwner(const void* address) const {
+		address = CheckpointNativeStorage::Original(address);
+		Once(m_PieSlicesBuilt, m_PieSlicesReady, [this] {
+			for (MovableObject* original: KnownObjects()) {
+				if (const auto* actor = CheckpointCast<const Actor>(CheckpointNativeStorage::Source(original))) AddPieMenu(static_cast<const Actor*>(static_cast<const MovableObject*>(original)), actor->GetPieMenu(), "menu");
+			}
+		});
+		const auto found = m_PieSlices.find(address);
+		return found == m_PieSlices.end() ? nullptr : &found->second;
+	}
+	/// A stand-in for a slice the world copy does not read: never read itself, it keeps the slice's address for the graph.
+	void* UnreadSlice(const void* slice) const {
+		std::lock_guard lock(m_UnreadMutex);
+		if (const auto found = m_UnreadByOriginal.find(slice); found != m_UnreadByOriginal.end()) return found->second;
+		void* standIn = &m_UnreadStandIns.emplace_back();
+		m_UnreadByOriginal.emplace(slice, standIn);
+		m_UnreadOriginals.emplace(standIn, slice);
+		return standIn;
+	}
+	/// The slice a handle names: a stand-in's slice, else the handle's original address.
+	const void* SliceSource(const void* address) const {
+		{
+			std::lock_guard lock(m_UnreadMutex);
+			if (const auto found = m_UnreadOriginals.find(address); found != m_UnreadOriginals.end()) return found->second;
+		}
+		return CheckpointNativeStorage::Original(address);
 	}
 	/// The actor a Controller belongs to, if it is a known actor's.
 	const long* ControllerOwner(const void* address) const {
@@ -4519,6 +4697,10 @@ struct RTE::LuaScriptGraphNativeCaptureData {
 	}
 
 private:
+	void AddPieMenu(const Actor* owner, const PieMenu* menu, const std::string& path) const {
+		const auto note = [&](const void* slice, const std::string& place) { m_PieSlices.try_emplace(slice, PieSlicePlace{owner, place}); };
+		ForEachPieSlice(menu, path, note);
+	}
 	struct VectorGetter { const char* name; const Vector* (*get)(const MovableObject*); };
 	static constexpr std::array<VectorGetter, 9> c_VectorGetters{{
 	    {"Pos", [](const MovableObject* mo) { return &mo->GetPos(); }},
@@ -4673,6 +4855,16 @@ private:
 	mutable std::once_flag m_SpecialBuilt;
 	mutable std::atomic<bool> m_SpecialReady{false};
 	mutable std::unordered_set<const void*> m_Special;
+	const void* const m_RunningActivity = g_ActivityMan.GetActivity();
+	const void* const m_StartActivity = g_ActivityMan.GetCheckpointStartActivity();
+	mutable std::once_flag m_PieSlicesBuilt;
+	mutable std::atomic<bool> m_PieSlicesReady{false};
+	mutable std::unordered_map<const void*, PieSlicePlace> m_PieSlices;
+	struct alignas(PieSlice) UnreadStandIn { std::byte bytes[sizeof(PieSlice)]{}; };
+	mutable std::mutex m_UnreadMutex;
+	mutable std::deque<UnreadStandIn> m_UnreadStandIns;
+	mutable std::unordered_map<const void*, void*> m_UnreadByOriginal;
+	mutable std::unordered_map<const void*, const void*> m_UnreadOriginals;
 };
 static thread_local const LuaScriptGraphNativeCaptureData* s_GraphNativeCapture = nullptr;
 
@@ -5218,7 +5410,7 @@ static bool ScriptGraphReadableDependency(const luabind::detail::object_rep* own
 	}
 	if (std::strcmp(owner->crep()->name(), "SceneEditorGUI") == 0) {
 		const auto* game = dynamic_cast<const GameActivity*>(g_ActivityMan.GetActivity());
-		for (int player = 0; game && player < Players::MaxPlayerCount; ++player) if (address == game->GetEditorGUI(player)) return true;
+		for (int player = 0; game && player < Players::MaxPlayerCount; ++player) if (address == game->GetExistingEditorGUI(player)) return true;
 		return false;
 	}
 	return true;
@@ -5505,6 +5697,34 @@ static int ScriptGraphLimbVectorOwner(lua_State* L) {
 	return 0;
 }
 
+// A Vector reference that outlived the object it points into (an AI's waypoint into a move target that died): the value the
+// script reads through it, read only from memory the engine holds and no living object owns - a gone object's memory its Lua
+// handles retain, a slot a native pool holds free or a block a class pool holds returned; nothing for any other reference, or
+// while an owner luabind recorded lives.
+static int ScriptGraphGoneVector(lua_State* L) {
+	auto* rep = luabind::detail::is_class_object(L, 1);
+	if (!rep || !rep->ptr() || (rep->flags() & luabind::detail::object_rep::owner) || !rep->crep() || rep->crep()->type() != LUABIND_TYPEID(Vector)) return 0;
+	if (rep->get_dependencies().is_valid() && ScriptGraphNativeAlive(L, rep)) return 0;
+	const void* original = CheckpointNativeStorage::Original(rep->ptr());
+	if (!MovableObject::RetainedMemoryHolds(original, sizeof(Vector)) && !CheckpointNativeStorage::FreeSlotHolds(original, sizeof(Vector)) &&
+	    !Entity::ClassInfo::AnyPoolHolds(original, sizeof(Vector)))
+		return 0;
+	// Through the view: a frozen state reads its copy of the bytes.
+	const Vector value = *static_cast<const Vector*>(rep->ptr());
+	lua_pushnumber(L, value.GetX());
+	lua_pushnumber(L, value.GetY());
+	lua_pushboolean(L, (rep->flags() & luabind::detail::object_rep::constant) != 0);
+	return 3;
+}
+
+// (vector, constant): a restored owned vector takes or leaves the constness its reference had.
+static int ScriptGraphConstant(lua_State* L) {
+	if (auto* rep = luabind::detail::is_class_object(L, 1); rep && (rep->flags() & luabind::detail::object_rep::owner)) {
+		rep->set_flags((rep->flags() & ~luabind::detail::object_rep::constant) | (lua_toboolean(L, 2) ? luabind::detail::object_rep::constant : 0));
+	}
+	return 0;
+}
+
 static int ScriptGraphLimbVector(lua_State* L) {
 	auto* owner = luabind::detail::is_class_object(L, 1);
 	const int index = lua_tointeger(L, 2);
@@ -5615,6 +5835,40 @@ static int ScriptGraphAreaBoxes(lua_State* L) {
 			lua_rawseti(L, -2, ++index);
 		}
 	}
+	return 1;
+}
+
+// The slices of a script's own pie menu, or of its own slice's sub-menu, as {address, place, address, place, ...}.
+static int ScriptGraphPieSlices(lua_State* L) {
+	auto* rep = luabind::detail::is_class_object(L, 1);
+	lua_newtable(L);
+	if (!rep || !rep->ptr() || !(rep->flags() & luabind::detail::object_rep::owner) || !rep->crep()) return 1;
+	const PieMenu* menu = nullptr;
+	if (std::strcmp(rep->crep()->name(), "PieMenu") == 0) {
+		menu = static_cast<const PieMenu*>(CheckpointNativeStorage::Original(rep->ptr()));
+	} else if (std::strcmp(rep->crep()->name(), "PieSlice") == 0) {
+		menu = CheckpointNativeStorage::Source(static_cast<const PieSlice*>(CheckpointNativeStorage::Original(rep->ptr())))->GetSubPieMenu();
+	}
+	int index = 0;
+	const auto note = [&](const void* slice, const std::string& place) {
+		lua_pushlightuserdata(L, const_cast<void*>(slice));
+		lua_rawseti(L, -2, ++index);
+		lua_pushlstring(L, place.data(), place.size());
+		lua_rawseti(L, -2, ++index);
+	};
+	ForEachPieSlice(menu, "menu", note);
+	return 1;
+}
+
+// (preset, class): a preset as the class the script held it as, const as every preset is.
+static int ScriptGraphPresetAs(lua_State* L) {
+	auto* rep = luabind::detail::is_class_object(L, 1);
+	const char* type = luaL_checkstring(L, 2);
+	if (!rep || !rep->ptr() || !rep->crep() || !ClassDerivesFrom(rep->crep(), "Entity") || !ScriptGraphPushEntity(L, static_cast<const Entity*>(rep->ptr()), type)) {
+		lua_pushvalue(L, 1);
+		return 1;
+	}
+	if (auto* pushed = luabind::detail::is_class_object(L, -1)) pushed->set_flags(pushed->flags() | luabind::detail::object_rep::constant);
 	return 1;
 }
 
@@ -5799,6 +6053,21 @@ static int ScriptGraphOwnerState(lua_State* L) {
 	return 1;
 }
 
+// The slice at a place ("/2/0") in a pie menu tree: each step a slice of the menu so far, whose sub-menu the next step reads.
+static PieSlice* PieSliceAtPlace(PieMenu* menu, std::string_view path) {
+	PieSlice* slice = nullptr;
+	while (!path.empty() && path.front() == '/') {
+		path.remove_prefix(1);
+		size_t step = 0;
+		const auto parsed = std::from_chars(path.data(), path.data() + path.size(), step);
+		if (parsed.ec != std::errc{} || !menu || step >= menu->GetPieSlices().size()) return nullptr;
+		path.remove_prefix(static_cast<size_t>(parsed.ptr - path.data()));
+		slice = menu->GetPieSlices()[step];
+		menu = slice ? slice->GetSubPieMenu() : nullptr;
+	}
+	return path.empty() ? slice : nullptr;
+}
+
 static int ScriptGraphOwnerReference(lua_State* L) {
 	auto* owner = luabind::detail::is_class_object(L, 1);
 	const char* property = luaL_checkstring(L, 2);
@@ -5854,6 +6123,14 @@ static int ScriptGraphOwnerReference(lua_State* L) {
 			if (std::strcmp(property, "current-object") == 0) return push(editor->GetCurrentObject());
 			if (std::strcmp(property, "editor-pie") == 0) return push(editor->GetCheckpointPieMenu());
 			if (std::strcmp(property, "retained-editor-owner") == 0) return push(editor->GetCheckpointRetainedOwner(static_cast<size_t>(index)));
+		} else if (std::strcmp(owner->crep()->name(), "PieMenu") == 0 || std::strcmp(owner->crep()->name(), "PieSlice") == 0) {
+			// A slice of a script's own pie menu, or of its own slice's sub-menu, by its place there.
+			std::string_view path(property);
+			constexpr std::string_view slicePrefix = "pie-slice:menu";
+			if (path.starts_with(slicePrefix)) {
+				PieMenu* menu = std::strcmp(owner->crep()->name(), "PieMenu") == 0 ? static_cast<PieMenu*>(owner->ptr()) : static_cast<PieSlice*>(owner->ptr())->GetSubPieMenu();
+				return push(PieSliceAtPlace(menu, path.substr(slicePrefix.size())));
+			}
 		} else if (ClassDerivesFrom(owner->crep(), "MovableObject")) {
 			auto* object = static_cast<MovableObject*>(owner->ptr());
 			if (std::strcmp(property, "actor-controller") == 0) {
@@ -5867,6 +6144,11 @@ static int ScriptGraphOwnerReference(lua_State* L) {
 				long uid = 0;
 				const auto parsed = std::from_chars(path.data(), path.data() + path.size(), uid);
 				if (parsed.ec == std::errc{} && parsed.ptr == path.data() + path.size()) return push(object->FindPartByUniqueID(uid));
+			}
+			constexpr std::string_view slicePrefix = "pie-slice:menu";
+			if (path.starts_with(slicePrefix)) {
+				auto* actor = dynamic_cast<Actor*>(object);
+				return push(PieSliceAtPlace(actor ? actor->GetPieMenu() : nullptr, path.substr(slicePrefix.size())));
 			}
 		} else if (std::strcmp(owner->crep()->name(), "Scene") == 0 && std::strcmp(property, "terrain") == 0) {
 			if (index == 0) return push(static_cast<Scene*>(owner->ptr())->GetTerrain());
@@ -5924,6 +6206,28 @@ static int ScriptGraphOwnerReferenceDescriptor(lua_State* L, const luabind::deta
 		return 7;
 	};
 	const auto* type = rep->crep();
+	// A pie slice is named by its place in a known actor's pie menu tree, else as a preset, else by its address for the graph to
+	// find in a script's own menu - with whether its memory is back in its pool - and never read.
+	if (s_GraphNativeCapture && type && std::strcmp(type->name(), "PieSlice") == 0) {
+		const void* slice = s_GraphNativeCapture->SliceSource(rep->ptr());
+		if (const auto* place = s_GraphNativeCapture->PieSliceOwner(slice)) return found(const_cast<Actor*>(place->owner), ("pie-slice:" + place->path).c_str(), 0);
+		if (s_GraphNativeCapture->Preset(slice)) {
+			// A loaded preset is never freed or changed during a match, so its names are read from the preset itself.
+			const auto* preset = static_cast<const Entity*>(static_cast<const PieSlice*>(slice));
+			const Entity* named = preset->GetPresetForCopy();
+			lua_pushliteral(L, "preset");
+			lua_pushstring(L, preset->GetClassName().c_str());
+			lua_pushstring(L, named ? named->GetPresetName().c_str() : "");
+			lua_pushstring(L, named ? named->GetModuleName().c_str() : "");
+			lua_pushstring(L, type->name());
+			return 5;
+		}
+		lua_pushliteral(L, "pie-slice-ref");
+		lua_pushlightuserdata(L, const_cast<void*>(slice));
+		lua_pushboolean(L, (rep->flags() & luabind::detail::object_rep::constant) != 0);
+		lua_pushboolean(L, PieSliceFreed(slice));
+		return 4;
+	}
 	if (CheckpointWriter::BatchEnabled() && type && type->get_class_type() == luabind::detail::class_rep::cpp_class &&
 	    type->type() == LUABIND_TYPEID(Vector) && std::strcmp(type->name(), "Vector") == 0) {
 		if (const int index = g_PrimitiveMan.FindCheckpointVertex(rep->ptr()); index >= 0) return found(&g_PrimitiveMan, "primitive-vertex", index);
@@ -6045,6 +6349,12 @@ static int ScriptGraphNative(lua_State* L) {
 	const bool owned = (rep->flags() & luabind::detail::object_rep::owner) != 0;
 	const std::string className = crep->name();
 	const void* const handle = CheckpointNativeStorage::Original(rep->ptr());
+	// A dead slice reference - restored as one, its pointer null - stays one.
+	if (!owned && !rep->ptr() && className == "PieSlice") {
+		lua_pushstring(L, "invalid");
+		lua_pushstring(L, className.c_str());
+		return 2;
+	}
 	// An Area a script kept past its scene's end is named, never read.
 	if (!owned && className == "Area" && !ScriptGraphNativeAlive(L, rep)) {
 		lua_pushstring(L, "invalid");
@@ -6156,7 +6466,9 @@ static int ScriptGraphNative(lua_State* L) {
 	if (className == "Vector") {
 		if (owned) {
 			lua_pushstring(L, "vector");
-			return 1;
+			if (!(rep->flags() & luabind::detail::object_rep::constant)) return 1;
+			lua_pushboolean(L, 1);
+			return 2;
 		}
 		if (s_GraphNativeCapture) {
 			if (const VectorField* field = s_GraphNativeCapture->VectorOwner(rep->ptr())) {
@@ -6241,7 +6553,10 @@ static int ScriptGraphNative(lua_State* L) {
 			lua_pushstring(L, entity->GetClassName().c_str());
 			lua_pushstring(L, preset ? preset->GetPresetName().c_str() : "");
 			lua_pushstring(L, preset ? preset->GetModuleName().c_str() : "");
-			return 4;
+			// The class a script holds a preset as, when it is not the plain Entity the registry hands out.
+			if (owned || className == "Entity") return 4;
+			lua_pushstring(L, className.c_str());
+			return 5;
 		}
 	}
 	lua_pushnil(L);
@@ -6280,6 +6595,189 @@ static bool RunStaleActivityReferenceSelfTest(LuaStateWrapper& lua) {
 	lua.RunScriptString("_F417Banner = nil");
 	const bool passed = bound && alive.find(":stale") == std::string::npos && relaunched.find(":stale") == std::string::npos && relaunched != "error";
 	std::cout << "[script-graph-selftest] " << (passed ? "PASS" : "FAIL") << " capture_reads_no_activity_but_the_running_one_or_a_preset alive=" << alive << " relaunched=" << relaunched << std::endl;
+	return passed;
+}
+
+// A device's script keeps handles to the slices it put into its holder's pie menu (the Coalition grenade launcher's), and an AI
+// behavior coroutine keeps its waypoint as a reference to its move target's position (SharedBehaviors.GoToWpt:
+// 'Waypoint.Pos = Owner.MOMoveTarget.Pos'), a target that can be gone by the capture. Both captures write them; the restore
+// gives back the same slice of the same actor's menu, a slice its menu deleted as a gone reference with its identity, a live
+// alias of a living target's position, and the last position of a target that is gone.
+static bool RunEngineHandleSelfTest(LuaStateWrapper& lua) {
+	const bool planted = lua.RunScriptString(R"lua(
+_F5Handles = {}
+local function holding(x)
+	local holder = CreateAHuman("Green Dummy", "Base.rte")
+	holder.Pos = Vector(x, 200)
+	MovableMan:AddActor(holder)
+	holder:AddInventoryItem(CreateHDFirearm("Constructor", "Base.rte"))
+	holder:EquipFirearm(true)
+	local options = holder.PieMenu:GetFirstPieSliceByPresetName("Constructor Options")
+	return holder, options and options.SubPieMenu and options.SubPieMenu:GetFirstPieSliceByPresetName("Constructor Order Construction")
+end
+_F5Handles.holder, _F5Handles.live = holding(300)
+_F5Handles.liveAlias = _F5Handles.live
+_F5Handles.dropper, _F5Handles.gone = holding(420)
+_F5Handles.goneAlias = _F5Handles.gone
+assert(_F5Handles.live ~= nil and _F5Handles.gone ~= nil, "a held Constructor put no options slice into its holder's menu")
+-- Live slices no actor's menu holds: one of the script's own pie menu, one of its own slice's sub-menu, and a preset as the
+-- registry hands it out and as a cast holds it.
+_F5Handles.ownMenu = CreatePieMenu("Constructor Pie Menu", "Base.rte")
+_F5Handles.ownMenuSlice = _F5Handles.ownMenu and _F5Handles.ownMenu:GetFirstPieSliceByPresetName("Constructor Spray Mode")
+_F5Handles.ownMenuAlias = _F5Handles.ownMenuSlice
+_F5Handles.ownSlice = CreatePieSlice("Constructor Options", "Base.rte")
+_F5Handles.subSlice = _F5Handles.ownSlice and _F5Handles.ownSlice.SubPieMenu and _F5Handles.ownSlice.SubPieMenu:GetFirstPieSliceByPresetName("Constructor Cancel Construction")
+_F5Handles.presetEntity = PresetMan:GetPreset("PieSlice", "Menu", "Base.rte")
+_F5Handles.presetSlice = _F5Handles.presetEntity and ToPieSlice(_F5Handles.presetEntity)
+assert(_F5Handles.ownMenuSlice and _F5Handles.subSlice and _F5Handles.presetSlice, "a script's own menu slice, its own slice's sub-menu slice or a preset slice could not be made")
+-- The device leaves its holder's hands: the menu deletes the slices it put there, and the handles point at nothing.
+_F5Handles.dropper:UnequipArms()
+local target = CreateMOPixel("Spark Yellow 1", "Base.rte")
+target.Pos = Vector(610, 190)
+target.Vel = Vector(0, 0)
+MovableMan:AddParticle(target)
+_F5Handles.targetUID = target.UniqueID
+local function waypointTo(mo)
+	return coroutine.create(function()
+		local Waypoint = {}
+		Waypoint.Pos = mo.Pos
+		coroutine.yield()
+		return Waypoint.Pos.X, Waypoint.Pos.Y, Waypoint.Pos
+	end)
+end
+_F5Handles.follower = waypointTo(_F5Handles.holder)
+_F5Handles.chaser = waypointTo(target)
+-- Whether a script may write through the position reference it keeps.
+_F5Handles.positionConstant = not pcall(function() local position = target.Pos; position.X = position.X end)
+assert(coroutine.resume(_F5Handles.follower) and coroutine.resume(_F5Handles.chaser))
+)lua") == 0;
+	// The chaser's target is deleted before the capture; the waypoint still holds its position.
+	bool targetGone = false;
+	// Where the gone target's memory went: retained for its Lua handles, a free native slot, a returned class pool block, or none.
+	int targetMemory = -1;
+	// What the kept reference reads once the object is gone: its destructor's bytes in the retained memory.
+	Vector keptPosition;
+	if (planted) {
+		lua_State* L = lua.GetLuaState();
+		lua_getglobal(L, "_F5Handles");
+		lua_getfield(L, -1, "targetUID");
+		const long uid = static_cast<long>(lua_tointeger(L, -1));
+		lua_pop(L, 2);
+		if (MovableObject* target = g_MovableMan.FindObjectByUniqueID(uid); target && g_MovableMan.RemoveParticle(target) == target) {
+			const Vector* position = &target->GetPos();
+			delete target;
+			targetGone = true;
+			targetMemory = MovableObject::RetainedMemoryHolds(position, sizeof(Vector)) ? 3 : CheckpointNativeStorage::FreeSlotHolds(position, sizeof(Vector)) ? 1 :
+			               Entity::ClassInfo::AnyPoolHolds(position, sizeof(Vector)) ? 2 : 0;
+			if (targetMemory > 0) keptPosition = *position;
+		}
+	}
+	std::string text;
+	CheckpointText frozen;
+	std::vector<std::string> problems, frozenProblems;
+	bool captured = false, frozenSame = false;
+	if (planted && targetGone) {
+		// A world capture opens these at its fence; the live walk is what it falls back to.
+		MovableMan::KnownObjectsScope known;
+		LuaScriptGraphNativeCaptureScope lookups;
+		captured = lua.SerializeScriptGraph(text, problems) && problems.empty();
+		// A frozen capture raises what it cannot carry.
+		try {
+			frozenSame = lua.CaptureScriptGraph(frozen, frozenProblems, true) && frozenProblems.empty() && frozen.Text() == text;
+		} catch (const ScriptGraphRefusal& refusal) {
+			frozenProblems.insert(frozenProblems.end(), refusal.problems.begin(), refusal.problems.end());
+		} catch (const std::exception& error) {
+			frozenProblems.emplace_back(error.what());
+		}
+	}
+	for (const std::string& problem: problems) std::cout << "[engine-handle-selftest] live capture: " << problem << std::endl;
+	for (const std::string& problem: frozenProblems) std::cout << "[engine-handle-selftest] frozen capture: " << problem << std::endl;
+	bool restored = false, kept = false, followed = false, remembered = false, ownKept = false, presetKept = false, refusedByName = false;
+	if (captured) {
+		std::vector<std::string> restoreProblems;
+		restored = lua.RestoreScriptGraph(text, restoreProblems) && restoreProblems.empty();
+		for (const std::string& problem: restoreProblems) std::cout << "[engine-handle-selftest] restore: " << problem << std::endl;
+		kept = restored && lua.RunScriptString(R"lua(
+local options = _F5Handles.holder.PieMenu:GetFirstPieSliceByPresetName("Constructor Options")
+local slice = options.SubPieMenu:GetFirstPieSliceByPresetName("Constructor Order Construction")
+assert(_ScriptGraphNativeAddress(_F5Handles.live) == _ScriptGraphNativeAddress(slice), "the slice handle came back as another slice")
+assert(rawequal(_F5Handles.live, _F5Handles.liveAlias), "one slice handle came back as two")
+local enabled = slice.Enabled
+_F5Handles.live.Enabled = not enabled
+assert(slice.Enabled == not enabled, "the slice handle stopped being an alias of the menu's slice")
+_F5Handles.live.Enabled = enabled
+assert(type(_F5Handles.gone) == "userdata" and rawequal(_F5Handles.gone, _F5Handles.goneAlias), "the gone slice's handle was dropped or split")
+assert(_ScriptGraphNative(_F5Handles.gone) == "invalid", "the gone slice's handle came back as a live slice")
+)lua") == 0;
+		// The living target moves after the restore; the waypoint reads it through the reference it kept.
+		followed = restored && lua.RunScriptString("_F5Handles.holder.Pos = Vector(555.5, 201); local ok, x, y = coroutine.resume(_F5Handles.follower); assert(ok and x == 555.5 and y == 201, 'the follower read ' .. tostring(x) .. ', not its target')") == 0;
+		remembered = restored && targetMemory > 0 &&
+		             lua.RunScriptString(std::format("local ok, x, y, kept = coroutine.resume(_F5Handles.chaser); assert(ok and x == {} and y == {}, 'the chaser read ' .. tostring(x) .. ', ' .. tostring(y) .. ', not what its kept reference read'); "
+		                                             "assert(pcall(function() kept.X = kept.X end) ~= _F5Handles.positionConstant, 'the kept reference changed its constness')",
+		                                             static_cast<double>(keptPosition.GetX()), static_cast<double>(keptPosition.GetY()))) == 0;
+		ownKept = restored && lua.RunScriptString(R"lua(
+local spray = _F5Handles.ownMenu:GetFirstPieSliceByPresetName("Constructor Spray Mode")
+assert(spray and _ScriptGraphNativeAddress(_F5Handles.ownMenuSlice) == _ScriptGraphNativeAddress(spray), "a slice of the script's own pie menu came back as another slice")
+assert(rawequal(_F5Handles.ownMenuSlice, _F5Handles.ownMenuAlias), "one slice of the script's own menu came back as two")
+local enabled = spray.Enabled
+_F5Handles.ownMenuSlice.Enabled = not enabled
+assert(spray.Enabled == not enabled, "the script's own menu slice stopped being an alias of the menu's slice")
+_F5Handles.ownMenuSlice.Enabled = enabled
+local cancel = _F5Handles.ownSlice.SubPieMenu:GetFirstPieSliceByPresetName("Constructor Cancel Construction")
+assert(cancel and _ScriptGraphNativeAddress(_F5Handles.subSlice) == _ScriptGraphNativeAddress(cancel), "a slice of the script's own slice's sub-menu came back as another slice")
+)lua") == 0;
+		presetKept = restored && lua.RunScriptString(R"lua(
+local preset = PresetMan:GetPreset("PieSlice", "Menu", "Base.rte")
+assert(_ScriptGraphNativeAddress(_F5Handles.presetEntity) == _ScriptGraphNativeAddress(preset), "the preset the registry handed out came back as another object")
+assert(_ScriptGraphNativeAddress(_F5Handles.presetSlice) == _ScriptGraphNativeAddress(preset), "the preset slice came back as another object")
+assert(pcall(function() return _F5Handles.presetSlice.Direction end), "the preset slice came back without its class")
+)lua") == 0;
+	}
+	// A live slice of a menu nothing in the graph reaches - the menu kept alive in the registry - is refused by name.
+	if (planted) {
+		lua_State* L = lua.GetLuaState();
+		lua.RunScriptString(R"lua(
+_F5Unreached = CreatePieMenu("Constructor Pie Menu", "Base.rte")
+_F5Handles.unreached = _F5Unreached and _F5Unreached:GetFirstPieSliceByPresetName("Constructor Order Construction")
+)lua");
+		lua_getglobal(L, "_F5Unreached");
+		const int keep = luaL_ref(L, LUA_REGISTRYINDEX);
+		lua_pushnil(L);
+		lua_setglobal(L, "_F5Unreached");
+		const std::string refusal = "a PieSlice that no actor's pie menu, script's own pie menu or preset holds";
+		const auto named = [&refusal](const std::vector<std::string>& found) {
+			return std::any_of(found.begin(), found.end(), [&refusal](const std::string& problem) { return problem.find(refusal) != std::string::npos; });
+		};
+		std::string unreachedText;
+		CheckpointText unreachedFrozen;
+		std::vector<std::string> unreachedProblems, unreachedFrozenProblems;
+		{
+			MovableMan::KnownObjectsScope known;
+			LuaScriptGraphNativeCaptureScope lookups;
+			lua.SerializeScriptGraph(unreachedText, unreachedProblems);
+			try {
+				// A frozen capture's worker writes its text; reading the text raises what the worker refused.
+				const bool carried = lua.CaptureScriptGraph(unreachedFrozen, unreachedFrozenProblems, true) && !unreachedFrozen.Text().empty();
+				if (unreachedFrozenProblems.empty()) unreachedFrozenProblems.emplace_back(carried ? "the frozen capture carried it" : "the frozen capture failed with no problem named");
+			} catch (const ScriptGraphRefusal& refused) {
+				unreachedFrozenProblems.insert(unreachedFrozenProblems.end(), refused.problems.begin(), refused.problems.end());
+			} catch (const std::exception& error) {
+				unreachedFrozenProblems.emplace_back(error.what());
+			}
+		}
+		refusedByName = named(unreachedProblems) && named(unreachedFrozenProblems);
+		if (!refusedByName) {
+			for (const std::string& problem: unreachedProblems) std::cout << "[engine-handle-selftest] unreached live: " << problem << std::endl;
+			for (const std::string& problem: unreachedFrozenProblems) std::cout << "[engine-handle-selftest] unreached frozen: " << problem << std::endl;
+		}
+		luaL_unref(L, LUA_REGISTRYINDEX, keep);
+		lua.RunScriptString("if _F5Handles then _F5Handles.unreached = nil end");
+	}
+	lua.RunScriptString("MovableMan:RemoveActor(_F5Handles.holder); MovableMan:RemoveActor(_F5Handles.dropper); _F5Handles = nil; collectgarbage()");
+	const bool passed = planted && targetGone && captured && frozenSame && restored && kept && followed && remembered && ownKept && presetKept && refusedByName;
+	std::cout << "[engine-handle-selftest] " << (passed ? "PASS" : "FAIL") << " planted=" << planted << " target_gone=" << targetGone << " live_captured=" << captured
+	          << " frozen_same=" << frozenSame << " restored=" << restored << " slices_kept=" << kept << " follower_alias_live=" << followed << " chaser_kept_read=" << remembered << " target_memory=" << targetMemory << " kept=" << keptPosition.GetX() << "," << keptPosition.GetY()
+	          << " own_menu_slices_kept=" << ownKept << " preset_slices_kept=" << presetKept << " unreached_refused_by_name=" << refusedByName << std::endl;
 	return passed;
 }
 
@@ -6655,7 +7153,7 @@ static int ScriptGraphDeadReference(lua_State* L) {
 	lua_getglobal(L, name);
 	if (!luabind::detail::is_class_rep(L, -1)) return luaL_error(L, "unknown dead reference class %s", name);
 	auto* type = static_cast<luabind::detail::class_rep*>(lua_touserdata(L, -1));
-	if (!ClassDerivesFrom(type, "MovableObject") && std::strcmp(type->name(), "Area") != 0) return luaL_error(L, "dead reference class is not a MovableObject or an Area");
+	if (!ClassDerivesFrom(type, "MovableObject") && std::strcmp(type->name(), "Area") != 0 && std::strcmp(type->name(), "PieSlice") != 0) return luaL_error(L, "dead reference class is not a MovableObject, an Area or a PieSlice");
 	lua_pop(L, 1);
 	void* storage = lua_newuserdata(L, sizeof(luabind::detail::object_rep));
 	new (storage) luabind::detail::object_rep(nullptr, type, 0, nullptr);
@@ -7032,6 +7530,8 @@ void LuaStateWrapper::LoadScriptGraphHelper() {
 		RegisterScriptGraphHelper(m_State, "_ScriptGraphPropertyOwner", ScriptGraphPropertyOwner);
 		lua_pushcfunction(m_State, ScriptGraphProperty);
 		lua_setglobal(m_State, "_ScriptGraphProperty");
+		lua_pushcfunction(m_State, ScriptGraphConstant);
+		lua_setglobal(m_State, "_ScriptGraphConstant");
 		RegisterScriptGraphHelper(m_State, "_ScriptGraphSoundSetOwner", ScriptGraphSoundSetOwner);
 		lua_pushcfunction(m_State, ScriptGraphSoundSet);
 		lua_setglobal(m_State, "_ScriptGraphSoundSet");
@@ -7039,6 +7539,7 @@ void LuaStateWrapper::LoadScriptGraphHelper() {
 		lua_pushcfunction(m_State, ScriptGraphActorLimb);
 		lua_setglobal(m_State, "_ScriptGraphActorLimb");
 		RegisterScriptGraphHelper(m_State, "_ScriptGraphLimbVectorOwner", ScriptGraphLimbVectorOwner);
+		RegisterScriptGraphHelper(m_State, "_ScriptGraphGoneVector", ScriptGraphGoneVector);
 		lua_pushcfunction(m_State, ScriptGraphLimbVector);
 		lua_setglobal(m_State, "_ScriptGraphLimbVector");
 		lua_pushcfunction(m_State, ScriptGraphGlobalScript);
@@ -7049,6 +7550,9 @@ void LuaStateWrapper::LoadScriptGraphHelper() {
 		lua_pushcfunction(m_State, ScriptGraphPrimitiveResolve);
 		lua_setglobal(m_State, "_ScriptGraphPrimitiveResolve");
 		RegisterScriptGraphHelper(m_State, "_ScriptGraphAreaBoxes", ScriptGraphAreaBoxes);
+		RegisterScriptGraphHelper(m_State, "_ScriptGraphPieSlices", ScriptGraphPieSlices);
+		lua_pushcfunction(m_State, ScriptGraphPresetAs);
+		lua_setglobal(m_State, "_ScriptGraphPresetAs");
 		lua_pushcfunction(m_State, ScriptGraphAreaBox);
 		lua_setglobal(m_State, "_ScriptGraphAreaBox");
 		RegisterScriptGraphHelper(m_State, "_ScriptGraphSceneBoxOwner", ScriptGraphSceneBoxOwner);
@@ -8120,7 +8624,10 @@ bool LuaStateWrapper::CapturePreparedScriptGraphs(const CheckpointLua::Boundary&
 		CheckpointLua::FrozenBindings bindings(heap, &boundary.Bindings());
 		part.nativeSetupUs = std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - started).count();
 		CheckpointLua::ProtectedCall(state, [&] {
-			const auto copy = [&, bindings](const luabind::detail::class_rep* type, const void* pointer) -> void* {
+			// The graph's text fragments live in the capture's arena until the state's text is compacted, so a save's hundred
+			// thousand small text blocks never land among the game's own in the process heap.
+			CheckpointBuffer::AllocationScope allocation(CheckpointWriter::BatchEnabled());
+			const auto copy = [&, bindings](const luabind::detail::class_rep* type, const void* pointer, bool owned) -> void* {
 				const auto started = RTE::SteadyClock::now();
 				struct Cost {
 					FrozenCaptureStats& part; RTE::SteadyClock::time_point started; uint64_t cpu;
@@ -8130,7 +8637,18 @@ bool LuaStateWrapper::CapturePreparedScriptGraphs(const CheckpointLua::Boundary&
 				if (const auto offset = bindings.BaseOffset(type, "Entity")) {
 					const auto* entity = reinterpret_cast<const Entity*>(static_cast<const char*>(pointer) + *offset);
 					if (bindings.DerivesFrom(type, "MovableObject") && !LuaScriptGraphNativeCaptureScope::Current()->Known(static_cast<const MovableObject*>(entity))) return nullptr;
-					return reinterpret_cast<char*>(snapshot->Object(entity)) - *offset;
+					// A slice no known actor's frozen pie menu holds may have been deleted with its menu, so it is never read here: a
+					// stand-in keeps its address, by which the graph names it (a script's own menu, a preset, freed) or refuses it.
+					if (!owned && bindings.DerivesFrom(type, "PieSlice") && !LuaScriptGraphNativeCaptureScope::Current()->PieSliceOwner(entity))
+						return LuaScriptGraphNativeCaptureScope::Current()->UnreadSlice(pointer);
+					// An activity the world no longer has (a rejoin's image load replaced it) can stay in the capture helper's own maps,
+					// which the copy carries and the serializer skips; it is never read.
+					if (!owned && bindings.DerivesFrom(type, "Activity") && !LuaScriptGraphNativeCaptureScope::Current()->LiveActivity(entity)) return nullptr;
+					try {
+						return reinterpret_cast<char*>(snapshot->Object(entity)) - *offset;
+					} catch (const UnsupportedCheckpointNative& error) {
+						throw UnsupportedCheckpointNative(std::string(error.what()) + ", held by Lua as " + bindings.Class(type)->name());
+					}
 				}
 				const auto value = [&]<class T>(T*) -> void* { return CopyFrozenValue<T>(*snapshot, pointer); };
 				const auto id = bindings.Class(type)->type();
@@ -9520,6 +10038,36 @@ std::pair<uint64_t, uint64_t> LuaMan::TakeHeapFaultTally() {
 	return CheckpointLua::HeapOwner::TakeFaultTally();
 }
 
+std::array<uint32_t, 5> LuaStateWrapper::TakeHeapTickFaults() {
+	return m_CheckpointHeap ? m_CheckpointHeap->TakeTickFaults() : std::array<uint32_t, 5>{};
+}
+
+std::array<uint32_t, 2> LuaStateWrapper::TakeHeapFirstTickWrites() {
+	return m_CheckpointHeap ? m_CheckpointHeap->TakeFirstTickWrites() : std::array<uint32_t, 2>{};
+}
+
+void LuaStateWrapper::NoteFullCollection(size_t before, size_t after) {
+	if (m_CheckpointHeap) m_CheckpointHeap->NoteFullCollection(before, after);
+}
+
+void LuaStateWrapper::TrimHeap() {
+	if (m_CheckpointHeap) m_CheckpointHeap->Trim();
+}
+
+std::string LuaMan::TakeHeapFaultsByState() {
+	std::string text;
+	const auto add = [&text](size_t slot, LuaStateWrapper& state) {
+		const auto [faults, collectorFaults, copied, recorded, whole] = state.TakeHeapTickFaults();
+		if (faults || collectorFaults) text += std::format(" {}:{}+{}/{}/{}{}", slot, faults, collectorFaults, copied, recorded, whole ? "w" : "");
+		const auto [saved, written] = state.TakeHeapFirstTickWrites();
+		if (saved) text += std::format(" {}:first-tick-saved={}:written={}", slot, saved, written);
+	};
+	add(0, g_LuaMan.GetMasterScriptState());
+	size_t slot = 1;
+	for (LuaStateWrapper& state: g_LuaMan.GetThreadedScriptStates()) add(slot++, state);
+	return text;
+}
+
 uint64_t LuaMan::TicksUntilFullCollection(size_t slot) {
 	const uint64_t last = s_LastCollectionTick.load(std::memory_order_acquire);
 	if (!IsDeterministicCollection() || last == (std::numeric_limits<uint64_t>::max)()) return 0;
@@ -10550,6 +11098,11 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 		checkpointValues = exact && checkpointValues;
 	}
 	{
+		const bool exact = CheckpointLua::HeapOwner::RunLearningArmSelfTest();
+		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " a_heap_copied_whole_to_learn_faults_once_per_written_run_and_keeps_its_bytes" << std::endl;
+		checkpointValues = exact && checkpointValues;
+	}
+	{
 		const bool exact = CheckpointLua::HeapOwner::RunPrivateNativeSelfTest();
 		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " saved_lua_native_values_refuse_allocations_retry_and_leave_no_live_pages" << std::endl;
 		checkpointValues = exact && checkpointValues;
@@ -10558,6 +11111,18 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 		const bool exact = CheckpointLua::HeapOwner::RunPreparedSelfTest() && CheckpointLua::HeapOwner::RunReusedOwnerSelfTest() && CheckpointLua::HeapOwner::RunPreparationLifetimeSelfTest();
 		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " prepared_lua_pages_freeze_without_allocation_reject_growth_and_survive_source_death" << std::endl;
 		checkpointValues = exact && checkpointValues;
+	}
+	{
+		std::string detail;
+		const bool exact = CheckpointLua::HeapOwner::RunTrimSelfTest(detail);
+		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " a_collected_lua_heap_gives_its_free_pages_back_beside_a_waiting_plan_and_its_arm_commits_them_again " << detail << std::endl;
+		checkpointValues = exact && checkpointValues;
+	}
+	{
+		std::string detail;
+		const bool bounded = CheckpointLua::HeapOwner::RunLargeChurnBoundSelfTest(detail);
+		std::cout << "[script-graph-selftest] " << (bounded ? "PASS" : "FAIL") << " large_blocks_of_ever_new_sizes_keep_the_lua_heap_within_its_bound " << detail << std::endl;
+		checkpointValues = bounded && checkpointValues;
 	}
 	{
 		const std::string mismatch = CheckpointLua::Boundary::SelfTestMismatch();
@@ -10763,7 +11328,7 @@ end
 			Vector* finalized = nullptr;
 			CheckpointLua::ProtectedCall(state, [&] {
 				bind(state); LuaThreadCodec::Register(state);
-				retained = std::make_unique<CheckpointLua::SavedObjects>(state, heap, callbacks, [&](const auto*, const void* pointer) -> void* {
+				retained = std::make_unique<CheckpointLua::SavedObjects>(state, heap, callbacks, [&](const auto*, const void* pointer, bool) -> void* {
 					auto& value = vectors[pointer];
 					if (!value) value = std::make_unique<Vector>(*CheckpointNativeStorage::Source(static_cast<const Vector*>(pointer)));
 					return value.get();
@@ -12539,7 +13104,10 @@ debug.setupvalue(next, 4, "150")
 	}
 
 	if (m_CheckpointHeap) {
-		RunScriptString("_ScriptGraphCowProbe = {} for index = 1, 4096 do _ScriptGraphCowProbe[index] = index end");
+		// The cold array is written before the first freeze and again only after the second, so the second generation's fence
+		// meets a write whatever the first generation made hot.
+		RunScriptString("_ScriptGraphCowProbe = {} for index = 1, 4096 do _ScriptGraphCowProbe[index] = index end "
+		                "_ScriptGraphColdProbe = {} for index = 1, 65536 do _ScriptGraphColdProbe[index] = index end");
 		lua_getglobal(m_State, "_ScriptGraphCowProbe");
 		const auto* table = static_cast<const GCtab*>(lua_topointer(m_State, -1));
 		lua_pop(m_State, 1);
@@ -12574,7 +13142,8 @@ debug.setupvalue(next, 4, "150")
 			}, true);
 		}
 		const int64_t nextFreezeWait = CheckpointLua::HeapOwner::ThisThreadGateWaitMicroseconds() - beforeWait;
-		const int changedAgain = RunScriptString("for index = 1, 4096 do _ScriptGraphCowProbe[index] = index * 2 end collectgarbage('step', 200)");
+		const int changedAgain = RunScriptString("for index = 1, 4096 do _ScriptGraphCowProbe[index] = index * 2 end "
+		                                         "for index = 1, 65536 do _ScriptGraphColdProbe[index] = -index end collectgarbage('step', 200)");
 
 		if (queued) (*queued)();
 		if (queuedSecond) (*queuedSecond)();
@@ -12588,7 +13157,7 @@ debug.setupvalue(next, 4, "150")
 		} catch (const std::exception& error) {
 			std::cout << "[script-graph-selftest] page copy probe: " << error.what() << std::endl;
 		}
-		RunScriptString("_ScriptGraphCowProbe = nil");
+		RunScriptString("_ScriptGraphCowProbe = nil _ScriptGraphColdProbe = nil");
 		const bool held = changed == 0 && changedAgain == 0 && imageHeld && secondImageHeld && liveWritten && pendingDuringWrite && entryWait == 0 && nextFreezeWait == 0 && frozen.FaultCount() > 0 && secondFrozen.FaultCount() > 0;
 		std::cout << "[script-graph-selftest] " << (held ? "PASS" : "FAIL") << " a_checkpoint_copy_preserves_pages_without_waiting_at_vm_entry image_held="
 		          << imageHeld << " live_written=" << liveWritten << " copy_still_queued=" << pendingDuringWrite << " entry_wait_us=" << entryWait << " next_freeze_wait_us=" << nextFreezeWait << " second_image_held=" << secondImageHeld
@@ -12828,7 +13397,9 @@ debug.setupvalue(next, 4, "150")
 		// A Lua class left in a global is what a mod checkpoint has to carry; the UI rows move the camera, which needs the scene too.
 		RunScriptString("class 'F82BuiltBase' (Box); function F82BuiltBase:__init() super() end");
 		checkpointValues = GameActivity::RunNetLocalUIRestoreSelfTest() && checkpointValues;
+		checkpointValues = GameActivity::RunCapturedSeatInterfacesSelfTest() && checkpointValues;
 		checkpointValues = RunStaleActivityReferenceSelfTest(*this) && checkpointValues;
+		checkpointValues = RunEngineHandleSelfTest(*this) && checkpointValues;
 		g_SceneMan.SetAsideScene(deliveryScene);
 		g_SceneMan.ReinstateScene(originalScene);
 	}
@@ -13118,6 +13689,9 @@ debug.setupvalue(next, 4, "150")
 	}
 	checkpointValues = PieMenu::RunCheckpointSelfTest() && checkpointValues;
 	checkpointValues = Actor::RunBorrowedReferenceSelfTest() && checkpointValues;
+	checkpointValues = Actor::RunGoneItemInReachSelfTest() && checkpointValues;
+	checkpointValues = ACraft::RunGoneIncomingObjectSelfTest() && checkpointValues;
+	checkpointValues = Entity::ClassInfo::RunPoolExhaustionSelfTest() && checkpointValues;
 	checkpointValues = GameActivity::RunDeliveryReferenceSelfTest() && checkpointValues;
 	checkpointValues = RunLuaHeldReferenceSelfTest() && checkpointValues;
 	checkpointValues = MOSprite::RunCheckpointSelfTest() && checkpointValues;
@@ -16754,6 +17328,13 @@ long long LuaMan::GetTotalHeapLiveBytes() {
 	return total;
 }
 
+std::string LuaMan::CheckpointHeapCensus() {
+	const std::string runs = CheckpointLua::HeapOwner::RunSlackCensus();
+	return (runs.empty() ? std::string() : runs + " ") + std::format("lua_committed_mb={} lua_free_mb={} lua_returned_mb={} lua_copy_mb={} lua_copy_committed_mb={} lua_idle_copy_mb={}", CheckpointLua::HeapOwner::CommittedHeapBytes() >> 20,
+	    CheckpointLua::HeapOwner::FreeHeapBytes() >> 20, CheckpointLua::HeapOwner::ReturnedHeapBytes() >> 20, CheckpointLua::HeapOwner::MappedCopyBytes() >> 20,
+	    CheckpointLua::HeapOwner::CommittedCopyBytes() >> 20, CheckpointLua::HeapOwner::IdleCopyBytes() >> 20);
+}
+
 void LuaMan::CollectGarbageForCheckpoint() {
 	WaitForAsyncGarbageCollection();
 	// A finalizer keeps its own object, and anything only it reaches, alive for the cycle that runs
@@ -16813,6 +17394,8 @@ void LuaMan::StartAsyncGarbageCollection(uint64_t tick, bool everyState) {
 			    std::lock_guard<std::recursive_mutex> lock(luaState->GetMutex());
 			    lua_State* state = luaState->GetLuaState();
 			    if (fullCollection) {
+				    const CheckpointLua::HeapOwner::CollectionScope collecting;
+				    const size_t inUse = static_cast<size_t>(G(state)->gc.total);
 				    // A whole cycle, so the tick a dropped object dies on does not follow its state's heap size.
 				    if (G(state)->gc.state == GCSpause) {
 					    // From the pause one unlimited step is that cycle; LUA_GCCOLLECT would first sweep every object once for nothing.
@@ -16823,10 +17406,12 @@ void LuaMan::StartAsyncGarbageCollection(uint64_t tick, bool everyState) {
 					    // A state a script or a restore left mid-cycle finishes nothing it started: LUA_GCCOLLECT starts over.
 					    lua_gc(state, LUA_GCCOLLECT, 0);
 				    }
+				    if (CheckpointNativeStorage::Enabled()) luaState->NoteFullCollection(inUse, static_cast<size_t>(G(state)->gc.total));
 			    } else {
 				    lua_gc(state, LUA_GCSTEP, 100);
 			    }
 			    lua_gc(state, LUA_GCSTOP, 0);
+			    luaState->TrimHeap();
 		    }));
 	}
 }

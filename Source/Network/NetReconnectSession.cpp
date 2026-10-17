@@ -693,9 +693,10 @@ namespace RTE {
 		return IsHolderAway(seat) ? held->heldSinceMs : 0;
 	}
 
-	void NetReconnectHost::ApplySeatEvent(const SeatState& seat, NetRosterEventKind kind, bool byChoice, bool keptWorld, NetSeatHoldCause cause) {
+	void NetReconnectHost::ApplySeatEvent(const SeatState& seat, NetRosterEventKind kind, bool byChoice, bool keptWorld, NetSeatHoldCause cause, bool excused) {
 		NetRosterEvent event;
 		event.kind = kind;
+		event.excused = excused;
 		event.seat = RosterIdOf(seat.seat.stableSeat);
 		event.nowMs = m_NowMs;
 		event.byChoice = byChoice;
@@ -812,10 +813,11 @@ namespace RTE {
 		ApplySeatEvent(*seat, NetRosterEventKind::CaughtUp);
 	}
 
-	void NetReconnectHost::NoteReturnAborted(uint8_t lockstepPeerId) {
+	void NetReconnectHost::NoteReturnAborted(uint8_t lockstepPeerId, bool returnerFailed) {
 		const SeatState* seat = SeatOfPeer(lockstepPeerId);
 		const NetRosterSeat* held = seat ? RosterSeatOf(*seat) : nullptr;
-		if (held && (held->phase == NetSeatPhase::RejoinImage || held->phase == NetSeatPhase::RejoinCatchUp)) ApplySeatEvent(*seat, NetRosterEventKind::TransferAborted);
+		if (held && (held->phase == NetSeatPhase::RejoinImage || held->phase == NetSeatPhase::RejoinCatchUp))
+			ApplySeatEvent(*seat, NetRosterEventKind::TransferAborted, false, false, NetSeatHoldCause::None, !returnerFailed);
 	}
 
 	bool NetReconnectHost::RosterHoldsSeat(const SeatState& seat) const {

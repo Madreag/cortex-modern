@@ -102,7 +102,7 @@ namespace RTE::CheckpointLua {
 			for (const char* name: {
 			         "_ScriptGraphNative", "_ScriptGraphNativeAddress", "_ScriptGraphMembers", "_ScriptGraphInstance",
 			         "_ScriptGraphNativeSave", "_ScriptGraphAreaBoxes", "_ScriptGraphGibOwner", "_ScriptGraphSoundSetOwner",
-			         "_ScriptGraphLimbOwner", "_ScriptGraphPropertyOwner", "_ScriptGraphLimbVectorOwner",
+			         "_ScriptGraphLimbOwner", "_ScriptGraphPropertyOwner", "_ScriptGraphLimbVectorOwner", "_ScriptGraphGoneVector", "_ScriptGraphPieSlices",
 			         "_ScriptGraphSceneBoxOwner", "_ScriptGraphIteratorSnapshot", "_ScriptGraphGibReferences"}) {
 				view.BindNative(destination, name);
 			}
@@ -867,6 +867,8 @@ namespace RTE::CheckpointLua {
 				const auto* preset = entity->GetPresetForCopy();
 				entry.kind = token("preset"); entry.nativeTail[entry.nativeTailCount++] = token(entity->GetClassName().c_str());
 				entry.nativeTail[entry.nativeTailCount++] = token(preset ? preset->GetPresetName().c_str() : ""); entry.nativeTail[entry.nativeTailCount++] = token(preset ? preset->GetModuleName().c_str() : "");
+				// The class a script holds a preset as, as the descriptor names it, when it is not the plain Entity.
+				if (std::strcmp(type->name(), "Entity") != 0) entry.nativeTail[entry.nativeTailCount++] = token(type->name());
 				entry.namedWhenAddressed = ClassDerivesFrom(type, "Activity") || type->type() == LUABIND_TYPEID(GlobalScript);
 				if (entry.namedWhenAddressed) entry.addressedKind = token("named");
 			}
@@ -1360,7 +1362,7 @@ namespace RTE::CheckpointLua {
 				// gone movable object's field, a past frame's alarm).
 				const bool readsProperties = className == "Vector" || className == "Timer" || className == "AlarmEvent";
 				// A reference a script kept past its object's end, restored or not, is named as gone.
-				const bool namedWhenGone = movable || className == "Area";
+				const bool namedWhenGone = movable || className == "Area" || className == "PieSlice";
 				detached = (!object->ptr() && (!namedWhenGone || owned)) ||(readsProperties && object->ptr() && !owned && !ScriptGraphNativeAlive(State(), object));
 				if (movable && object->ptr() && ScriptGraphNativeAlive(State(), object)) {
 					const auto* mo = static_cast<const MovableObject*>(object->ptr());
@@ -1428,6 +1430,7 @@ namespace RTE::CheckpointLua {
 			const auto helper = [&](const char* name, lua_CFunction function) { entry.helpers.emplace(name, One(function, name, value)); };
 			if (contains("copy")) entry.helpers.emplace("_ScriptGraphNativeSave", One(ScriptGraphNativeSave, "NativeSave", value, true));
 			if (contains("area-ref") || (contains("copy") && className == "Area")) helper("_ScriptGraphAreaBoxes", ScriptGraphAreaBoxes);
+			if (contains("copy") && (className == "PieMenu" || className == "PieSlice")) helper("_ScriptGraphPieSlices", ScriptGraphPieSlices);
 			if (contains("gib-ref")) helper("_ScriptGraphGibOwner", ScriptGraphGibOwner);
 			if (contains("soundset-ref")) helper("_ScriptGraphSoundSetOwner", ScriptGraphSoundSetOwner);
 			if (contains("limb-ref")) helper("_ScriptGraphLimbOwner", ScriptGraphLimbOwner);
@@ -1435,6 +1438,7 @@ namespace RTE::CheckpointLua {
 			if (contains("vector-ref-unresolved") || contains("timer-ref")) {
 				helper("_ScriptGraphPropertyOwner", ScriptGraphPropertyOwner);
 				helper("_ScriptGraphLimbVectorOwner", ScriptGraphLimbVectorOwner);
+				helper("_ScriptGraphGoneVector", ScriptGraphGoneVector);
 			}
 			static constexpr std::array vectorProperties{"X", "Y"};
 			static constexpr std::array timerProperties{"StartSimTimeTicks", "SimTimeLimitTicks", "StartRealTimeTicks", "RealTimeLimitTicks"};

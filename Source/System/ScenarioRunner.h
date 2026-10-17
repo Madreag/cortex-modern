@@ -194,6 +194,8 @@ namespace RTE {
 		/// Whether a lockstep coordinator is attached at all — a FAILED one still owns the sim (the
 		/// tick must surface its stop reason, never silently degrade to per-machine controllers).
 		static bool HasLockstepCoordinator();
+		/// The same answer without the plane's lock, for the storage checks every allocation makes.
+		static bool LockstepCoordinatorAttached() noexcept;
 		/// The attached coordinator's stop reason ("" while running or when absent).
 		static std::string GetLockstepStopReason();
 		/// Accumulated wall time spent inside the lockstep frame wait, for the pace report.

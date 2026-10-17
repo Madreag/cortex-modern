@@ -1,4 +1,4 @@
-"""Build the pinned GNS checkout with the checked-in TURN patch."""
+"""Build the pinned GNS checkout with the TURN and transport diagnostic patches."""
 import argparse
 import hashlib
 import json
@@ -17,6 +17,7 @@ def main():
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
     patch = args.repo / 'external/patches/gns-turn-lifetime.patch'
+    diagnostics = args.repo / 'external/patches/gns-transport-diagnostics.patch'
     with (args.out / 'gns-build.log').open('w', encoding='utf-8') as log:
         def run(command):
             subprocess.run([str(value) for value in command], stdout=log, stderr=subprocess.STDOUT, check=True)
@@ -26,6 +27,7 @@ def main():
         if revision != '2cb93a06350bb065db53abdb0d87cf297e0bfd34':
             raise ValueError('GNS checkout differs from the pinned upstream')
         run(['git', '-C', args.source, 'apply', patch.resolve()])
+        run(['git', '-C', args.source, 'apply', diagnostics.resolve()])
         options = ['-DCMAKE_BUILD_TYPE=Release', '-DBUILD_SHARED_LIB=OFF', '-DBUILD_STATIC_LIB=ON', '-DBUILD_TESTS=OFF',
                    '-DBUILD_EXAMPLES=OFF', '-DBUILD_TOOLS=OFF', '-DENABLE_ICE=ON', '-DUSE_CRYPTO=OpenSSL', '-DUSE_STEAMWEBRTC=OFF',
                    '-DLTO=OFF', '-DCMAKE_INSTALL_PREFIX=' + str(args.install.resolve())]
@@ -36,9 +38,11 @@ def main():
         run(['cmake', '--install', args.build, '--config', 'Release'])
     library = next(iter(args.install.glob('lib/*GameNetworkingSockets_s.*')))
     record = dict(upstream=revision, patch_sha256=hashlib.sha256(patch.read_bytes()).hexdigest(),
-                  library=str(library.resolve()), library_sha256=hashlib.sha256(library.read_bytes()).hexdigest(), lifetime_version=5)
+                  transport_diagnostics_patch_sha256=hashlib.sha256(diagnostics.read_bytes()).hexdigest(),
+                  library=str(library.resolve()), library_sha256=hashlib.sha256(library.read_bytes()).hexdigest(),
+                  lifetime_version=5, transport_diagnostics_version=1)
     (args.out / 'gns-build.json').write_text(json.dumps(record, indent=2) + '\n', encoding='utf-8')
-    print('[gns-build] complete lifetime_version=5', flush=True)
+    print('[gns-build] complete lifetime_version=5 transport_diagnostics_version=1', flush=True)
     return 0
 
 
