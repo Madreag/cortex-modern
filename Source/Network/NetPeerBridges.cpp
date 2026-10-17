@@ -587,7 +587,7 @@ namespace RTE {
 				const auto queue = wire ? wire->GetPeerQueueStats(route) : NetTransportQueueStats{};
 				const auto receipt = m_PeerReceiptDelaySamples.find(peer);
 				DiagnosticLine() << "[net-peer-hold-trigger] local=" << static_cast<int>(m_Config.localPeerId) << " peer=" << static_cast<int>(peer)
-				    << " frame=" << proposal.frame << " ai_frame=" << proposal.frame + static_cast<uint64_t>(std::ceil(c_NetInputContinuityMs / m_Config.simTickMs))
+				    << " frame=" << proposal.frame << " ai_frame=" << proposal.frame
 				    << " observed_frame=" << frame << " now_ms=" << nowMs << " cause=" << cause << " ahead=" << heldAhead
 				    << " first_missing_ms=" << m_FirstMissingMs << " last_heard_ms=" << heard << " last_progress_ms=" << stats.lastProgressMs
 				    << " displayed=" << m_LastCompletedSimulationTick.value_or(0) << " consumer_at_ms=" << m_PeerConsumerAtMs.value_or(0)
@@ -633,8 +633,18 @@ namespace RTE {
 			if (!NetHostMigrationCodec::Encode(vote, m_Config.migrationKey, bytes)) return;
 			voters |= SeatBit(peer); signedVotes.push_back(std::move(bytes));
 		}
-		if ((voters & required) != required || (proposal.preparedFrame == 3 ? !PeerAdminCertificateValid(proposal, voters) :
-		    proposal.preparedFrame == 0 ? !PeerGroupMayHold(voters, frame) : !PeerGroupHasAuthority(voters, frame))) return;
+		if (proposal.preparedFrame == 0) {
+			if ((voters & proposal.connectedMask) == 0 || !PeerGroupMayHold(proposal.connectedMask, frame)) return;
+			if ((voters & required) != required) {
+				// Each survivor installs its own hold at the bound. The other survivors' signatures can still be in flight on a
+				// healthy long link; waiting a second round trip here would make their controls pay for the missing machine.
+				if (frame != m_Stats.nextFrame || !m_ConsumerWaitingFrame || *m_ConsumerWaitingFrame > frame ||
+				    nowMs < m_ConsumerWaitStartMs || m_Config.simTickMs <= 0) return;
+				const auto boundMs = static_cast<uint64_t>(std::ceil(m_Config.slowPlayerBoundTicks * m_Config.simTickMs));
+				const auto reserveMs = static_cast<uint64_t>(std::ceil(m_Config.simTickMs / 2));
+				if (nowMs - m_ConsumerWaitStartMs + reserveMs < boundMs) return;
+			}
+		} else if ((voters & required) != required || (proposal.preparedFrame == 3 ? !PeerAdminCertificateValid(proposal, voters) : !PeerGroupHasAuthority(voters, frame))) return;
 		auto certificate = proposal;
 		certificate.type = NetHostMigrationMessageType::PeerBridgeCommit;
 		certificate.voterMask = voters;
@@ -682,7 +692,10 @@ namespace RTE {
 			voters |= SeatBit(vote.senderPeerId); offset += size;
 		}
 		const uint32_t required = PeerDecisionRequiredVoters(agreed);
-		return (agreed.preparedFrame != 4 || ValidatePeerCaptureBridge(agreed)) && offset == certificate.bytes.size() && voters == certificate.voterMask && (voters & required) == required &&
+		// A hold is a surviving signer's bounded local record. Other decisions still require every playing voter. A missing
+		// owner's signature alone cannot install a hold: at least one of the seats that continues must have signed it.
+		const bool signedByRequired = agreed.preparedFrame == 0 ? (voters & agreed.connectedMask) != 0 : (voters & required) == required;
+		return (agreed.preparedFrame != 4 || ValidatePeerCaptureBridge(agreed)) && offset == certificate.bytes.size() && voters == certificate.voterMask && signedByRequired &&
 		    agreed.connectedMask == certificate.connectedMask && agreed.members == certificate.members && agreed.preparedFrame == certificate.preparedFrame &&
 		    agreed.boundary == certificate.boundary && agreed.completeFrom == certificate.completeFrom && agreed.successorPeerId == certificate.successorPeerId;
 	}
@@ -715,7 +728,7 @@ namespace RTE {
 			CheckPeerFrameTie(certificate.frame, voters, nowMs);
 		const PeerDecisionKey decision{certificate.frame, DecisionKind(certificate)};
 		if (agreed.preparedFrame == 3 ? !PeerAdminCertificateValid(agreed, voters) :
-		    agreed.preparedFrame == 0 ? !PeerGroupMayHold(voters, certificate.frame) : !PeerGroupHasAuthority(voters, certificate.frame)) {
+		    agreed.preparedFrame == 0 ? !PeerGroupMayHold(agreed.connectedMask, certificate.frame) : !PeerGroupHasAuthority(voters, certificate.frame)) {
 			m_AuthorityWaitSinceMs.try_emplace(decision, nowMs);
 			refused("certificate");
 			keep(); return;
@@ -751,7 +764,7 @@ namespace RTE {
 		}
 		// A hold, rather than a normally in-flight input or receipt, opens the arbitration question. Asking earlier can assign a
 		// healthy startup gap a permanent winner and then reuse that unrelated answer when a machine actually stops.
-		if (agreed.preparedFrame == 0) CheckPeerFrameTie(certificate.frame, voters, nowMs);
+		if (agreed.preparedFrame == 0) CheckPeerFrameTie(certificate.frame, agreed.connectedMask, nowMs);
 		m_PeerBridgeCertificates.emplace(PeerDecisionKey{certificate.frame, DecisionKind(certificate)}, certificate);
 		if (agreed.preparedFrame == 4) {
 			NetHostMigrationMessage request;
@@ -833,7 +846,7 @@ namespace RTE {
 				if (alreadyHeld && heldAhead) continue;
 				PeerBridge bridge;
 				bridge.fromFrame = agreed.frame;
-				bridge.aiFrame = agreed.frame + static_cast<uint64_t>(std::ceil(c_NetInputContinuityMs / m_Config.simTickMs));
+				bridge.aiFrame = agreed.frame;
 				bridge.committedHold = true;
 				bridge.members = agreed.connectedMask;
 				if (agreed.frame > m_Config.startFrame) {

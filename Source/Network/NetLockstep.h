@@ -1687,10 +1687,10 @@ namespace RTE {
 		uint32_t PeerRetainedSeatsAt(uint64_t frame) const;
 		uint32_t PeerFrameMembersAt(uint64_t frame) const;
 		void PrunePeerFrameSeatChanges(uint64_t floor);
-		/// Whether the round's referee decides its ties: a directory round of two or four retained seats; the host's half wins any other tie.
+		/// Whether the directory arbitrates splits of this round's retained seats asynchronously.
 		bool PeerTieRefereed(uint64_t frame = UINT64_MAX) const;
-		/// Whether voters are exactly half of the seats that vote at a frame in a round whose ties the referee decides.
-		bool PeerGroupIsRefereedHalf(uint32_t voters, uint64_t frame = UINT64_MAX) const;
+		/// Whether voters are a nonempty proper subset of the seats that vote in a directory round.
+		bool PeerGroupNeedsArbitration(uint32_t voters, uint64_t frame = UINT64_MAX) const;
 		/// The frame from which the whole group last played together at or before frame: the name every half gives the split after it.
 		uint64_t PeerSplitEpoch(uint64_t frame) const;
 		/// Whether these seats confirm a frame the given group of members played: a majority of them, or on a tie the half the round's tie

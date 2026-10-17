@@ -436,10 +436,10 @@ class ConnectionAuthority:
         host = bounded_int(request, "host_seat", 0, MAX_SEATS - 1)
         owners, members = request.get("owners"), request.get("members")
         query_only = request.get("query_only", False)
-        if (not isinstance(owners, list) or not isinstance(members, list) or len(owners) not in (2, 4)
+        if (not isinstance(owners, list) or not isinstance(members, list) or not 2 <= len(owners) <= 4
                 or any(type(seat) is not int or seat < 0 or seat >= MAX_SEATS for seat in owners + members)
                 or owners != sorted(set(owners)) or members != sorted(set(members))
-                or len(members) * 2 != len(owners) or not set(members) <= set(owners)
+                or not 0 < len(members) < len(owners) or not set(members) <= set(owners)
                 or type(query_only) is not bool or host not in owners or answer["seat"] not in owners
                 or (not query_only and answer["seat"] not in members)):
             raise ConnectionErrorReply(400, "frame_tie_request", "The tied groups did not name retained seats. Reconnecting will retry.")
@@ -476,8 +476,8 @@ class ConnectionAuthority:
             # A record kept from the collecting rule ends its window as that rule did.
             if "winner" not in tie and now >= tie["until"] and tie["groups"]:
                 tie["winner"] = tie["groups"][0]
-            # Both halves name a split by the last frame the whole group played, so the first half to check in keeps it
-            # at once: a half that still reaches the referee plays on inside the slow-player bound and the other returns.
+            # Survivors already play through local holds. These immutable decisions arbitrate only competing split
+            # histories: the first group to check in keeps its history, and the other group returns through an image.
             if "winner" not in tie and not query_only:
                 tie["groups"].append(members)
                 tie["winner"] = members

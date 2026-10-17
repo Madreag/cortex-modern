@@ -3553,6 +3553,30 @@ class ConnectionAuthorityTests(unittest.TestCase):
         ties = dict(self.store.connections.records())[self.sid]["frame_ties"]
         self.assertEqual(len(ties), 2)
 
+    def test_frame_tie_three_seats_arbitrates_either_size_without_rewriting_history(self):
+        self.referee_fixture(seats=3)
+        self.assertEqual(self.frame_check_in(2, [2])["members"], [2])
+        self.assertEqual(self.frame_check_in(0, [0, 1])["members"], [2])
+        self.assertEqual(self.frame_check_in(1, [2], query_only=True)["members"], [2])
+        self.assertEqual(self.frame_check_in(0, [0, 1], frame=89)["members"], [0, 1])
+        self.assertEqual(self.frame_check_in(2, [2], frame=89)["members"], [0, 1])
+        self.assertEqual(self.store.connection_bootstrap(self.sid, self.now)["host_generation"], 0)
+
+    def test_frame_tie_unequal_groups_keep_retained_owner_and_signer_checks(self):
+        self.referee_fixture()
+        for members, caller in (([], 0), ([0, 1, 2, 3], 0), ([1, 1], 1), ([3, 2], 3), ([4], 0), ([1, 2, 3], 0)):
+            with self.subTest(members=members, caller=caller), self.assertRaises(ConnectionErrorReply) as invalid:
+                self.frame_check_in(caller, members)
+            self.assertEqual(invalid.exception.body["error"], "frame_tie_request")
+        with self.assertRaises(ConnectionErrorReply) as omitted:
+            self.frame_check_in(0, [0], owners=[0, 1, 2])
+        self.assertEqual(omitted.exception.body["error"], "frame_tie_owners")
+        self.assertEqual(self.frame_check_in(0, [1, 2, 3], query_only=True)["status"], "waiting")
+        self.assertEqual(self.frame_check_in(3, [1, 2, 3])["members"], [1, 2, 3])
+        self.assertEqual(self.frame_check_in(0, [0])["members"], [1, 2, 3])
+        self.assertEqual(self.frame_check_in(0, [0], frame=89)["members"], [0])
+        self.assertEqual(self.frame_check_in(2, [1, 2, 3], frame=89)["members"], [0])
+
     def test_frame_tie_decision_survives_later_ties_and_reload(self):
         self.referee_fixture()
         self.assertEqual(self.frame_check_in(0, [0, 1])["members"], [0, 1])

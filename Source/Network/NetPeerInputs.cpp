@@ -388,7 +388,7 @@ namespace RTE {
 					const uint64_t heardAt = LastAuthenticatedTraffic(peer);
 					m_HoldFacts[peer] = {reply.frame, nowMs >= heardAt ? nowMs - heardAt : 0, m_Config.slowPlayerBoundTicks * m_Config.simTickMs, cause};
 					DiagnosticLine() << "[net-peer-hold-trigger] local=" << static_cast<int>(m_Config.localPeerId) << " peer=" << static_cast<int>(peer)
-					    << " frame=" << reply.frame << " ai_frame=" << reply.frame + static_cast<uint64_t>(std::ceil(c_NetInputContinuityMs / m_Config.simTickMs))
+					    << " frame=" << reply.frame << " ai_frame=" << reply.frame
 					    << " now_ms=" << nowMs << " cause=" << cause << " requested_by=" << static_cast<int>(message.senderPeerId)
 					    << " last_heard_ms=" << heardAt << " last_progress_ms=" << m_Stats.peers[peer].lastProgressMs
 					    << " received_through=" << m_Stats.peers[peer].highestTargetFrame << " delay_ticks=" << InputDelayAt(peer, reply.frame)
@@ -431,7 +431,7 @@ namespace RTE {
 		if (message.type == NetHostMigrationMessageType::PeerTailMissing) {
 			const bool longHitch = m_ConsumerWaitingFrame && nowMs >= m_ConsumerWaitStartMs && nowMs - m_ConsumerWaitStartMs >= c_NetSeatDisconnectSilenceMs;
 			// History older than the donor keeps cannot carry the split's certificate, so the split's name asks the referee instead.
-			if (message.frame == m_Stats.nextFrame && (message.connectedMask & SeatBit(m_Config.localPeerId)) == 0 && PeerGroupIsRefereedHalf(message.connectedMask) &&
+			if (message.frame == m_Stats.nextFrame && (message.connectedMask & SeatBit(m_Config.localPeerId)) == 0 && PeerGroupNeedsArbitration(message.connectedMask) &&
 			    !PeerGroupHasAuthority(message.connectedMask)) CheckPeerFrameTie(message.frame, message.connectedMask, nowMs);
 			if (message.frame == m_Stats.nextFrame && PeerGroupHasAuthority(message.connectedMask) && longHitch) {
 				m_LocalSeatHeld = true; m_LocalHoldFrame = m_Stats.nextFrame;
@@ -453,7 +453,7 @@ namespace RTE {
 			    message.preparedFrame - m_Stats.nextFrame <= NetLockstepCodec::c_MaxFutureFrameSkew))
 				m_Stats.peers[message.senderPeerId].reportedNextFrame = std::max(m_Stats.peers[message.senderPeerId].reportedNextFrame, message.preparedFrame + 1);
 			// The other half of a refereed split holds history only on the referee's word: ask it what it decided for this split.
-			const bool otherHalf = (message.connectedMask & SeatBit(m_Config.localPeerId)) == 0 && PeerGroupIsRefereedHalf(message.connectedMask);
+			const bool otherHalf = (message.connectedMask & SeatBit(m_Config.localPeerId)) == 0 && PeerGroupNeedsArbitration(message.connectedMask);
 			if (otherHalf && !PeerGroupHasAuthority(message.connectedMask)) CheckPeerFrameTie(m_Stats.nextFrame, message.connectedMask, nowMs);
 			if ((otherHalf || PeerGroupHasAuthority(message.connectedMask)) && message.appliedFrame >= m_Stats.nextFrame)
 				RequestPeerCommittedTail(nowMs);

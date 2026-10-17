@@ -303,7 +303,7 @@ namespace RTE {
 			if ((vote.members & SeatBit(m_Config.localPeerId)) == 0 && !m_PeerBridges.contains(m_Config.localPeerId)) {
 				PeerBridge own;
 				own.fromFrame = m_Stats.nextFrame;
-				own.aiFrame = own.fromFrame + static_cast<uint64_t>(std::ceil(c_NetInputContinuityMs / m_Config.simTickMs));
+				own.aiFrame = own.fromFrame;
 				own.members = vote.members;
 				// The matching majority's committed history already excludes this seat.
 				own.committedHold = true;

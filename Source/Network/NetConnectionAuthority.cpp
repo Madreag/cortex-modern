@@ -620,7 +620,7 @@ namespace RTE {
 				m_FrameTieReply.state = NetFrameTieReply::State::Waiting;
 				if (body.at("status") == "decided") {
 					auto members = body.at("members").get<std::vector<uint16_t>>();
-					if (members.empty() || members.size() * 2 != expected.owners.size() || !std::is_sorted(members.begin(), members.end()) ||
+					if (members.empty() || members.size() >= expected.owners.size() || !std::is_sorted(members.begin(), members.end()) ||
 					    std::adjacent_find(members.begin(), members.end()) != members.end() || !std::includes(expected.owners.begin(), expected.owners.end(), members.begin(), members.end())) throw json::other_error::create(501, "frame reply", &body);
 					m_FrameTieReply.state = NetFrameTieReply::State::Decided; m_FrameTieReply.members = std::move(members);
 				}
