@@ -3,10 +3,10 @@
   "runner_pid": 3010182,
   "platform": "linux",
   "argv": [
-    "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand",
+    "build-gcc/CortexCommand",
     "-net-session-plane-selftest"
   ],
-  "cwd": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/kept-b41-final-validation/random-5000/net-session-plane-hold-schedules-selftest/runtime",
+  "cwd": "retained-evidence/kept-b41-final-validation/random-5000/net-session-plane-hold-schedules-selftest/runtime",
   "timeout_seconds": 10800.0,
   "private_desktop": "n/a",
   "input_desktop_before": "n/a",
@@ -17,10 +17,10 @@
     "CC_TEST_HOLD_SCHEDULE_THREADS": "7",
     "CC_TEST_HOLD_SCHEDULES": "5000",
     "CC_TEST_SESSION_PLANE_CASE": "random_hold_schedules",
-    "CC_TEST_HOLD_FIXED_FAILURE_REPORT": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/kept-b41-final-validation/random-5000/net-session-plane-selftest/fixed-failure-groups.txt",
-    "TEMP": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/kept-b41-final-validation/random-5000/net-session-plane-hold-schedules-selftest/runtime/Temp",
-    "TMP": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/kept-b41-final-validation/random-5000/net-session-plane-hold-schedules-selftest/runtime/Temp",
-    "TMPDIR": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/kept-b41-final-validation/random-5000/net-session-plane-hold-schedules-selftest/runtime/Temp",
+    "CC_TEST_HOLD_FIXED_FAILURE_REPORT": "retained-evidence/kept-b41-final-validation/random-5000/net-session-plane-selftest/fixed-failure-groups.txt",
+    "TEMP": "retained-evidence/kept-b41-final-validation/random-5000/net-session-plane-hold-schedules-selftest/runtime/Temp",
+    "TMP": "retained-evidence/kept-b41-final-validation/random-5000/net-session-plane-hold-schedules-selftest/runtime/Temp",
+    "TMPDIR": "retained-evidence/kept-b41-final-validation/random-5000/net-session-plane-hold-schedules-selftest/runtime/Temp",
     "SDL_VIDEODRIVER": "x11",
     "DISPLAY": ":0",
     "CC_TEST_CRASH_DUMP": "crash.dmp"
@@ -32,7 +32,7 @@
     {
       "check": "exe_exists",
       "ok": true,
-      "detail": "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand"
+      "detail": "build-gcc/CortexCommand"
     },
     {
       "check": "exe_sha256_recorded",
@@ -42,22 +42,22 @@
     {
       "check": "cwd_exists",
       "ok": true,
-      "detail": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/kept-b41-final-validation/random-5000/net-session-plane-hold-schedules-selftest/runtime"
+      "detail": "retained-evidence/kept-b41-final-validation/random-5000/net-session-plane-hold-schedules-selftest/runtime"
     },
     {
       "check": "data_junction_resolves",
       "ok": true,
-      "detail": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/kept-b41-final-validation/random-5000/net-session-plane-hold-schedules-selftest/runtime/Data -> /home/erol/cortex-workers/session-plane-engineer/Data"
+      "detail": "retained-evidence/kept-b41-final-validation/random-5000/net-session-plane-hold-schedules-selftest/runtime/Data -> Data"
     },
     {
       "check": "userdata_writable",
       "ok": true,
-      "detail": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/kept-b41-final-validation/random-5000/net-session-plane-hold-schedules-selftest/runtime/Userdata"
+      "detail": "retained-evidence/kept-b41-final-validation/random-5000/net-session-plane-hold-schedules-selftest/runtime/Userdata"
     },
     {
       "check": "out_dir_private_writable",
       "ok": true,
-      "detail": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/kept-b41-final-validation/random-5000/net-session-plane-hold-schedules-selftest"
+      "detail": "retained-evidence/kept-b41-final-validation/random-5000/net-session-plane-hold-schedules-selftest"
     },
     {
       "check": "lane_scripts_desktop_free",
@@ -67,7 +67,7 @@
   ],
   "evidence_expected": [],
   "hop": null,
-  "exe_path": "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand",
+  "exe_path": "build-gcc/CortexCommand",
   "exe_bytes": 68598152,
   "exe_mtime_utc": "2026-10-17T04:40:25.263522+00:00",
   "exe_sha256": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",

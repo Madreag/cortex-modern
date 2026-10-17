@@ -3,7 +3,7 @@
   "rows": [
     {
       "name": "2-seats-referee-0-200ms",
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-slow-host/2-seats-referee-0-200ms/net-session-plane-selftest/stdout.log",
+      "path": "retained-evidence/final-slow-host/2-seats-referee-0-200ms/net-session-plane-selftest/stdout.log",
       "sha256": "dac8cee5fa8c1d15dd33295d3cd6d2fe26ecb65beb87a4535346ae9887f62525",
       "bytes": 60667,
       "survivor_wait_count": 0,
@@ -14,7 +14,7 @@
     },
     {
       "name": "2-seats-referee-0-30ms",
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-slow-host/2-seats-referee-0-30ms/net-session-plane-selftest/stdout.log",
+      "path": "retained-evidence/final-slow-host/2-seats-referee-0-30ms/net-session-plane-selftest/stdout.log",
       "sha256": "9eeeb2f3b63096d9a1e186a36c9fdec1bc79a6d23aa07260fff306acc2e6bb69",
       "bytes": 51705,
       "survivor_wait_count": 0,
@@ -25,7 +25,7 @@
     },
     {
       "name": "2-seats-referee-1-200ms",
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-slow-host/2-seats-referee-1-200ms/net-session-plane-selftest/stdout.log",
+      "path": "retained-evidence/final-slow-host/2-seats-referee-1-200ms/net-session-plane-selftest/stdout.log",
       "sha256": "f6199436ba55fcdd1ca45c4bd5af0d2318e0c73dc3c510d1c12aa7f8c01a502c",
       "bytes": 60945,
       "survivor_wait_count": 0,
@@ -36,7 +36,7 @@
     },
     {
       "name": "2-seats-referee-1-30ms",
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-slow-host/2-seats-referee-1-30ms/net-session-plane-selftest/stdout.log",
+      "path": "retained-evidence/final-slow-host/2-seats-referee-1-30ms/net-session-plane-selftest/stdout.log",
       "sha256": "acd26905409724d190b1fd09a76da6817c43a825fd785a2c805ee869a0de62ab",
       "bytes": 51791,
       "survivor_wait_count": 0,
@@ -47,7 +47,7 @@
     },
     {
       "name": "4-seats-referee-1-200ms",
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-slow-host/4-seats-referee-1-200ms/net-session-plane-selftest/stdout.log",
+      "path": "retained-evidence/final-slow-host/4-seats-referee-1-200ms/net-session-plane-selftest/stdout.log",
       "sha256": "35769f78840d57d361cad2515172b9c1584ea48e16219889f238639ed9e00af5",
       "bytes": 231051,
       "survivor_wait_count": 1856,
@@ -13071,7 +13071,7 @@
     },
     {
       "name": "4-seats-referee-1-30ms",
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-slow-host/4-seats-referee-1-30ms/net-session-plane-selftest/stdout.log",
+      "path": "retained-evidence/final-slow-host/4-seats-referee-1-30ms/net-session-plane-selftest/stdout.log",
       "sha256": "125edbbbd79a585f511b97acb6b6579563c5cd0d4b006cb60bc82a53c6646ec2",
       "bytes": 81565,
       "survivor_wait_count": 0,

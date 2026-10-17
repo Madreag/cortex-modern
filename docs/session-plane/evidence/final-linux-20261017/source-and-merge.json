@@ -10,7 +10,7 @@
   "cm_dev_ancestor": true,
   "unmerged_index": "",
   "runtime_source_diff_since_compile": "",
-  "gns_root": "/home/erol/deps/gns-turnfix-v6",
+  "gns_root": "deps/gns-turnfix-v6",
   "v5_retained": true,
   "v6_present": true,
   "fixture_tip": "06a44fb82f73fdd65df634407cd2c7540a03075b",

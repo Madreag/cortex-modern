@@ -2,7 +2,7 @@
   "pid": 2954409,
   "cmdline": [
     "python3",
-    "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/run-current-gate.py",
+    "retained-evidence/run-current-gate.py",
     "deferred-return-tip-final-validation",
     ""
   ],

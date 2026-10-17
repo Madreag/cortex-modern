@@ -25,7 +25,7 @@
       "input_delay_ticks": 2,
       "result": {
         "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
-        "repo": "/home/erol/cortex-workers/session-plane-engineer",
+        "repo": ".",
         "passed": 0,
         "total": 1,
         "quiet_rows": [],
@@ -59,12 +59,12 @@
       },
       "logs": [
         {
-          "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-referee-100ms-floor/net-session-plane-selftest/stderr.log",
+          "path": "retained-evidence/final-referee-100ms-floor/net-session-plane-selftest/stderr.log",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "failure_lines": []
         },
         {
-          "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-referee-100ms-floor/net-session-plane-selftest/stdout.log",
+          "path": "retained-evidence/final-referee-100ms-floor/net-session-plane-selftest/stdout.log",
           "sha256": "0b0954a18a2e98bad0562cfcb115c78bb35addb7fa6f29b16ec7a4a06e2f93d5",
           "failure_lines": [
             {
@@ -83,7 +83,7 @@
       "input_delay_ticks": 3,
       "result": {
         "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
-        "repo": "/home/erol/cortex-workers/session-plane-engineer",
+        "repo": ".",
         "passed": 0,
         "total": 1,
         "quiet_rows": [],
@@ -117,12 +117,12 @@
       },
       "logs": [
         {
-          "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-referee-300ms-floor/net-session-plane-selftest/stderr.log",
+          "path": "retained-evidence/final-referee-300ms-floor/net-session-plane-selftest/stderr.log",
           "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "failure_lines": []
         },
         {
-          "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-referee-300ms-floor/net-session-plane-selftest/stdout.log",
+          "path": "retained-evidence/final-referee-300ms-floor/net-session-plane-selftest/stdout.log",
           "sha256": "1052c529bb6ddd6f1868c7a6f320d0d5be1319c038a9fd791a4caaf17bbb5243",
           "failure_lines": [
             {

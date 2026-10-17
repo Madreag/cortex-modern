@@ -1,5 +1,5 @@
 {
-  "fight15-s10h": {
+  "fight15-field-held-seat": {
     "supported": true,
     "roles": [
       "host",
@@ -7,7 +7,7 @@
     ],
     "engine_launched": false
   },
-  "fight15-s12": {
+  "fight15-field-observer-b": {
     "supported": true,
     "roles": [
       "host",
@@ -36,7 +36,7 @@
     "reason": "scene must use its public directory",
     "engine_launched": false
   },
-  "fight15-s11": {
+  "fight15-field-observer-a": {
     "supported": true,
     "roles": [
       "host",
@@ -46,7 +46,7 @@
     ],
     "engine_launched": false
   },
-  "fight15-s13": {
+  "fight15-field-observer-c": {
     "supported": true,
     "roles": [
       "host",

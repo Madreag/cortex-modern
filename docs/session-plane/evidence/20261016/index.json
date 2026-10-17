@@ -5,397 +5,397 @@
   "scope": "Linux headed single-box coordinator/native regression evidence. No off-box engine ran in this lane.",
   "record_copies": {
     "gate.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/deferred-return-tip-final-validation/completion-audit.json",
+      "original": "retained-evidence/deferred-return-tip-final-validation/completion-audit.json",
       "sha256": "f43e69f310c95735f37ebc3c811e64b1436f34cf019dc2c745bae96c5ac1f703",
       "bytes": 48612
     },
     "run-manifest.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/deferred-return-tip-final-validation/summary.json",
+      "original": "retained-evidence/deferred-return-tip-final-validation/summary.json",
       "sha256": "847c93f84c0a31bb508d22536440cebb699fa35b4b6e29340e511ebc27ac99b2",
       "bytes": 6012
     },
     "provenance.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/deferred-return-tip-final-validation/provenance-audit.json",
+      "original": "retained-evidence/deferred-return-tip-final-validation/provenance-audit.json",
       "sha256": "e40de2605da6a4eb5bb17324f53d558899acb5c05ff815b993cd6d3cf3d883ec",
       "bytes": 496
     },
     "shapes.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/deferred-return-tip-final-validation/shape-inventory/shape-coverage-audit.json",
+      "original": "retained-evidence/deferred-return-tip-final-validation/shape-inventory/shape-coverage-audit.json",
       "sha256": "05581bfa0b8edfa736d0a40b235f9abaf3b5f4a9d2ff88d213d55b7aeca3b0f6",
       "bytes": 66103
     },
     "link-delay.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/deferred-return-tip-final-validation/link-delay-and-survivor-waits.json",
+      "original": "retained-evidence/deferred-return-tip-final-validation/link-delay-and-survivor-waits.json",
       "sha256": "3762536026f4a763ad0ea0a070b5a9f4b4e72bccc4a722630fcc7ffb4678271f",
       "bytes": 34022
     },
     "suite.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/deferred-return-tip-final-validation/suite-54/result.json",
+      "original": "retained-evidence/deferred-return-tip-final-validation/suite-54/result.json",
       "sha256": "a20a3fcb34adc9b3330b18deb02ca1a672e24b2057e3b19517cd425cb059b341",
       "bytes": 30824
     },
     "random-driver.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/deferred-return-tip-final-validation/random-5000/result.json",
+      "original": "retained-evidence/deferred-return-tip-final-validation/random-5000/result.json",
       "sha256": "95a825c0ced48050f36a59e58aa2ff7323a6008928676ec11dcfcbbaed3bb824",
       "bytes": 5630
     },
     "fixed-failure-groups.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/deferred-return-tip-final-validation/suite-54/net-session-plane-selftest/fixed-failure-groups.json",
+      "original": "retained-evidence/deferred-return-tip-final-validation/suite-54/net-session-plane-selftest/fixed-failure-groups.json",
       "sha256": "4e7773acc422ff15c3380d3d40eced6f3bb7ac257ddc7905873fe7a129c164df",
       "bytes": 514
     },
     "orchestration-pause.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/deferred-return-tip-final-validation/parent-paused-before-5000.json",
+      "original": "retained-evidence/deferred-return-tip-final-validation/parent-paused-before-5000.json",
       "sha256": "ccbc9470cea79fb59723a0dda3b3c884ff923f99c3272555e01a0bd2edbb6675",
       "bytes": 484
     },
     "orchestration-resume.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/deferred-return-tip-final-validation/parent-resumed-after-return-details.json",
+      "original": "retained-evidence/deferred-return-tip-final-validation/parent-resumed-after-return-details.json",
       "sha256": "61824962f7099d0e2935cd91125489f13ef26ff60e029c5ad6ded68a965e66a2",
       "bytes": 217
     },
     "field-A-frames.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/field-A/frame-account-with-digests.json",
+      "original": "retained-evidence/field-A/frame-account-with-digests.json",
       "sha256": "ce79975b1ad74be25139209b7aaa66f45844129b158489d6d6ecc63eb1bdbe94",
       "bytes": 15271
     },
     "field-A-analysis.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/field-A/frame-account.json",
+      "original": "retained-evidence/field-A/frame-account.json",
       "sha256": "093a731544ceb0500ef30e54c2c4f268a7c85bb93c665641a892525e51dda617",
       "bytes": 8275
     },
     "field-A-saver-correlation.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/field-A/saver-correlation.json",
+      "original": "retained-evidence/field-A/saver-correlation.json",
       "sha256": "d2a5c8da0e02fe4066fe2748250f5c3772e645e9623c030cf2452b528954dc07",
       "bytes": 5068
     },
     "field-A-local-replay-search.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/field-A/full-local-replay-search.json",
+      "original": "retained-evidence/field-A/full-local-replay-search.json",
       "sha256": "b9ea7af6eccd144b0c1c5f61ec9aa2e622c586a9d3cd99987c8408ca28182918",
       "bytes": 1683
     },
     "return-transitions.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/return-transition-details-8fb/analysis.json",
+      "original": "retained-evidence/return-transition-details-8fb/analysis.json",
       "sha256": "f3faf0073a14c69843d3b9f5ff49c8baa75252121e96b4d49d3d3079f6e45d24",
       "bytes": 559483
     },
     "return-transition-run.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/return-transition-details-8fb/proof.json",
+      "original": "retained-evidence/return-transition-details-8fb/proof.json",
       "sha256": "346b12f5816853bad12f124242454e062712b210309d028218a130c88b92bd9b",
       "bytes": 733
     },
     "conflicting-return-schedules.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/current-driver-history-schedules.json",
+      "original": "retained-evidence/current-driver-history-schedules.json",
       "sha256": "9f394e40350aac33d7aa839b243ff76af62d94ab59c97c86edba03da20fa9b53",
       "bytes": 1115
     },
     "conflicting-returns-before.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/current-driver-history-replays/proof.json",
+      "original": "retained-evidence/current-driver-history-replays/proof.json",
       "sha256": "e37e11e077a33258c2fb035111ba8b205a6f5eed9c4cd40751096772bb2a278f",
       "bytes": 1076
     },
     "conflicting-returns-after.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/deferred-return-vote-fix/proof.json",
+      "original": "retained-evidence/deferred-return-vote-fix/proof.json",
       "sha256": "83300e4b5788e9efe13a486023d588707e841a4a0acdd1d1de282ef38aab6dbb",
       "bytes": 1644
     },
     "focused-tests.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/tail-hold-trigger-validation/proof.json",
+      "original": "retained-evidence/tail-hold-trigger-validation/proof.json",
       "sha256": "cf9d5d657e9efdac245311f08c5567c314dbd278245504b0cadc62361b1b785d",
       "bytes": 1393
     },
     "native-dependency-apply.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/transport-diagnostics/builder-patch-check.json",
+      "original": "retained-evidence/transport-diagnostics/builder-patch-check.json",
       "sha256": "ec2d9c64e02dcb4bc78df586d46f98b9d00cdc4d0a18bce3b90e5dc41e3eeec9",
       "bytes": 751
     },
     "native-p2p-runtime.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/transport-diagnostics/p2p-final/runtime.json",
+      "original": "retained-evidence/transport-diagnostics/p2p-final/runtime.json",
       "sha256": "40e5c902aefdd6fb51dcd2fa09c31999068e47156d81cf7966b21efe0cbe99db",
       "bytes": 1044
     },
     "native-p2p-launch.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/transport-diagnostics/p2p-final/launch.json",
+      "original": "retained-evidence/transport-diagnostics/p2p-final/launch.json",
       "sha256": "84d64e059e7650be58ac3b7d13b7be5ce896cd3cad907bc7273de6a8acdf928c",
       "bytes": 3580
     },
     "directory-capacity.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/ownership-tip-directory-capacity/result.json",
+      "original": "retained-evidence/ownership-tip-directory-capacity/result.json",
       "sha256": "9f488100b2860febfe0f2c5b889f8385c50a2c09f1cd133c92cb1aac909404d4",
       "bytes": 434
     },
     "commits-since-resume.txt": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/commits-since-resume.txt",
+      "original": "retained-evidence/commits-since-resume.txt",
       "sha256": "0915210d726800f5ea54e8146a7ade9d689f56f5797a4108ea69a9c1c6389396",
       "bytes": 4455
     },
     "commits-since-7b.txt": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/commits-since-7b.txt",
+      "original": "retained-evidence/commits-since-7b.txt",
       "sha256": "3ea8d3c99729c29055333c7dbeb702b7e8cd6c00f380c987c1bdf25a68cbf915",
       "bytes": 11908
     },
     "reproduction/run-current-gate.py": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/run-current-gate.py",
+      "original": "retained-evidence/run-current-gate.py",
       "sha256": "e7a56c9f027613c2fdf39872f7c7f2dba0c37f0b02798b62c486f6b937e18af7",
       "bytes": 4215
     },
     "reproduction/run-slow-host-proof.py": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/run-slow-host-proof.py",
+      "original": "retained-evidence/run-slow-host-proof.py",
       "sha256": "3709f7bf398ab0aad94cb53f588d79f1092d3abab52b3f553a64f38dab5f8959",
       "bytes": 2034
     },
     "reproduction/run-return-transition-details.py": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/run-return-transition-details.py",
+      "original": "retained-evidence/run-return-transition-details.py",
       "sha256": "fcdf8ddc73e5d9d17380bd1ba00735314da85672343168f63171c6f468c2fee4",
       "bytes": 3594
     },
     "reproduction/audit-shape-coverage.py": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/audit-shape-coverage.py",
+      "original": "retained-evidence/audit-shape-coverage.py",
       "sha256": "e1970f000a32916a8c40cd4710d43efba2a34cce1739dbe4e585cb054d224c34",
       "bytes": 2907
     },
     "reproduction/collect-gate-evidence.py": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/collect-gate-evidence.py",
+      "original": "retained-evidence/collect-gate-evidence.py",
       "sha256": "4abbfe0876952a334d094d11e70713760bb813ccf97ff832ec4a0c9494b6e69c",
       "bytes": 3543
     },
     "spread-scene-static-audit.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/spread-scene-static-audit.json",
+      "original": "retained-evidence/spread-scene-static-audit.json",
       "sha256": "f031ab5a7575b4cf3d808045a7dc565f137e7186e3a895a66915eadd4b1d8fc4",
       "bytes": 1122
     },
     "shape-lists/return.txt": {
-      "original": "/home/erol/cortex-workers/lead-handoff-20261013/hold-shapes/hold-shapes-return.txt",
+      "original": "docs/session-plane/evidence/20261016/shape-lists/hold-shapes-return.txt",
       "sha256": "09f128b3567a6939af3c394173c73d0560b540ce4d70c4ab966b7ac14855d002",
       "bytes": 8354
     },
     "shape-lists/catchup.txt": {
-      "original": "/home/erol/cortex-workers/lead-handoff-20261013/hold-shapes/hold-shapes-catchup.txt",
+      "original": "docs/session-plane/evidence/20261016/shape-lists/hold-shapes-catchup.txt",
       "sha256": "3ef2778f7596e68719b4df586e65a462cba85480632f38d1ca3a1c0c074c4859",
       "bytes": 10788
     },
     "shape-lists/hold.txt": {
-      "original": "/home/erol/cortex-workers/lead-handoff-20261013/hold-shapes/hold-shapes-hold.txt",
+      "original": "docs/session-plane/evidence/20261016/shape-lists/hold-shapes-hold.txt",
       "sha256": "be5b788fee0abd92eaa45f3a927deffd310c8af0bb2d12780c4e2c21a045ed00",
       "bytes": 20609
     },
     "shape-lists/referee.txt": {
-      "original": "/home/erol/cortex-workers/lead-handoff-20261013/hold-shapes/hold-shapes-referee.txt",
+      "original": "docs/session-plane/evidence/20261016/shape-lists/hold-shapes-referee.txt",
       "sha256": "f1ea93c8e6263a114bf8d03fb0d83632433630ec3cb9a799170d8af4411c2dc5",
       "bytes": 17018
     },
     "detectors/host_hold_ai_authority_is_the_certified_frames-red.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/a-host-authority-red-7b/result.json",
+      "original": "retained-evidence/a-host-authority-red-7b/result.json",
       "sha256": "325bc12e10fb270dd4ef9830522cbcf1cdf25657309169f5167f8bd2e5202657",
       "bytes": 950
     },
     "detectors/host_hold_ai_authority_is_the_certified_frames-green.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/tail-hold-trigger-validation/A-authority/result.json",
+      "original": "retained-evidence/tail-hold-trigger-validation/A-authority/result.json",
       "sha256": "08368ae397b3ad82b9e106dffd9867aee712cdf5ee1655bd3fa15c607f88c061",
       "bytes": 768
     },
     "detectors/input_delay_follows_the_measured_link-red.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/b-link-delay-red/result.json",
+      "original": "retained-evidence/b-link-delay-red/result.json",
       "sha256": "9d5efc116da3d425b12a4c30751d51d160dd72a5ed160772080dfd5df42ed58a",
       "bytes": 636
     },
     "detectors/input_delay_follows_the_measured_link-green.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/tail-hold-trigger-validation/link-delay/result.json",
+      "original": "retained-evidence/tail-hold-trigger-validation/link-delay/result.json",
       "sha256": "caa4800d5b5d38e491129a9a4929082709e004c2873fa9a68c9743f464e938c9",
       "bytes": 763
     },
     "detectors/held_host_names_a_private_base_through_the_playing_seats-red.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/capture-before-implementation/result.json",
+      "original": "retained-evidence/capture-before-implementation/result.json",
       "sha256": "680644a52208c056863067137837928841716925919f130124264f071d715161",
       "bytes": 636
     },
     "detectors/held_host_names_a_private_base_through_the_playing_seats-green.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/tail-hold-trigger-validation/held-host-base-capture/result.json",
+      "original": "retained-evidence/tail-hold-trigger-validation/held-host-base-capture/result.json",
       "sha256": "44f043fdafca536769220dd10a63bd902070463a591f5d44e51a726b6b9071c0",
       "bytes": 763
     },
     "detectors/a_future_removal_does_not_rewrite_an_earlier_frame_prefix-red.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/future-facts-prefix-red-v2/proof.json",
+      "original": "retained-evidence/future-facts-prefix-red-v2/proof.json",
       "sha256": "de925aba60e42b01b439ab9c1ce3aaaf6810585b720ed527740c7eebcb4f299f",
       "bytes": 171
     },
     "detectors/a_future_removal_does_not_rewrite_an_earlier_frame_prefix-green.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/tail-hold-trigger-validation/future-facts-prefix/result.json",
+      "original": "retained-evidence/tail-hold-trigger-validation/future-facts-prefix/result.json",
       "sha256": "41176ebbdf2a867bdcf66d069bb963b006096bf5b20ae4ed57d45147ad8beda5",
       "bytes": 764
     },
     "detectors/a_silent_interval_does_not_lower_the_measured_sending_rate-red.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/sender-rate-silence-red/proof.json",
+      "original": "retained-evidence/sender-rate-silence-red/proof.json",
       "sha256": "167d98ab9150ef0423a3dfd6c9d9d3aa688b3e681734b908e6e20cad33bc9efe",
       "bytes": 171
     },
     "detectors/a_silent_interval_does_not_lower_the_measured_sending_rate-green.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/tail-hold-trigger-validation/sender-rate-silence/result.json",
+      "original": "retained-evidence/tail-hold-trigger-validation/sender-rate-silence/result.json",
       "sha256": "e724df049d8dc7d13abb9f4f5918644f619aeceab92c81c63b6b82676313edef",
       "bytes": 765
     },
     "detectors/a_deferred_return_cannot_sign_a_second_activation-red.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/deferred-return-vote-red/proof.json",
+      "original": "retained-evidence/deferred-return-vote-red/proof.json",
       "sha256": "023319634209d0a50e6a1bcbd182d93827e25f4aa624e5f4d27b21b54a1e0efb",
       "bytes": 171
     },
     "detectors/a_deferred_return_cannot_sign_a_second_activation-green.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/tail-hold-trigger-validation/deferred-return-vote/result.json",
+      "original": "retained-evidence/tail-hold-trigger-validation/deferred-return-vote/result.json",
       "sha256": "fe0da210b0181955096ea0305ac9dbf3510287c15ce1f9997dd6593dc89bf2f3",
       "bytes": 766
     },
     "detectors/an_unsigned_hold_invitation_never_fences_an_input-red.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/b-invitation-red/result.json",
+      "original": "retained-evidence/b-invitation-red/result.json",
       "sha256": "da2a954edb62f648cac38430ab00c180ceccc2ff82810ebe3806c4ef893ec5df",
       "bytes": 636
     },
     "detectors/an_unsigned_hold_invitation_never_fences_an_input-green.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/tail-hold-trigger-validation/hold-invitation/result.json",
+      "original": "retained-evidence/tail-hold-trigger-validation/hold-invitation/result.json",
       "sha256": "36603a2180213941a55e36756558e6f455be8a2e48e0c24f5d7f59c4226a09a6",
       "bytes": 764
     },
     "detectors/a_seat_co_signs_and_fences_its_own_future_hold-red.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/b-volunteer-red/result.json",
+      "original": "retained-evidence/b-volunteer-red/result.json",
       "sha256": "da2a954edb62f648cac38430ab00c180ceccc2ff82810ebe3806c4ef893ec5df",
       "bytes": 636
     },
     "detectors/a_seat_co_signs_and_fences_its_own_future_hold-green.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/tail-hold-trigger-validation/own-ahead-hold/result.json",
+      "original": "retained-evidence/tail-hold-trigger-validation/own-ahead-hold/result.json",
       "sha256": "cf9c94f8a67a491c6c79807601b6043ea9b61e06196746e47eab914b3143602e",
       "bytes": 764
     },
     "detectors/a_later_return_keeps_the_earlier_scheduled_return-red.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/concurrent-returns-red2/result.json",
+      "original": "retained-evidence/concurrent-returns-red2/result.json",
       "sha256": "7888d5a4c07db243f3fa4c9ef6ec8f8ad3cc4f79da82933042d07744adcf1538",
       "bytes": 636
     },
     "detectors/a_later_return_keeps_the_earlier_scheduled_return-green.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/tail-hold-trigger-validation/concurrent-returns/result.json",
+      "original": "retained-evidence/tail-hold-trigger-validation/concurrent-returns/result.json",
       "sha256": "03c560d26e9e6e8062640c85f400f1fbc9a524de5b360198dd362f7f41a89ef5",
       "bytes": 764
     },
     "detectors/a_return_cannot_return_another_held_seat-red.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/membership-detector-7b/proof.json",
+      "original": "retained-evidence/membership-detector-7b/proof.json",
       "sha256": "1a37a3d31600990e56220045187957f17ebb77557f463ccab9e1ee74f9395353",
       "bytes": 266
     },
     "detectors/a_return_cannot_return_another_held_seat-green.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/tail-hold-trigger-validation/return-keeps-other-held/result.json",
+      "original": "retained-evidence/tail-hold-trigger-validation/return-keeps-other-held/result.json",
       "sha256": "f2125061c0374a9e416a230f18467c917684eae851639d3e402521f238149f6a",
       "bytes": 759
     },
     "detectors/a_future_removal_keeps_the_past_directory_decision-red.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/ownership-completion-red/proof.json",
+      "original": "retained-evidence/ownership-completion-red/proof.json",
       "sha256": "a9f6e3021902d6b3b16c96f6cf13841a8cf7891ead11cbb88ef064cd44848291",
       "bytes": 664
     },
     "detectors/a_future_removal_keeps_the_past_directory_decision-green.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/tail-hold-trigger-validation/future-removal-authority/result.json",
+      "original": "retained-evidence/tail-hold-trigger-validation/future-removal-authority/result.json",
       "sha256": "50b04fcf221f3e1beb02094cced23a95bcf87206b04c3adca03cf3bb4cf45771",
       "bytes": 759
     },
     "detectors/a_return_start_uses_its_certified_admission-red.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/ownership-completion-red/proof.json",
+      "original": "retained-evidence/ownership-completion-red/proof.json",
       "sha256": "a9f6e3021902d6b3b16c96f6cf13841a8cf7891ead11cbb88ef064cd44848291",
       "bytes": 664
     },
     "detectors/a_return_start_uses_its_certified_admission-green.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/tail-hold-trigger-validation/return-start-admission/result.json",
+      "original": "retained-evidence/tail-hold-trigger-validation/return-start-admission/result.json",
       "sha256": "1b4a2aaee7ec4ad06073d2ce79c139ed4683bb865b2afe79ac5b172c878feefe",
       "bytes": 759
     },
     "detectors/pending_decisions_wait_for_authority_across_local_timeouts-red.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/pending-decision-authority-red2/result.json",
+      "original": "retained-evidence/pending-decision-authority-red2/result.json",
       "sha256": "f9db0e33d03bc7185bf56215e53c8f8bab3b717497b7c4f9873aacd08a5039de",
       "bytes": 636
     },
     "detectors/pending_decisions_wait_for_authority_across_local_timeouts-green.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/tail-hold-trigger-validation/pending-decision-authority/result.json",
+      "original": "retained-evidence/tail-hold-trigger-validation/pending-decision-authority/result.json",
       "sha256": "452f25f0d96c47aae76aa158924c28589e1637c3565171cad055c528169ba1b5",
       "bytes": 764
     },
     "focused/A-authority.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/tail-hold-trigger-validation/A-authority/result.json",
+      "original": "retained-evidence/tail-hold-trigger-validation/A-authority/result.json",
       "sha256": "08368ae397b3ad82b9e106dffd9867aee712cdf5ee1655bd3fa15c607f88c061",
       "bytes": 768
     },
     "focused/C-ui.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/tail-hold-trigger-validation/C-ui/result.json",
+      "original": "retained-evidence/tail-hold-trigger-validation/C-ui/result.json",
       "sha256": "7b43e1e83b1a65885ef2a7399b79c716189880ea292f48e1d0a8053b670023b6",
       "bytes": 954
     },
     "focused/concurrent-returns.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/tail-hold-trigger-validation/concurrent-returns/result.json",
+      "original": "retained-evidence/tail-hold-trigger-validation/concurrent-returns/result.json",
       "sha256": "03c560d26e9e6e8062640c85f400f1fbc9a524de5b360198dd362f7f41a89ef5",
       "bytes": 764
     },
     "focused/deferred-return-vote.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/tail-hold-trigger-validation/deferred-return-vote/result.json",
+      "original": "retained-evidence/tail-hold-trigger-validation/deferred-return-vote/result.json",
       "sha256": "fe0da210b0181955096ea0305ac9dbf3510287c15ce1f9997dd6593dc89bf2f3",
       "bytes": 766
     },
     "focused/future-facts-prefix.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/tail-hold-trigger-validation/future-facts-prefix/result.json",
+      "original": "retained-evidence/tail-hold-trigger-validation/future-facts-prefix/result.json",
       "sha256": "41176ebbdf2a867bdcf66d069bb963b006096bf5b20ae4ed57d45147ad8beda5",
       "bytes": 764
     },
     "focused/future-removal-authority.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/tail-hold-trigger-validation/future-removal-authority/result.json",
+      "original": "retained-evidence/tail-hold-trigger-validation/future-removal-authority/result.json",
       "sha256": "50b04fcf221f3e1beb02094cced23a95bcf87206b04c3adca03cf3bb4cf45771",
       "bytes": 759
     },
     "focused/held-host-base-capture.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/tail-hold-trigger-validation/held-host-base-capture/result.json",
+      "original": "retained-evidence/tail-hold-trigger-validation/held-host-base-capture/result.json",
       "sha256": "44f043fdafca536769220dd10a63bd902070463a591f5d44e51a726b6b9071c0",
       "bytes": 763
     },
     "focused/hold-invitation.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/tail-hold-trigger-validation/hold-invitation/result.json",
+      "original": "retained-evidence/tail-hold-trigger-validation/hold-invitation/result.json",
       "sha256": "36603a2180213941a55e36756558e6f455be8a2e48e0c24f5d7f59c4226a09a6",
       "bytes": 764
     },
     "focused/link-delay.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/tail-hold-trigger-validation/link-delay/result.json",
+      "original": "retained-evidence/tail-hold-trigger-validation/link-delay/result.json",
       "sha256": "caa4800d5b5d38e491129a9a4929082709e004c2873fa9a68c9743f464e938c9",
       "bytes": 763
     },
     "focused/own-ahead-hold.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/tail-hold-trigger-validation/own-ahead-hold/result.json",
+      "original": "retained-evidence/tail-hold-trigger-validation/own-ahead-hold/result.json",
       "sha256": "cf9c94f8a67a491c6c79807601b6043ea9b61e06196746e47eab914b3143602e",
       "bytes": 764
     },
     "focused/pending-decision-authority.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/tail-hold-trigger-validation/pending-decision-authority/result.json",
+      "original": "retained-evidence/tail-hold-trigger-validation/pending-decision-authority/result.json",
       "sha256": "452f25f0d96c47aae76aa158924c28589e1637c3565171cad055c528169ba1b5",
       "bytes": 764
     },
     "focused/removal-retry.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/tail-hold-trigger-validation/removal-retry/result.json",
+      "original": "retained-evidence/tail-hold-trigger-validation/removal-retry/result.json",
       "sha256": "b996439d30e711705acc829531b1786665456c06290fcf2e3911b4442b8297e9",
       "bytes": 759
     },
     "focused/return-keeps-other-held.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/tail-hold-trigger-validation/return-keeps-other-held/result.json",
+      "original": "retained-evidence/tail-hold-trigger-validation/return-keeps-other-held/result.json",
       "sha256": "f2125061c0374a9e416a230f18467c917684eae851639d3e402521f238149f6a",
       "bytes": 759
     },
     "focused/return-member-starts.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/tail-hold-trigger-validation/return-member-starts/result.json",
+      "original": "retained-evidence/tail-hold-trigger-validation/return-member-starts/result.json",
       "sha256": "48f2d15613d6aae96ef8e0c11027cb135b367e6b1bdb959afb818ff6b68595f3",
       "bytes": 759
     },
     "focused/return-start-admission.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/tail-hold-trigger-validation/return-start-admission/result.json",
+      "original": "retained-evidence/tail-hold-trigger-validation/return-start-admission/result.json",
       "sha256": "1b4a2aaee7ec4ad06073d2ce79c139ed4683bb865b2afe79ac5b172c878feefe",
       "bytes": 759
     },
     "focused/seat-return-pacing.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/tail-hold-trigger-validation/seat-return-pacing/result.json",
+      "original": "retained-evidence/tail-hold-trigger-validation/seat-return-pacing/result.json",
       "sha256": "7b86962969fc2637a4a6f64f47188dd3af485e03cb40e7b956dbcaf87ba52df2",
       "bytes": 763
     },
     "focused/sender-rate-silence.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/tail-hold-trigger-validation/sender-rate-silence/result.json",
+      "original": "retained-evidence/tail-hold-trigger-validation/sender-rate-silence/result.json",
       "sha256": "e724df049d8dc7d13abb9f4f5918644f619aeceab92c81c63b6b82676313edef",
       "bytes": 765
     }
@@ -407,5 +407,5 @@
     "fixed-rows.txt",
     "native-transport.json"
   ],
-  "field_A_block": "The actual s10f1 attachable UID, input producer/application and third-hold difference are not recoverable from the supplied digests. Both exact-round replay/state records or object/controller traces are needed from the lead."
+  "field_A_block": "The actual field-host-hold attachable UID, input producer/application and third-hold difference are not recoverable from the supplied digests. Both exact-round replay/state records or object/controller traces are needed from the lead."
 }

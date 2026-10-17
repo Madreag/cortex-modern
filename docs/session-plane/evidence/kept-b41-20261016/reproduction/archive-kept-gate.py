@@ -6,7 +6,7 @@ import re
 import subprocess
 import sys
 
-root = Path('/home/erol/cortex-workers/session-plane-engineer')
+root = Path('.')
 scratch = Path(__file__).parent
 gate = scratch / sys.argv[1]
 out = root / 'docs/session-plane/evidence' / sys.argv[2]

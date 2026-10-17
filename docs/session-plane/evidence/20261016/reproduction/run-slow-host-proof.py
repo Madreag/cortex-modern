@@ -1,6 +1,6 @@
 import os, subprocess, sys, json, re
 from pathlib import Path
-root = Path('/home/erol/cortex-workers/session-plane-engineer')
+root = Path('.')
 base = Path(__file__).parent / sys.argv[1]
 env = os.environ | {'CC_RUNNER_HEADED':'1','DISPLAY':':0','CCCP_TEST_BINARY':str(root/'build-gcc/CortexCommand'),'CC_TEST_HOLD_SCHEDULES':'0','CC_TEST_RETURN_INPUT_DETAILS':'1'}
 results = []

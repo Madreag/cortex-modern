@@ -4,7 +4,7 @@
   "scope": "serial diagnostic replays, unchanged executable; all three full rows RED",
   "cases": {
     "two_direct_host_3s": {
-      "log": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/return-transition-details-8fb/two_direct_host_3s/net-session-plane-selftest/stdout.log",
+      "log": "retained-evidence/return-transition-details-8fb/two_direct_host_3s/net-session-plane-selftest/stdout.log",
       "sha256": "14fdeaf74b752e67cfcf2828fd132b5a24c3ba35946d7d836d3766d82e40a793",
       "events": [
         {
@@ -82,7 +82,7 @@
       ]
     },
     "joiner_catching_up_at_105_percent_returns_over_100ms": {
-      "log": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/return-transition-details-8fb/joiner_catching_up_at_105_percent_returns_over_100ms/net-session-plane-selftest/stdout.log",
+      "log": "retained-evidence/return-transition-details-8fb/joiner_catching_up_at_105_percent_returns_over_100ms/net-session-plane-selftest/stdout.log",
       "sha256": "06dec748e3f733fbfb5124b93375ac6a6d79d7860a4577cb04319b9c7a71d8ac",
       "events": [
         {
@@ -604,7 +604,7 @@
       ]
     },
     "four_seats_held_joiner_catches_up_then_runs_at_round_rate_over_100ms": {
-      "log": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/return-transition-details-8fb/four_seats_held_joiner_catches_up_then_runs_at_round_rate_over_100ms/net-session-plane-selftest/stdout.log",
+      "log": "retained-evidence/return-transition-details-8fb/four_seats_held_joiner_catches_up_then_runs_at_round_rate_over_100ms/net-session-plane-selftest/stdout.log",
       "sha256": "51654e01c1699b47b8350ea60b755f83938fd14e501ddac18f82462045c8132c",
       "events": [
         {
@@ -17389,6 +17389,6 @@
   "interpretation": {
     "direct_host_cut": "Hub::Split cuts traffic symmetrically around seat1 for 6000..9000ms. With no referee, host-half authority1 continues and holds seat2; seat2 waits2972ms. Reachable row remains RED; no rule was changed to authorize both halves.",
     "four_seat_first_return": "Return2 activation1205, delay9, neutralThrough1236. All certify delay8 from1225. Survivors3/4 vote hold1237 at20599ms with displayed1236. Seat2 sends1237 at20634ms while displayed1228; all receive at20684ms after survivors installed hold20683ms. Completed survivor wait83ms. Later returns/reholds repeat; admission and production pacing remain unresolved.",
-    "field_A": "These are separate synthetic return traces, not evidence naming the s10f1 attachable UID or producer at57176."
+    "field_A": "These are separate synthetic return traces, not evidence naming the field-host-hold attachable UID or producer at57176."
   }
 }

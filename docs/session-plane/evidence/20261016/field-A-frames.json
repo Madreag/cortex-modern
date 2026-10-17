@@ -1,5 +1,5 @@
 {
-  "source_evidence": "/home/erol/cortex-workers/four-player-run/.four-player-run/full-game/s10f1-desync",
+  "source_evidence": "retained-evidence/field-match/full-game/field-host-hold-desync",
   "samples": [
     {
       "frame": 42285,

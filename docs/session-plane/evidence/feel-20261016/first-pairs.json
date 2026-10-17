@@ -2,7 +2,7 @@
   "source_parent": "acc509c49358124b5024fef4b510327999f0ded9",
   "cases": [
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-feel-before-overlay-1/01-sp",
+      "path": "retained-evidence/B-feel-before-overlay-1/01-sp",
       "arm": "sp",
       "manifest": {
         "started": "2026-10-16 10:50:35 PM MST",
@@ -17,7 +17,7 @@
           960,
           540
         ],
-        "binary": "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand",
+        "binary": "build-gcc/CortexCommand",
         "binary_sha256": "6ac5f4e05927cd1db819ae4d50f6e87de2c0e4506233a8a9e079ea80b8f93ffe",
         "quiet_samples": [
           {
@@ -282,7 +282,7 @@
         {
           "peer": "sp",
           "requested_rtt_ms": null,
-          "raw": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-feel-before-overlay-1/01-sp/sp/feel/raw.jsonl.gz",
+          "raw": "retained-evidence/B-feel-before-overlay-1/01-sp/sp/feel/raw.jsonl.gz",
           "raw_sha256": "3fbee580943eb7e254610d2f2cb5069789dff6be90f5cb948285615805191743",
           "input_coverage": {
             "expected_responses": 32,
@@ -881,7 +881,7 @@
       ]
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-feel-before-overlay-2/01-30ms",
+      "path": "retained-evidence/B-feel-before-overlay-2/01-30ms",
       "arm": "30ms",
       "manifest": {
         "started": "2026-10-16 10:54:49 PM MST",
@@ -896,7 +896,7 @@
           960,
           540
         ],
-        "binary": "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand",
+        "binary": "build-gcc/CortexCommand",
         "binary_sha256": "6ac5f4e05927cd1db819ae4d50f6e87de2c0e4506233a8a9e079ea80b8f93ffe",
         "quiet_samples": [
           {
@@ -1229,8 +1229,8 @@
         "complete": true,
         "finished": "2026-10-16 10:55:26 PM MST",
         "peer_hashes": {
-          "first": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-feel-before-overlay-2/01-30ms/host_trace.json",
-          "second": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-feel-before-overlay-2/01-30ms/client_trace.json",
+          "first": "retained-evidence/B-feel-before-overlay-2/01-30ms/host_trace.json",
+          "second": "retained-evidence/B-feel-before-overlay-2/01-30ms/client_trace.json",
           "cross_peer": true,
           "sim_gated_pass": true,
           "existing_comparator": {
@@ -1363,7 +1363,7 @@
         {
           "peer": "host",
           "requested_rtt_ms": 30,
-          "raw": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-feel-before-overlay-2/01-30ms/host/feel/raw.jsonl.gz",
+          "raw": "retained-evidence/B-feel-before-overlay-2/01-30ms/host/feel/raw.jsonl.gz",
           "raw_sha256": "236f034ac6b4810ae920aefd2a0a43600ac00064d60c9ac4ee57bdbb11fd07b7",
           "input_coverage": {
             "expected_responses": 32,
@@ -1982,7 +1982,7 @@
         {
           "peer": "client",
           "requested_rtt_ms": 30,
-          "raw": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-feel-before-overlay-2/01-30ms/client/feel/raw.jsonl.gz",
+          "raw": "retained-evidence/B-feel-before-overlay-2/01-30ms/client/feel/raw.jsonl.gz",
           "raw_sha256": "e5fa1e57c2a461b4d003cb0aff5584527d9b74a7f89f1f0a9daf7d4d4f6975cb",
           "input_coverage": {
             "expected_responses": 32,
@@ -2601,7 +2601,7 @@
       ]
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-feel-before-overlay-2/01-200ms",
+      "path": "retained-evidence/B-feel-before-overlay-2/01-200ms",
       "arm": "200ms",
       "manifest": {
         "started": "2026-10-16 10:55:29 PM MST",
@@ -2616,7 +2616,7 @@
           960,
           540
         ],
-        "binary": "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand",
+        "binary": "build-gcc/CortexCommand",
         "binary_sha256": "6ac5f4e05927cd1db819ae4d50f6e87de2c0e4506233a8a9e079ea80b8f93ffe",
         "quiet_samples": [
           {
@@ -2976,8 +2976,8 @@
         "complete": true,
         "finished": "2026-10-16 10:56:09 PM MST",
         "peer_hashes": {
-          "first": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-feel-before-overlay-2/01-200ms/host_trace.json",
-          "second": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-feel-before-overlay-2/01-200ms/client_trace.json",
+          "first": "retained-evidence/B-feel-before-overlay-2/01-200ms/host_trace.json",
+          "second": "retained-evidence/B-feel-before-overlay-2/01-200ms/client_trace.json",
           "cross_peer": true,
           "sim_gated_pass": true,
           "existing_comparator": {
@@ -3110,7 +3110,7 @@
         {
           "peer": "host",
           "requested_rtt_ms": 200,
-          "raw": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-feel-before-overlay-2/01-200ms/host/feel/raw.jsonl.gz",
+          "raw": "retained-evidence/B-feel-before-overlay-2/01-200ms/host/feel/raw.jsonl.gz",
           "raw_sha256": "d407e6c0b0051db224bbc80cdd7c85427b627a1d41bc8764cdda0d37ef92ac37",
           "input_coverage": {
             "expected_responses": 32,
@@ -3737,7 +3737,7 @@
         {
           "peer": "client",
           "requested_rtt_ms": 200,
-          "raw": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-feel-before-overlay-2/01-200ms/client/feel/raw.jsonl.gz",
+          "raw": "retained-evidence/B-feel-before-overlay-2/01-200ms/client/feel/raw.jsonl.gz",
           "raw_sha256": "ea626a3db637c446086817e8cf54790d3d831d361e222af985c60594787a15a6",
           "input_coverage": {
             "expected_responses": 32,
@@ -4351,7 +4351,7 @@
       ]
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-feel-small-overlay-red/01-30ms",
+      "path": "retained-evidence/B-feel-small-overlay-red/01-30ms",
       "arm": "30ms",
       "manifest": {
         "started": "2026-10-16 10:58:10 PM MST",
@@ -4366,7 +4366,7 @@
           640,
           540
         ],
-        "binary": "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand",
+        "binary": "build-gcc/CortexCommand",
         "binary_sha256": "ee9caa375cce4668b26b276418c4b8f73bb5fa430c975aed216286b17c7ac5bb",
         "quiet_samples": [
           {
@@ -4699,8 +4699,8 @@
         "complete": true,
         "finished": "2026-10-16 10:58:48 PM MST",
         "peer_hashes": {
-          "first": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-feel-small-overlay-red/01-30ms/host_trace.json",
-          "second": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-feel-small-overlay-red/01-30ms/client_trace.json",
+          "first": "retained-evidence/B-feel-small-overlay-red/01-30ms/host_trace.json",
+          "second": "retained-evidence/B-feel-small-overlay-red/01-30ms/client_trace.json",
           "cross_peer": true,
           "sim_gated_pass": true,
           "existing_comparator": {
@@ -4833,7 +4833,7 @@
         {
           "peer": "host",
           "requested_rtt_ms": 30,
-          "raw": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-feel-small-overlay-red/01-30ms/host/feel/raw.jsonl.gz",
+          "raw": "retained-evidence/B-feel-small-overlay-red/01-30ms/host/feel/raw.jsonl.gz",
           "raw_sha256": "b0c5bdc1e3e774c529cc16421288927d2782ec8d9e232d4794d5ffb7df76b536",
           "input_coverage": {
             "expected_responses": 32,
@@ -5453,7 +5453,7 @@
         {
           "peer": "client",
           "requested_rtt_ms": 30,
-          "raw": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-feel-small-overlay-red/01-30ms/client/feel/raw.jsonl.gz",
+          "raw": "retained-evidence/B-feel-small-overlay-red/01-30ms/client/feel/raw.jsonl.gz",
           "raw_sha256": "66d251c91082d44170c3c42a16abb49b0fb6c4a3233afd751c8f413140e0fc6a",
           "input_coverage": {
             "expected_responses": 32,

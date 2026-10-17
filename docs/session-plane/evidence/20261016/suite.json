@@ -1,6 +1,6 @@
 {
   "exe_sha256": "8fb5b753511cfa6e4904bd4301d6fd9fbbdd72cb8daf2449e8042f4954124762",
-  "repo": "/home/erol/cortex-workers/session-plane-engineer",
+  "repo": ".",
   "passed": 48,
   "total": 54,
   "quiet_rows": [
@@ -113,10 +113,10 @@
       "reason": "exit_code=1",
       "binary": "8fb5b753511cfa6e4904bd4301d6fd9fbbdd72cb8daf2449e8042f4954124762",
       "fixed_failure_report": {
-        "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/deferred-return-tip-final-validation/suite-54/net-session-plane-selftest/fixed-failure-groups.txt",
+        "path": "retained-evidence/deferred-return-tip-final-validation/suite-54/net-session-plane-selftest/fixed-failure-groups.txt",
         "binary": "8fb5b753511cfa6e4904bd4301d6fd9fbbdd72cb8daf2449e8042f4954124762",
         "digest": "753bdfad0bf0eeffffa805ca49335deacfd35421135757a9116d43860073cde5",
-        "suite_root": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/deferred-return-tip-final-validation/suite-54",
+        "suite_root": "retained-evidence/deferred-return-tip-final-validation/suite-54",
         "saved_cases_ran": 108
       },
       "row_elapsed_s": 128.02272436697967,
@@ -146,10 +146,10 @@
       "binary": "8fb5b753511cfa6e4904bd4301d6fd9fbbdd72cb8daf2449e8042f4954124762",
       "schedule_summary": "[net-session-plane-selftest] random_hold_schedules schedules=200 ran=200 seeds=1..200",
       "fixed_failure_report": {
-        "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/deferred-return-tip-final-validation/suite-54/net-session-plane-selftest/fixed-failure-groups.txt",
+        "path": "retained-evidence/deferred-return-tip-final-validation/suite-54/net-session-plane-selftest/fixed-failure-groups.txt",
         "binary": "8fb5b753511cfa6e4904bd4301d6fd9fbbdd72cb8daf2449e8042f4954124762",
         "digest": "753bdfad0bf0eeffffa805ca49335deacfd35421135757a9116d43860073cde5",
-        "suite_root": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/deferred-return-tip-final-validation/suite-54",
+        "suite_root": "retained-evidence/deferred-return-tip-final-validation/suite-54",
         "saved_cases_ran": 108
       },
       "row_elapsed_s": 204.8087660850142,
@@ -381,7 +381,7 @@
       "binary": "8fb5b753511cfa6e4904bd4301d6fd9fbbdd72cb8daf2449e8042f4954124762",
       "service_python": "/usr/bin/python3",
       "service_exit_code": 0,
-      "service_log": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/deferred-return-tip-final-validation/suite-54/net-directory-selftest/service-tests.log",
+      "service_log": "retained-evidence/deferred-return-tip-final-validation/suite-54/net-directory-selftest/service-tests.log",
       "row_elapsed_s": 123.7558952519903,
       "start_load": [
         2.5400390625,
@@ -658,7 +658,7 @@
         "window": 48234498,
         "engine_pid": 2975345,
         "owner_pid": 2975352,
-        "runtime": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/deferred-return-tip-final-validation/suite-54/module-version-selftest/runtime",
+        "runtime": "retained-evidence/deferred-return-tip-final-validation/suite-54/module-version-selftest/runtime",
         "caption": "RTE Warning! (>_<)",
         "action": "Return",
         "expected_warning_modules": [
@@ -682,7 +682,7 @@
       "dialog": false,
       "continued": false,
       "exe_sha256": "8fb5b753511cfa6e4904bd4301d6fd9fbbdd72cb8daf2449e8042f4954124762",
-      "stdout": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/deferred-return-tip-final-validation/suite-54/ext-validate-version-selftest/run/stdout.log",
+      "stdout": "retained-evidence/deferred-return-tip-final-validation/suite-54/ext-validate-version-selftest/run/stdout.log",
       "pass": true,
       "reason": "",
       "binary": "8fb5b753511cfa6e4904bd4301d6fd9fbbdd72cb8daf2449e8042f4954124762",
@@ -804,7 +804,7 @@
       "verdicts_after_assert": [],
       "shutdown_line": "",
       "exe_sha256": "8fb5b753511cfa6e4904bd4301d6fd9fbbdd72cb8daf2449e8042f4954124762",
-      "stdout": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/deferred-return-tip-final-validation/suite-54/headless-assert-continues-selftest/run/stdout.log",
+      "stdout": "retained-evidence/deferred-return-tip-final-validation/suite-54/headless-assert-continues-selftest/run/stdout.log",
       "pass": false,
       "reason": "no continued-assert fault line",
       "binary": "8fb5b753511cfa6e4904bd4301d6fd9fbbdd72cb8daf2449e8042f4954124762",

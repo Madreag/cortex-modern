@@ -2,7 +2,7 @@ import os,time,json,subprocess,sys,hashlib
 from pathlib import Path
 from datetime import datetime
 from zoneinfo import ZoneInfo
-root=Path('/home/erol/cortex-workers/session-plane-engineer'); s=Path(__file__).parent
+root=Path.cwd().resolve(); s=Path(__file__).parent
 out=s/sys.argv[1]; out.mkdir(exist_ok=False)
 binary=root/'build-gcc/CortexCommand'
 def stamp(): return datetime.now(ZoneInfo('America/Phoenix')).strftime('%Y-%m-%d %I:%M:%S %p MST')

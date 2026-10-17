@@ -18,7 +18,7 @@
   },
   "cases": [
     {
-      "run": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/D-quiet-referee-hung-floor",
+      "run": "retained-evidence/D-quiet-referee-hung-floor",
       "binary_sha256": "5a0ada0c38a725321cfda6d135e9ee7c82f2897c7366bb573ce1042dbece3c68",
       "gate_pass": false,
       "peer_rtt_ms": 2,
@@ -49,7 +49,7 @@
       "schedule": "seed=0 seats=2 internet=1 exchange=100 end=14000 rtt=2 jitter=0 recover=300,300 phase=0,0 spell=1:hung:6000:3000"
     },
     {
-      "run": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/D-quiet-referee-30ms-300ms-floor",
+      "run": "retained-evidence/D-quiet-referee-30ms-300ms-floor",
       "binary_sha256": "5a0ada0c38a725321cfda6d135e9ee7c82f2897c7366bb573ce1042dbece3c68",
       "gate_pass": false,
       "peer_rtt_ms": 30,

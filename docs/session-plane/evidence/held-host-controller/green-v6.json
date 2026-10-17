@@ -6,7 +6,7 @@
     "upstream": "2cb93a06350bb065db53abdb0d87cf297e0bfd34",
     "patch_sha256": "453f18420ce6bed9d55beecd732a0615400b043fc9777e3c2f4ef7dc71ceafc9",
     "transport_diagnostics_patch_sha256": "64e5fcd5c0f936a75c8b373052125a95e4259383f7b7ac98915930535ae53dfd",
-    "library": "/home/erol/deps/gns-turnfix-v6/lib/libGameNetworkingSockets_s.a",
+    "library": "deps/gns-turnfix-v6/lib/libGameNetworkingSockets_s.a",
     "library_sha256": "0ac31b066349fffa332c936e9c791a7b64d6501ad242d0b8464bd689d0923e75",
     "lifetime_version": 5,
     "transport_diagnostics_version": 1
@@ -16,7 +16,7 @@
     "row": "a_held_host_preserves_controller_disable_before_its_return_arrives",
     "baseline_red": "detector-7b-red.json",
     "stdout": "[lua] allocation sinking: off (a captured state allocates every table)\n[net-lockstep-selftest] held_host_handoff future_return=0 gone=0 initial_disabled=0 disabled=0 mode=2 producer=2\n[lua] allocation sinking: on\n[lua] allocation sinking: off (a captured state allocates every table)\n[net-lockstep-selftest] held_host_handoff future_return=0 gone=0 initial_disabled=1 disabled=1 mode=2 producer=2\n[lua] allocation sinking: on\n[lua] allocation sinking: off (a captured state allocates every table)\n[net-lockstep-selftest] held_host_handoff future_return=1 gone=0 initial_disabled=0 disabled=0 mode=2 producer=2\n[lua] allocation sinking: on\n[lua] allocation sinking: off (a captured state allocates every table)\n[net-lockstep-selftest] held_host_handoff future_return=1 gone=0 initial_disabled=1 disabled=1 mode=2 producer=2\n[lua] allocation sinking: on\n[net-session-plane-selftest] PASS a_held_host_preserves_controller_disable_before_its_return_arrives\n[net-session-plane-selftest] PASS\n",
-    "runner": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-held-host-green/net-session-plane-selftest",
+    "runner": "retained-evidence/A-held-host-green/net-session-plane-selftest",
     "green": true
   },
   "native": {
@@ -43,7 +43,7 @@
         710,
         790
       ],
-      "binary": "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand",
+      "binary": "build-gcc/CortexCommand",
       "binary_sha256": "21f906900ee71228ca18786fbfdc98bdfa1bb277c0e5016e5c441444a16a5795",
       "quiet_samples": [
         {
@@ -367,8 +367,8 @@
       "complete": true,
       "finished": "2026-10-17 10:30:12 AM MST",
       "peer_hashes": {
-        "first": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/host_trace.json",
-        "second": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/client_trace.json",
+        "first": "retained-evidence/A-native-host-hold-green/01-30ms/host_trace.json",
+        "second": "retained-evidence/A-native-host-hold-green/01-30ms/client_trace.json",
         "cross_peer": true,
         "sim_gated_pass": true,
         "existing_comparator": {
@@ -503,22 +503,22 @@
         "runner_pid": 23432,
         "platform": "linux",
         "argv": [
-          "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand",
+          "build-gcc/CortexCommand",
           "-seed",
           "42",
           "-max-ticks",
           "1200",
           "-tick-hashes",
           "-out",
-          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/host_trace.json",
+          "retained-evidence/A-native-host-hold-green/01-30ms/host_trace.json",
           "-input-script",
-          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/input.txt",
+          "retained-evidence/A-native-host-hold-green/01-30ms/input.txt",
           "-feel-render-settings",
-          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/host/runtime/Userdata/FeelRender.ini",
+          "retained-evidence/A-native-host-hold-green/01-30ms/host/runtime/Userdata/FeelRender.ini",
           "-feel-measure",
-          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/host/feel",
+          "retained-evidence/A-native-host-hold-green/01-30ms/host/feel",
           "-controller-debug-dump",
-          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/host_controller.jsonl",
+          "retained-evidence/A-native-host-hold-green/01-30ms/host_controller.jsonl",
           "-controller-debug-ticks",
           "710-790",
           "-net-match-service-e2e",
@@ -540,14 +540,14 @@
           "-net-fake-lag",
           "15",
           "-net-reconnect-ticket",
-          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/host.ticket",
+          "retained-evidence/A-native-host-hold-green/01-30ms/host.ticket",
           "-net-match-report",
-          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/host_report.json",
+          "retained-evidence/A-native-host-hold-green/01-30ms/host_report.json",
           "-net-test-live-stall",
           "600:2000",
           "-net-host"
         ],
-        "cwd": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/host/runtime",
+        "cwd": "retained-evidence/A-native-host-hold-green/01-30ms/host/runtime",
         "timeout_seconds": 900,
         "private_desktop": "n/a",
         "input_desktop_before": "n/a",
@@ -559,15 +559,15 @@
           "DISPLAY": ":0",
           "CC_TEST_FEEL_HEADED": "1",
           "CCCP_TEST_SINGLE_SCREEN": "1",
-          "CCCP_TEST_SCREEN_WATCHES": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/screen-watches.txt",
+          "CCCP_TEST_SCREEN_WATCHES": "retained-evidence/A-native-host-hold-green/01-30ms/screen-watches.txt",
           "CC_TEST_VSYNC_OFF": "1",
           "PYTHONDONTWRITEBYTECODE": "1",
           "CC_TEST_NET_MATCH_E2E_WAIT_PEERS": "1",
           "CC_TEST_DELAY_APPLY_DETAILS": "1",
           "CC_SIM_DUMP": "710:790",
-          "TEMP": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/host/runtime/Temp",
-          "TMP": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/host/runtime/Temp",
-          "TMPDIR": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/host/runtime/Temp",
+          "TEMP": "retained-evidence/A-native-host-hold-green/01-30ms/host/runtime/Temp",
+          "TMP": "retained-evidence/A-native-host-hold-green/01-30ms/host/runtime/Temp",
+          "TMPDIR": "retained-evidence/A-native-host-hold-green/01-30ms/host/runtime/Temp",
           "SDL_VIDEODRIVER": "x11",
           "CC_TEST_CRASH_DUMP": "crash.dmp"
         },
@@ -578,7 +578,7 @@
           {
             "check": "exe_exists",
             "ok": true,
-            "detail": "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand"
+            "detail": "build-gcc/CortexCommand"
           },
           {
             "check": "exe_sha256_recorded",
@@ -588,22 +588,22 @@
           {
             "check": "cwd_exists",
             "ok": true,
-            "detail": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/host/runtime"
+            "detail": "retained-evidence/A-native-host-hold-green/01-30ms/host/runtime"
           },
           {
             "check": "data_junction_resolves",
             "ok": true,
-            "detail": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/host/runtime/Data -> /home/erol/cortex-workers/session-plane-engineer/Data"
+            "detail": "retained-evidence/A-native-host-hold-green/01-30ms/host/runtime/Data -> Data"
           },
           {
             "check": "userdata_writable",
             "ok": true,
-            "detail": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/host/runtime/Userdata"
+            "detail": "retained-evidence/A-native-host-hold-green/01-30ms/host/runtime/Userdata"
           },
           {
             "check": "out_dir_private_writable",
             "ok": true,
-            "detail": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/host"
+            "detail": "retained-evidence/A-native-host-hold-green/01-30ms/host"
           },
           {
             "check": "lane_scripts_desktop_free",
@@ -612,12 +612,12 @@
           }
         ],
         "evidence_expected": [
-          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/host_trace.json",
-          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/host/feel/raw.jsonl",
-          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/host_report.json"
+          "retained-evidence/A-native-host-hold-green/01-30ms/host_trace.json",
+          "retained-evidence/A-native-host-hold-green/01-30ms/host/feel/raw.jsonl",
+          "retained-evidence/A-native-host-hold-green/01-30ms/host_report.json"
         ],
         "hop": null,
-        "exe_path": "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand",
+        "exe_path": "build-gcc/CortexCommand",
         "exe_bytes": 68629656,
         "exe_mtime_utc": "2026-10-17T17:29:08.878487+00:00",
         "exe_sha256": "21f906900ee71228ca18786fbfdc98bdfa1bb277c0e5016e5c441444a16a5795",
@@ -638,9 +638,9 @@
         "last_verdict": null,
         "verdict_present": false,
         "evidence_present": [
-          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/host_trace.json",
-          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/host/feel/raw.jsonl",
-          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/host_report.json"
+          "retained-evidence/A-native-host-hold-green/01-30ms/host_trace.json",
+          "retained-evidence/A-native-host-hold-green/01-30ms/host/feel/raw.jsonl",
+          "retained-evidence/A-native-host-hold-green/01-30ms/host_report.json"
         ],
         "evidence_missing": [],
         "evidence_complete": true,
@@ -652,22 +652,22 @@
         "runner_pid": 23432,
         "platform": "linux",
         "argv": [
-          "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand",
+          "build-gcc/CortexCommand",
           "-seed",
           "42",
           "-max-ticks",
           "1200",
           "-tick-hashes",
           "-out",
-          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/client_trace.json",
+          "retained-evidence/A-native-host-hold-green/01-30ms/client_trace.json",
           "-input-script",
-          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/input.txt",
+          "retained-evidence/A-native-host-hold-green/01-30ms/input.txt",
           "-feel-render-settings",
-          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/client/runtime/Userdata/FeelRender.ini",
+          "retained-evidence/A-native-host-hold-green/01-30ms/client/runtime/Userdata/FeelRender.ini",
           "-feel-measure",
-          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/client/feel",
+          "retained-evidence/A-native-host-hold-green/01-30ms/client/feel",
           "-controller-debug-dump",
-          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/client_controller.jsonl",
+          "retained-evidence/A-native-host-hold-green/01-30ms/client_controller.jsonl",
           "-controller-debug-ticks",
           "710-790",
           "-net-match-service-e2e",
@@ -689,13 +689,13 @@
           "-net-fake-lag",
           "15",
           "-net-reconnect-ticket",
-          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/client.ticket",
+          "retained-evidence/A-native-host-hold-green/01-30ms/client.ticket",
           "-net-match-report",
-          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/client_report.json",
+          "retained-evidence/A-native-host-hold-green/01-30ms/client_report.json",
           "-net-join",
           "127.0.0.1"
         ],
-        "cwd": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/client/runtime",
+        "cwd": "retained-evidence/A-native-host-hold-green/01-30ms/client/runtime",
         "timeout_seconds": 900,
         "private_desktop": "n/a",
         "input_desktop_before": "n/a",
@@ -707,15 +707,15 @@
           "DISPLAY": ":0",
           "CC_TEST_FEEL_HEADED": "1",
           "CCCP_TEST_SINGLE_SCREEN": "1",
-          "CCCP_TEST_SCREEN_WATCHES": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/screen-watches.txt",
+          "CCCP_TEST_SCREEN_WATCHES": "retained-evidence/A-native-host-hold-green/01-30ms/screen-watches.txt",
           "CC_TEST_VSYNC_OFF": "1",
           "PYTHONDONTWRITEBYTECODE": "1",
           "CC_TEST_NET_MATCH_E2E_WAIT_PEERS": "1",
           "CC_TEST_DELAY_APPLY_DETAILS": "1",
           "CC_SIM_DUMP": "710:790",
-          "TEMP": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/client/runtime/Temp",
-          "TMP": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/client/runtime/Temp",
-          "TMPDIR": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/client/runtime/Temp",
+          "TEMP": "retained-evidence/A-native-host-hold-green/01-30ms/client/runtime/Temp",
+          "TMP": "retained-evidence/A-native-host-hold-green/01-30ms/client/runtime/Temp",
+          "TMPDIR": "retained-evidence/A-native-host-hold-green/01-30ms/client/runtime/Temp",
           "SDL_VIDEODRIVER": "x11",
           "CC_TEST_CRASH_DUMP": "crash.dmp"
         },
@@ -726,7 +726,7 @@
           {
             "check": "exe_exists",
             "ok": true,
-            "detail": "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand"
+            "detail": "build-gcc/CortexCommand"
           },
           {
             "check": "exe_sha256_recorded",
@@ -736,22 +736,22 @@
           {
             "check": "cwd_exists",
             "ok": true,
-            "detail": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/client/runtime"
+            "detail": "retained-evidence/A-native-host-hold-green/01-30ms/client/runtime"
           },
           {
             "check": "data_junction_resolves",
             "ok": true,
-            "detail": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/client/runtime/Data -> /home/erol/cortex-workers/session-plane-engineer/Data"
+            "detail": "retained-evidence/A-native-host-hold-green/01-30ms/client/runtime/Data -> Data"
           },
           {
             "check": "userdata_writable",
             "ok": true,
-            "detail": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/client/runtime/Userdata"
+            "detail": "retained-evidence/A-native-host-hold-green/01-30ms/client/runtime/Userdata"
           },
           {
             "check": "out_dir_private_writable",
             "ok": true,
-            "detail": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/client"
+            "detail": "retained-evidence/A-native-host-hold-green/01-30ms/client"
           },
           {
             "check": "lane_scripts_desktop_free",
@@ -760,12 +760,12 @@
           }
         ],
         "evidence_expected": [
-          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/client_trace.json",
-          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/client/feel/raw.jsonl",
-          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/client_report.json"
+          "retained-evidence/A-native-host-hold-green/01-30ms/client_trace.json",
+          "retained-evidence/A-native-host-hold-green/01-30ms/client/feel/raw.jsonl",
+          "retained-evidence/A-native-host-hold-green/01-30ms/client_report.json"
         ],
         "hop": null,
-        "exe_path": "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand",
+        "exe_path": "build-gcc/CortexCommand",
         "exe_bytes": 68629656,
         "exe_mtime_utc": "2026-10-17T17:29:08.878487+00:00",
         "exe_sha256": "21f906900ee71228ca18786fbfdc98bdfa1bb277c0e5016e5c441444a16a5795",
@@ -788,9 +788,9 @@
         "last_verdict": "[net-match] state transfer complete: 1753880 bytes",
         "verdict_present": true,
         "evidence_present": [
-          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/client_trace.json",
-          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/client/feel/raw.jsonl",
-          "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/A-native-host-hold-green/01-30ms/client_report.json"
+          "retained-evidence/A-native-host-hold-green/01-30ms/client_trace.json",
+          "retained-evidence/A-native-host-hold-green/01-30ms/client/feel/raw.jsonl",
+          "retained-evidence/A-native-host-hold-green/01-30ms/client_report.json"
         ],
         "evidence_missing": [],
         "evidence_complete": true,

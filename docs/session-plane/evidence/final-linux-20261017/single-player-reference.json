@@ -1,6 +1,6 @@
 {
-  "first": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-cadence-repeat-matrix/01-sp/sp_trace.json",
-  "second": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-B-repeat-matrix/01-sp/sp_trace.json",
+  "first": "retained-evidence/B-cadence-repeat-matrix/01-sp/sp_trace.json",
+  "second": "retained-evidence/final-B-repeat-matrix/01-sp/sp_trace.json",
   "cross_peer": false,
   "sim_gated_pass": true,
   "existing_comparator": {
@@ -120,11 +120,11 @@
   "control_note": "Pre-checkpoint-merge SP arm on5a0ada0c; current source only changes active lockstep cadence, estimator, overlays and preview-report counters.",
   "current_binary_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
   "control_receipt": {
-    "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-cadence-repeat-matrix/01-sp/sp_trace.json",
+    "path": "retained-evidence/B-cadence-repeat-matrix/01-sp/sp_trace.json",
     "sha256": "aa98c115355ae727cc078094d4c16dede3d4cbaffc67e1c042fe0e9f1712f0e1"
   },
   "current_receipt": {
-    "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-B-repeat-matrix/01-sp/sp_trace.json",
+    "path": "retained-evidence/final-B-repeat-matrix/01-sp/sp_trace.json",
     "sha256": "87a486c75b390af4076f33b200de04cda416b485ddabd36edf3376270b1624d8"
   },
   "single_player_reference": {

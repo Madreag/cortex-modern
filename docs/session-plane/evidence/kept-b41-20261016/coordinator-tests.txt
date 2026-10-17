@@ -1,4 +1,4 @@
-SOURCE /home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/kept-b41-final-validation/suite-54/net-lockstep-selftest/stdout.log
+SOURCE retained-evidence/kept-b41-final-validation/suite-54/net-lockstep-selftest/stdout.log
 [net-lockstep-selftest] held_controller_hash=341f273d0a3745ccfbe686c22a2c027c872800d8d49f0b322a749a8b8b156c7b mode=1 disabled=0
 [net-lockstep-selftest] held_controller_hash=8402f922f66c0e83aef9ef46d356c3423a65ef5b633b7c5be6d409f00c7237bd mode=1 disabled=1
 [net-lockstep-selftest] held_controller_hash=627d0fe983dc78d62264971d052ad19d4df63932f271eef219c5c804795424f2 mode=2 disabled=1
@@ -899,7 +899,7 @@ SOURCE /home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07loca
 [net-lockstep-selftest] PASS producing_pass_ends_the_set_it_began_with
 [net-lockstep-selftest] readded_actor_begins_from_the_wire owner={uid=1048738 mask=65536 fire=1 jump=0} peer={uid=1048739 mask=65536 fire=1 jump=0}
 [net-lockstep-selftest] PASS readded_actor_begins_from_the_wire
-SOURCE /home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/kept-b41-final-validation/suite-54/net-lockstep-selftest/stderr.log
+SOURCE retained-evidence/kept-b41-final-validation/suite-54/net-lockstep-selftest/stderr.log
 [net-lockstep-selftest] FAIL two_internet_client_loop_3s_keepalive_host_keeps_the_bound: non-lagging peer 1 stalled 128ms past its bound
 [net-lockstep-selftest] FAIL host_loss_directory_referee: non-lagging peer 2 stalled 101ms past its bound
 [net-lockstep-selftest] FAIL: a reporting row failed

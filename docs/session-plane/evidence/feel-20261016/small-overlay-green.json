@@ -13,7 +13,7 @@
       640,
       540
     ],
-    "binary": "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand",
+    "binary": "build-gcc/CortexCommand",
     "binary_sha256": "a795165de949c6b5018ec0cd75843734a43257f4525b36f27440f837001caf32",
     "quiet_samples": [
       {
@@ -346,8 +346,8 @@
     "complete": true,
     "finished": "2026-10-16 11:03:16 PM MST",
     "peer_hashes": {
-      "first": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B4-small-overlay-green/01-30ms/host_trace.json",
-      "second": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B4-small-overlay-green/01-30ms/client_trace.json",
+      "first": "retained-evidence/B4-small-overlay-green/01-30ms/host_trace.json",
+      "second": "retained-evidence/B4-small-overlay-green/01-30ms/client_trace.json",
       "cross_peer": true,
       "sim_gated_pass": true,
       "existing_comparator": {
@@ -479,7 +479,7 @@
   "peers": [
     {
       "peer": "host",
-      "raw": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B4-small-overlay-green/01-30ms/host/feel/raw.jsonl.gz",
+      "raw": "retained-evidence/B4-small-overlay-green/01-30ms/host/feel/raw.jsonl.gz",
       "raw_sha256": "4cc55f00db91ca36f67a5f467b99bc438ecb86df9c686519fe509d990ce5faeb",
       "delay_min": 4,
       "delay_max": 5,
@@ -542,7 +542,7 @@
     },
     {
       "peer": "client",
-      "raw": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B4-small-overlay-green/01-30ms/client/feel/raw.jsonl.gz",
+      "raw": "retained-evidence/B4-small-overlay-green/01-30ms/client/feel/raw.jsonl.gz",
       "raw_sha256": "6c4f5e743602282c122f223fd6e871951d3c4415ee55c011e24846f3ea66dfa3",
       "delay_min": 4,
       "delay_max": 5,
@@ -606,7 +606,7 @@
   ],
   "ui": {
     "exe_sha256": "a795165de949c6b5018ec0cd75843734a43257f4525b36f27440f837001caf32",
-    "repo": "/home/erol/cortex-workers/session-plane-engineer",
+    "repo": ".",
     "passed": 1,
     "total": 1,
     "quiet_rows": [
@@ -648,7 +648,7 @@
   },
   "menu": {
     "exe_sha256": "a795165de949c6b5018ec0cd75843734a43257f4525b36f27440f837001caf32",
-    "repo": "/home/erol/cortex-workers/session-plane-engineer",
+    "repo": ".",
     "passed": 1,
     "total": 1,
     "quiet_rows": [],

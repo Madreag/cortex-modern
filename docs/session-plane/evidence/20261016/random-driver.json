@@ -1,6 +1,6 @@
 {
   "exe_sha256": "8fb5b753511cfa6e4904bd4301d6fd9fbbdd72cb8daf2449e8042f4954124762",
-  "repo": "/home/erol/cortex-workers/session-plane-engineer",
+  "repo": ".",
   "passed": 0,
   "total": 2,
   "quiet_rows": [],
@@ -26,10 +26,10 @@
       "reason": "exit_code=1",
       "binary": "8fb5b753511cfa6e4904bd4301d6fd9fbbdd72cb8daf2449e8042f4954124762",
       "fixed_failure_report": {
-        "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/deferred-return-tip-final-validation/random-5000/net-session-plane-selftest/fixed-failure-groups.txt",
+        "path": "retained-evidence/deferred-return-tip-final-validation/random-5000/net-session-plane-selftest/fixed-failure-groups.txt",
         "binary": "8fb5b753511cfa6e4904bd4301d6fd9fbbdd72cb8daf2449e8042f4954124762",
         "digest": "753bdfad0bf0eeffffa805ca49335deacfd35421135757a9116d43860073cde5",
-        "suite_root": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/deferred-return-tip-final-validation/random-5000",
+        "suite_root": "retained-evidence/deferred-return-tip-final-validation/random-5000",
         "saved_cases_ran": 108
       },
       "row_elapsed_s": 122.00237787899096,
@@ -59,10 +59,10 @@
       "binary": "8fb5b753511cfa6e4904bd4301d6fd9fbbdd72cb8daf2449e8042f4954124762",
       "schedule_summary": "[net-session-plane-selftest] random_hold_schedules schedules=5000 ran=5000 seeds=1..5000",
       "fixed_failure_report": {
-        "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/deferred-return-tip-final-validation/random-5000/net-session-plane-selftest/fixed-failure-groups.txt",
+        "path": "retained-evidence/deferred-return-tip-final-validation/random-5000/net-session-plane-selftest/fixed-failure-groups.txt",
         "binary": "8fb5b753511cfa6e4904bd4301d6fd9fbbdd72cb8daf2449e8042f4954124762",
         "digest": "753bdfad0bf0eeffffa805ca49335deacfd35421135757a9116d43860073cde5",
-        "suite_root": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/deferred-return-tip-final-validation/random-5000",
+        "suite_root": "retained-evidence/deferred-return-tip-final-validation/random-5000",
         "saved_cases_ran": 108
       },
       "row_elapsed_s": 2361.693313141004,

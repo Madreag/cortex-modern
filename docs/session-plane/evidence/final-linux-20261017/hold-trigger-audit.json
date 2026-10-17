@@ -4,7 +4,7 @@
   "pass_check": true,
   "records": [
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/net-session-plane-selftest/stdout.log",
+      "path": "retained-evidence/final-suite-55/net-session-plane-selftest/stdout.log",
       "sha256": "abbbb4f75302571031cff51c6f360a862d7c160f79a7556a731f620428e4b6c9",
       "bytes": 8966046,
       "installed_lines": 517,
@@ -27,7 +27,7 @@
       "missing_required_fields": []
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/net-session-plane-hold-schedules-selftest/stdout.log",
+      "path": "retained-evidence/final-suite-55/net-session-plane-hold-schedules-selftest/stdout.log",
       "sha256": "d5b315fb28262dad5031c435abe82bd3cb627e8318f3402ee770be348327aa73",
       "bytes": 37860,
       "installed_lines": 4,
@@ -42,7 +42,7 @@
       "missing_required_fields": []
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-slow-host/2-seats-referee-0-200ms/net-session-plane-selftest/stdout.log",
+      "path": "retained-evidence/final-slow-host/2-seats-referee-0-200ms/net-session-plane-selftest/stdout.log",
       "sha256": "dac8cee5fa8c1d15dd33295d3cd6d2fe26ecb65beb87a4535346ae9887f62525",
       "bytes": 60667,
       "installed_lines": 2,
@@ -57,7 +57,7 @@
       "missing_required_fields": []
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-slow-host/2-seats-referee-0-30ms/net-session-plane-selftest/stdout.log",
+      "path": "retained-evidence/final-slow-host/2-seats-referee-0-30ms/net-session-plane-selftest/stdout.log",
       "sha256": "9eeeb2f3b63096d9a1e186a36c9fdec1bc79a6d23aa07260fff306acc2e6bb69",
       "bytes": 51705,
       "installed_lines": 2,
@@ -72,7 +72,7 @@
       "missing_required_fields": []
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-slow-host/2-seats-referee-1-200ms/net-session-plane-selftest/stdout.log",
+      "path": "retained-evidence/final-slow-host/2-seats-referee-1-200ms/net-session-plane-selftest/stdout.log",
       "sha256": "f6199436ba55fcdd1ca45c4bd5af0d2318e0c73dc3c510d1c12aa7f8c01a502c",
       "bytes": 60945,
       "installed_lines": 2,
@@ -87,7 +87,7 @@
       "missing_required_fields": []
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-slow-host/2-seats-referee-1-30ms/net-session-plane-selftest/stdout.log",
+      "path": "retained-evidence/final-slow-host/2-seats-referee-1-30ms/net-session-plane-selftest/stdout.log",
       "sha256": "acd26905409724d190b1fd09a76da6817c43a825fd785a2c805ee869a0de62ab",
       "bytes": 51791,
       "installed_lines": 2,
@@ -102,7 +102,7 @@
       "missing_required_fields": []
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-slow-host/4-seats-referee-1-200ms/net-session-plane-selftest/stdout.log",
+      "path": "retained-evidence/final-slow-host/4-seats-referee-1-200ms/net-session-plane-selftest/stdout.log",
       "sha256": "35769f78840d57d361cad2515172b9c1584ea48e16219889f238639ed9e00af5",
       "bytes": 231051,
       "installed_lines": 8,
@@ -120,7 +120,7 @@
       "missing_required_fields": []
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-slow-host/4-seats-referee-1-30ms/net-session-plane-selftest/stdout.log",
+      "path": "retained-evidence/final-slow-host/4-seats-referee-1-30ms/net-session-plane-selftest/stdout.log",
       "sha256": "125edbbbd79a585f511b97acb6b6579563c5cd0d4b006cb60bc82a53c6646ec2",
       "bytes": 81565,
       "installed_lines": 4,
@@ -135,7 +135,7 @@
       "missing_required_fields": []
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-referee-100ms-floor/net-session-plane-selftest/stdout.log",
+      "path": "retained-evidence/final-referee-100ms-floor/net-session-plane-selftest/stdout.log",
       "sha256": "0b0954a18a2e98bad0562cfcb115c78bb35addb7fa6f29b16ec7a4a06e2f93d5",
       "bytes": 17372,
       "installed_lines": 2,
@@ -150,7 +150,7 @@
       "missing_required_fields": []
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-referee-300ms-floor/net-session-plane-selftest/stdout.log",
+      "path": "retained-evidence/final-referee-300ms-floor/net-session-plane-selftest/stdout.log",
       "sha256": "1052c529bb6ddd6f1868c7a6f320d0d5be1319c038a9fd791a4caaf17bbb5243",
       "bytes": 18802,
       "installed_lines": 2,
@@ -165,7 +165,7 @@
       "missing_required_fields": []
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-A-C-own-hold/01-30ms/client/stdout.log",
+      "path": "retained-evidence/final-A-C-own-hold/01-30ms/client/stdout.log",
       "sha256": "0d538e4eacc3fbbdc81f40c9aaa54bf223ca2d037b71bb082852d1e65c692208",
       "bytes": 760338,
       "installed_lines": 1,
@@ -178,7 +178,7 @@
       "missing_required_fields": []
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-A-C-own-hold/01-30ms/host/stdout.log",
+      "path": "retained-evidence/final-A-C-own-hold/01-30ms/host/stdout.log",
       "sha256": "5e356aa67160538b88a5557716a7196a7845337121988becf222b391c1bd69cd",
       "bytes": 777917,
       "installed_lines": 1,

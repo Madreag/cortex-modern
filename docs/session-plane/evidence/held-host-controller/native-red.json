@@ -25,7 +25,7 @@
       720,
       738
     ],
-    "binary": "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand",
+    "binary": "build-gcc/CortexCommand",
     "binary_sha256": "9dbd3fac6e20ec6d6b8148920d00a5dec25281d455bab5b4f34550c61e5fed5d",
     "quiet_samples": [
       {

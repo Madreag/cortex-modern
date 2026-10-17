@@ -1,11 +1,11 @@
 {
   "scope": "Only the explicit current final-executions.json jobs, including nested suite runs and two-peer native cases. Older similarly named directories excluded.",
-  "execution_receipt": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-executions.json",
+  "execution_receipt": "retained-evidence/final-executions.json",
   "count": 89,
   "all_headed": true,
   "records": [
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-A-detector/net-session-plane-selftest/launch.json",
+      "path": "retained-evidence/final-A-detector/net-session-plane-selftest/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -13,7 +13,7 @@
       "exit_code": 0
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-B1-detector/net-session-plane-selftest/launch.json",
+      "path": "retained-evidence/final-B1-detector/net-session-plane-selftest/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -21,7 +21,7 @@
       "exit_code": 0
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-smoke/capture-window-selftest/launch.json",
+      "path": "retained-evidence/final-smoke/capture-window-selftest/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -29,7 +29,7 @@
       "exit_code": 0
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-smoke/menu-automation-selftest/launch.json",
+      "path": "retained-evidence/final-smoke/menu-automation-selftest/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -37,7 +37,7 @@
       "exit_code": 0
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-smoke/preview-invariance-selftest/launch.json",
+      "path": "retained-evidence/final-smoke/preview-invariance-selftest/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -45,7 +45,7 @@
       "exit_code": 0
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-smoke/single-player-reference-selftest/launch.json",
+      "path": "retained-evidence/final-smoke/single-player-reference-selftest/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -53,7 +53,7 @@
       "exit_code": 0
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-A-C-own-hold/01-30ms/client/launch.json",
+      "path": "retained-evidence/final-A-C-own-hold/01-30ms/client/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -61,7 +61,7 @@
       "exit_code": 0
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-A-C-own-hold/01-30ms/host/launch.json",
+      "path": "retained-evidence/final-A-C-own-hold/01-30ms/host/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -69,7 +69,7 @@
       "exit_code": 0
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-B-repeat-matrix/01-200ms/client/launch.json",
+      "path": "retained-evidence/final-B-repeat-matrix/01-200ms/client/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -77,7 +77,7 @@
       "exit_code": 0
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-B-repeat-matrix/01-200ms/host/launch.json",
+      "path": "retained-evidence/final-B-repeat-matrix/01-200ms/host/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -85,7 +85,7 @@
       "exit_code": 0
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-B-repeat-matrix/01-30ms/client/launch.json",
+      "path": "retained-evidence/final-B-repeat-matrix/01-30ms/client/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -93,7 +93,7 @@
       "exit_code": 0
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-B-repeat-matrix/01-30ms/host/launch.json",
+      "path": "retained-evidence/final-B-repeat-matrix/01-30ms/host/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -101,7 +101,7 @@
       "exit_code": 0
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-B-repeat-matrix/01-sp/sp/launch.json",
+      "path": "retained-evidence/final-B-repeat-matrix/01-sp/sp/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -109,7 +109,7 @@
       "exit_code": 0
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-B-repeat-matrix/02-200ms/client/launch.json",
+      "path": "retained-evidence/final-B-repeat-matrix/02-200ms/client/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -117,7 +117,7 @@
       "exit_code": 0
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-B-repeat-matrix/02-200ms/host/launch.json",
+      "path": "retained-evidence/final-B-repeat-matrix/02-200ms/host/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -125,7 +125,7 @@
       "exit_code": 0
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-B-repeat-matrix/02-30ms/client/launch.json",
+      "path": "retained-evidence/final-B-repeat-matrix/02-30ms/client/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -133,7 +133,7 @@
       "exit_code": 0
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-B-repeat-matrix/02-30ms/host/launch.json",
+      "path": "retained-evidence/final-B-repeat-matrix/02-30ms/host/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -141,7 +141,7 @@
       "exit_code": 0
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-B-repeat-matrix/02-sp/sp/launch.json",
+      "path": "retained-evidence/final-B-repeat-matrix/02-sp/sp/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -149,7 +149,7 @@
       "exit_code": 0
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-B-repeat-matrix/03-200ms/client/launch.json",
+      "path": "retained-evidence/final-B-repeat-matrix/03-200ms/client/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -157,7 +157,7 @@
       "exit_code": 0
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-B-repeat-matrix/03-200ms/host/launch.json",
+      "path": "retained-evidence/final-B-repeat-matrix/03-200ms/host/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -165,7 +165,7 @@
       "exit_code": 0
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-B-repeat-matrix/03-30ms/client/launch.json",
+      "path": "retained-evidence/final-B-repeat-matrix/03-30ms/client/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -173,7 +173,7 @@
       "exit_code": 0
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-B-repeat-matrix/03-30ms/host/launch.json",
+      "path": "retained-evidence/final-B-repeat-matrix/03-30ms/host/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -181,7 +181,7 @@
       "exit_code": 0
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-B-repeat-matrix/03-sp/sp/launch.json",
+      "path": "retained-evidence/final-B-repeat-matrix/03-sp/sp/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -189,7 +189,7 @@
       "exit_code": 0
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-B-live-resize/01-30ms/client/launch.json",
+      "path": "retained-evidence/final-B-live-resize/01-30ms/client/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -197,7 +197,7 @@
       "exit_code": 0
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-B-live-resize/01-30ms/host/launch.json",
+      "path": "retained-evidence/final-B-live-resize/01-30ms/host/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -205,7 +205,7 @@
       "exit_code": 0
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-slow-host/2-seats-referee-0-30ms/net-session-plane-selftest/launch.json",
+      "path": "retained-evidence/final-slow-host/2-seats-referee-0-30ms/net-session-plane-selftest/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -213,7 +213,7 @@
       "exit_code": 0
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-slow-host/2-seats-referee-1-30ms/net-session-plane-selftest/launch.json",
+      "path": "retained-evidence/final-slow-host/2-seats-referee-1-30ms/net-session-plane-selftest/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -221,7 +221,7 @@
       "exit_code": 0
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-slow-host/4-seats-referee-1-30ms/net-session-plane-selftest/launch.json",
+      "path": "retained-evidence/final-slow-host/4-seats-referee-1-30ms/net-session-plane-selftest/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -229,7 +229,7 @@
       "exit_code": 0
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-slow-host/2-seats-referee-0-200ms/net-session-plane-selftest/launch.json",
+      "path": "retained-evidence/final-slow-host/2-seats-referee-0-200ms/net-session-plane-selftest/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -237,7 +237,7 @@
       "exit_code": 0
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-slow-host/2-seats-referee-1-200ms/net-session-plane-selftest/launch.json",
+      "path": "retained-evidence/final-slow-host/2-seats-referee-1-200ms/net-session-plane-selftest/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -245,15 +245,7 @@
       "exit_code": 0
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-slow-host/4-seats-referee-1-200ms/net-session-plane-selftest/launch.json",
-      "visible_window": true,
-      "headless_env": null,
-      "started": true,
-      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
-      "exit_code": 1
-    },
-    {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-referee-100ms-floor/net-session-plane-selftest/launch.json",
+      "path": "retained-evidence/final-slow-host/4-seats-referee-1-200ms/net-session-plane-selftest/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -261,7 +253,7 @@
       "exit_code": 1
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-referee-300ms-floor/net-session-plane-selftest/launch.json",
+      "path": "retained-evidence/final-referee-100ms-floor/net-session-plane-selftest/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -269,55 +261,7 @@
       "exit_code": 1
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/camera-null-scene-selftest/launch.json",
-      "visible_window": true,
-      "headless_env": null,
-      "started": true,
-      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
-      "exit_code": 0
-    },
-    {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/capture-window-selftest/launch.json",
-      "visible_window": true,
-      "headless_env": null,
-      "started": true,
-      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
-      "exit_code": 0
-    },
-    {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/combo-key-selftest/launch.json",
-      "visible_window": true,
-      "headless_env": null,
-      "started": true,
-      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
-      "exit_code": 0
-    },
-    {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/controller-frame-selftest/launch.json",
-      "visible_window": true,
-      "headless_env": null,
-      "started": true,
-      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
-      "exit_code": 0
-    },
-    {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/cow-checkpoint-selftest/launch.json",
-      "visible_window": true,
-      "headless_env": null,
-      "started": true,
-      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
-      "exit_code": 0
-    },
-    {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/deterministic-math-selftest/launch.json",
-      "visible_window": true,
-      "headless_env": null,
-      "started": true,
-      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
-      "exit_code": 0
-    },
-    {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/ext-validate-version-selftest/run/launch.json",
+      "path": "retained-evidence/final-referee-300ms-floor/net-session-plane-selftest/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -325,7 +269,7 @@
       "exit_code": 1
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/float-text-selftest/launch.json",
+      "path": "retained-evidence/final-suite-55/camera-null-scene-selftest/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -333,7 +277,7 @@
       "exit_code": 0
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/fp-environment-selftest/launch.json",
+      "path": "retained-evidence/final-suite-55/capture-window-selftest/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -341,7 +285,7 @@
       "exit_code": 0
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/frame-recorder-selftest/launch.json",
+      "path": "retained-evidence/final-suite-55/combo-key-selftest/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -349,7 +293,31 @@
       "exit_code": 0
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/headless-assert-continues-selftest/run/launch.json",
+      "path": "retained-evidence/final-suite-55/controller-frame-selftest/launch.json",
+      "visible_window": true,
+      "headless_env": null,
+      "started": true,
+      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
+      "exit_code": 0
+    },
+    {
+      "path": "retained-evidence/final-suite-55/cow-checkpoint-selftest/launch.json",
+      "visible_window": true,
+      "headless_env": null,
+      "started": true,
+      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
+      "exit_code": 0
+    },
+    {
+      "path": "retained-evidence/final-suite-55/deterministic-math-selftest/launch.json",
+      "visible_window": true,
+      "headless_env": null,
+      "started": true,
+      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
+      "exit_code": 0
+    },
+    {
+      "path": "retained-evidence/final-suite-55/ext-validate-version-selftest/run/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -357,7 +325,31 @@
       "exit_code": 1
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/headless-render-cap-selftest/run/launch.json",
+      "path": "retained-evidence/final-suite-55/float-text-selftest/launch.json",
+      "visible_window": true,
+      "headless_env": null,
+      "started": true,
+      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
+      "exit_code": 0
+    },
+    {
+      "path": "retained-evidence/final-suite-55/fp-environment-selftest/launch.json",
+      "visible_window": true,
+      "headless_env": null,
+      "started": true,
+      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
+      "exit_code": 0
+    },
+    {
+      "path": "retained-evidence/final-suite-55/frame-recorder-selftest/launch.json",
+      "visible_window": true,
+      "headless_env": null,
+      "started": true,
+      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
+      "exit_code": 0
+    },
+    {
+      "path": "retained-evidence/final-suite-55/headless-assert-continues-selftest/run/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -365,143 +357,7 @@
       "exit_code": 1
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/joystick-updater-selftest/launch.json",
-      "visible_window": true,
-      "headless_env": null,
-      "started": true,
-      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
-      "exit_code": 0
-    },
-    {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/limb-path-selftest/launch.json",
-      "visible_window": true,
-      "headless_env": null,
-      "started": true,
-      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
-      "exit_code": 0
-    },
-    {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/lua-numeric-policy-selftest/launch.json",
-      "visible_window": true,
-      "headless_env": null,
-      "started": true,
-      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
-      "exit_code": 0
-    },
-    {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/menu-automation-selftest/launch.json",
-      "visible_window": true,
-      "headless_env": null,
-      "started": true,
-      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
-      "exit_code": 0
-    },
-    {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/mod-api-shims-selftest/launch.json",
-      "visible_window": true,
-      "headless_env": null,
-      "started": true,
-      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
-      "exit_code": 0
-    },
-    {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/module-version-selftest/launch.json",
-      "visible_window": true,
-      "headless_env": null,
-      "started": true,
-      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
-      "exit_code": 0
-    },
-    {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/net-admission-selftest/launch.json",
-      "visible_window": true,
-      "headless_env": null,
-      "started": true,
-      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
-      "exit_code": 0
-    },
-    {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/net-auth-selftest/launch.json",
-      "visible_window": true,
-      "headless_env": null,
-      "started": true,
-      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
-      "exit_code": 0
-    },
-    {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/net-directory-selftest/launch.json",
-      "visible_window": true,
-      "headless_env": null,
-      "started": true,
-      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
-      "exit_code": 0
-    },
-    {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/net-identity-selftest/launch.json",
-      "visible_window": true,
-      "headless_env": null,
-      "started": true,
-      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
-      "exit_code": 0
-    },
-    {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/net-input-acceptance-selftest/launch.json",
-      "visible_window": true,
-      "headless_env": null,
-      "started": true,
-      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
-      "exit_code": 0
-    },
-    {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/net-input-acceptance-steady-selftest/launch.json",
-      "visible_window": true,
-      "headless_env": null,
-      "started": true,
-      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
-      "exit_code": 0
-    },
-    {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/net-lockstep-cli-selftest/client/launch.json",
-      "visible_window": true,
-      "headless_env": null,
-      "started": true,
-      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
-      "exit_code": 0
-    },
-    {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/net-lockstep-cli-selftest/host/launch.json",
-      "visible_window": true,
-      "headless_env": null,
-      "started": true,
-      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
-      "exit_code": 0
-    },
-    {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/net-lockstep-release-paths-selftest/launch.json",
-      "visible_window": true,
-      "headless_env": null,
-      "started": true,
-      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
-      "exit_code": 0
-    },
-    {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/net-lockstep-released-claims-selftest/launch.json",
-      "visible_window": true,
-      "headless_env": null,
-      "started": true,
-      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
-      "exit_code": 0
-    },
-    {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/net-lockstep-seat-admission-selftest/launch.json",
-      "visible_window": true,
-      "headless_env": null,
-      "started": true,
-      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
-      "exit_code": 0
-    },
-    {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/net-lockstep-seat-succession-selftest/launch.json",
+      "path": "retained-evidence/final-suite-55/headless-render-cap-selftest/run/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -509,7 +365,143 @@
       "exit_code": 1
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/net-lockstep-selftest/launch.json",
+      "path": "retained-evidence/final-suite-55/joystick-updater-selftest/launch.json",
+      "visible_window": true,
+      "headless_env": null,
+      "started": true,
+      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
+      "exit_code": 0
+    },
+    {
+      "path": "retained-evidence/final-suite-55/limb-path-selftest/launch.json",
+      "visible_window": true,
+      "headless_env": null,
+      "started": true,
+      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
+      "exit_code": 0
+    },
+    {
+      "path": "retained-evidence/final-suite-55/lua-numeric-policy-selftest/launch.json",
+      "visible_window": true,
+      "headless_env": null,
+      "started": true,
+      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
+      "exit_code": 0
+    },
+    {
+      "path": "retained-evidence/final-suite-55/menu-automation-selftest/launch.json",
+      "visible_window": true,
+      "headless_env": null,
+      "started": true,
+      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
+      "exit_code": 0
+    },
+    {
+      "path": "retained-evidence/final-suite-55/mod-api-shims-selftest/launch.json",
+      "visible_window": true,
+      "headless_env": null,
+      "started": true,
+      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
+      "exit_code": 0
+    },
+    {
+      "path": "retained-evidence/final-suite-55/module-version-selftest/launch.json",
+      "visible_window": true,
+      "headless_env": null,
+      "started": true,
+      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
+      "exit_code": 0
+    },
+    {
+      "path": "retained-evidence/final-suite-55/net-admission-selftest/launch.json",
+      "visible_window": true,
+      "headless_env": null,
+      "started": true,
+      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
+      "exit_code": 0
+    },
+    {
+      "path": "retained-evidence/final-suite-55/net-auth-selftest/launch.json",
+      "visible_window": true,
+      "headless_env": null,
+      "started": true,
+      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
+      "exit_code": 0
+    },
+    {
+      "path": "retained-evidence/final-suite-55/net-directory-selftest/launch.json",
+      "visible_window": true,
+      "headless_env": null,
+      "started": true,
+      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
+      "exit_code": 0
+    },
+    {
+      "path": "retained-evidence/final-suite-55/net-identity-selftest/launch.json",
+      "visible_window": true,
+      "headless_env": null,
+      "started": true,
+      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
+      "exit_code": 0
+    },
+    {
+      "path": "retained-evidence/final-suite-55/net-input-acceptance-selftest/launch.json",
+      "visible_window": true,
+      "headless_env": null,
+      "started": true,
+      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
+      "exit_code": 0
+    },
+    {
+      "path": "retained-evidence/final-suite-55/net-input-acceptance-steady-selftest/launch.json",
+      "visible_window": true,
+      "headless_env": null,
+      "started": true,
+      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
+      "exit_code": 0
+    },
+    {
+      "path": "retained-evidence/final-suite-55/net-lockstep-cli-selftest/client/launch.json",
+      "visible_window": true,
+      "headless_env": null,
+      "started": true,
+      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
+      "exit_code": 0
+    },
+    {
+      "path": "retained-evidence/final-suite-55/net-lockstep-cli-selftest/host/launch.json",
+      "visible_window": true,
+      "headless_env": null,
+      "started": true,
+      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
+      "exit_code": 0
+    },
+    {
+      "path": "retained-evidence/final-suite-55/net-lockstep-release-paths-selftest/launch.json",
+      "visible_window": true,
+      "headless_env": null,
+      "started": true,
+      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
+      "exit_code": 0
+    },
+    {
+      "path": "retained-evidence/final-suite-55/net-lockstep-released-claims-selftest/launch.json",
+      "visible_window": true,
+      "headless_env": null,
+      "started": true,
+      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
+      "exit_code": 0
+    },
+    {
+      "path": "retained-evidence/final-suite-55/net-lockstep-seat-admission-selftest/launch.json",
+      "visible_window": true,
+      "headless_env": null,
+      "started": true,
+      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
+      "exit_code": 0
+    },
+    {
+      "path": "retained-evidence/final-suite-55/net-lockstep-seat-succession-selftest/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -517,55 +509,7 @@
       "exit_code": 1
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/net-match-selftest/launch.json",
-      "visible_window": true,
-      "headless_env": null,
-      "started": true,
-      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
-      "exit_code": 0
-    },
-    {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/net-protocol-selftest/launch.json",
-      "visible_window": true,
-      "headless_env": null,
-      "started": true,
-      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
-      "exit_code": 0
-    },
-    {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/net-reconnect-selftest/launch.json",
-      "visible_window": true,
-      "headless_env": null,
-      "started": true,
-      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
-      "exit_code": 0
-    },
-    {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/net-reconnect-session-selftest/launch.json",
-      "visible_window": true,
-      "headless_env": null,
-      "started": true,
-      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
-      "exit_code": 0
-    },
-    {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/net-rejoin-matrix-selftest/launch.json",
-      "visible_window": true,
-      "headless_env": null,
-      "started": true,
-      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
-      "exit_code": 0
-    },
-    {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/net-roster-selftest/launch.json",
-      "visible_window": true,
-      "headless_env": null,
-      "started": true,
-      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
-      "exit_code": 0
-    },
-    {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/net-session-plane-hold-schedules-selftest/launch.json",
+      "path": "retained-evidence/final-suite-55/net-lockstep-selftest/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -573,7 +517,55 @@
       "exit_code": 1
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/net-session-plane-selftest/launch.json",
+      "path": "retained-evidence/final-suite-55/net-match-selftest/launch.json",
+      "visible_window": true,
+      "headless_env": null,
+      "started": true,
+      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
+      "exit_code": 0
+    },
+    {
+      "path": "retained-evidence/final-suite-55/net-protocol-selftest/launch.json",
+      "visible_window": true,
+      "headless_env": null,
+      "started": true,
+      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
+      "exit_code": 0
+    },
+    {
+      "path": "retained-evidence/final-suite-55/net-reconnect-selftest/launch.json",
+      "visible_window": true,
+      "headless_env": null,
+      "started": true,
+      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
+      "exit_code": 0
+    },
+    {
+      "path": "retained-evidence/final-suite-55/net-reconnect-session-selftest/launch.json",
+      "visible_window": true,
+      "headless_env": null,
+      "started": true,
+      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
+      "exit_code": 0
+    },
+    {
+      "path": "retained-evidence/final-suite-55/net-rejoin-matrix-selftest/launch.json",
+      "visible_window": true,
+      "headless_env": null,
+      "started": true,
+      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
+      "exit_code": 0
+    },
+    {
+      "path": "retained-evidence/final-suite-55/net-roster-selftest/launch.json",
+      "visible_window": true,
+      "headless_env": null,
+      "started": true,
+      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
+      "exit_code": 0
+    },
+    {
+      "path": "retained-evidence/final-suite-55/net-session-plane-hold-schedules-selftest/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -581,7 +573,15 @@
       "exit_code": 1
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/net-session-selftest/launch.json",
+      "path": "retained-evidence/final-suite-55/net-session-plane-selftest/launch.json",
+      "visible_window": true,
+      "headless_env": null,
+      "started": true,
+      "exe_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
+      "exit_code": 1
+    },
+    {
+      "path": "retained-evidence/final-suite-55/net-session-selftest/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -589,7 +589,7 @@
       "exit_code": 0
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/net-world-join-selftest/launch.json",
+      "path": "retained-evidence/final-suite-55/net-world-join-selftest/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -597,7 +597,7 @@
       "exit_code": 0
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/path-prefix-selftest/launch.json",
+      "path": "retained-evidence/final-suite-55/path-prefix-selftest/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -605,7 +605,7 @@
       "exit_code": 0
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/preview-binding-exhaustive-selftest/launch.json",
+      "path": "retained-evidence/final-suite-55/preview-binding-exhaustive-selftest/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -613,7 +613,7 @@
       "exit_code": 0
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/preview-hotplug-selftest/launch.json",
+      "path": "retained-evidence/final-suite-55/preview-hotplug-selftest/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -621,7 +621,7 @@
       "exit_code": 0
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/preview-invariance-selftest/launch.json",
+      "path": "retained-evidence/final-suite-55/preview-invariance-selftest/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -629,7 +629,7 @@
       "exit_code": 0
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/render-window-scripts-selftest/launch.json",
+      "path": "retained-evidence/final-suite-55/render-window-scripts-selftest/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -637,7 +637,7 @@
       "exit_code": 0
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/rotate-primitive-selftest/launch.json",
+      "path": "retained-evidence/final-suite-55/rotate-primitive-selftest/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -645,7 +645,7 @@
       "exit_code": 0
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/rteerror-selftest/launch.json",
+      "path": "retained-evidence/final-suite-55/rteerror-selftest/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -653,7 +653,7 @@
       "exit_code": 0
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/save-refusal-diagnosis-selftest/launch.json",
+      "path": "retained-evidence/final-suite-55/save-refusal-diagnosis-selftest/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -661,7 +661,7 @@
       "exit_code": 0
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/settings-preferences-selftest/launch.json",
+      "path": "retained-evidence/final-suite-55/settings-preferences-selftest/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -669,7 +669,7 @@
       "exit_code": 0
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/sim-checksum-selftest/launch.json",
+      "path": "retained-evidence/final-suite-55/sim-checksum-selftest/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -677,7 +677,7 @@
       "exit_code": 0
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/single-module-harness-selftest/launch.json",
+      "path": "retained-evidence/final-suite-55/single-module-harness-selftest/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -685,7 +685,7 @@
       "exit_code": 0
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/single-player-reference-selftest/launch.json",
+      "path": "retained-evidence/final-suite-55/single-player-reference-selftest/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -693,7 +693,7 @@
       "exit_code": 0
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/steady-clock-selftest/launch.json",
+      "path": "retained-evidence/final-suite-55/steady-clock-selftest/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -701,7 +701,7 @@
       "exit_code": 0
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/swap-wait-selftest/launch.json",
+      "path": "retained-evidence/final-suite-55/swap-wait-selftest/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,
@@ -709,7 +709,7 @@
       "exit_code": 0
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-suite-55/text-wrap-selftest/launch.json",
+      "path": "retained-evidence/final-suite-55/text-wrap-selftest/launch.json",
       "visible_window": true,
       "headless_env": null,
       "started": true,

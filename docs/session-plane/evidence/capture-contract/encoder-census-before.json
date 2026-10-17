@@ -1,7 +1,7 @@
 {
   "source_head": "93e67a1b12c42150db56c01b1069146958cf00ec",
   "scope": "Static local-source reference census before adding the capture contract detector. This does not replace executable checks.",
-  "official_tool": "lead-tools/find_encoders.py was absent from this worktree and the readable /home/erol tree; two unrelated relay service directories were unreadable.",
+  "official_tool": "lead-tools/find_encoders.py was absent from this worktree and the readable . tree; two unrelated relay service directories were unreadable.",
   "planned_guard_changes": {
     "NetHostMigrationCodec::c_Version": [
       6,

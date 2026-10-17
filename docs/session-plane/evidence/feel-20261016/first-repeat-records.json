@@ -13,7 +13,7 @@
   },
   "cases": [
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-200ms",
+      "path": "retained-evidence/B3-first-repeat-matrix/01-200ms",
       "manifest": {
         "started": "2026-10-16 11:05:05 PM MST",
         "arm": "200ms",
@@ -27,15 +27,15 @@
           960,
           540
         ],
-        "binary": "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand",
+        "binary": "build-gcc/CortexCommand",
         "binary_sha256": "a795165de949c6b5018ec0cd75843734a43257f4525b36f27440f837001caf32",
         "quiet": true,
         "binary_unchanged": true,
         "complete": true,
         "finished": "2026-10-16 11:05:45 PM MST",
         "peer_hashes": {
-          "first": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-200ms/host_trace.json",
-          "second": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-200ms/client_trace.json",
+          "first": "retained-evidence/B3-first-repeat-matrix/01-200ms/host_trace.json",
+          "second": "retained-evidence/B3-first-repeat-matrix/01-200ms/client_trace.json",
           "cross_peer": true,
           "sim_gated_pass": true,
           "existing_comparator": {
@@ -170,7 +170,7 @@
         {
           "peer": "client",
           "requested_rtt_ms": 200,
-          "raw": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-200ms/client/feel/raw.jsonl.gz",
+          "raw": "retained-evidence/B3-first-repeat-matrix/01-200ms/client/feel/raw.jsonl.gz",
           "raw_sha256": "3c332c353b5e9fb6181e5cc8bdda81d3c97848f488e62e1c4e0e977e306e4093",
           "input_coverage": {
             "expected_responses": 32,
@@ -2811,115 +2811,115 @@
           "captures": [
             {
               "frame": 55,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-200ms/client/feel/frame-60.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-200ms/client/feel/frame-60.png",
               "tick": 60,
               "type": "capture"
             },
             {
               "frame": 111,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-200ms/client/feel/frame-120.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-200ms/client/feel/frame-120.png",
               "tick": 120,
               "type": "capture"
             },
             {
               "frame": 169,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-200ms/client/feel/frame-180.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-200ms/client/feel/frame-180.png",
               "tick": 180,
               "type": "capture"
             },
             {
               "frame": 225,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-200ms/client/feel/frame-240.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-200ms/client/feel/frame-240.png",
               "tick": 240,
               "type": "capture"
             },
             {
               "frame": 282,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-200ms/client/feel/frame-300.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-200ms/client/feel/frame-300.png",
               "tick": 300,
               "type": "capture"
             },
             {
               "frame": 339,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-200ms/client/feel/frame-360.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-200ms/client/feel/frame-360.png",
               "tick": 360,
               "type": "capture"
             },
             {
               "frame": 395,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-200ms/client/feel/frame-420.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-200ms/client/feel/frame-420.png",
               "tick": 420,
               "type": "capture"
             },
             {
               "frame": 447,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-200ms/client/feel/frame-480.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-200ms/client/feel/frame-480.png",
               "tick": 480,
               "type": "capture"
             },
             {
               "frame": 501,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-200ms/client/feel/frame-540.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-200ms/client/feel/frame-540.png",
               "tick": 540,
               "type": "capture"
             },
             {
               "frame": 552,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-200ms/client/feel/frame-600.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-200ms/client/feel/frame-600.png",
               "tick": 600,
               "type": "capture"
             },
             {
               "frame": 609,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-200ms/client/feel/frame-660.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-200ms/client/feel/frame-660.png",
               "tick": 660,
               "type": "capture"
             },
             {
               "frame": 663,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-200ms/client/feel/frame-720.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-200ms/client/feel/frame-720.png",
               "tick": 720,
               "type": "capture"
             },
             {
               "frame": 716,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-200ms/client/feel/frame-780.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-200ms/client/feel/frame-780.png",
               "tick": 780,
               "type": "capture"
             },
             {
               "frame": 768,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-200ms/client/feel/frame-840.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-200ms/client/feel/frame-840.png",
               "tick": 840,
               "type": "capture"
             },
             {
               "frame": 821,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-200ms/client/feel/frame-900.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-200ms/client/feel/frame-900.png",
               "tick": 900,
               "type": "capture"
             },
             {
               "frame": 875,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-200ms/client/feel/frame-960.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-200ms/client/feel/frame-960.png",
               "tick": 960,
               "type": "capture"
             },
             {
               "frame": 932,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-200ms/client/feel/frame-1020.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-200ms/client/feel/frame-1020.png",
               "tick": 1020,
               "type": "capture"
             },
             {
               "frame": 982,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-200ms/client/feel/frame-1080.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-200ms/client/feel/frame-1080.png",
               "tick": 1080,
               "type": "capture"
             },
             {
               "frame": 1036,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-200ms/client/feel/frame-1140.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-200ms/client/feel/frame-1140.png",
               "tick": 1141,
               "type": "capture"
             }
@@ -2932,7 +2932,7 @@
         {
           "peer": "host",
           "requested_rtt_ms": 200,
-          "raw": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-200ms/host/feel/raw.jsonl.gz",
+          "raw": "retained-evidence/B3-first-repeat-matrix/01-200ms/host/feel/raw.jsonl.gz",
           "raw_sha256": "80de68392e54723edde5ce44a5095fd9a9646413546ae2d208592fef3bf8ba94",
           "input_coverage": {
             "expected_responses": 32,
@@ -5577,115 +5577,115 @@
           "captures": [
             {
               "frame": 40,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-200ms/host/feel/frame-60.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-200ms/host/feel/frame-60.png",
               "tick": 60,
               "type": "capture"
             },
             {
               "frame": 97,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-200ms/host/feel/frame-120.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-200ms/host/feel/frame-120.png",
               "tick": 121,
               "type": "capture"
             },
             {
               "frame": 153,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-200ms/host/feel/frame-180.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-200ms/host/feel/frame-180.png",
               "tick": 180,
               "type": "capture"
             },
             {
               "frame": 208,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-200ms/host/feel/frame-240.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-200ms/host/feel/frame-240.png",
               "tick": 240,
               "type": "capture"
             },
             {
               "frame": 264,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-200ms/host/feel/frame-300.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-200ms/host/feel/frame-300.png",
               "tick": 300,
               "type": "capture"
             },
             {
               "frame": 320,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-200ms/host/feel/frame-360.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-200ms/host/feel/frame-360.png",
               "tick": 360,
               "type": "capture"
             },
             {
               "frame": 376,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-200ms/host/feel/frame-420.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-200ms/host/feel/frame-420.png",
               "tick": 420,
               "type": "capture"
             },
             {
               "frame": 431,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-200ms/host/feel/frame-480.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-200ms/host/feel/frame-480.png",
               "tick": 480,
               "type": "capture"
             },
             {
               "frame": 480,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-200ms/host/feel/frame-540.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-200ms/host/feel/frame-540.png",
               "tick": 540,
               "type": "capture"
             },
             {
               "frame": 530,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-200ms/host/feel/frame-600.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-200ms/host/feel/frame-600.png",
               "tick": 600,
               "type": "capture"
             },
             {
               "frame": 585,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-200ms/host/feel/frame-660.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-200ms/host/feel/frame-660.png",
               "tick": 660,
               "type": "capture"
             },
             {
               "frame": 639,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-200ms/host/feel/frame-720.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-200ms/host/feel/frame-720.png",
               "tick": 720,
               "type": "capture"
             },
             {
               "frame": 694,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-200ms/host/feel/frame-780.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-200ms/host/feel/frame-780.png",
               "tick": 780,
               "type": "capture"
             },
             {
               "frame": 742,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-200ms/host/feel/frame-840.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-200ms/host/feel/frame-840.png",
               "tick": 840,
               "type": "capture"
             },
             {
               "frame": 796,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-200ms/host/feel/frame-900.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-200ms/host/feel/frame-900.png",
               "tick": 900,
               "type": "capture"
             },
             {
               "frame": 849,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-200ms/host/feel/frame-960.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-200ms/host/feel/frame-960.png",
               "tick": 961,
               "type": "capture"
             },
             {
               "frame": 898,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-200ms/host/feel/frame-1020.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-200ms/host/feel/frame-1020.png",
               "tick": 1020,
               "type": "capture"
             },
             {
               "frame": 951,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-200ms/host/feel/frame-1080.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-200ms/host/feel/frame-1080.png",
               "tick": 1080,
               "type": "capture"
             },
             {
               "frame": 1003,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-200ms/host/feel/frame-1140.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-200ms/host/feel/frame-1140.png",
               "tick": 1140,
               "type": "capture"
             }
@@ -5698,7 +5698,7 @@
       ]
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-30ms",
+      "path": "retained-evidence/B3-first-repeat-matrix/01-30ms",
       "manifest": {
         "started": "2026-10-16 11:04:24 PM MST",
         "arm": "30ms",
@@ -5712,15 +5712,15 @@
           960,
           540
         ],
-        "binary": "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand",
+        "binary": "build-gcc/CortexCommand",
         "binary_sha256": "a795165de949c6b5018ec0cd75843734a43257f4525b36f27440f837001caf32",
         "quiet": true,
         "binary_unchanged": true,
         "complete": true,
         "finished": "2026-10-16 11:05:02 PM MST",
         "peer_hashes": {
-          "first": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-30ms/host_trace.json",
-          "second": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-30ms/client_trace.json",
+          "first": "retained-evidence/B3-first-repeat-matrix/01-30ms/host_trace.json",
+          "second": "retained-evidence/B3-first-repeat-matrix/01-30ms/client_trace.json",
           "cross_peer": true,
           "sim_gated_pass": true,
           "existing_comparator": {
@@ -5855,7 +5855,7 @@
         {
           "peer": "client",
           "requested_rtt_ms": 30,
-          "raw": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-30ms/client/feel/raw.jsonl.gz",
+          "raw": "retained-evidence/B3-first-repeat-matrix/01-30ms/client/feel/raw.jsonl.gz",
           "raw_sha256": "0757781fb8fab1470e32bc0b118c2fb715a8a054931114ed44d69d18322f4401",
           "input_coverage": {
             "expected_responses": 32,
@@ -8504,115 +8504,115 @@
           "captures": [
             {
               "frame": 49,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-30ms/client/feel/frame-60.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-30ms/client/feel/frame-60.png",
               "tick": 60,
               "type": "capture"
             },
             {
               "frame": 105,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-30ms/client/feel/frame-120.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-30ms/client/feel/frame-120.png",
               "tick": 120,
               "type": "capture"
             },
             {
               "frame": 161,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-30ms/client/feel/frame-180.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-30ms/client/feel/frame-180.png",
               "tick": 181,
               "type": "capture"
             },
             {
               "frame": 214,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-30ms/client/feel/frame-240.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-30ms/client/feel/frame-240.png",
               "tick": 240,
               "type": "capture"
             },
             {
               "frame": 269,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-30ms/client/feel/frame-300.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-30ms/client/feel/frame-300.png",
               "tick": 300,
               "type": "capture"
             },
             {
               "frame": 324,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-30ms/client/feel/frame-360.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-30ms/client/feel/frame-360.png",
               "tick": 360,
               "type": "capture"
             },
             {
               "frame": 382,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-30ms/client/feel/frame-420.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-30ms/client/feel/frame-420.png",
               "tick": 420,
               "type": "capture"
             },
             {
               "frame": 439,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-30ms/client/feel/frame-480.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-30ms/client/feel/frame-480.png",
               "tick": 480,
               "type": "capture"
             },
             {
               "frame": 498,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-30ms/client/feel/frame-540.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-30ms/client/feel/frame-540.png",
               "tick": 540,
               "type": "capture"
             },
             {
               "frame": 555,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-30ms/client/feel/frame-600.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-30ms/client/feel/frame-600.png",
               "tick": 600,
               "type": "capture"
             },
             {
               "frame": 610,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-30ms/client/feel/frame-660.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-30ms/client/feel/frame-660.png",
               "tick": 660,
               "type": "capture"
             },
             {
               "frame": 663,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-30ms/client/feel/frame-720.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-30ms/client/feel/frame-720.png",
               "tick": 720,
               "type": "capture"
             },
             {
               "frame": 721,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-30ms/client/feel/frame-780.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-30ms/client/feel/frame-780.png",
               "tick": 780,
               "type": "capture"
             },
             {
               "frame": 775,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-30ms/client/feel/frame-840.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-30ms/client/feel/frame-840.png",
               "tick": 840,
               "type": "capture"
             },
             {
               "frame": 831,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-30ms/client/feel/frame-900.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-30ms/client/feel/frame-900.png",
               "tick": 900,
               "type": "capture"
             },
             {
               "frame": 887,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-30ms/client/feel/frame-960.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-30ms/client/feel/frame-960.png",
               "tick": 960,
               "type": "capture"
             },
             {
               "frame": 945,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-30ms/client/feel/frame-1020.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-30ms/client/feel/frame-1020.png",
               "tick": 1020,
               "type": "capture"
             },
             {
               "frame": 1002,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-30ms/client/feel/frame-1080.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-30ms/client/feel/frame-1080.png",
               "tick": 1080,
               "type": "capture"
             },
             {
               "frame": 1058,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-30ms/client/feel/frame-1140.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-30ms/client/feel/frame-1140.png",
               "tick": 1140,
               "type": "capture"
             }
@@ -8625,7 +8625,7 @@
         {
           "peer": "host",
           "requested_rtt_ms": 30,
-          "raw": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-30ms/host/feel/raw.jsonl.gz",
+          "raw": "retained-evidence/B3-first-repeat-matrix/01-30ms/host/feel/raw.jsonl.gz",
           "raw_sha256": "e53db9d8a3a9bde33c97f5d9436e4691c374c7c4d00822d712f79aac57cdda5b",
           "input_coverage": {
             "expected_responses": 32,
@@ -11270,115 +11270,115 @@
           "captures": [
             {
               "frame": 39,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-30ms/host/feel/frame-60.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-30ms/host/feel/frame-60.png",
               "tick": 60,
               "type": "capture"
             },
             {
               "frame": 94,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-30ms/host/feel/frame-120.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-30ms/host/feel/frame-120.png",
               "tick": 120,
               "type": "capture"
             },
             {
               "frame": 149,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-30ms/host/feel/frame-180.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-30ms/host/feel/frame-180.png",
               "tick": 180,
               "type": "capture"
             },
             {
               "frame": 199,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-30ms/host/feel/frame-240.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-30ms/host/feel/frame-240.png",
               "tick": 240,
               "type": "capture"
             },
             {
               "frame": 255,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-30ms/host/feel/frame-300.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-30ms/host/feel/frame-300.png",
               "tick": 301,
               "type": "capture"
             },
             {
               "frame": 308,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-30ms/host/feel/frame-360.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-30ms/host/feel/frame-360.png",
               "tick": 360,
               "type": "capture"
             },
             {
               "frame": 363,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-30ms/host/feel/frame-420.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-30ms/host/feel/frame-420.png",
               "tick": 420,
               "type": "capture"
             },
             {
               "frame": 419,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-30ms/host/feel/frame-480.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-30ms/host/feel/frame-480.png",
               "tick": 480,
               "type": "capture"
             },
             {
               "frame": 474,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-30ms/host/feel/frame-540.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-30ms/host/feel/frame-540.png",
               "tick": 540,
               "type": "capture"
             },
             {
               "frame": 528,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-30ms/host/feel/frame-600.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-30ms/host/feel/frame-600.png",
               "tick": 600,
               "type": "capture"
             },
             {
               "frame": 579,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-30ms/host/feel/frame-660.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-30ms/host/feel/frame-660.png",
               "tick": 660,
               "type": "capture"
             },
             {
               "frame": 632,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-30ms/host/feel/frame-720.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-30ms/host/feel/frame-720.png",
               "tick": 720,
               "type": "capture"
             },
             {
               "frame": 688,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-30ms/host/feel/frame-780.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-30ms/host/feel/frame-780.png",
               "tick": 780,
               "type": "capture"
             },
             {
               "frame": 740,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-30ms/host/feel/frame-840.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-30ms/host/feel/frame-840.png",
               "tick": 840,
               "type": "capture"
             },
             {
               "frame": 797,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-30ms/host/feel/frame-900.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-30ms/host/feel/frame-900.png",
               "tick": 900,
               "type": "capture"
             },
             {
               "frame": 849,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-30ms/host/feel/frame-960.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-30ms/host/feel/frame-960.png",
               "tick": 960,
               "type": "capture"
             },
             {
               "frame": 903,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-30ms/host/feel/frame-1020.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-30ms/host/feel/frame-1020.png",
               "tick": 1020,
               "type": "capture"
             },
             {
               "frame": 957,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-30ms/host/feel/frame-1080.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-30ms/host/feel/frame-1080.png",
               "tick": 1080,
               "type": "capture"
             },
             {
               "frame": 1010,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-30ms/host/feel/frame-1140.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-30ms/host/feel/frame-1140.png",
               "tick": 1140,
               "type": "capture"
             }
@@ -11391,7 +11391,7 @@
       ]
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-sp",
+      "path": "retained-evidence/B3-first-repeat-matrix/01-sp",
       "manifest": {
         "started": "2026-10-16 11:03:49 PM MST",
         "arm": "sp",
@@ -11405,7 +11405,7 @@
           960,
           540
         ],
-        "binary": "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand",
+        "binary": "build-gcc/CortexCommand",
         "binary_sha256": "a795165de949c6b5018ec0cd75843734a43257f4525b36f27440f837001caf32",
         "quiet": true,
         "binary_unchanged": true,
@@ -11418,7 +11418,7 @@
         {
           "peer": "sp",
           "requested_rtt_ms": null,
-          "raw": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-sp/sp/feel/raw.jsonl.gz",
+          "raw": "retained-evidence/B3-first-repeat-matrix/01-sp/sp/feel/raw.jsonl.gz",
           "raw_sha256": "3c3942f3548c729da95c9f6a2babcae88423db1893a08e45c93166ba5ae4a361",
           "input_coverage": {
             "expected_responses": 32,
@@ -14042,115 +14042,115 @@
           "captures": [
             {
               "frame": 36,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-sp/sp/feel/frame-60.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-sp/sp/feel/frame-60.png",
               "tick": 60,
               "type": "capture"
             },
             {
               "frame": 96,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-sp/sp/feel/frame-120.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-sp/sp/feel/frame-120.png",
               "tick": 120,
               "type": "capture"
             },
             {
               "frame": 156,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-sp/sp/feel/frame-180.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-sp/sp/feel/frame-180.png",
               "tick": 180,
               "type": "capture"
             },
             {
               "frame": 216,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-sp/sp/feel/frame-240.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-sp/sp/feel/frame-240.png",
               "tick": 240,
               "type": "capture"
             },
             {
               "frame": 275,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-sp/sp/feel/frame-300.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-sp/sp/feel/frame-300.png",
               "tick": 300,
               "type": "capture"
             },
             {
               "frame": 335,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-sp/sp/feel/frame-360.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-sp/sp/feel/frame-360.png",
               "tick": 360,
               "type": "capture"
             },
             {
               "frame": 395,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-sp/sp/feel/frame-420.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-sp/sp/feel/frame-420.png",
               "tick": 420,
               "type": "capture"
             },
             {
               "frame": 454,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-sp/sp/feel/frame-480.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-sp/sp/feel/frame-480.png",
               "tick": 480,
               "type": "capture"
             },
             {
               "frame": 514,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-sp/sp/feel/frame-540.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-sp/sp/feel/frame-540.png",
               "tick": 540,
               "type": "capture"
             },
             {
               "frame": 574,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-sp/sp/feel/frame-600.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-sp/sp/feel/frame-600.png",
               "tick": 600,
               "type": "capture"
             },
             {
               "frame": 634,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-sp/sp/feel/frame-660.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-sp/sp/feel/frame-660.png",
               "tick": 660,
               "type": "capture"
             },
             {
               "frame": 693,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-sp/sp/feel/frame-720.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-sp/sp/feel/frame-720.png",
               "tick": 720,
               "type": "capture"
             },
             {
               "frame": 753,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-sp/sp/feel/frame-780.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-sp/sp/feel/frame-780.png",
               "tick": 780,
               "type": "capture"
             },
             {
               "frame": 813,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-sp/sp/feel/frame-840.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-sp/sp/feel/frame-840.png",
               "tick": 840,
               "type": "capture"
             },
             {
               "frame": 872,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-sp/sp/feel/frame-900.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-sp/sp/feel/frame-900.png",
               "tick": 900,
               "type": "capture"
             },
             {
               "frame": 932,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-sp/sp/feel/frame-960.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-sp/sp/feel/frame-960.png",
               "tick": 960,
               "type": "capture"
             },
             {
               "frame": 992,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-sp/sp/feel/frame-1020.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-sp/sp/feel/frame-1020.png",
               "tick": 1020,
               "type": "capture"
             },
             {
               "frame": 1051,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-sp/sp/feel/frame-1080.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-sp/sp/feel/frame-1080.png",
               "tick": 1080,
               "type": "capture"
             },
             {
               "frame": 1111,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/01-sp/sp/feel/frame-1140.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/01-sp/sp/feel/frame-1140.png",
               "tick": 1140,
               "type": "capture"
             }
@@ -14160,7 +14160,7 @@
       ]
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-200ms",
+      "path": "retained-evidence/B3-first-repeat-matrix/02-200ms",
       "manifest": {
         "started": "2026-10-16 11:07:04 PM MST",
         "arm": "200ms",
@@ -14174,15 +14174,15 @@
           960,
           540
         ],
-        "binary": "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand",
+        "binary": "build-gcc/CortexCommand",
         "binary_sha256": "a795165de949c6b5018ec0cd75843734a43257f4525b36f27440f837001caf32",
         "quiet": true,
         "binary_unchanged": true,
         "complete": true,
         "finished": "2026-10-16 11:07:45 PM MST",
         "peer_hashes": {
-          "first": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-200ms/host_trace.json",
-          "second": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-200ms/client_trace.json",
+          "first": "retained-evidence/B3-first-repeat-matrix/02-200ms/host_trace.json",
+          "second": "retained-evidence/B3-first-repeat-matrix/02-200ms/client_trace.json",
           "cross_peer": true,
           "sim_gated_pass": true,
           "existing_comparator": {
@@ -14317,7 +14317,7 @@
         {
           "peer": "client",
           "requested_rtt_ms": 200,
-          "raw": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-200ms/client/feel/raw.jsonl.gz",
+          "raw": "retained-evidence/B3-first-repeat-matrix/02-200ms/client/feel/raw.jsonl.gz",
           "raw_sha256": "7ac9994c7cc57545ccb217328798e865c5de01cf107ce44b7da1a561cc21072c",
           "input_coverage": {
             "expected_responses": 32,
@@ -16963,115 +16963,115 @@
           "captures": [
             {
               "frame": 56,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-200ms/client/feel/frame-60.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-200ms/client/feel/frame-60.png",
               "tick": 60,
               "type": "capture"
             },
             {
               "frame": 108,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-200ms/client/feel/frame-120.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-200ms/client/feel/frame-120.png",
               "tick": 120,
               "type": "capture"
             },
             {
               "frame": 164,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-200ms/client/feel/frame-180.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-200ms/client/feel/frame-180.png",
               "tick": 180,
               "type": "capture"
             },
             {
               "frame": 220,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-200ms/client/feel/frame-240.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-200ms/client/feel/frame-240.png",
               "tick": 240,
               "type": "capture"
             },
             {
               "frame": 279,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-200ms/client/feel/frame-300.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-200ms/client/feel/frame-300.png",
               "tick": 300,
               "type": "capture"
             },
             {
               "frame": 336,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-200ms/client/feel/frame-360.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-200ms/client/feel/frame-360.png",
               "tick": 360,
               "type": "capture"
             },
             {
               "frame": 391,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-200ms/client/feel/frame-420.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-200ms/client/feel/frame-420.png",
               "tick": 420,
               "type": "capture"
             },
             {
               "frame": 446,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-200ms/client/feel/frame-480.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-200ms/client/feel/frame-480.png",
               "tick": 480,
               "type": "capture"
             },
             {
               "frame": 500,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-200ms/client/feel/frame-540.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-200ms/client/feel/frame-540.png",
               "tick": 540,
               "type": "capture"
             },
             {
               "frame": 552,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-200ms/client/feel/frame-600.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-200ms/client/feel/frame-600.png",
               "tick": 600,
               "type": "capture"
             },
             {
               "frame": 603,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-200ms/client/feel/frame-660.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-200ms/client/feel/frame-660.png",
               "tick": 660,
               "type": "capture"
             },
             {
               "frame": 654,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-200ms/client/feel/frame-720.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-200ms/client/feel/frame-720.png",
               "tick": 720,
               "type": "capture"
             },
             {
               "frame": 703,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-200ms/client/feel/frame-780.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-200ms/client/feel/frame-780.png",
               "tick": 780,
               "type": "capture"
             },
             {
               "frame": 749,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-200ms/client/feel/frame-840.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-200ms/client/feel/frame-840.png",
               "tick": 840,
               "type": "capture"
             },
             {
               "frame": 800,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-200ms/client/feel/frame-900.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-200ms/client/feel/frame-900.png",
               "tick": 900,
               "type": "capture"
             },
             {
               "frame": 852,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-200ms/client/feel/frame-960.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-200ms/client/feel/frame-960.png",
               "tick": 961,
               "type": "capture"
             },
             {
               "frame": 898,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-200ms/client/feel/frame-1020.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-200ms/client/feel/frame-1020.png",
               "tick": 1020,
               "type": "capture"
             },
             {
               "frame": 951,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-200ms/client/feel/frame-1080.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-200ms/client/feel/frame-1080.png",
               "tick": 1080,
               "type": "capture"
             },
             {
               "frame": 999,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-200ms/client/feel/frame-1140.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-200ms/client/feel/frame-1140.png",
               "tick": 1140,
               "type": "capture"
             }
@@ -17084,7 +17084,7 @@
         {
           "peer": "host",
           "requested_rtt_ms": 200,
-          "raw": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-200ms/host/feel/raw.jsonl.gz",
+          "raw": "retained-evidence/B3-first-repeat-matrix/02-200ms/host/feel/raw.jsonl.gz",
           "raw_sha256": "d19482f9198b642db6bc5b1655d17db081c0ceffa9db700b264f967a637b2f27",
           "input_coverage": {
             "expected_responses": 32,
@@ -19728,115 +19728,115 @@
           "captures": [
             {
               "frame": 41,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-200ms/host/feel/frame-60.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-200ms/host/feel/frame-60.png",
               "tick": 60,
               "type": "capture"
             },
             {
               "frame": 95,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-200ms/host/feel/frame-120.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-200ms/host/feel/frame-120.png",
               "tick": 120,
               "type": "capture"
             },
             {
               "frame": 152,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-200ms/host/feel/frame-180.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-200ms/host/feel/frame-180.png",
               "tick": 180,
               "type": "capture"
             },
             {
               "frame": 206,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-200ms/host/feel/frame-240.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-200ms/host/feel/frame-240.png",
               "tick": 240,
               "type": "capture"
             },
             {
               "frame": 262,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-200ms/host/feel/frame-300.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-200ms/host/feel/frame-300.png",
               "tick": 301,
               "type": "capture"
             },
             {
               "frame": 315,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-200ms/host/feel/frame-360.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-200ms/host/feel/frame-360.png",
               "tick": 360,
               "type": "capture"
             },
             {
               "frame": 368,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-200ms/host/feel/frame-420.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-200ms/host/feel/frame-420.png",
               "tick": 420,
               "type": "capture"
             },
             {
               "frame": 418,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-200ms/host/feel/frame-480.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-200ms/host/feel/frame-480.png",
               "tick": 480,
               "type": "capture"
             },
             {
               "frame": 464,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-200ms/host/feel/frame-540.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-200ms/host/feel/frame-540.png",
               "tick": 540,
               "type": "capture"
             },
             {
               "frame": 511,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-200ms/host/feel/frame-600.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-200ms/host/feel/frame-600.png",
               "tick": 600,
               "type": "capture"
             },
             {
               "frame": 565,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-200ms/host/feel/frame-660.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-200ms/host/feel/frame-660.png",
               "tick": 660,
               "type": "capture"
             },
             {
               "frame": 619,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-200ms/host/feel/frame-720.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-200ms/host/feel/frame-720.png",
               "tick": 720,
               "type": "capture"
             },
             {
               "frame": 673,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-200ms/host/feel/frame-780.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-200ms/host/feel/frame-780.png",
               "tick": 780,
               "type": "capture"
             },
             {
               "frame": 722,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-200ms/host/feel/frame-840.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-200ms/host/feel/frame-840.png",
               "tick": 840,
               "type": "capture"
             },
             {
               "frame": 773,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-200ms/host/feel/frame-900.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-200ms/host/feel/frame-900.png",
               "tick": 901,
               "type": "capture"
             },
             {
               "frame": 819,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-200ms/host/feel/frame-960.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-200ms/host/feel/frame-960.png",
               "tick": 960,
               "type": "capture"
             },
             {
               "frame": 869,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-200ms/host/feel/frame-1020.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-200ms/host/feel/frame-1020.png",
               "tick": 1020,
               "type": "capture"
             },
             {
               "frame": 921,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-200ms/host/feel/frame-1080.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-200ms/host/feel/frame-1080.png",
               "tick": 1081,
               "type": "capture"
             },
             {
               "frame": 968,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-200ms/host/feel/frame-1140.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-200ms/host/feel/frame-1140.png",
               "tick": 1140,
               "type": "capture"
             }
@@ -19849,7 +19849,7 @@
       ]
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-30ms",
+      "path": "retained-evidence/B3-first-repeat-matrix/02-30ms",
       "manifest": {
         "started": "2026-10-16 11:06:24 PM MST",
         "arm": "30ms",
@@ -19863,15 +19863,15 @@
           960,
           540
         ],
-        "binary": "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand",
+        "binary": "build-gcc/CortexCommand",
         "binary_sha256": "a795165de949c6b5018ec0cd75843734a43257f4525b36f27440f837001caf32",
         "quiet": true,
         "binary_unchanged": true,
         "complete": true,
         "finished": "2026-10-16 11:07:02 PM MST",
         "peer_hashes": {
-          "first": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-30ms/host_trace.json",
-          "second": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-30ms/client_trace.json",
+          "first": "retained-evidence/B3-first-repeat-matrix/02-30ms/host_trace.json",
+          "second": "retained-evidence/B3-first-repeat-matrix/02-30ms/client_trace.json",
           "cross_peer": true,
           "sim_gated_pass": true,
           "existing_comparator": {
@@ -20006,7 +20006,7 @@
         {
           "peer": "client",
           "requested_rtt_ms": 30,
-          "raw": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-30ms/client/feel/raw.jsonl.gz",
+          "raw": "retained-evidence/B3-first-repeat-matrix/02-30ms/client/feel/raw.jsonl.gz",
           "raw_sha256": "bd163624d278745d19216e288f06585bfecf1732ceffe69a18d3f0b585b5ad21",
           "input_coverage": {
             "expected_responses": 32,
@@ -22651,115 +22651,115 @@
           "captures": [
             {
               "frame": 50,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-30ms/client/feel/frame-60.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-30ms/client/feel/frame-60.png",
               "tick": 60,
               "type": "capture"
             },
             {
               "frame": 109,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-30ms/client/feel/frame-120.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-30ms/client/feel/frame-120.png",
               "tick": 121,
               "type": "capture"
             },
             {
               "frame": 166,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-30ms/client/feel/frame-180.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-30ms/client/feel/frame-180.png",
               "tick": 180,
               "type": "capture"
             },
             {
               "frame": 221,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-30ms/client/feel/frame-240.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-30ms/client/feel/frame-240.png",
               "tick": 240,
               "type": "capture"
             },
             {
               "frame": 279,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-30ms/client/feel/frame-300.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-30ms/client/feel/frame-300.png",
               "tick": 300,
               "type": "capture"
             },
             {
               "frame": 334,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-30ms/client/feel/frame-360.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-30ms/client/feel/frame-360.png",
               "tick": 360,
               "type": "capture"
             },
             {
               "frame": 392,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-30ms/client/feel/frame-420.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-30ms/client/feel/frame-420.png",
               "tick": 420,
               "type": "capture"
             },
             {
               "frame": 450,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-30ms/client/feel/frame-480.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-30ms/client/feel/frame-480.png",
               "tick": 480,
               "type": "capture"
             },
             {
               "frame": 508,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-30ms/client/feel/frame-540.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-30ms/client/feel/frame-540.png",
               "tick": 540,
               "type": "capture"
             },
             {
               "frame": 566,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-30ms/client/feel/frame-600.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-30ms/client/feel/frame-600.png",
               "tick": 600,
               "type": "capture"
             },
             {
               "frame": 621,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-30ms/client/feel/frame-660.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-30ms/client/feel/frame-660.png",
               "tick": 660,
               "type": "capture"
             },
             {
               "frame": 676,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-30ms/client/feel/frame-720.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-30ms/client/feel/frame-720.png",
               "tick": 720,
               "type": "capture"
             },
             {
               "frame": 733,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-30ms/client/feel/frame-780.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-30ms/client/feel/frame-780.png",
               "tick": 780,
               "type": "capture"
             },
             {
               "frame": 791,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-30ms/client/feel/frame-840.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-30ms/client/feel/frame-840.png",
               "tick": 840,
               "type": "capture"
             },
             {
               "frame": 849,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-30ms/client/feel/frame-900.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-30ms/client/feel/frame-900.png",
               "tick": 900,
               "type": "capture"
             },
             {
               "frame": 907,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-30ms/client/feel/frame-960.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-30ms/client/feel/frame-960.png",
               "tick": 960,
               "type": "capture"
             },
             {
               "frame": 966,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-30ms/client/feel/frame-1020.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-30ms/client/feel/frame-1020.png",
               "tick": 1020,
               "type": "capture"
             },
             {
               "frame": 1023,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-30ms/client/feel/frame-1080.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-30ms/client/feel/frame-1080.png",
               "tick": 1080,
               "type": "capture"
             },
             {
               "frame": 1079,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-30ms/client/feel/frame-1140.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-30ms/client/feel/frame-1140.png",
               "tick": 1140,
               "type": "capture"
             }
@@ -22772,7 +22772,7 @@
         {
           "peer": "host",
           "requested_rtt_ms": 30,
-          "raw": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-30ms/host/feel/raw.jsonl.gz",
+          "raw": "retained-evidence/B3-first-repeat-matrix/02-30ms/host/feel/raw.jsonl.gz",
           "raw_sha256": "d93e4dacc2ba1625592b47b6b6840d325e9470b4a99ea77e7611a1c2a5eaa33b",
           "input_coverage": {
             "expected_responses": 32,
@@ -25417,115 +25417,115 @@
           "captures": [
             {
               "frame": 38,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-30ms/host/feel/frame-60.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-30ms/host/feel/frame-60.png",
               "tick": 60,
               "type": "capture"
             },
             {
               "frame": 95,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-30ms/host/feel/frame-120.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-30ms/host/feel/frame-120.png",
               "tick": 120,
               "type": "capture"
             },
             {
               "frame": 152,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-30ms/host/feel/frame-180.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-30ms/host/feel/frame-180.png",
               "tick": 180,
               "type": "capture"
             },
             {
               "frame": 206,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-30ms/host/feel/frame-240.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-30ms/host/feel/frame-240.png",
               "tick": 240,
               "type": "capture"
             },
             {
               "frame": 262,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-30ms/host/feel/frame-300.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-30ms/host/feel/frame-300.png",
               "tick": 300,
               "type": "capture"
             },
             {
               "frame": 317,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-30ms/host/feel/frame-360.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-30ms/host/feel/frame-360.png",
               "tick": 360,
               "type": "capture"
             },
             {
               "frame": 374,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-30ms/host/feel/frame-420.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-30ms/host/feel/frame-420.png",
               "tick": 420,
               "type": "capture"
             },
             {
               "frame": 430,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-30ms/host/feel/frame-480.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-30ms/host/feel/frame-480.png",
               "tick": 480,
               "type": "capture"
             },
             {
               "frame": 488,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-30ms/host/feel/frame-540.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-30ms/host/feel/frame-540.png",
               "tick": 540,
               "type": "capture"
             },
             {
               "frame": 545,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-30ms/host/feel/frame-600.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-30ms/host/feel/frame-600.png",
               "tick": 600,
               "type": "capture"
             },
             {
               "frame": 601,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-30ms/host/feel/frame-660.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-30ms/host/feel/frame-660.png",
               "tick": 660,
               "type": "capture"
             },
             {
               "frame": 654,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-30ms/host/feel/frame-720.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-30ms/host/feel/frame-720.png",
               "tick": 720,
               "type": "capture"
             },
             {
               "frame": 709,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-30ms/host/feel/frame-780.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-30ms/host/feel/frame-780.png",
               "tick": 780,
               "type": "capture"
             },
             {
               "frame": 763,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-30ms/host/feel/frame-840.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-30ms/host/feel/frame-840.png",
               "tick": 840,
               "type": "capture"
             },
             {
               "frame": 819,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-30ms/host/feel/frame-900.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-30ms/host/feel/frame-900.png",
               "tick": 900,
               "type": "capture"
             },
             {
               "frame": 878,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-30ms/host/feel/frame-960.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-30ms/host/feel/frame-960.png",
               "tick": 960,
               "type": "capture"
             },
             {
               "frame": 936,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-30ms/host/feel/frame-1020.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-30ms/host/feel/frame-1020.png",
               "tick": 1020,
               "type": "capture"
             },
             {
               "frame": 992,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-30ms/host/feel/frame-1080.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-30ms/host/feel/frame-1080.png",
               "tick": 1080,
               "type": "capture"
             },
             {
               "frame": 1046,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-30ms/host/feel/frame-1140.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-30ms/host/feel/frame-1140.png",
               "tick": 1141,
               "type": "capture"
             }
@@ -25538,7 +25538,7 @@
       ]
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-sp",
+      "path": "retained-evidence/B3-first-repeat-matrix/02-sp",
       "manifest": {
         "started": "2026-10-16 11:05:48 PM MST",
         "arm": "sp",
@@ -25552,7 +25552,7 @@
           960,
           540
         ],
-        "binary": "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand",
+        "binary": "build-gcc/CortexCommand",
         "binary_sha256": "a795165de949c6b5018ec0cd75843734a43257f4525b36f27440f837001caf32",
         "quiet": true,
         "binary_unchanged": true,
@@ -25565,7 +25565,7 @@
         {
           "peer": "sp",
           "requested_rtt_ms": null,
-          "raw": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-sp/sp/feel/raw.jsonl.gz",
+          "raw": "retained-evidence/B3-first-repeat-matrix/02-sp/sp/feel/raw.jsonl.gz",
           "raw_sha256": "8781a743ac3839c8e7b8c2d5a699ac62758bc0f794c3137669816af863b502aa",
           "input_coverage": {
             "expected_responses": 32,
@@ -28189,115 +28189,115 @@
           "captures": [
             {
               "frame": 37,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-sp/sp/feel/frame-60.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-sp/sp/feel/frame-60.png",
               "tick": 60,
               "type": "capture"
             },
             {
               "frame": 97,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-sp/sp/feel/frame-120.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-sp/sp/feel/frame-120.png",
               "tick": 120,
               "type": "capture"
             },
             {
               "frame": 157,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-sp/sp/feel/frame-180.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-sp/sp/feel/frame-180.png",
               "tick": 180,
               "type": "capture"
             },
             {
               "frame": 216,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-sp/sp/feel/frame-240.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-sp/sp/feel/frame-240.png",
               "tick": 240,
               "type": "capture"
             },
             {
               "frame": 276,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-sp/sp/feel/frame-300.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-sp/sp/feel/frame-300.png",
               "tick": 300,
               "type": "capture"
             },
             {
               "frame": 336,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-sp/sp/feel/frame-360.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-sp/sp/feel/frame-360.png",
               "tick": 360,
               "type": "capture"
             },
             {
               "frame": 396,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-sp/sp/feel/frame-420.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-sp/sp/feel/frame-420.png",
               "tick": 420,
               "type": "capture"
             },
             {
               "frame": 455,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-sp/sp/feel/frame-480.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-sp/sp/feel/frame-480.png",
               "tick": 480,
               "type": "capture"
             },
             {
               "frame": 515,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-sp/sp/feel/frame-540.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-sp/sp/feel/frame-540.png",
               "tick": 540,
               "type": "capture"
             },
             {
               "frame": 575,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-sp/sp/feel/frame-600.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-sp/sp/feel/frame-600.png",
               "tick": 600,
               "type": "capture"
             },
             {
               "frame": 635,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-sp/sp/feel/frame-660.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-sp/sp/feel/frame-660.png",
               "tick": 660,
               "type": "capture"
             },
             {
               "frame": 694,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-sp/sp/feel/frame-720.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-sp/sp/feel/frame-720.png",
               "tick": 720,
               "type": "capture"
             },
             {
               "frame": 754,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-sp/sp/feel/frame-780.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-sp/sp/feel/frame-780.png",
               "tick": 780,
               "type": "capture"
             },
             {
               "frame": 814,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-sp/sp/feel/frame-840.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-sp/sp/feel/frame-840.png",
               "tick": 840,
               "type": "capture"
             },
             {
               "frame": 873,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-sp/sp/feel/frame-900.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-sp/sp/feel/frame-900.png",
               "tick": 900,
               "type": "capture"
             },
             {
               "frame": 933,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-sp/sp/feel/frame-960.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-sp/sp/feel/frame-960.png",
               "tick": 960,
               "type": "capture"
             },
             {
               "frame": 993,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-sp/sp/feel/frame-1020.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-sp/sp/feel/frame-1020.png",
               "tick": 1020,
               "type": "capture"
             },
             {
               "frame": 1053,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-sp/sp/feel/frame-1080.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-sp/sp/feel/frame-1080.png",
               "tick": 1080,
               "type": "capture"
             },
             {
               "frame": 1112,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/02-sp/sp/feel/frame-1140.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/02-sp/sp/feel/frame-1140.png",
               "tick": 1140,
               "type": "capture"
             }
@@ -28307,7 +28307,7 @@
       ]
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-200ms",
+      "path": "retained-evidence/B3-first-repeat-matrix/03-200ms",
       "manifest": {
         "started": "2026-10-16 11:09:04 PM MST",
         "arm": "200ms",
@@ -28321,15 +28321,15 @@
           960,
           540
         ],
-        "binary": "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand",
+        "binary": "build-gcc/CortexCommand",
         "binary_sha256": "a795165de949c6b5018ec0cd75843734a43257f4525b36f27440f837001caf32",
         "quiet": true,
         "binary_unchanged": true,
         "complete": true,
         "finished": "2026-10-16 11:09:45 PM MST",
         "peer_hashes": {
-          "first": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-200ms/host_trace.json",
-          "second": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-200ms/client_trace.json",
+          "first": "retained-evidence/B3-first-repeat-matrix/03-200ms/host_trace.json",
+          "second": "retained-evidence/B3-first-repeat-matrix/03-200ms/client_trace.json",
           "cross_peer": true,
           "sim_gated_pass": true,
           "existing_comparator": {
@@ -28464,7 +28464,7 @@
         {
           "peer": "client",
           "requested_rtt_ms": 200,
-          "raw": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-200ms/client/feel/raw.jsonl.gz",
+          "raw": "retained-evidence/B3-first-repeat-matrix/03-200ms/client/feel/raw.jsonl.gz",
           "raw_sha256": "aadd1c7299a89e8d30fef2d7e41713e777f5b7240581482f2f35cf6259efd8ce",
           "input_coverage": {
             "expected_responses": 32,
@@ -31106,121 +31106,121 @@
           "captures": [
             {
               "frame": 57,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-200ms/client/feel/frame-60.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-200ms/client/feel/frame-60.png",
               "tick": 60,
               "type": "capture"
             },
             {
               "frame": 114,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-200ms/client/feel/frame-120.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-200ms/client/feel/frame-120.png",
               "tick": 121,
               "type": "capture"
             },
             {
               "frame": 172,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-200ms/client/feel/frame-180.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-200ms/client/feel/frame-180.png",
               "tick": 180,
               "type": "capture"
             },
             {
               "frame": 229,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-200ms/client/feel/frame-240.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-200ms/client/feel/frame-240.png",
               "tick": 240,
               "type": "capture"
             },
             {
               "frame": 287,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-200ms/client/feel/frame-300.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-200ms/client/feel/frame-300.png",
               "tick": 301,
               "type": "capture"
             },
             {
               "frame": 344,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-200ms/client/feel/frame-360.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-200ms/client/feel/frame-360.png",
               "tick": 360,
               "type": "capture"
             },
             {
               "frame": 399,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-200ms/client/feel/frame-420.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-200ms/client/feel/frame-420.png",
               "tick": 420,
               "type": "capture"
             },
             {
               "frame": 453,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-200ms/client/feel/frame-480.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-200ms/client/feel/frame-480.png",
               "tick": 480,
               "type": "capture"
             },
             {
               "frame": 509,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-200ms/client/feel/frame-540.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-200ms/client/feel/frame-540.png",
               "tick": 540,
               "type": "capture"
             },
             {
               "frame": 560,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-200ms/client/feel/frame-600.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-200ms/client/feel/frame-600.png",
               "tick": 600,
               "type": "capture"
             },
             {
               "frame": 616,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-200ms/client/feel/frame-660.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-200ms/client/feel/frame-660.png",
               "tick": 660,
               "type": "capture"
             },
             {
               "frame": 669,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-200ms/client/feel/frame-720.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-200ms/client/feel/frame-720.png",
               "tick": 720,
               "type": "capture"
             },
             {
               "frame": 722,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-200ms/client/feel/frame-780.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-200ms/client/feel/frame-780.png",
               "tick": 780,
               "type": "capture"
             },
             {
               "frame": 771,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-200ms/client/feel/frame-840.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-200ms/client/feel/frame-840.png",
               "tick": 840,
               "type": "capture"
             },
             {
               "frame": 820,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-200ms/client/feel/frame-900.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-200ms/client/feel/frame-900.png",
               "tick": 900,
               "type": "capture"
             },
             {
               "frame": 872,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-200ms/client/feel/frame-960.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-200ms/client/feel/frame-960.png",
               "tick": 961,
               "type": "capture"
             },
             {
               "frame": 924,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-200ms/client/feel/frame-1020.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-200ms/client/feel/frame-1020.png",
               "tick": 1020,
               "type": "capture"
             },
             {
               "frame": 967,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-200ms/client/feel/frame-1080.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-200ms/client/feel/frame-1080.png",
               "tick": 1080,
               "type": "capture"
             },
             {
               "frame": 1019,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-200ms/client/feel/frame-1140.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-200ms/client/feel/frame-1140.png",
               "tick": 1141,
               "type": "capture"
             },
             {
               "frame": 1068,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-200ms/client/feel/frame-1200.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-200ms/client/feel/frame-1200.png",
               "tick": 1200,
               "type": "capture"
             }
@@ -31233,7 +31233,7 @@
         {
           "peer": "host",
           "requested_rtt_ms": 200,
-          "raw": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-200ms/host/feel/raw.jsonl.gz",
+          "raw": "retained-evidence/B3-first-repeat-matrix/03-200ms/host/feel/raw.jsonl.gz",
           "raw_sha256": "9e3b9d4b8aaac4117f434ead4fe6b1b78696736a39d53d4b60dc8de972c31a2f",
           "input_coverage": {
             "expected_responses": 32,
@@ -33877,115 +33877,115 @@
           "captures": [
             {
               "frame": 39,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-200ms/host/feel/frame-60.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-200ms/host/feel/frame-60.png",
               "tick": 60,
               "type": "capture"
             },
             {
               "frame": 97,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-200ms/host/feel/frame-120.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-200ms/host/feel/frame-120.png",
               "tick": 120,
               "type": "capture"
             },
             {
               "frame": 155,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-200ms/host/feel/frame-180.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-200ms/host/feel/frame-180.png",
               "tick": 180,
               "type": "capture"
             },
             {
               "frame": 211,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-200ms/host/feel/frame-240.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-200ms/host/feel/frame-240.png",
               "tick": 241,
               "type": "capture"
             },
             {
               "frame": 267,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-200ms/host/feel/frame-300.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-200ms/host/feel/frame-300.png",
               "tick": 300,
               "type": "capture"
             },
             {
               "frame": 324,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-200ms/host/feel/frame-360.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-200ms/host/feel/frame-360.png",
               "tick": 360,
               "type": "capture"
             },
             {
               "frame": 380,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-200ms/host/feel/frame-420.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-200ms/host/feel/frame-420.png",
               "tick": 420,
               "type": "capture"
             },
             {
               "frame": 431,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-200ms/host/feel/frame-480.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-200ms/host/feel/frame-480.png",
               "tick": 480,
               "type": "capture"
             },
             {
               "frame": 484,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-200ms/host/feel/frame-540.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-200ms/host/feel/frame-540.png",
               "tick": 541,
               "type": "capture"
             },
             {
               "frame": 532,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-200ms/host/feel/frame-600.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-200ms/host/feel/frame-600.png",
               "tick": 600,
               "type": "capture"
             },
             {
               "frame": 587,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-200ms/host/feel/frame-660.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-200ms/host/feel/frame-660.png",
               "tick": 660,
               "type": "capture"
             },
             {
               "frame": 640,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-200ms/host/feel/frame-720.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-200ms/host/feel/frame-720.png",
               "tick": 720,
               "type": "capture"
             },
             {
               "frame": 692,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-200ms/host/feel/frame-780.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-200ms/host/feel/frame-780.png",
               "tick": 780,
               "type": "capture"
             },
             {
               "frame": 743,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-200ms/host/feel/frame-840.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-200ms/host/feel/frame-840.png",
               "tick": 841,
               "type": "capture"
             },
             {
               "frame": 791,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-200ms/host/feel/frame-900.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-200ms/host/feel/frame-900.png",
               "tick": 900,
               "type": "capture"
             },
             {
               "frame": 836,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-200ms/host/feel/frame-960.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-200ms/host/feel/frame-960.png",
               "tick": 960,
               "type": "capture"
             },
             {
               "frame": 881,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-200ms/host/feel/frame-1020.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-200ms/host/feel/frame-1020.png",
               "tick": 1020,
               "type": "capture"
             },
             {
               "frame": 928,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-200ms/host/feel/frame-1080.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-200ms/host/feel/frame-1080.png",
               "tick": 1081,
               "type": "capture"
             },
             {
               "frame": 972,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-200ms/host/feel/frame-1140.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-200ms/host/feel/frame-1140.png",
               "tick": 1140,
               "type": "capture"
             }
@@ -33998,7 +33998,7 @@
       ]
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-30ms",
+      "path": "retained-evidence/B3-first-repeat-matrix/03-30ms",
       "manifest": {
         "started": "2026-10-16 11:08:23 PM MST",
         "arm": "30ms",
@@ -34012,15 +34012,15 @@
           960,
           540
         ],
-        "binary": "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand",
+        "binary": "build-gcc/CortexCommand",
         "binary_sha256": "a795165de949c6b5018ec0cd75843734a43257f4525b36f27440f837001caf32",
         "quiet": true,
         "binary_unchanged": true,
         "complete": true,
         "finished": "2026-10-16 11:09:01 PM MST",
         "peer_hashes": {
-          "first": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-30ms/host_trace.json",
-          "second": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-30ms/client_trace.json",
+          "first": "retained-evidence/B3-first-repeat-matrix/03-30ms/host_trace.json",
+          "second": "retained-evidence/B3-first-repeat-matrix/03-30ms/client_trace.json",
           "cross_peer": true,
           "sim_gated_pass": true,
           "existing_comparator": {
@@ -34155,7 +34155,7 @@
         {
           "peer": "client",
           "requested_rtt_ms": 30,
-          "raw": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-30ms/client/feel/raw.jsonl.gz",
+          "raw": "retained-evidence/B3-first-repeat-matrix/03-30ms/client/feel/raw.jsonl.gz",
           "raw_sha256": "c520b2ce18a572772d66519bb0c8e11af96977b55648c2f8fca9d3094c18edcd",
           "input_coverage": {
             "expected_responses": 32,
@@ -36794,115 +36794,115 @@
           "captures": [
             {
               "frame": 49,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-30ms/client/feel/frame-60.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-30ms/client/feel/frame-60.png",
               "tick": 60,
               "type": "capture"
             },
             {
               "frame": 106,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-30ms/client/feel/frame-120.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-30ms/client/feel/frame-120.png",
               "tick": 120,
               "type": "capture"
             },
             {
               "frame": 164,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-30ms/client/feel/frame-180.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-30ms/client/feel/frame-180.png",
               "tick": 180,
               "type": "capture"
             },
             {
               "frame": 218,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-30ms/client/feel/frame-240.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-30ms/client/feel/frame-240.png",
               "tick": 240,
               "type": "capture"
             },
             {
               "frame": 275,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-30ms/client/feel/frame-300.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-30ms/client/feel/frame-300.png",
               "tick": 300,
               "type": "capture"
             },
             {
               "frame": 328,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-30ms/client/feel/frame-360.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-30ms/client/feel/frame-360.png",
               "tick": 360,
               "type": "capture"
             },
             {
               "frame": 386,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-30ms/client/feel/frame-420.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-30ms/client/feel/frame-420.png",
               "tick": 420,
               "type": "capture"
             },
             {
               "frame": 444,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-30ms/client/feel/frame-480.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-30ms/client/feel/frame-480.png",
               "tick": 480,
               "type": "capture"
             },
             {
               "frame": 503,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-30ms/client/feel/frame-540.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-30ms/client/feel/frame-540.png",
               "tick": 540,
               "type": "capture"
             },
             {
               "frame": 560,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-30ms/client/feel/frame-600.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-30ms/client/feel/frame-600.png",
               "tick": 600,
               "type": "capture"
             },
             {
               "frame": 617,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-30ms/client/feel/frame-660.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-30ms/client/feel/frame-660.png",
               "tick": 660,
               "type": "capture"
             },
             {
               "frame": 673,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-30ms/client/feel/frame-720.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-30ms/client/feel/frame-720.png",
               "tick": 720,
               "type": "capture"
             },
             {
               "frame": 729,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-30ms/client/feel/frame-780.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-30ms/client/feel/frame-780.png",
               "tick": 780,
               "type": "capture"
             },
             {
               "frame": 784,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-30ms/client/feel/frame-840.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-30ms/client/feel/frame-840.png",
               "tick": 840,
               "type": "capture"
             },
             {
               "frame": 837,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-30ms/client/feel/frame-900.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-30ms/client/feel/frame-900.png",
               "tick": 900,
               "type": "capture"
             },
             {
               "frame": 895,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-30ms/client/feel/frame-960.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-30ms/client/feel/frame-960.png",
               "tick": 960,
               "type": "capture"
             },
             {
               "frame": 954,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-30ms/client/feel/frame-1020.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-30ms/client/feel/frame-1020.png",
               "tick": 1020,
               "type": "capture"
             },
             {
               "frame": 1012,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-30ms/client/feel/frame-1080.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-30ms/client/feel/frame-1080.png",
               "tick": 1080,
               "type": "capture"
             },
             {
               "frame": 1067,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-30ms/client/feel/frame-1140.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-30ms/client/feel/frame-1140.png",
               "tick": 1140,
               "type": "capture"
             }
@@ -36915,7 +36915,7 @@
         {
           "peer": "host",
           "requested_rtt_ms": 30,
-          "raw": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-30ms/host/feel/raw.jsonl.gz",
+          "raw": "retained-evidence/B3-first-repeat-matrix/03-30ms/host/feel/raw.jsonl.gz",
           "raw_sha256": "15e34edcb1a1d596b529b667a21a8204ea29898321e6c8c026e5849026ba3768",
           "input_coverage": {
             "expected_responses": 32,
@@ -39562,115 +39562,115 @@
           "captures": [
             {
               "frame": 42,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-30ms/host/feel/frame-60.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-30ms/host/feel/frame-60.png",
               "tick": 60,
               "type": "capture"
             },
             {
               "frame": 100,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-30ms/host/feel/frame-120.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-30ms/host/feel/frame-120.png",
               "tick": 120,
               "type": "capture"
             },
             {
               "frame": 156,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-30ms/host/feel/frame-180.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-30ms/host/feel/frame-180.png",
               "tick": 180,
               "type": "capture"
             },
             {
               "frame": 208,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-30ms/host/feel/frame-240.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-30ms/host/feel/frame-240.png",
               "tick": 240,
               "type": "capture"
             },
             {
               "frame": 261,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-30ms/host/feel/frame-300.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-30ms/host/feel/frame-300.png",
               "tick": 300,
               "type": "capture"
             },
             {
               "frame": 318,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-30ms/host/feel/frame-360.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-30ms/host/feel/frame-360.png",
               "tick": 360,
               "type": "capture"
             },
             {
               "frame": 375,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-30ms/host/feel/frame-420.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-30ms/host/feel/frame-420.png",
               "tick": 420,
               "type": "capture"
             },
             {
               "frame": 433,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-30ms/host/feel/frame-480.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-30ms/host/feel/frame-480.png",
               "tick": 480,
               "type": "capture"
             },
             {
               "frame": 490,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-30ms/host/feel/frame-540.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-30ms/host/feel/frame-540.png",
               "tick": 540,
               "type": "capture"
             },
             {
               "frame": 547,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-30ms/host/feel/frame-600.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-30ms/host/feel/frame-600.png",
               "tick": 600,
               "type": "capture"
             },
             {
               "frame": 602,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-30ms/host/feel/frame-660.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-30ms/host/feel/frame-660.png",
               "tick": 660,
               "type": "capture"
             },
             {
               "frame": 657,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-30ms/host/feel/frame-720.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-30ms/host/feel/frame-720.png",
               "tick": 720,
               "type": "capture"
             },
             {
               "frame": 710,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-30ms/host/feel/frame-780.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-30ms/host/feel/frame-780.png",
               "tick": 780,
               "type": "capture"
             },
             {
               "frame": 761,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-30ms/host/feel/frame-840.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-30ms/host/feel/frame-840.png",
               "tick": 840,
               "type": "capture"
             },
             {
               "frame": 815,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-30ms/host/feel/frame-900.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-30ms/host/feel/frame-900.png",
               "tick": 900,
               "type": "capture"
             },
             {
               "frame": 872,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-30ms/host/feel/frame-960.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-30ms/host/feel/frame-960.png",
               "tick": 960,
               "type": "capture"
             },
             {
               "frame": 930,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-30ms/host/feel/frame-1020.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-30ms/host/feel/frame-1020.png",
               "tick": 1020,
               "type": "capture"
             },
             {
               "frame": 988,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-30ms/host/feel/frame-1080.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-30ms/host/feel/frame-1080.png",
               "tick": 1080,
               "type": "capture"
             },
             {
               "frame": 1046,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-30ms/host/feel/frame-1140.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-30ms/host/feel/frame-1140.png",
               "tick": 1140,
               "type": "capture"
             }
@@ -39683,7 +39683,7 @@
       ]
     },
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-sp",
+      "path": "retained-evidence/B3-first-repeat-matrix/03-sp",
       "manifest": {
         "started": "2026-10-16 11:07:48 PM MST",
         "arm": "sp",
@@ -39697,7 +39697,7 @@
           960,
           540
         ],
-        "binary": "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand",
+        "binary": "build-gcc/CortexCommand",
         "binary_sha256": "a795165de949c6b5018ec0cd75843734a43257f4525b36f27440f837001caf32",
         "quiet": true,
         "binary_unchanged": true,
@@ -39710,7 +39710,7 @@
         {
           "peer": "sp",
           "requested_rtt_ms": null,
-          "raw": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-sp/sp/feel/raw.jsonl.gz",
+          "raw": "retained-evidence/B3-first-repeat-matrix/03-sp/sp/feel/raw.jsonl.gz",
           "raw_sha256": "c8019dced8f3c7b6784e5aa29068fc5ded33f5172a96c13c564c503d90787ce9",
           "input_coverage": {
             "expected_responses": 32,
@@ -42334,115 +42334,115 @@
           "captures": [
             {
               "frame": 36,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-sp/sp/feel/frame-60.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-sp/sp/feel/frame-60.png",
               "tick": 60,
               "type": "capture"
             },
             {
               "frame": 96,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-sp/sp/feel/frame-120.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-sp/sp/feel/frame-120.png",
               "tick": 120,
               "type": "capture"
             },
             {
               "frame": 156,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-sp/sp/feel/frame-180.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-sp/sp/feel/frame-180.png",
               "tick": 180,
               "type": "capture"
             },
             {
               "frame": 215,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-sp/sp/feel/frame-240.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-sp/sp/feel/frame-240.png",
               "tick": 240,
               "type": "capture"
             },
             {
               "frame": 275,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-sp/sp/feel/frame-300.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-sp/sp/feel/frame-300.png",
               "tick": 300,
               "type": "capture"
             },
             {
               "frame": 335,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-sp/sp/feel/frame-360.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-sp/sp/feel/frame-360.png",
               "tick": 360,
               "type": "capture"
             },
             {
               "frame": 395,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-sp/sp/feel/frame-420.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-sp/sp/feel/frame-420.png",
               "tick": 421,
               "type": "capture"
             },
             {
               "frame": 454,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-sp/sp/feel/frame-480.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-sp/sp/feel/frame-480.png",
               "tick": 480,
               "type": "capture"
             },
             {
               "frame": 514,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-sp/sp/feel/frame-540.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-sp/sp/feel/frame-540.png",
               "tick": 540,
               "type": "capture"
             },
             {
               "frame": 574,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-sp/sp/feel/frame-600.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-sp/sp/feel/frame-600.png",
               "tick": 600,
               "type": "capture"
             },
             {
               "frame": 633,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-sp/sp/feel/frame-660.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-sp/sp/feel/frame-660.png",
               "tick": 660,
               "type": "capture"
             },
             {
               "frame": 693,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-sp/sp/feel/frame-720.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-sp/sp/feel/frame-720.png",
               "tick": 720,
               "type": "capture"
             },
             {
               "frame": 753,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-sp/sp/feel/frame-780.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-sp/sp/feel/frame-780.png",
               "tick": 780,
               "type": "capture"
             },
             {
               "frame": 813,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-sp/sp/feel/frame-840.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-sp/sp/feel/frame-840.png",
               "tick": 840,
               "type": "capture"
             },
             {
               "frame": 872,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-sp/sp/feel/frame-900.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-sp/sp/feel/frame-900.png",
               "tick": 900,
               "type": "capture"
             },
             {
               "frame": 932,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-sp/sp/feel/frame-960.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-sp/sp/feel/frame-960.png",
               "tick": 960,
               "type": "capture"
             },
             {
               "frame": 992,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-sp/sp/feel/frame-1020.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-sp/sp/feel/frame-1020.png",
               "tick": 1020,
               "type": "capture"
             },
             {
               "frame": 1051,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-sp/sp/feel/frame-1080.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-sp/sp/feel/frame-1080.png",
               "tick": 1080,
               "type": "capture"
             },
             {
               "frame": 1111,
-              "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B3-first-repeat-matrix/03-sp/sp/feel/frame-1140.png",
+              "path": "retained-evidence/B3-first-repeat-matrix/03-sp/sp/feel/frame-1140.png",
               "tick": 1140,
               "type": "capture"
             }

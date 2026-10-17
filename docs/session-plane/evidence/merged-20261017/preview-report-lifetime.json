@@ -9,7 +9,7 @@
       "full_hashes_equal": true,
       "peers": {
         "host": {
-          "source": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/merged-A-C-own-hold/01-30ms/host-measurement.json",
+          "source": "retained-evidence/merged-A-C-own-hold/01-30ms/host-measurement.json",
           "sha256": "78380a22acbf09e8a45471a8a157f5462db6c4e38d4d39d9faa875f08970f873",
           "counters": {
             "previews": 997,
@@ -173,7 +173,7 @@
           "overlay_pass": true
         },
         "client": {
-          "source": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/merged-A-C-own-hold/01-30ms/client-measurement.json",
+          "source": "retained-evidence/merged-A-C-own-hold/01-30ms/client-measurement.json",
           "sha256": "e6cdae4cdd0ea91df2795e3d0ab7f61da93f8d973a1dbf0bbda4c2f202773ffb",
           "counters": {
             "previews": 1191,
@@ -239,7 +239,7 @@
       "full_hashes_equal": true,
       "peers": {
         "host": {
-          "source": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-A-C-own-hold/01-30ms/host-measurement.json",
+          "source": "retained-evidence/final-A-C-own-hold/01-30ms/host-measurement.json",
           "sha256": "fb6b5d60783ac7537dc64dab3aecfe00c655b1d7a2fecb38f5a97ece867c1b17",
           "counters": {
             "previews": 1001,
@@ -529,7 +529,7 @@
           "overlay_pass": true
         },
         "client": {
-          "source": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-A-C-own-hold/01-30ms/client-measurement.json",
+          "source": "retained-evidence/final-A-C-own-hold/01-30ms/client-measurement.json",
           "sha256": "589a4900d25e47c577176c247dde9af8f24eec1af81e31275cc6b1bc3344f6bd",
           "counters": {
             "previews": 1194,

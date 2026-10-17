@@ -13,6 +13,6 @@
     }
   ],
   "required_headers": true,
-  "source": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/transport-diagnostics/builder-patch-check-source",
-  "native_rebuild": "The same patched native source already built in s07local/transport-diagnostics/gns-build; this check changes the helper recipe only."
+  "source": "retained-evidence/transport-diagnostics/builder-patch-check-source",
+  "native_rebuild": "The same patched native source already built in retained-evidence/transport-diagnostics/gns-build; this check changes the helper recipe only."
 }

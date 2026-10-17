@@ -5,102 +5,102 @@
   "scope": "Final kept-source headed Linux single-box validation; every RED retained.",
   "record_copies": {
     "gate.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/kept-b41-final-validation/completion-audit.json",
+      "original": "retained-evidence/kept-b41-final-validation/completion-audit.json",
       "sha256": "69b92fd80150e113922d0ea2cefcf4ee075e435ef61ade5d9ef7ba1b9d326dc4",
       "bytes": 46029
     },
     "run-manifest.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/kept-b41-final-validation/summary.json",
+      "original": "retained-evidence/kept-b41-final-validation/summary.json",
       "sha256": "968cf07e4894b7a8ba58b3bcef3bf9f4056df3b3ba45f1605f9cc719a1704bfe",
       "bytes": 6012
     },
     "provenance.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/kept-b41-final-validation/provenance-audit.json",
+      "original": "retained-evidence/kept-b41-final-validation/provenance-audit.json",
       "sha256": "730d05cbee3793cf4a7681b37bdbbbb488436683dd2c092727631631db414e6e",
       "bytes": 496
     },
     "shapes.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/kept-b41-final-validation/shape-inventory/shape-coverage-audit.json",
+      "original": "retained-evidence/kept-b41-final-validation/shape-inventory/shape-coverage-audit.json",
       "sha256": "6ac420deb4442d2d8d4ad3ff2958030cc2da3c180e92fcfa0ac7fc288ab8bc91",
       "bytes": 65271
     },
     "link-delay.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/kept-b41-final-validation/link-delay-and-survivor-waits.json",
+      "original": "retained-evidence/kept-b41-final-validation/link-delay-and-survivor-waits.json",
       "sha256": "ee429302bee2f0e0cddc3b18bcc1ff130539b3dd9fbdf8b0c95e3cd79a11abd4",
       "bytes": 34116
     },
     "hold-triggers.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/kept-b41-final-validation/hold-trigger-audit.json",
+      "original": "retained-evidence/kept-b41-final-validation/hold-trigger-audit.json",
       "sha256": "5caa1fd969583d075e7997d65b040d328ec39c743af526b613d40056d6dde069",
       "bytes": 3870
     },
     "remaining-timing-events.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/kept-b41-final-validation/remaining-timing-events.json",
+      "original": "retained-evidence/kept-b41-final-validation/remaining-timing-events.json",
       "sha256": "fc7cf7f0e65ac750a43598738b12b86fde28ee6b72355ae9b0c7294699882943",
       "bytes": 40530
     },
     "suite.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/kept-b41-final-validation/suite-54/result.json",
+      "original": "retained-evidence/kept-b41-final-validation/suite-54/result.json",
       "sha256": "3c6827957105e9e8ede103ade6b035d3e886a0a19125138658adea8292cb0d77",
       "bytes": 30921
     },
     "random-driver.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/kept-b41-final-validation/random-5000/result.json",
+      "original": "retained-evidence/kept-b41-final-validation/random-5000/result.json",
       "sha256": "a0ea10239c55eb4cd45d5d1dc9525bce83739c3ad04b31e28038fa0e3af92f8f",
       "bytes": 5981
     },
     "driver-runtime.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/kept-b41-final-validation/driver-runtime-audit.json",
+      "original": "retained-evidence/kept-b41-final-validation/driver-runtime-audit.json",
       "sha256": "c9f5d35f3282ea0c3e2be18ec9614281187362e36c39e1276ac0c8e2c7823eb0",
       "bytes": 566
     },
     "native-dependency.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/kept-b41-final-validation/driver-native-dependency.json",
+      "original": "retained-evidence/kept-b41-final-validation/driver-native-dependency.json",
       "sha256": "501d4127254903066609e0ef98155d8e5aaf937d44b104b20449b07c6e8f61ab",
       "bytes": 568
     },
     "driver-launch.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/kept-b41-final-validation/random-5000/net-session-plane-hold-schedules-selftest/launch.json",
+      "original": "retained-evidence/kept-b41-final-validation/random-5000/net-session-plane-hold-schedules-selftest/launch.json",
       "sha256": "094755d5cc649bc1dc8b0efdc9ed1b00a6deed538dd0e1084c711994a3b1ca4c",
       "bytes": 18496
     },
     "fixed-failure-groups.json": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/kept-b41-final-validation/suite-54/net-session-plane-selftest/fixed-failure-groups.json",
+      "original": "retained-evidence/kept-b41-final-validation/suite-54/net-session-plane-selftest/fixed-failure-groups.json",
       "sha256": "8af5901f7dc579519b3edad2aa2cca9cd698e95bcef26ca7436444d9e9ffdb55",
       "bytes": 492
     },
     "build.txt": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/kept-b41-final-validation/build.log",
+      "original": "retained-evidence/kept-b41-final-validation/build.log",
       "sha256": "939de11e0c58a407e466487eea1c670d6bfdfe87631360ab8908658ce8446dc8",
       "bytes": 60
     },
     "C-preflight-build.txt": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/C-final-preflight/build.log",
+      "original": "retained-evidence/C-final-preflight/build.log",
       "sha256": "e8cf5929657c16d3dcab6416f96369a066fd0c1fa5c169d0a57499e368534d6e",
       "bytes": 149
     },
     "reproduction/run-current-gate.py": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/run-current-gate.py",
+      "original": "retained-evidence/run-current-gate.py",
       "sha256": "e7a56c9f027613c2fdf39872f7c7f2dba0c37f0b02798b62c486f6b937e18af7",
       "bytes": 4215
     },
     "reproduction/run-slow-host-proof.py": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/run-slow-host-proof.py",
+      "original": "retained-evidence/run-slow-host-proof.py",
       "sha256": "3709f7bf398ab0aad94cb53f588d79f1092d3abab52b3f553a64f38dab5f8959",
       "bytes": 2034
     },
     "reproduction/audit-shape-coverage.py": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/audit-shape-coverage.py",
+      "original": "retained-evidence/audit-shape-coverage.py",
       "sha256": "b1454287faec7d6e40c400ceb6c858d2336ce41e98c950bb26ba1b549af0e96d",
       "bytes": 2974
     },
     "reproduction/collect-gate-evidence.py": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/collect-gate-evidence.py",
+      "original": "retained-evidence/collect-gate-evidence.py",
       "sha256": "4abbfe0876952a334d094d11e70713760bb813ccf97ff832ec4a0c9494b6e69c",
       "bytes": 3543
     },
     "reproduction/archive-kept-gate.py": {
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/archive-kept-gate.py",
+      "original": "retained-evidence/archive-kept-gate.py",
       "sha256": "7318b09c2af2cc329929ee7eabe892b4cd4f19866f6a747c11a8fb7ee81bba33",
       "bytes": 8790
     }

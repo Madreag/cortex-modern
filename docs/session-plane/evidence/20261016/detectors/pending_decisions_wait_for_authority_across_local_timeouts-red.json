@@ -1,6 +1,6 @@
 {
   "exe_sha256": "7f0526f7ef75b244db8816c98b1b3400fd9294ac6913448f13dd3998f0e3fe24",
-  "repo": "/home/erol/cortex-workers/session-plane-engineer",
+  "repo": ".",
   "passed": 0,
   "total": 1,
   "quiet_rows": [],

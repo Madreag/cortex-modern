@@ -2,7 +2,7 @@
   "binary_sha256": "2c224533eea61753a91b2298b12829579f7d34591ab67ef60cce34e0560a0135",
   "cases": [
     {
-      "source_path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B1-native-live-rise/01-30ms",
+      "source_path": "retained-evidence/B1-native-live-rise/01-30ms",
       "manifest": {
         "started": "2026-10-16 11:17:01 PM MST",
         "arm": "30ms",
@@ -21,7 +21,7 @@
           100
         ],
         "local_prediction_max_ticks_setting": 20,
-        "binary": "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand",
+        "binary": "build-gcc/CortexCommand",
         "binary_sha256": "2c224533eea61753a91b2298b12829579f7d34591ab67ef60cce34e0560a0135",
         "quiet_samples": [
           {
@@ -354,8 +354,8 @@
         "complete": true,
         "finished": "2026-10-16 11:17:38 PM MST",
         "peer_hashes": {
-          "first": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B1-native-live-rise/01-30ms/host_trace.json",
-          "second": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B1-native-live-rise/01-30ms/client_trace.json",
+          "first": "retained-evidence/B1-native-live-rise/01-30ms/host_trace.json",
+          "second": "retained-evidence/B1-native-live-rise/01-30ms/client_trace.json",
           "cross_peer": true,
           "sim_gated_pass": true,
           "existing_comparator": {
@@ -574,7 +574,7 @@
         "host": {
           "peer": "host",
           "requested_rtt_ms": 30,
-          "raw": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B1-native-live-rise/01-30ms/host/feel/raw.jsonl.gz",
+          "raw": "retained-evidence/B1-native-live-rise/01-30ms/host/feel/raw.jsonl.gz",
           "raw_sha256": "0a26c119d11e1553f688dd33ca08d1cd9bc5d6e19e16c8ea168068f7550f6186",
           "input_coverage": {
             "expected_responses": 32,
@@ -903,7 +903,7 @@
         "client": {
           "peer": "client",
           "requested_rtt_ms": 30,
-          "raw": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B1-native-live-rise/01-30ms/client/feel/raw.jsonl.gz",
+          "raw": "retained-evidence/B1-native-live-rise/01-30ms/client/feel/raw.jsonl.gz",
           "raw_sha256": "943da0586733955fb309b5bb2e9a25da576369f7bb057f0f916ac4a01e594be9",
           "input_coverage": {
             "expected_responses": 32,
@@ -1371,7 +1371,7 @@
       }
     },
     {
-      "source_path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B2-native-cap-one/01-30ms",
+      "source_path": "retained-evidence/B2-native-cap-one/01-30ms",
       "manifest": {
         "started": "2026-10-16 11:17:55 PM MST",
         "arm": "30ms",
@@ -1387,7 +1387,7 @@
         ],
         "lag_step": null,
         "local_prediction_max_ticks_setting": 1,
-        "binary": "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand",
+        "binary": "build-gcc/CortexCommand",
         "binary_sha256": "2c224533eea61753a91b2298b12829579f7d34591ab67ef60cce34e0560a0135",
         "quiet_samples": [
           {
@@ -1720,8 +1720,8 @@
         "complete": true,
         "finished": "2026-10-16 11:18:33 PM MST",
         "peer_hashes": {
-          "first": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B2-native-cap-one/01-30ms/host_trace.json",
-          "second": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B2-native-cap-one/01-30ms/client_trace.json",
+          "first": "retained-evidence/B2-native-cap-one/01-30ms/host_trace.json",
+          "second": "retained-evidence/B2-native-cap-one/01-30ms/client_trace.json",
           "cross_peer": true,
           "sim_gated_pass": true,
           "existing_comparator": {
@@ -1854,7 +1854,7 @@
         "host": {
           "peer": "host",
           "requested_rtt_ms": 30,
-          "raw": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B2-native-cap-one/01-30ms/host/feel/raw.jsonl.gz",
+          "raw": "retained-evidence/B2-native-cap-one/01-30ms/host/feel/raw.jsonl.gz",
           "raw_sha256": "baf1008cbfef812b25db60bb68c29befaf37334ed100857dd49335bbb22241e3",
           "input_coverage": {
             "expected_responses": 32,
@@ -2277,7 +2277,7 @@
         "client": {
           "peer": "client",
           "requested_rtt_ms": 30,
-          "raw": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B2-native-cap-one/01-30ms/client/feel/raw.jsonl.gz",
+          "raw": "retained-evidence/B2-native-cap-one/01-30ms/client/feel/raw.jsonl.gz",
           "raw_sha256": "bec7bb81028e1f151fe2dda9c20ee5379bdd21edcfa019ff2308450ae01dbb28",
           "input_coverage": {
             "expected_responses": 32,
@@ -2900,7 +2900,7 @@
       }
     },
     {
-      "source_path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B2-native-cap-one/01-200ms",
+      "source_path": "retained-evidence/B2-native-cap-one/01-200ms",
       "manifest": {
         "started": "2026-10-16 11:18:35 PM MST",
         "arm": "200ms",
@@ -2916,7 +2916,7 @@
         ],
         "lag_step": null,
         "local_prediction_max_ticks_setting": 1,
-        "binary": "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand",
+        "binary": "build-gcc/CortexCommand",
         "binary_sha256": "2c224533eea61753a91b2298b12829579f7d34591ab67ef60cce34e0560a0135",
         "quiet_samples": [
           {
@@ -3276,8 +3276,8 @@
         "complete": true,
         "finished": "2026-10-16 11:19:16 PM MST",
         "peer_hashes": {
-          "first": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B2-native-cap-one/01-200ms/host_trace.json",
-          "second": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B2-native-cap-one/01-200ms/client_trace.json",
+          "first": "retained-evidence/B2-native-cap-one/01-200ms/host_trace.json",
+          "second": "retained-evidence/B2-native-cap-one/01-200ms/client_trace.json",
           "cross_peer": true,
           "sim_gated_pass": true,
           "existing_comparator": {
@@ -3410,7 +3410,7 @@
         "host": {
           "peer": "host",
           "requested_rtt_ms": 200,
-          "raw": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B2-native-cap-one/01-200ms/host/feel/raw.jsonl.gz",
+          "raw": "retained-evidence/B2-native-cap-one/01-200ms/host/feel/raw.jsonl.gz",
           "raw_sha256": "82174c8f3174472c165d01b032d3e9e2fc8f6ca17dcf58f86d91b9781c1cdd4d",
           "input_coverage": {
             "expected_responses": 32,
@@ -4012,7 +4012,7 @@
         "client": {
           "peer": "client",
           "requested_rtt_ms": 200,
-          "raw": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B2-native-cap-one/01-200ms/client/feel/raw.jsonl.gz",
+          "raw": "retained-evidence/B2-native-cap-one/01-200ms/client/feel/raw.jsonl.gz",
           "raw_sha256": "55368a7bb83c1dde52363a0ecfb7d4235aa25d2a093f1d98c196d5953a7078e8",
           "input_coverage": {
             "expected_responses": 32,

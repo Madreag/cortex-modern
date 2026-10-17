@@ -1,6 +1,6 @@
 {
   "pid": 2954409,
   "at": "2026-10-16 07:54:57 PM MST",
-  "proof": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/return-transition-details-8fb/proof.json",
+  "proof": "retained-evidence/return-transition-details-8fb/proof.json",
   "binary_unchanged": true
 }

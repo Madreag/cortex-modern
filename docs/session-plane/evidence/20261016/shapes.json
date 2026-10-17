@@ -1566,8 +1566,8 @@
       "test_frame_tie_full_record_keeps_a_new_split_available": {
         "state": "FAIL",
         "line": "Real signed endpoint capacity regression; see its unmodified first result",
-        "result": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/ownership-tip-directory-capacity/result.json",
-        "log": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/ownership-tip-directory-capacity/test.log",
+        "result": "retained-evidence/ownership-tip-directory-capacity/result.json",
+        "log": "retained-evidence/ownership-tip-directory-capacity/test.log",
         "source_files_verified": true
       }
     },

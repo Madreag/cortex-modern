@@ -1,6 +1,6 @@
 {
   "exe_sha256": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
-  "repo": "/home/erol/cortex-workers/session-plane-engineer",
+  "repo": ".",
   "passed": 0,
   "total": 2,
   "quiet_rows": [],
@@ -26,10 +26,10 @@
       "reason": "exit_code=1",
       "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
       "fixed_failure_report": {
-        "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/kept-b41-final-validation/random-5000/net-session-plane-selftest/fixed-failure-groups.txt",
+        "path": "retained-evidence/kept-b41-final-validation/random-5000/net-session-plane-selftest/fixed-failure-groups.txt",
         "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
         "digest": "f214ba039fc4cadb8be08b11f41fb021459eed0de669ca1594a3545795d21c9d",
-        "suite_root": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/kept-b41-final-validation/random-5000",
+        "suite_root": "retained-evidence/kept-b41-final-validation/random-5000",
         "saved_cases_ran": 108
       },
       "row_elapsed_s": 131.95598517596954,
@@ -59,10 +59,10 @@
       "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
       "schedule_summary": "[net-session-plane-selftest] random_hold_schedules schedules=5000 ran=5000 seeds=1..5000",
       "fixed_failure_report": {
-        "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/kept-b41-final-validation/random-5000/net-session-plane-selftest/fixed-failure-groups.txt",
+        "path": "retained-evidence/kept-b41-final-validation/random-5000/net-session-plane-selftest/fixed-failure-groups.txt",
         "binary": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
         "digest": "f214ba039fc4cadb8be08b11f41fb021459eed0de669ca1594a3545795d21c9d",
-        "suite_root": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/kept-b41-final-validation/random-5000",
+        "suite_root": "retained-evidence/kept-b41-final-validation/random-5000",
         "saved_cases_ran": 108
       },
       "row_elapsed_s": 2408.421390368021,

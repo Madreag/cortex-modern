@@ -1,6 +1,6 @@
 {
   "host": {
-    "path": "/home/erol/cortex-workers/four-player-run/.four-player-run/s10f1/run0/host/stdout.log",
+    "path": "retained-evidence/field-match/field-host-hold/trial-01/host/stdout.log",
     "sha256": "382bbb559f681a313fffcf08d38570c3f3203881800889a9abf6bfbcb14ef3e3",
     "events": [
       {
@@ -76,7 +76,7 @@
     ]
   },
   "joiner": {
-    "path": "/home/erol/cortex-workers/four-player-run/.four-player-run/s10f1/run0/joiner/stdout.log",
+    "path": "retained-evidence/field-match/field-host-hold/trial-01/joiner/stdout.log",
     "sha256": "6de97bb3b2aeb714a64629fdd96519c445fdba6a0466fcef840018fd1f185bc2",
     "events": [
       {

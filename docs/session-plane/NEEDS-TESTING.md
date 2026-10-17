@@ -13,7 +13,7 @@ session and the lead's approved headed/headless policy. No box is assigned here.
 WHAT IT PROVES: a real relay host's own hold and return, the drawn own-hold sentence,
 trigger records, input delay and equal per-tick histories; peers: Windows/MSVC host
 and Mac/GCC joiner, 960x540, quiet. Exact command:
-`python3 tools/e2e_peers.py --scenario fight15-s10h --repo <REPO> --out <FRESH_OUT> --peer-boxes host=<WINDOWS_HOST_BOX>,joiner=<MAC_JOINER_BOX> --boxes-file <BOX_FACTS> --engine-env CC_TEST_RETURN_INPUT_DETAILS=1`
+`python3 tools/e2e_peers.py --scenario fight15-field-held-seat --repo <REPO> --out <FRESH_OUT> --peer-boxes host=<WINDOWS_HOST_BOX>,joiner=<MAC_JOINER_BOX> --boxes-file <BOX_FACTS> --engine-env CC_TEST_RETURN_INPUT_DETAILS=1`
 The scripted stop is at simulation tick 6000 for 2000 milliseconds. It is not a
 stop six seconds after launch. Retain the `h15-own-hold-line` screen evidence and
 the complete hold/proposal/certificate/return records from both peers. The required
@@ -24,12 +24,12 @@ fewer, with no survivor stalls during the host's slow-machine holds.
 WHAT IT PROVES: three-player relay fight, automatic holds/returns and equal histories
 through the complete fight; peers: Windows/MSVC host, Mac/GCC joiner1 and Linux/GCC
 joiner2, 960x540, quiet. Exact command:
-`python3 tools/e2e_peers.py --scenario fight15-s12 --repo <REPO> --out <FRESH_OUT> --peer-boxes host=<WINDOWS_HOST_BOX>,joiner1=<MAC_JOINER_BOX>,joiner2=<LINUX_JOINER_BOX> --boxes-file <BOX_FACTS> --engine-env CC_TEST_RETURN_INPUT_DETAILS=1`
+`python3 tools/e2e_peers.py --scenario fight15-field-observer-b --repo <REPO> --out <FRESH_OUT> --peer-boxes host=<WINDOWS_HOST_BOX>,joiner1=<MAC_JOINER_BOX>,joiner2=<LINUX_JOINER_BOX> --boxes-file <BOX_FACTS> --engine-env CC_TEST_RETURN_INPUT_DETAILS=1`
 
 WHAT IT PROVES: four-player relay fight, every held seat's independent return and
 equal histories; peers: Windows/MSVC host, Mac/GCC joiner1, Linux/GCC joiner2 and a
 second Windows/MSVC joiner3, 960x540, quiet. Exact command:
-`python3 tools/e2e_peers.py --scenario fight15-s11 --repo <REPO> --out <FRESH_OUT> --peer-boxes host=<WINDOWS_HOST_BOX>,joiner1=<MAC_JOINER_BOX>,joiner2=<LINUX_JOINER_BOX>,joiner3=<WINDOWS_JOINER_BOX> --boxes-file <BOX_FACTS> --engine-env CC_TEST_RETURN_INPUT_DETAILS=1`
+`python3 tools/e2e_peers.py --scenario fight15-field-observer-a --repo <REPO> --out <FRESH_OUT> --peer-boxes host=<WINDOWS_HOST_BOX>,joiner1=<MAC_JOINER_BOX>,joiner2=<LINUX_JOINER_BOX>,joiner3=<WINDOWS_JOINER_BOX> --boxes-file <BOX_FACTS> --engine-env CC_TEST_RETURN_INPUT_DETAILS=1`
 
 These three commands passed the runner's local scene validation without launching
 an engine. They do not add actual 200 ms network latency, repeated host stops,

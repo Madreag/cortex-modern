@@ -4,7 +4,7 @@
   "build_ninja_sha256": "12659931c2c95ec8b663c8d5e47b1e4596f18a7fa130268136312f94e6cc89b4",
   "static_native_libraries": [
     {
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/transport-diagnostics/gns-install/lib/libGameNetworkingSockets_s.a",
+      "path": "retained-evidence/transport-diagnostics/gns-install/lib/libGameNetworkingSockets_s.a",
       "bytes": 2866312,
       "sha256": "a78be0e5770e219defc653c5f072ab37cd71ed51493f10c3d7d052441a6bd31c"
     }

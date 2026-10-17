@@ -1,6 +1,6 @@
 {
   "binary_sha256": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
-  "source_log": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/kept-b41-final-validation/random-5000/net-session-plane-hold-schedules-selftest/stdout.log",
+  "source_log": "retained-evidence/kept-b41-final-validation/random-5000/net-session-plane-hold-schedules-selftest/stdout.log",
   "source_sha256": "12271c208ddaac22bc370943f134b49649b90dcc42e5533c184e4ed7699e9ad7",
   "rows": [
     {

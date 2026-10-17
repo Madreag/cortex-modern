@@ -437,68 +437,68 @@
     {
       "arm": "sp",
       "repeat": 1,
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-cadence-repeat-matrix/01-sp",
-      "retained_quiet_case": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-cadence-repeat-matrix/01-sp",
+      "original": "retained-evidence/B-cadence-repeat-matrix/01-sp",
+      "retained_quiet_case": "retained-evidence/B-cadence-repeat-matrix/01-sp",
       "reason": "original quiet case"
     },
     {
       "arm": "30ms",
       "repeat": 1,
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-cadence-repeat-matrix/01-30ms",
-      "retained_quiet_case": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-cadence-repeat-matrix/01-30ms",
+      "original": "retained-evidence/B-cadence-repeat-matrix/01-30ms",
+      "retained_quiet_case": "retained-evidence/B-cadence-repeat-matrix/01-30ms",
       "reason": "original quiet case"
     },
     {
       "arm": "200ms",
       "repeat": 1,
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-cadence-repeat-matrix/01-200ms",
-      "retained_quiet_case": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-cadence-repeat-matrix/01-200ms",
+      "original": "retained-evidence/B-cadence-repeat-matrix/01-200ms",
+      "retained_quiet_case": "retained-evidence/B-cadence-repeat-matrix/01-200ms",
       "reason": "original quiet case"
     },
     {
       "arm": "sp",
       "repeat": 2,
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-cadence-repeat-matrix/02-sp",
-      "retained_quiet_case": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-cadence-repeat-matrix/02-sp",
+      "original": "retained-evidence/B-cadence-repeat-matrix/02-sp",
+      "retained_quiet_case": "retained-evidence/B-cadence-repeat-matrix/02-sp",
       "reason": "original quiet case"
     },
     {
       "arm": "30ms",
       "repeat": 2,
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-cadence-repeat-matrix/02-30ms",
-      "retained_quiet_case": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-cadence-repeat-matrix/02-30ms",
+      "original": "retained-evidence/B-cadence-repeat-matrix/02-30ms",
+      "retained_quiet_case": "retained-evidence/B-cadence-repeat-matrix/02-30ms",
       "reason": "original quiet case"
     },
     {
       "arm": "200ms",
       "repeat": 2,
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-cadence-repeat-matrix/02-200ms",
-      "retained_quiet_case": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-cadence-loaded-case-reruns/01-200ms",
+      "original": "retained-evidence/B-cadence-repeat-matrix/02-200ms",
+      "retained_quiet_case": "retained-evidence/B-cadence-loaded-case-reruns/01-200ms",
       "reason": "foreign jobs overlapped the original arm"
     },
     {
       "arm": "sp",
       "repeat": 3,
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-cadence-repeat-matrix/03-sp",
-      "retained_quiet_case": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-cadence-repeat-matrix/03-sp",
+      "original": "retained-evidence/B-cadence-repeat-matrix/03-sp",
+      "retained_quiet_case": "retained-evidence/B-cadence-repeat-matrix/03-sp",
       "reason": "original quiet case"
     },
     {
       "arm": "30ms",
       "repeat": 3,
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-cadence-repeat-matrix/03-30ms",
-      "retained_quiet_case": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-cadence-repeat-matrix/03-30ms",
+      "original": "retained-evidence/B-cadence-repeat-matrix/03-30ms",
+      "retained_quiet_case": "retained-evidence/B-cadence-repeat-matrix/03-30ms",
       "reason": "original quiet case"
     },
     {
       "arm": "200ms",
       "repeat": 3,
-      "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-cadence-repeat-matrix/03-200ms",
-      "retained_quiet_case": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-cadence-loaded-case-reruns/02-200ms",
+      "original": "retained-evidence/B-cadence-repeat-matrix/03-200ms",
+      "retained_quiet_case": "retained-evidence/B-cadence-loaded-case-reruns/02-200ms",
       "reason": "foreign jobs overlapped the original arm"
     }
   ],
-  "original_matrix_retained": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-cadence-repeat-matrix/results.json",
+  "original_matrix_retained": "retained-evidence/B-cadence-repeat-matrix/results.json",
   "binary_sha256": "5a0ada0c38a725321cfda6d135e9ee7c82f2897c7366bb573ce1042dbece3c68",
   "three_numbers_ms": {
     "sp": 31.786406999919564,
@@ -525,7 +525,7 @@
       "version": "before",
       "arm": "sp",
       "peer": "sp",
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-link-only-repeat-matrix/01-sp/sp/feel/raw.jsonl.gz",
+      "path": "retained-evidence/B-link-only-repeat-matrix/01-sp/sp/feel/raw.jsonl.gz",
       "frames": 1171,
       "mean_interval_ms": 16.867041736123024,
       "steady_tick_range": [
@@ -539,7 +539,7 @@
       "version": "before",
       "arm": "30ms",
       "peer": "host",
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-link-only-repeat-matrix/01-30ms/host/feel/raw.jsonl.gz",
+      "path": "retained-evidence/B-link-only-repeat-matrix/01-30ms/host/feel/raw.jsonl.gz",
       "frames": 1153,
       "mean_interval_ms": 17.328093355594255,
       "steady_tick_range": [
@@ -553,7 +553,7 @@
       "version": "before",
       "arm": "200ms",
       "peer": "host",
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-link-only-repeat-matrix/01-200ms/host/feel/raw.jsonl.gz",
+      "path": "retained-evidence/B-link-only-repeat-matrix/01-200ms/host/feel/raw.jsonl.gz",
       "frames": 1142,
       "mean_interval_ms": 17.49680545534156,
       "steady_tick_range": [
@@ -567,7 +567,7 @@
       "version": "after",
       "arm": "sp",
       "peer": "sp",
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-cadence-repeat-matrix/01-sp/sp/feel/raw.jsonl.gz",
+      "path": "retained-evidence/B-cadence-repeat-matrix/01-sp/sp/feel/raw.jsonl.gz",
       "frames": 1171,
       "mean_interval_ms": 16.87210275149442,
       "steady_tick_range": [
@@ -581,7 +581,7 @@
       "version": "after",
       "arm": "30ms",
       "peer": "host",
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-cadence-repeat-matrix/01-30ms/host/feel/raw.jsonl.gz",
+      "path": "retained-evidence/B-cadence-repeat-matrix/01-30ms/host/feel/raw.jsonl.gz",
       "frames": 1194,
       "mean_interval_ms": 16.735606170016837,
       "steady_tick_range": [
@@ -595,7 +595,7 @@
       "version": "after",
       "arm": "200ms",
       "peer": "host",
-      "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-cadence-repeat-matrix/01-200ms/host/feel/raw.jsonl.gz",
+      "path": "retained-evidence/B-cadence-repeat-matrix/01-200ms/host/feel/raw.jsonl.gz",
       "frames": 1195,
       "mean_interval_ms": 16.72083626861945,
       "steady_tick_range": [
@@ -607,8 +607,8 @@
     }
   ],
   "single_player_hash_control": {
-    "first": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-link-only-repeat-matrix/01-sp/sp_trace.json",
-    "second": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B-cadence-repeat-matrix/01-sp/sp_trace.json",
+    "first": "retained-evidence/B-link-only-repeat-matrix/01-sp/sp_trace.json",
+    "second": "retained-evidence/B-cadence-repeat-matrix/01-sp/sp_trace.json",
     "cross_peer": false,
     "sim_gated_pass": true,
     "existing_comparator": {

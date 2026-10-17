@@ -3,10 +3,10 @@
   "runner_pid": 2639774,
   "platform": "linux",
   "argv": [
-    "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand",
+    "build-gcc/CortexCommand",
     "-net-p2p-selftest"
   ],
-  "cwd": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/transport-diagnostics/p2p-final/runtime",
+  "cwd": "retained-evidence/transport-diagnostics/p2p-final/runtime",
   "timeout_seconds": 60.0,
   "private_desktop": "n/a",
   "input_desktop_before": "n/a",
@@ -14,9 +14,9 @@
   "headless_env": null,
   "visible_window": true,
   "env_set": {
-    "TEMP": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/transport-diagnostics/p2p-final/runtime/Temp",
-    "TMP": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/transport-diagnostics/p2p-final/runtime/Temp",
-    "TMPDIR": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/transport-diagnostics/p2p-final/runtime/Temp",
+    "TEMP": "retained-evidence/transport-diagnostics/p2p-final/runtime/Temp",
+    "TMP": "retained-evidence/transport-diagnostics/p2p-final/runtime/Temp",
+    "TMPDIR": "retained-evidence/transport-diagnostics/p2p-final/runtime/Temp",
     "SDL_VIDEODRIVER": "x11",
     "DISPLAY": ":0",
     "CC_TEST_CRASH_DUMP": "crash.dmp"
@@ -28,7 +28,7 @@
     {
       "check": "exe_exists",
       "ok": true,
-      "detail": "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand"
+      "detail": "build-gcc/CortexCommand"
     },
     {
       "check": "exe_sha256_recorded",
@@ -38,22 +38,22 @@
     {
       "check": "cwd_exists",
       "ok": true,
-      "detail": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/transport-diagnostics/p2p-final/runtime"
+      "detail": "retained-evidence/transport-diagnostics/p2p-final/runtime"
     },
     {
       "check": "data_junction_resolves",
       "ok": true,
-      "detail": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/transport-diagnostics/p2p-final/runtime/Data -> /home/erol/cortex-workers/session-plane-engineer/Data"
+      "detail": "retained-evidence/transport-diagnostics/p2p-final/runtime/Data -> Data"
     },
     {
       "check": "userdata_writable",
       "ok": true,
-      "detail": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/transport-diagnostics/p2p-final/runtime/Userdata"
+      "detail": "retained-evidence/transport-diagnostics/p2p-final/runtime/Userdata"
     },
     {
       "check": "out_dir_private_writable",
       "ok": true,
-      "detail": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/transport-diagnostics/p2p-final"
+      "detail": "retained-evidence/transport-diagnostics/p2p-final"
     },
     {
       "check": "lane_scripts_desktop_free",
@@ -63,7 +63,7 @@
   ],
   "evidence_expected": [],
   "hop": null,
-  "exe_path": "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand",
+  "exe_path": "build-gcc/CortexCommand",
   "exe_bytes": 68222592,
   "exe_mtime_utc": "2026-10-15T23:03:01.234195+00:00",
   "exe_sha256": "18ebee7c42675bf7cb02659ce652adea0178ead1a997b340dd7dc31c9f97c6df",

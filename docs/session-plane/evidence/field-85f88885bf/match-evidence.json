@@ -1,19 +1,19 @@
 {
   "copy_receipt": {
     "copied_at_utc": "2026-10-17T17:07:20.930472+00:00",
-    "source_box": "bro",
-    "source_root": "/Users/erol/cortex-workers/gns-v6-rollout/night",
+    "source_box": "macos-observer",
+    "source_root": "retained-evidence/field-match/macos-observer",
     "read_only": true,
     "archive_sha256": "1dc3f466c0b5536e4fe593c0929cc33227ccfa8762f3be65618c27baf5ad329a",
     "archive_bytes": 12257280,
     "members": [
       {
-        "name": "c/run0/host/stdout.log",
+        "name": "c/trial-01/host/stdout.log",
         "bytes": 62992338,
         "sha256": "4065e405384e268da693cc9dbe3e54874b9af086c72756cbd16c11bcca38efcf"
       },
       {
-        "name": "c/run0/joiner/stdout.log",
+        "name": "c/trial-01/joiner/stdout.log",
         "bytes": 56245761,
         "sha256": "677f4fd1c027bb9d4c23b07cc3939ca75906478b746d5595959e9ce015d67d95"
       },
@@ -88,280 +88,280 @@
         "peer": "2",
         "ticks": 5,
         "group_delay_max": 5,
-        "ref": "night/c/run0/host/stdout.log:9816"
+        "ref": "night/c/trial-01/host/stdout.log:9816"
       },
       {
         "frame": 662,
         "peer": "1",
         "ticks": 5,
         "group_delay_max": 5,
-        "ref": "night/c/run0/host/stdout.log:9811"
+        "ref": "night/c/trial-01/host/stdout.log:9811"
       },
       {
         "frame": 6379,
         "peer": "2",
         "ticks": 6,
         "group_delay_max": 6,
-        "ref": "night/c/run0/host/stdout.log:24420"
+        "ref": "night/c/trial-01/host/stdout.log:24420"
       },
       {
         "frame": 7105,
         "peer": "2",
         "ticks": 5,
         "group_delay_max": 5,
-        "ref": "night/c/run0/host/stdout.log:26222"
+        "ref": "night/c/trial-01/host/stdout.log:26222"
       },
       {
         "frame": 7140,
         "peer": "1",
         "ticks": 6,
         "group_delay_max": 6,
-        "ref": "night/c/run0/host/stdout.log:26282"
+        "ref": "night/c/trial-01/host/stdout.log:26282"
       },
       {
         "frame": 8041,
         "peer": "1",
         "ticks": 5,
         "group_delay_max": 5,
-        "ref": "night/c/run0/host/stdout.log:28610"
+        "ref": "night/c/trial-01/host/stdout.log:28610"
       },
       {
         "frame": 8334,
         "peer": "1",
         "ticks": 6,
         "group_delay_max": 6,
-        "ref": "night/c/run0/host/stdout.log:29378"
+        "ref": "night/c/trial-01/host/stdout.log:29378"
       },
       {
         "frame": 9914,
         "peer": "1",
         "ticks": 5,
         "group_delay_max": 5,
-        "ref": "night/c/run0/host/stdout.log:33523"
+        "ref": "night/c/trial-01/host/stdout.log:33523"
       },
       {
         "frame": 20157,
         "peer": "1",
         "ticks": 6,
         "group_delay_max": 6,
-        "ref": "night/c/run0/host/stdout.log:59901"
+        "ref": "night/c/trial-01/host/stdout.log:59901"
       },
       {
         "frame": 28924,
         "peer": "1",
         "ticks": 5,
         "group_delay_max": 5,
-        "ref": "night/c/run0/host/stdout.log:82901"
+        "ref": "night/c/trial-01/host/stdout.log:82901"
       },
       {
         "frame": 29818,
         "peer": "1",
         "ticks": 6,
         "group_delay_max": 6,
-        "ref": "night/c/run0/host/stdout.log:85207"
+        "ref": "night/c/trial-01/host/stdout.log:85207"
       },
       {
         "frame": 30543,
         "peer": "1",
         "ticks": 5,
         "group_delay_max": 5,
-        "ref": "night/c/run0/host/stdout.log:87085"
+        "ref": "night/c/trial-01/host/stdout.log:87085"
       },
       {
         "frame": 36420,
         "peer": "2",
         "ticks": 6,
         "group_delay_max": 6,
-        "ref": "night/c/run0/host/stdout.log:102332"
+        "ref": "night/c/trial-01/host/stdout.log:102332"
       },
       {
         "frame": 37145,
         "peer": "2",
         "ticks": 5,
         "group_delay_max": 5,
-        "ref": "night/c/run0/host/stdout.log:104282"
+        "ref": "night/c/trial-01/host/stdout.log:104282"
       },
       {
         "frame": 40132,
         "peer": "1",
         "ticks": 5,
         "group_delay_max": 5,
-        "ref": "night/c/run0/host/stdout.log:112171"
+        "ref": "night/c/trial-01/host/stdout.log:112171"
       },
       {
         "frame": 46944,
         "peer": "1",
         "ticks": 6,
         "group_delay_max": 6,
-        "ref": "night/c/run0/host/stdout.log:130057"
+        "ref": "night/c/trial-01/host/stdout.log:130057"
       },
       {
         "frame": 47820,
         "peer": "1",
         "ticks": 5,
         "group_delay_max": 5,
-        "ref": "night/c/run0/host/stdout.log:132317"
+        "ref": "night/c/trial-01/host/stdout.log:132317"
       },
       {
         "frame": 48665,
         "peer": "1",
         "ticks": 6,
         "group_delay_max": 6,
-        "ref": "night/c/run0/host/stdout.log:134553"
+        "ref": "night/c/trial-01/host/stdout.log:134553"
       },
       {
         "frame": 56634,
         "peer": "1",
         "ticks": 5,
         "group_delay_max": 5,
-        "ref": "night/c/run0/host/stdout.log:155610"
+        "ref": "night/c/trial-01/host/stdout.log:155610"
       },
       {
         "frame": 60853,
         "peer": "1",
         "ticks": 6,
         "group_delay_max": 6,
-        "ref": "night/c/run0/host/stdout.log:166602"
+        "ref": "night/c/trial-01/host/stdout.log:166602"
       },
       {
         "frame": 61175,
         "peer": "2",
         "ticks": 12,
         "group_delay_max": 12,
-        "ref": "night/c/run0/host/stdout.log:167775"
+        "ref": "night/c/trial-01/host/stdout.log:167775"
       },
       {
         "frame": 61246,
         "peer": "1",
         "ticks": 12,
         "group_delay_max": 12,
-        "ref": "night/c/run0/host/stdout.log:167960"
+        "ref": "night/c/trial-01/host/stdout.log:167960"
       },
       {
         "frame": 61441,
         "peer": "2",
         "ticks": 8,
         "group_delay_max": 12,
-        "ref": "night/c/run0/host/stdout.log:168460"
+        "ref": "night/c/trial-01/host/stdout.log:168460"
       },
       {
         "frame": 61497,
         "peer": "1",
         "ticks": 9,
         "group_delay_max": 9,
-        "ref": "night/c/run0/host/stdout.log:168562"
+        "ref": "night/c/trial-01/host/stdout.log:168562"
       },
       {
         "frame": 61631,
         "peer": "2",
         "ticks": 7,
         "group_delay_max": 9,
-        "ref": "night/c/run0/host/stdout.log:169050"
+        "ref": "night/c/trial-01/host/stdout.log:169050"
       },
       {
         "frame": 61692,
         "peer": "1",
         "ticks": 7,
         "group_delay_max": 7,
-        "ref": "night/c/run0/host/stdout.log:169140"
+        "ref": "night/c/trial-01/host/stdout.log:169140"
       },
       {
         "frame": 62227,
         "peer": "2",
         "ticks": 6,
         "group_delay_max": 7,
-        "ref": "night/c/run0/host/stdout.log:170607"
+        "ref": "night/c/trial-01/host/stdout.log:170607"
       },
       {
         "frame": 62290,
         "peer": "1",
         "ticks": 6,
         "group_delay_max": 6,
-        "ref": "night/c/run0/host/stdout.log:170699"
+        "ref": "night/c/trial-01/host/stdout.log:170699"
       },
       {
         "frame": 62824,
         "peer": "2",
         "ticks": 5,
         "group_delay_max": 6,
-        "ref": "night/c/run0/host/stdout.log:172184"
+        "ref": "night/c/trial-01/host/stdout.log:172184"
       },
       {
         "frame": 62890,
         "peer": "1",
         "ticks": 5,
         "group_delay_max": 5,
-        "ref": "night/c/run0/host/stdout.log:172273"
+        "ref": "night/c/trial-01/host/stdout.log:172273"
       },
       {
         "frame": 63805,
         "peer": "1",
         "ticks": 6,
         "group_delay_max": 6,
-        "ref": "night/c/run0/host/stdout.log:174658"
+        "ref": "night/c/trial-01/host/stdout.log:174658"
       },
       {
         "frame": 64534,
         "peer": "1",
         "ticks": 5,
         "group_delay_max": 5,
-        "ref": "night/c/run0/host/stdout.log:176527"
+        "ref": "night/c/trial-01/host/stdout.log:176527"
       },
       {
         "frame": 64710,
         "peer": "1",
         "ticks": 6,
         "group_delay_max": 6,
-        "ref": "night/c/run0/host/stdout.log:176983"
+        "ref": "night/c/trial-01/host/stdout.log:176983"
       },
       {
         "frame": 66300,
         "peer": "1",
         "ticks": 5,
         "group_delay_max": 5,
-        "ref": "night/c/run0/host/stdout.log:181032"
+        "ref": "night/c/trial-01/host/stdout.log:181032"
       },
       {
         "frame": 66920,
         "peer": "1",
         "ticks": 6,
         "group_delay_max": 6,
-        "ref": "night/c/run0/host/stdout.log:182618"
+        "ref": "night/c/trial-01/host/stdout.log:182618"
       },
       {
         "frame": 69633,
         "peer": "1",
         "ticks": 5,
         "group_delay_max": 5,
-        "ref": "night/c/run0/host/stdout.log:190127"
+        "ref": "night/c/trial-01/host/stdout.log:190127"
       },
       {
         "frame": 69762,
         "peer": "1",
         "ticks": 6,
         "group_delay_max": 6,
-        "ref": "night/c/run0/host/stdout.log:190616"
+        "ref": "night/c/trial-01/host/stdout.log:190616"
       },
       {
         "frame": 70498,
         "peer": "1",
         "ticks": 6,
         "group_delay_max": 6,
-        "ref": "night/c/run0/host/stdout.log:192537"
+        "ref": "night/c/trial-01/host/stdout.log:192537"
       },
       {
         "frame": 76572,
         "peer": "1",
         "ticks": 5,
         "group_delay_max": 5,
-        "ref": "night/c/run0/host/stdout.log:208966"
+        "ref": "night/c/trial-01/host/stdout.log:208966"
       },
       {
         "frame": 76789,
         "peer": "1",
         "ticks": 6,
         "group_delay_max": 6,
-        "ref": "night/c/run0/host/stdout.log:209552"
+        "ref": "night/c/trial-01/host/stdout.log:209552"
       }
     ]
   },

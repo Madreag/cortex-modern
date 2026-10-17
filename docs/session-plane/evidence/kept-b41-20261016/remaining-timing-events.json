@@ -1,6 +1,6 @@
 {
   "binary_sha256": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
-  "source_log": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/kept-b41-final-validation/shape-inventory/net-session-plane-selftest/stdout.log",
+  "source_log": "retained-evidence/kept-b41-final-validation/shape-inventory/net-session-plane-selftest/stdout.log",
   "source_log_sha256": "62846f6556330d7d4e371e71b55be9d6168a5f659957432676be34ae13354a18",
   "scope": "Exact observations from complete kept-binary catalogue rows. These are reachable RED rows, not fixed or declared unreachable. Later input acceptance does not prove when the missing first input was produced or why it was rejected.",
   "rows": [

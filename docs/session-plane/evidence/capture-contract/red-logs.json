@@ -1,10 +1,10 @@
 [
   {
-    "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/capture-contract-red-v2/capture-wire-contract/net-lockstep-selftest/stdout.log",
+    "original": "retained-evidence/capture-contract-red-v2/capture-wire-contract/net-lockstep-selftest/stdout.log",
     "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
   },
   {
-    "original": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/capture-contract-red-v2/capture-wire-contract/net-lockstep-selftest/stderr.log",
+    "original": "retained-evidence/capture-contract-red-v2/capture-wire-contract/net-lockstep-selftest/stderr.log",
     "sha256": "d7adba6e63e58a857b33c9ae8a9a0e7cd200ccb57796de26a76df6d27b7acb13"
   }
 ]

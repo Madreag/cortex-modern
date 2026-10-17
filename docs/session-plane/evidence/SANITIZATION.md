@@ -1,0 +1,3 @@
+Published evidence uses repository-relative source paths and neutral artifact names. Files under `retained-evidence/` refer to the separately retained local evidence pack; they are not shipped with the source tree. Original notes and evidence were archived locally and verified by SHA-256 before publication was sanitized.
+
+`sanitization.json` records the original and published hash of every changed file at the sanitization milestone. Existing hashes inside a receipt identify its original evidence, whose measurements and verdicts were not changed. Paths and operational identifiers in published transcripts have been normalized, so their bytes intentionally differ from the original logs. Later technical edits are recorded by version control.

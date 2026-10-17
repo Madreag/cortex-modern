@@ -9,7 +9,7 @@ import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-root = Path('/home/erol/cortex-workers/session-plane-engineer')
+root = Path('.')
 scratch = Path(__file__).parent
 gate = scratch / 'deferred-return-tip-final-validation'
 parent = 2954409

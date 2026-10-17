@@ -6,7 +6,7 @@
       "name": "hung-host-100ms-directory",
       "exit_code": 0,
       "seconds": 1.0212012299998605,
-      "log": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/local-authority-01/hung-host-100ms-directory/net-session-plane-selftest/stdout.log",
+      "log": "retained-evidence/local-authority-01/hung-host-100ms-directory/net-session-plane-selftest/stdout.log",
       "log_sha256": "8d4150fdc1711263b194944f584a369cfa7c2afe09e61409605c11b17feb0191",
       "verdicts": [
         "[net-session-plane-selftest] PASS two_internet_seats_2ms_host_hung_3000ms seed=0 referee_seat1=asked:2368,waiting:2360,decided:8,requests:8,first_decided_ms:101 referee_seat2=asked:185,waiting:184,decided:1,requests:1,first_decided_ms:101",
@@ -24,7 +24,7 @@
       "name": "hung-host-300ms-directory",
       "exit_code": 1,
       "seconds": 1.1167050979984197,
-      "log": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/local-authority-01/hung-host-300ms-directory/net-session-plane-selftest/stdout.log",
+      "log": "retained-evidence/local-authority-01/hung-host-300ms-directory/net-session-plane-selftest/stdout.log",
       "log_sha256": "864d9ee9b53aa78e43cea5a87948cbe1c5a3bab30ac79ddc3455f1fa9e2e7550",
       "verdicts": [
         "[net-session-plane-selftest] FAIL two_internet_seats_30ms_directory_300ms_host_hung_3000ms seed=0 property=bound kind=tie_survivor_waits: seat 2 waited 631 ms for frame 362 from 6048 ms, the spells then [1:hung] referee_seat1=asked:5302,waiting:4268,decided:5,requests:6,first_decided_ms:601 referee_seat2=asked:1803,waiting:752,decided:1,requests:2,first_decided_ms:601"

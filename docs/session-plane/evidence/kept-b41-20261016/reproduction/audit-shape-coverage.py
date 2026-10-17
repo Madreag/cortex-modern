@@ -1,6 +1,6 @@
 import fnmatch, hashlib, json, re, sys
 from pathlib import Path
-root=Path('/home/erol/cortex-workers/session-plane-engineer')
+root=Path.cwd().resolve()
 run=Path(sys.argv[1])
 log=(run/'net-session-plane-selftest/stdout.log').read_text()
 # Include completed same-executable suite/driver observations. A failure in

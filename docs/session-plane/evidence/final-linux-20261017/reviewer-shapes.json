@@ -1,7 +1,7 @@
 {
   "binary_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
   "fixture_mapping": {
-    "path": "/home/erol/cortex-workers/session-plane-engineer/Source/Network/NetSessionPlaneShapeCoverage.json",
+    "path": "Source/Network/NetSessionPlaneShapeCoverage.json",
     "sha256": "47d278502c2fdb791d273f43d38756b35c4018ae509f2b8783c5801e8baa28e7",
     "bytes": 24643
   },

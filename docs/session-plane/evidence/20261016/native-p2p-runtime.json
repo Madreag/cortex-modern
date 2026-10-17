@@ -1,7 +1,7 @@
 {
-  "executable": "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand",
-  "cwd": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/transport-diagnostics/p2p-final/runtime",
-  "data": "/home/erol/cortex-workers/session-plane-engineer/Data",
+  "executable": "build-gcc/CortexCommand",
+  "cwd": "retained-evidence/transport-diagnostics/p2p-final/runtime",
+  "data": "Data",
   "settings_sha256": "6fc82c0d85f5837d1e710f8c23fc2e76cc2bd720539661fe33bc104a74800390",
   "settings_overrides": {
     "MuteMaster": "1",

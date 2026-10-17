@@ -1,6 +1,6 @@
 {
   "binary_sha256": "ed3e2774d2cb28e24bbec6df598696781c1bb1877f4e83ec0464aaac8f1a8d17",
-  "path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/C-native-own-hold/01-30ms",
+  "path": "retained-evidence/C-native-own-hold/01-30ms",
   "whole_match_pass": false,
   "reason": "Native host hold at606/AI727; both report desync750. Host exits1; the owning driver was interrupted after failure to close only its partner through its runner. No complete client tick trace, no completed B3 or whole-match claim.",
   "checker_change": "Own-hold sentence now requires every documented word in LabelNetMatchStatus; only ordinary whitespace/line wrapping is normalized. Existing watch rules unchanged.",
@@ -76,7 +76,7 @@
   "checks": {
     "C-full-sentence-menu": {
       "exe_sha256": "ed3e2774d2cb28e24bbec6df598696781c1bb1877f4e83ec0464aaac8f1a8d17",
-      "repo": "/home/erol/cortex-workers/session-plane-engineer",
+      "repo": ".",
       "passed": 1,
       "total": 1,
       "quiet_rows": [],
@@ -106,7 +106,7 @@
     },
     "C-full-sentence-ui": {
       "exe_sha256": "ed3e2774d2cb28e24bbec6df598696781c1bb1877f4e83ec0464aaac8f1a8d17",
-      "repo": "/home/erol/cortex-workers/session-plane-engineer",
+      "repo": ".",
       "passed": 1,
       "total": 1,
       "quiet_rows": [
@@ -148,7 +148,7 @@
     },
     "B-live-fault-coordinator": {
       "exe_sha256": "2c224533eea61753a91b2298b12829579f7d34591ab67ef60cce34e0560a0135",
-      "repo": "/home/erol/cortex-workers/session-plane-engineer",
+      "repo": ".",
       "passed": 0,
       "total": 1,
       "quiet_rows": [],
