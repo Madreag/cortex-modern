@@ -83,6 +83,7 @@ SELFTESTS = [
     "preview-invariance",
     "preview-hotplug",
     "preview-binding-exhaustive",
+    "capture-window",
     "joystick-updater",
 ]
 # Rows whose verdict carries a wall-clock window, so a loaded box can fail them without a defect. They run last, one at
@@ -146,6 +147,9 @@ def score_wall_clock_informational(stdout: str, record: dict, name: str, sanitiz
 BINDING_WALK_ARGS = ["-net-replay", "tools/fixtures/pickup_fire.ccreplay", "-input-script", "tools/fixtures/pickup_fire.txt",
                      "-max-ticks", "155", "-preview-binding-exhaustive-selftest"]
 BINDING_WALK_FIXTURES = ["pickup_fire.ccreplay", "pickup_fire.txt"]
+# A world capture of the same replay's match world through its prepared saver, the allocator moved inside its window, at 150.
+CAPTURE_WINDOW_ARGS = ["-net-replay", "tools/fixtures/pickup_fire.ccreplay", "-input-script", "tools/fixtures/pickup_fire.txt",
+                       "-max-ticks", "152", "-capture-window-selftest"]
 BINDING_WALK_TIMEOUT = 1800
 # The TSan walk takes about 1030 s alone on the Mac and about 3100 s in a throttled GUI-session job.
 BINDING_WALK_SANITIZER_TIMEOUT = {"tsan": 3600}
@@ -575,8 +579,10 @@ def run_row_in_mode(options, make_run, name, case, sanitizer):
                 # supplied a case filter or an N intended for the random driver.
                 row_env["CC_TEST_SESSION_PLANE_CASE"] = "fixed_session_fixtures"
                 row_env["CC_TEST_HOLD_SCHEDULES"] = "0"
-        run = make_run(options.repo, BINDING_WALK_ARGS if walk else [f"-{native_name}-selftest"], case, budget,
-                       fixtures=BINDING_WALK_FIXTURES if walk else SELFTEST_FIXTURES.get(name), env=row_env)
+        window = name == "capture-window"
+        args = BINDING_WALK_ARGS if walk else CAPTURE_WINDOW_ARGS if window else [f"-{native_name}-selftest"]
+        run = make_run(options.repo, args, case, budget,
+                       fixtures=BINDING_WALK_FIXTURES if walk or window else SELFTEST_FIXTURES.get(name), env=row_env)
         try:
             record = run.start().finish()
         finally:

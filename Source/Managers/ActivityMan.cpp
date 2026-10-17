@@ -2929,40 +2929,8 @@ bool ActivityMan::RunSaveRefusalDiagnosisSelfTest() {
 }
 
 bool ActivityMan::RunWorldCaptureWindow(const std::function<void()>& beforeArm, const std::function<void()>& inWindow, std::vector<std::string>& problems) {
-	// A match's world: its storage on, and a scripted activity and a scene with terrain made in that storage.
-	NativeWorldMode worldMode(true);
-	CheckpointNativeStorage::WorldAllocationScope worldValues(true);
-	auto priorActivity = std::move(m_Activity);
-	m_Activity.reset(new GAScripted());
-	m_Activity->SetActivityState(Activity::Running);
-	SceneMan::SceneSetAside originalScene;
-	g_SceneMan.SetAsideScene(originalScene);
-	SceneMan::SceneSetAside captureScene;
-	struct CaptureTerrain : SLTerrain {
-		CaptureTerrain() {
-			m_MainBitmap = create_bitmap_ex(8, 64, 64);
-			m_MainBitmapOwned = true;
-		}
-	};
-	auto* scene = new Scene();
-	scene->Create(new CaptureTerrain());
-	captureScene.scene = scene;
-	g_SceneMan.ReinstateScene(captureScene);
-	struct Restore {
-		ActivityMan& owner;
-		SceneMan::SceneSetAside& capture;
-		SceneMan::SceneSetAside& original;
-		std::unique_ptr<Activity>& prior;
-		~Restore() {
-			owner.DropPreparedAutosave();
-			g_SceneMan.SetAsideScene(capture);
-			g_SceneMan.ReinstateScene(original);
-			owner.m_Activity = std::move(prior);
-		}
-	} restore{*this, captureScene, originalScene, priorActivity};
-	PrepareAutosave();
-	if (!m_PreparedAutosave) {
-		problems.emplace_back("the saver was not prepared");
+	if (!CheckpointNativeStorage::WorldEnabled() || !m_PreparedAutosave) {
+		problems.emplace_back("no match world with a prepared saver to capture");
 		return false;
 	}
 	// Every record from here on is this capture's.
@@ -2972,8 +2940,17 @@ bool ActivityMan::RunWorldCaptureWindow(const std::function<void()>& beforeArm, 
 		// The game's gate holds the saver at its first yield, before it reads anything, until the verdict is waited for.
 		SaverThreads::Gating gating;
 		beforeArm();
-		SaverThreads::CloseSlice();
-		if (!SaveAutosaveSnapshot("aaaaaaaa-0000-0000-0000-000000000002", 1)) {
+		bool taken = false;
+		for (int attempt = 0; !taken && attempt < 5; ++attempt) {
+			if (attempt) {
+				// A plan the world outgrew since its preparation is prepared again, as the next tick would.
+				NotifyCheckpointTick();
+				m_PreparedAutosave->queue.WaitUntilPrepared();
+			}
+			SaverThreads::CloseSlice();
+			taken = SaveAutosaveSnapshot("aaaaaaaa-0000-0000-0000-000000000002", static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) + 1 + attempt);
+		}
+		if (!taken) {
 			problems.emplace_back("the capture was not taken: " + LastAutosaveRefusal().reason);
 			return false;
 		}

@@ -6807,8 +6807,7 @@ _EngineHandles.unreached = _UnreachedPieMenu and _UnreachedPieMenu:GetFirstPieSl
 // nothing reaches can be freed before the walk reaches its handle. Each is judged as it stood at the fence - the dropped slice
 // is carried as gone and the waypoint as the position it read though new objects hold their memory, and the live slice is
 // refused by name though its slot is free when the walk gets there.
-static bool RunCaptureWindowSelfTest(LuaStateWrapper& lua) {
-	CheckpointNativeStorage::WorldAllocationScope world(true);
+static bool RunCaptureWindowCases(LuaStateWrapper& lua) {
 	lua_State* const L = lua.GetLuaState();
 	const Entity::ClassInfo* sliceType = Entity::ClassInfo::GetClass("PieSlice");
 	const size_t sliceBytes = sliceType ? sliceType->CheckpointInstanceBytes() : 0;
@@ -6939,6 +6938,8 @@ _CaptureWindow.unreached = _UnreachedCaptureMenu and _UnreachedCaptureMenu:GetFi
 	          << " live_at_fence=" << liveAtFence << " freed_in_window=" << freedInWindow << " unreached_refused_by_name=" << unreachedRefused << std::endl;
 	return passed;
 }
+
+bool LuaMan::RunCaptureWindowSelfTest() { return RunCaptureWindowCases(m_MasterScriptState); }
 
 static int ScriptGraphGlobalScript(lua_State* L) {
 	const auto* activity = dynamic_cast<const GAScripted*>(g_ActivityMan.GetActivity());
@@ -13559,7 +13560,6 @@ debug.setupvalue(next, 4, "150")
 		checkpointValues = GameActivity::RunCapturedSeatInterfacesSelfTest() && checkpointValues;
 		checkpointValues = RunStaleActivityReferenceSelfTest(*this) && checkpointValues;
 		checkpointValues = RunEngineHandleSelfTest(*this) && checkpointValues;
-		checkpointValues = RunCaptureWindowSelfTest(*this) && checkpointValues;
 		g_SceneMan.SetAsideScene(deliveryScene);
 		g_SceneMan.ReinstateScene(originalScene);
 	}

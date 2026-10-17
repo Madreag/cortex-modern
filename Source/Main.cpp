@@ -1343,6 +1343,7 @@ struct MenuTraceCoverage {
 };
 static MenuTraceCoverage s_menuTraceCoverage;
 static bool s_cowCheckpointAutosave = false;
+static bool s_captureWindowSelfTest = false;
 static bool s_checkpointRestoreContinue = false;
 static uint64_t s_checkpointRestoreTick = 0;
 static uint32_t s_checkpointRestoreAutosaveTicks = 0;
@@ -3489,6 +3490,10 @@ bool HandleMainArgs(int argCount, char** argValue) {
 				return false;
 			}
 			continue;
+		}
+		if (currentArg == "-capture-window-selftest") {
+			// The row plays the pickup_fire replay, a match world in the world's storage with its prepared saver.
+			s_captureWindowSelfTest = true;
 		}
 		if (currentArg == "-preview-binding-exhaustive-selftest") {
 			// Fixtures join the world at 150 and the walk runs at 154, off the 30-tick desync sample; the row plays the pickup_fire replay.
@@ -9214,6 +9219,10 @@ void RunGameLoop() {
 			LocalPredictionInvarianceOnTick(simTick);
 			if (LuaBindingExhaustiveSelfTest::OnTick(simTick) > 0) {
 				s_netReplayExitCode = 5;
+			}
+			if (s_captureWindowSelfTest && simTick == 150) {
+				s_captureWindowSelfTest = false;
+				if (!g_LuaMan.RunCaptureWindowSelfTest()) s_netReplayExitCode = 5;
 			}
 			PreviewEventLedgerFrameOnTick();
 			TrackUidsIfArmed(simTick);

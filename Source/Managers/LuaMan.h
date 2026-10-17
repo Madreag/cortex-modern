@@ -1005,6 +1005,8 @@ namespace RTE {
 		void NameStaleActivityValues();
 		/// Test lever CCCP_TEST_PIE_SLICE_HANDLES: every state keeps live slices no actor's pie menu holds, for the world capture.
 		void PlantPieSliceHandles();
+		/// Self-test of a world capture's slices and gone vectors against the allocator's moves in its window, in a match world.
+		bool RunCaptureWindowSelfTest();
 		/// The heap every Lua state's collector found live when it last finished marking, less what it swept since, in bytes.
 		long long GetTotalHeapLiveBytes();
 
