@@ -438,6 +438,65 @@ namespace RTE {
 			return true;
 		}
 
+		static bool FutureDepartureKeepsFramePrefix(std::string* error) {
+			std::array<Wire, 2> wires;
+			std::array<NetLockstepCoordinator, 2> peers;
+			for (size_t index = 0; index < peers.size(); ++index) {
+				auto& peer = peers[index];
+				Configure(peer, wires[index]);
+				peer.m_Config.localPeerId = peer.m_Config.authorityPeerId = 1;
+				peer.m_Config.peerCount = peer.m_Config.matchConfig.peerCount = 4;
+				peer.m_Config.matchConfig.players.push_back({4, 3, false, "Fourth"});
+				peer.m_Config.matchConfig.successorOrder = {2, 3, 4};
+				peer.m_Config.peerFrameGroups = true;
+				peer.m_RoundConfigHash = NetMatchConfigUtil::HashConfig(peer.m_Config.matchConfig);
+				peer.m_RelayHost = true; peer.m_MigrationPhase = NetHostMigrationPhase::None;
+				peer.m_RemotePeerIds = {2, 3, 4}; peer.m_RemoteTransports = {{2, 42}, {3, 43}, {4, 44}};
+				peer.m_FrameGroupMembers = 15; peer.m_FrameGroupChanges = {{1, 15}};
+				peer.m_Stats.nextFrame = 362; peer.m_LastCompletedSimulationTick = 361;
+			}
+			peers[0].ApplyPeerLeave(4, 366, "removed from the session", 7000, true, false, false, true);
+			const auto commit = [&](NetLockstepCoordinator& peer, uint64_t frame, NetLockstepReadyFrame& ready) {
+				for (uint8_t owner = 1; owner <= (frame < 366 ? 4 : 3); ++owner) {
+					ControllerFrame control; control.actorUniqueID = 1000 + owner; control.analogMoveX = owner * 100;
+					NetLockstepFrame input; input.senderPeerId = owner; input.roundId = 77; input.targetFrame = frame; input.frames = {control};
+					peer.m_PeerSourceInputs[frame][owner] = input;
+					if (owner == 1) peer.m_LocalFrames[frame] = input.frames;
+					else peer.m_RemoteFrames[frame][owner] = input.frames;
+					for (uint8_t voter = 1; voter <= (frame < 366 ? 4 : 3); ++voter) peer.m_PeerInputReceipts[owner][voter] = frame + 1;
+				}
+				peer.AdvanceReadyFrames(7000 + frame);
+				if (!peer.PopReadyFrame(ready) || ready.frame != frame) {
+					*error = std::string("the future-departure detector did not prepare its complete input frame: ") + peer.m_AdvanceBlock; return false;
+				}
+				peer.FinishSimulationTick(frame);
+				return true;
+			};
+			for (uint64_t frame = 362; frame <= 366; ++frame) {
+				if (frame == 363) peers[1].ApplyPeerLeave(4, 366, "removed from the session", 7001, true, false, false, true);
+				std::array<NetLockstepReadyFrame, 2> ready;
+				for (size_t index = 0; index < peers.size(); ++index) if (!commit(peers[index], frame, ready[index])) return false;
+				if (frame < 366) {
+					for (const auto& record: ready) {
+						if (!record.remoteFrameCounts.contains(4) || record.remoteFrameCounts.at(4) != 1) {
+							*error = "a future removal omitted its earlier authenticated input"; return false;
+						}
+					}
+					if (ready[0].committedPeerLeaves.contains(4) || ready[1].committedPeerLeaves.contains(4)) {
+						*error = "future departure366 entered committed frame" + std::to_string(frame); return false;
+					}
+				} else for (const auto& record: ready) {
+					if (!record.committedPeerLeaves.contains(4) || record.committedPeerLeaves.at(4) != 366 || record.remoteFrameCounts.contains(4)) {
+						*error = "the removal did not take effect at its exact committed frame"; return false;
+					}
+				}
+				if (peers[0].PeerFramePrefix(frame) != peers[1].PeerFramePrefix(frame)) {
+					*error = "the removal's arrival time changed the committed prefix"; return false;
+				}
+			}
+			return true;
+		}
+
 		static bool RemovalNoticeRetries(std::string* error) {
 			Wire wire; NetLockstepCoordinator peer;
 			Configure(peer, wire);
@@ -29976,6 +30035,13 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "future-facts-prefix") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::FutureDepartureKeepsFramePrefix(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS a_future_removal_does_not_rewrite_an_earlier_frame_prefix" << std::endl;
+				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "future-removal-authority") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::FutureRemovalKeepsPastAuthority(&error)) return fail(error);
@@ -30063,6 +30129,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::ReturnStartAdmission, "a_return_start_uses_its_certified_admission");
 		row(&SessionPlaneRecoveryTest::ReturnMemberStarts, "a_return_keeps_each_authenticated_members_start");
 		row(&SessionPlaneRecoveryTest::RemovalNoticeRetries, "a_roster_removal_keeps_its_frame_after_a_cut");
+		row(&SessionPlaneRecoveryTest::FutureDepartureKeepsFramePrefix, "a_future_removal_does_not_rewrite_an_earlier_frame_prefix");
 		row(&SessionPlaneRecoveryTest::HoldInvitation, "an_unsigned_hold_invitation_never_fences_an_input");
 		row(&SessionPlaneRecoveryTest::OwnAheadHoldFence, "a_seat_co_signs_and_fences_its_own_future_hold");
 		row(&SessionPlaneRecoveryTest::HeldHostBaseCapture, "held_host_names_a_private_base_through_the_playing_seats");
