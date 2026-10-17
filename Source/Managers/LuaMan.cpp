@@ -6939,8 +6939,6 @@ _CaptureWindow.unreached = _UnreachedCaptureMenu and _UnreachedCaptureMenu:GetFi
 	return passed;
 }
 
-bool LuaMan::RunCaptureWindowSelfTest() { return RunCaptureWindowCases(m_MasterScriptState); }
-
 static int ScriptGraphGlobalScript(lua_State* L) {
 	const auto* activity = dynamic_cast<const GAScripted*>(g_ActivityMan.GetActivity());
 	const int index = luaL_checkinteger(L, 1);
@@ -10839,6 +10837,8 @@ static bool RunStoredCallbackStateCloseSelfTest() {
 	          << " a_stored_callback_releases_its_reference_before_state_close released=" << released << " safe=" << safe << std::endl;
 	return made && released && safe;
 }
+
+bool LuaMan::RunCaptureWindowSelfTest() { return RunCaptureWindowCases(m_MasterScriptState); }
 
 bool LuaMan::RunScriptGraphSelfTest() {
 	lua_State* state = m_MasterScriptState.GetLuaState();
