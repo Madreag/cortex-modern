@@ -632,6 +632,15 @@ namespace RTE {
 			std::vector<Event> events;
 			bool keepReturnCertificates = false;
 			std::map<uint64_t, NetHostMigrationMessage> receivedReturnCertificates;
+			bool TraceFaultObservation() const {
+				return std::getenv("CC_TEST_DIRECT_FAULT_OBSERVATIONS") && owner == 2 && hub.now >= hub.faultAt && hub.now <= hub.faultAt + 100;
+			}
+			static std::string BytesHex(const std::vector<uint8_t>& bytes) {
+				static constexpr char digits[] = "0123456789abcdef";
+				std::string text; text.reserve(bytes.size() * 2);
+				for (uint8_t byte: bytes) { text += digits[byte >> 4]; text += digits[byte & 15]; }
+				return text;
+			}
 			Wire(Hub& h, uint8_t seat): hub(h), owner(seat) { hub.wires.insert(this); }
 			~Wire() override { Stop(); hub.wires.erase(this); }
 			bool StartHost(uint16_t wanted, std::string* error = nullptr) override {
@@ -757,6 +766,8 @@ namespace RTE {
 			}
 			bool Send(NetPeerId id, NetTransportLane lane, const std::vector<uint8_t>& bytes, std::string* error = nullptr, bool* congested = nullptr) override {
 				std::lock_guard lock(hub.mutex);
+				if (TraceFaultObservation()) DiagnosticLine() << "[direct-fault-observation] now=" << hub.now << " op=send route=" << id
+				    << " connected=" << connections.contains(id) << " lane=" << static_cast<int>(lane) << " bytes=" << BytesHex(bytes);
 				if (congested) *congested = false;
 				const auto found = connections.find(id);
 				if (found == connections.end()) { if (error) *error = "the fixture connection is absent"; return false; }
@@ -898,15 +909,28 @@ namespace RTE {
 					}
 				}
 				events.resize(pending);
+				if (TraceFaultObservation()) {
+					DiagnosticLine() << "[direct-fault-observation] now=" << hub.now << " op=poll count=" << ready.size();
+					for (const auto& event: ready) DiagnosticLine() << "[direct-fault-observation] now=" << hub.now << " op=event type=" << static_cast<int>(event.type)
+					    << " route=" << event.peerId << " lane=" << static_cast<int>(event.lane) << " bytes=" << BytesHex(event.bytes);
+				}
 				return ready;
 			}
-			uint32_t GetPeerPingMs(NetPeerId id) const override { return connections.contains(id) ? static_cast<uint32_t>(2 * hub.Delay(owner, connections.at(id).first->owner)) : 0; }
-			bool IsPeerPingMeasured(NetPeerId id) const override { return connections.contains(id); }
+			uint32_t GetPeerPingMs(NetPeerId id) const override {
+				const uint32_t rtt = connections.contains(id) ? static_cast<uint32_t>(2 * hub.Delay(owner, connections.at(id).first->owner)) : 0;
+				if (TraceFaultObservation()) DiagnosticLine() << "[direct-fault-observation] now=" << hub.now << " op=rtt route=" << id << " value=" << rtt;
+				return rtt;
+			}
+			bool IsPeerPingMeasured(NetPeerId id) const override {
+				if (TraceFaultObservation()) DiagnosticLine() << "[direct-fault-observation] now=" << hub.now << " op=measured route=" << id << " value=" << connections.contains(id);
+				return connections.contains(id);
+			}
 #if __has_include("NetPeerSessionWire.h")
 			NetTransportQueueStats GetPeerQueueStats(NetPeerId id) const override {
 				const auto connection = connections.find(id); if (connection == connections.end()) return {};
 				const auto [other, remote] = connection->second; uint64_t bytes = 0;
 				for (const auto& event: other->events) if (event.value.peerId == remote && event.value.lane == NetTransportLane::ControlReliable) bytes += event.value.bytes.size();
+				if (TraceFaultObservation()) DiagnosticLine() << "[direct-fault-observation] now=" << hub.now << " op=queue route=" << id << " reliable_bytes=" << bytes << " queue_ms=0 send_rate=0";
 				return {bytes, 0, 0};
 			}
 #endif

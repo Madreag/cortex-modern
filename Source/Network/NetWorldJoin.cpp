@@ -1517,7 +1517,8 @@ namespace RTE {
 		// The order is the config's, so every peer and every boot names the same slot for the same
 		// lockstep id; a live peer count never re-derives it.
 		for (uint8_t peerId = 1; peerId <= config.peerCount; ++peerId) {
-			if (peerId == config.hostPeerId) {
+			// A private match can hold its administrative host exactly like any other human seat.
+			if (peerId == config.hostPeerId && (!privateMatch || config.dedicated)) {
 				continue;
 			}
 			NetWorldSlot slot;
@@ -1792,7 +1793,10 @@ namespace RTE {
 	}
 
 	bool NetWorldJoinHost::BeginRejoin(NetPeerId connection, uint16_t stableSeat, uint8_t peerId, uint32_t incarnation, const std::string& name, uint64_t nowMs, std::string* error) {
-		if (!IsPrivateMatch() || incarnation == 0 || peerId == m_Config.hostPeerId) return false;
+		if (!IsPrivateMatch() || incarnation == 0) {
+			if (error) *error = "a held-seat return requires a private match and a live incarnation";
+			return false;
+		}
 		const auto* slot = m_Membership.SlotOfSeat(stableSeat);
 		if (slot && slot->peerId != peerId) return false;
 		if (!slot && !m_Membership.Hold(peerId, stableSeat, name, error)) return false;

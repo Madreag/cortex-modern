@@ -95,6 +95,12 @@ namespace RTE {
 
 	uint32_t NetLockstepCoordinator::PeerHeldSeatsAt(uint64_t frame) const {
 		uint32_t held = 0;
+		// A private image reconstructs seat authority from committed replay records, without live bridge votes. Those held
+		// seats still cannot vote when this reader validates the survivors' return certificate.
+		if (m_Playback) {
+			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) if (IsSeatUnderAI(peer, frame)) held |= SeatBit(peer);
+			return held;
+		}
 		// Restored/private-tail bridges can precede the first decision certificate received here.
 		for (const auto& [peer, bridge]: m_PeerBridges)
 			if (bridge.committedHold && frame >= bridge.fromFrame && (!bridge.returnFrame || frame < *bridge.returnFrame)) held |= SeatBit(peer);
@@ -366,6 +372,28 @@ namespace RTE {
 		if (!UsesPeerFrameGroups() || !IsRunning()) return;
 		PollPeerFrameTies(nowMs);
 		if (!IsRunning()) return;
+		if (m_ConsumerWaitingFrame && *m_ConsumerWaitingFrame == m_Stats.nextFrame) {
+			const uint64_t frame = *m_ConsumerWaitingFrame;
+			const uint64_t elapsed = nowMs >= m_ConsumerWaitStartMs ? nowMs - m_ConsumerWaitStartMs : 0;
+			const auto remote = m_RemoteFrames.find(frame);
+			if (!PeerTieRefereed(frame) && m_Config.localPeerId != GetHostPeerId() &&
+			    (PeerHeldSeatsAt(frame) & (uint32_t{1} << (GetHostPeerId() - 1))) == 0 &&
+			    IsRemoteRequiredForFrame(GetHostPeerId(), frame) &&
+			    (remote == m_RemoteFrames.end() || !remote->second.contains(GetHostPeerId())) &&
+			    elapsed >= static_cast<uint64_t>(std::ceil(m_Config.slowPlayerBoundTicks * m_Config.simTickMs))) {
+				// Direct sessions have no independent arbitrator. A client cut from the playing host stops at its local bound;
+				// it can adopt the host's history through the existing private-image return when the link is available again.
+				if (!m_GrantedSimulationTick) {
+					m_Stats.nextFrame = GetResumeFrame(); m_ReadyFrames.clear();
+					m_LocalSeatHeld = true; m_LocalHoldFrame = m_Stats.nextFrame;
+					m_State = NetLockstepState::Stopped;
+					m_Stats.timeoutReason = "PeerHeld:the direct host link is unavailable; returning through a private image";
+					DiagnosticLine() << "[net-direct-partition] local=" << static_cast<int>(m_Config.localPeerId) << " frame=" << m_Stats.nextFrame
+					    << " now_ms=" << nowMs << " wait_ms=" << elapsed << " cause=input_missing action=image_return" << std::endl;
+				}
+				return;
+			}
+		}
 		if (m_Config.peerSessionLinks && nowMs >= m_PeerPathLogAtMs) {
 			m_PeerPathLogAtMs = nowMs + 5000;
 			for (const auto& [peer, path]: m_PeerReceiptDelaySamples) {

@@ -1,0 +1,10 @@
+{
+  "binary_sha256": "a309b29626b6bf4c1827f1c67b7f117e94cb5cf449528581aab07fb81f1a7e29",
+  "compared_rows": 939,
+  "first": "[direct-fault-observation] now=6000 op=poll count=0",
+  "last": "[direct-fault-observation] now=6084 op=rtt route=1 value=2",
+  "identical": true,
+  "observations_sha256": "4fd3f14ce5a344245fe2808dca3d7a6f801f079cb143c091fdddea9cea3cd3eb",
+  "explanation": "From the first client poll at the fault through the stop at elapsed 50 ms, both runs expose identical packets, sends, polls, queue stats, RTT and measurement flags. The contracts demand stop for a live host cut and continued play for a fully hung host. An additional independent liveness signal or a ruling is needed to choose those different actions from identical observations.",
+  "scope": "Two-seat direct transport fixture; no physical-machine claim."
+}

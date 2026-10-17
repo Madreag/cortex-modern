@@ -421,7 +421,9 @@ namespace RTE {
 	}
 
 	bool NetLockstepCoordinator::ProposePeerReclaim(uint8_t peer, NetPeerId transport, uint32_t incarnation, uint64_t frame, uint64_t trailFrames, std::string* error) {
-		if (!IsRunning() || m_Config.localPeerId != GetHostPeerId() || peer == 0 || peer > m_Config.peerCount ||
+		// The first playing survivor serves the private return even while the administrative host is held.
+		const uint8_t returnLeader = m_FrameGroupMembers ? static_cast<uint8_t>(std::countr_zero(m_FrameGroupMembers) + 1) : 0;
+		if (!IsRunning() || m_Config.localPeerId != returnLeader || peer == 0 || peer > m_Config.peerCount ||
 		    !m_PeerBridges.contains(peer) || !m_PeerBridges.at(peer).committedHold || transport == c_InvalidNetPeerId || incarnation == 0 || frame <= m_Stats.nextFrame ||
 		    frame - m_Stats.nextFrame > NetLockstepCodec::c_MaxFutureFrameSkew || !PeerGroupHasAuthority(m_FrameGroupMembers)) {
 			if (error) *error = "the private return needs an authoritative group and a future frame";

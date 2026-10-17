@@ -491,21 +491,8 @@ namespace RTE {
 			const uint64_t displayed = m_LastCompletedSimulationTick.value_or(m_Config.startFrame - 1);
 			if (displayed < m_Stats.effectiveStartFrame + m_Config.slowPlayerBoundTicks &&
 			    (m_ConsumerWaitingFrame != frame || nowMs < m_ConsumerWaitStartMs || nowMs - m_ConsumerWaitStartMs < boundMs)) return false;
-			uint64_t agreementMs = 0;
-			bool anotherVoter = false;
-			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) if (peer != m_Config.localPeerId && (proposal.connectedMask & SeatBit(peer)) != 0)
-			{
-				anotherVoter = true;
-				// Size the vote from the surviving signers' transport, outside another seat's input wait.
-				const auto [wire, route] = PeerFrameRoute(peer);
-				if (wire && wire->IsPeerPingMeasured(route)) agreementMs = std::max<uint64_t>(agreementMs, wire->GetPeerPingMs(route));
-				else if (const auto path = m_PeerReceiptDelaySamples.find(peer); path != m_PeerReceiptDelaySamples.end())
-					agreementMs = std::max<uint64_t>(agreementMs, path->second.P95Ms());
-			}
-			// Spend the voters' scheduling reserve inside the consumer's three-tick bound.
-			if (anotherVoter) agreementMs = std::max<uint64_t>(1, agreementMs) + boundMs;
-			// A lone voter commits at once; half a tick covers the commit and the consumer's next poll, so its wait ends inside the bound.
-			else agreementMs = static_cast<uint64_t>(std::ceil(m_Config.simTickMs / 2));
+			// Reserve only local commit and consumption time; the hold requires no remote signature.
+			uint64_t agreementMs = static_cast<uint64_t>(std::ceil(m_Config.simTickMs / 2));
 			// The consumer's bound is already on the deadline below. Charge this co-sign its round trip and a poll, not the bound
 			// twice: an early speculative vote would fence a healthy returner's first input while it is still normally in flight.
 			if (!PeerGroupMayHold(proposal.connectedMask, proposal.frame)) for (uint8_t peer: proposal.members) {
