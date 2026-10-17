@@ -1,9 +1,17 @@
 import unittest
 
-from feel.session_delay import preview_obligations, summarize
+from feel.session_delay import live_resize_proof, preview_obligations, summarize
 
 
 class SessionDelayMeasurement(unittest.TestCase):
+    def test_live_resize_requires_both_applied_boundaries_and_real_fault_readback(self):
+        fault = '[feel-lag-step] requested_frame=600 observed_target_frame=600 per_engine_lag_ms=100 applied=1 readback=1 send_lag_ms=50 receive_lag_ms=50\n'
+        first = fault + '[net-input-delay-applied] local=1 peer=1 frame=625 ticks=14\n'
+        second = fault + '[net-input-delay-applied] local=2 peer=1 frame=625 ticks=14\n'
+        self.assertTrue(live_resize_proof(dict(host=first, client=second), ['host', 'client'], [600, 100])['pass_check'])
+        for bad in (second.replace('frame=625', 'frame=626'), second.replace('readback=1', 'readback=0'), fault):
+            self.assertFalse(live_resize_proof(dict(host=first, client=bad), ['host', 'client'], [600, 100])['pass_check'])
+
     def test_a_preview_cap_short_of_the_match_delay_is_red(self):
         frame = dict(_line=1, tick=600, frame=500, delay=15, preview_depth=10, actors=[{}],
                      activity_running=True, lockstep_active=True, lockstep_paused=False)

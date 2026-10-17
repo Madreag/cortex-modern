@@ -10416,6 +10416,11 @@ namespace RTE {
 					if (at != changes->second.begin()) delay = std::prev(at)->second;
 				}
 				m_Config.matchConfig.peerInputDelayFrames[peer - 1] = delay;
+				if (std::getenv("CC_TEST_DELAY_APPLY_DETAILS")) if (const auto changes = m_DelayChanges.find(peer);
+				    changes != m_DelayChanges.end() && changes->second.contains(outFrame.frame)) {
+					DiagnosticLine() << "[net-input-delay-applied] local=" << static_cast<int>(m_Config.localPeerId)
+					                 << " peer=" << static_cast<int>(peer) << " frame=" << outFrame.frame << " ticks=" << delay << std::endl;
+				}
 			}
 			++m_Config.matchConfig.configRevision;
 			if (m_Config.publishLiveConfig) m_Config.publishLiveConfig(m_Config.matchConfig);

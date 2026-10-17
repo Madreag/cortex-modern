@@ -1,6 +1,7 @@
 #include "NetPeerFrameHelpers.h"
 
 #include "DiagnosticLine.h"
+#include "GnsTransport.h"
 #include "NetAuthCrypto.h"
 #include "NetLobbyProtocol.h"
 #include "NetProtocol.h"
@@ -50,6 +51,7 @@ namespace RTE {
 
 	void NetLockstepCoordinator::SendPeerInput(const NetLockstepFrame& frame) {
 		if (!UsesPeerFrameGroups()) return;
+		GnsTransport::ObserveOutgoingLockstepFrame(frame.targetFrame);
 		NetLockstepFrame current = frame;
 		current.priorWindow.clear();
 		std::vector<uint8_t> newest;

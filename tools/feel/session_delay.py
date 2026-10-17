@@ -80,7 +80,26 @@ def preview_obligations(frames, network):
     return owed, mismatches, missing
 
 
-def reduce_peer(folder, peer, rtt, plan):
+def applied_delays(text):
+    return [tuple(map(int, values)) for values in re.findall(
+        r'\[net-input-delay-applied\] local=\d+ peer=(\d+) frame=(\d+) ticks=(\d+)', text)]
+
+
+def live_resize_proof(logs, peers, step):
+    changes = {peer: applied_delays(logs[peer]) for peer in peers}
+    faults = {peer: [tuple(map(int, values)) for values in re.findall(
+        r'\[feel-lag-step\] requested_frame=(\d+) observed_target_frame=(\d+) per_engine_lag_ms=(\d+) '
+        r'applied=(\d+) readback=(\d+) send_lag_ms=(\d+) receive_lag_ms=(\d+)', logs[peer])] for peer in peers}
+    faults_match = all(len(rows) == 1 and rows[0][0] == step[0] and rows[0][1] >= step[0] and
+                       rows[0][2:] == (step[1], 1, 1, step[1] // 2, step[1] - step[1] // 2)
+                       for rows in faults.values())
+    same = len(peers) == 2 and bool(changes[peers[0]]) and sorted(changes[peers[0]]) == sorted(changes[peers[1]])
+    rises = same and any(frame > step[0] and delay >= 13 for owner, frame, delay in changes[peers[0]])
+    return dict(changes=changes, faults=faults, same_applied_frames=same, rises_after_fault=bool(rises),
+                pass_check=faults_match and bool(rises))
+
+
+def reduce_peer(folder, peer, rtt, plan, lag_step=None):
     raw = record_path(folder / peer / 'feel/raw.jsonl')
     rows = list(report.read_jsonl(raw))
     frames = [r for r in rows if r['type'] == 'frame' and r['active'] and 1 <= r['tick'] <= TICKS]
@@ -102,11 +121,13 @@ def reduce_peer(folder, peer, rtt, plan):
     native_path = folder / f'{peer}_report.json'
     native = json.loads(native_path.read_text()) if native_path.is_file() else {}
     preview = native.get('local_prediction', {})
+    lockstep = native.get('service', {}).get('runner', {}).get('lockstep', {})
     preview_cost = preview.get('ms_total', 0) / preview['actor_ticks'] if preview.get('actor_ticks') else None
     watches = watch_results(folder / peer / 'stdout.log')
     delay_watches = [w for w in watches if w['watch'] == 'b4-delay']
     delay_values = [r['delay'] for r in frames if r['actors']]
-    limit = 6 if rtt == 30 else 16 if rtt == 200 else 0
+    limit = 16 if lag_step else 6 if rtt == 30 else 16 if rtt == 200 else 0
+    low_delay = [r['delay'] for r in frames if r['actors'] and lag_step and r['tick'] < lag_step[0]]
     coverage = bool(frames) and not missing and len(latencies) == expected_responses and not latency_missing
     result = dict(peer=peer, requested_rtt_ms=rtt, raw=str(raw), raw_sha256=sha(raw),
                   input_coverage=dict(expected_responses=expected_responses, observed_responses=len(latencies),
@@ -116,10 +137,12 @@ def reduce_peer(folder, peer, rtt, plan):
                   input_edges=latencies, delay_min=min(delay_values, default=None), delay_max=max(delay_values, default=None),
                   delay_depth_counts=[dict(delay=d, depth=p, frames=n) for (d, p), n in sorted(depths.items())],
                   depth_mismatches=mismatches, missing_activity_state=missing_state, preview=preview, preview_ms_per_actor_tick=preview_cost,
+                  wait_stats={key: lockstep.get(key) for key in ('missing_frame_stalls', 'blocking_frame_waits', 'longest_stall_ms')},
                   rtt_samples=[dict(tick=r['tick'], peer=p['peer'], ping_ms=p['ping_ms'])
                                for r in frames if r['tick'] % 60 == 0 for p in r.get('rtt', []) if not p['local']],
                   captures=[r for r in rows if r['type'] == 'capture'], delay_watches=delay_watches,
-                  b1_delay_pass=bool(delay_values) and max(delay_values) <= limit,
+                  b1_delay_pass=bool(delay_values) and max(delay_values) <= limit and
+                                (not lag_step or bool(low_delay) and max(low_delay) <= 6),
                   b2_depth_pass=bool(owed) and not mismatches and not missing_state and (rtt is None or preview.get('enabled') and preview.get('previews', 0) > 0),
                   b3_coverage_pass=coverage,
                   b4_overlay_pass=rtt is None or bool(delay_watches) and all(w['active_frames'] > 0 and w['violations'] == 0 for w in delay_watches))
@@ -127,7 +150,7 @@ def reduce_peer(folder, peer, rtt, plan):
     return result
 
 
-def launch_case(root, arm, repeat, port, exe_sha, size):
+def launch_case(root, arm, repeat, port, exe_sha, size, lag_step=None, preview_cap=20):
     wait_quiet()
     scratch_bytes(root.parent)
     out = root / f'{repeat:02d}-{arm}'
@@ -142,6 +165,7 @@ def launch_case(root, arm, repeat, port, exe_sha, size):
     runs, receipts = {}, {}
     manifest = dict(started=stamp(), arm=arm, repeat=repeat, requested_rtt_ms=rtt, ticks=TICKS,
                     per_engine_lag_ms=0 if rtt is None else rtt // 2, headed=True, display=':0', size=size,
+                    lag_step=lag_step, local_prediction_max_ticks_setting=preview_cap,
                     binary=str(engine_executable(REPO)), binary_sha256=exe_sha, quiet_samples=[])
     write_json(out / 'manifest.json', manifest)
     try:
@@ -164,6 +188,9 @@ def launch_case(root, arm, repeat, port, exe_sha, size):
                                CCCP_TEST_SCREEN_WATCHES=str(watches), CC_TEST_VSYNC_OFF='1', PYTHONDONTWRITEBYTECODE='1')
             if rtt is not None:
                 environment['CC_TEST_NET_MATCH_E2E_WAIT_PEERS'] = '1'
+                environment['CC_TEST_DELAY_APPLY_DETAILS'] = '1'
+                if lag_step:
+                    environment['CC_TEST_FEEL_LAG_STEP'] = ':'.join(map(str, lag_step))
             expected = [trace, run_out / 'feel/raw.jsonl'] + ([out / f'{peer}_report.json'] if rtt is not None else [])
             run = make_run(REPO, flags, run_out, timeout=900, env=environment, expected=expected)
             runs[peer] = run
@@ -172,10 +199,15 @@ def launch_case(root, arm, repeat, port, exe_sha, size):
             text = settings.read_text(encoding='utf-8')
             for key, value in zip(('ResolutionX', 'ResolutionY'), size):
                 text = re.sub(rf'(?m)^([ \t]*{key}[ \t]*=[ \t]*)[^\r\n]*', lambda match: match[1] + str(value), text)
+            text, cap_lines = re.subn(r'(?m)^([ \t]*LocalPredictionMaxTicks[ \t]*=[ \t]*)[^\r\n]*',
+                                     lambda match: match[1] + str(preview_cap), text)
+            if cap_lines != 1:
+                raise RuntimeError('private settings must contain exactly one LocalPredictionMaxTicks')
             settings.write_text(text, encoding='utf-8')
             runtime_path = run_out / 'runtime.json'
             runtime = json.loads(runtime_path.read_text())
             runtime['settings_overrides'].update(dict(zip(('ResolutionX', 'ResolutionY'), map(str, size))))
+            runtime['settings_overrides']['LocalPredictionMaxTicks'] = str(preview_cap)
             runtime['settings_sha256'] = sha(settings)
             write_json(runtime_path, runtime)
             stage_baseline(run, TICKS, 2)
@@ -201,10 +233,14 @@ def launch_case(root, arm, repeat, port, exe_sha, size):
     manifest['finished'] = stamp()
     write_json(out / 'manifest.json', manifest)
     compress_case_records(out)
-    results = [reduce_peer(out, peer, rtt, plan) for peer in peers] if manifest['complete'] else []
+    results = [reduce_peer(out, peer, rtt, plan, lag_step) for peer in peers] if manifest['complete'] else []
     if rtt is not None and manifest['complete']:
         manifest['peer_hashes'] = compare_pair(out / 'host_trace.json', out / 'client_trace.json', cross_peer=True)
         manifest['complete'] = manifest['peer_hashes']['pass']
+    if lag_step:
+        manifest['live_resize'] = live_resize_proof({peer: (out / peer / 'stdout.log').read_text(errors='replace') for peer in peers}, peers, lag_step)
+        manifest['live_resize']['measured_rtt_reaches_200ms'] = all(any(r['ping_ms'] >= 200 for r in p['rtt_samples']) for p in results) and len(results) == 2
+        manifest['live_resize']['pass_check'] &= manifest['live_resize']['measured_rtt_reaches_200ms']
     write_json(out / 'manifest.json', manifest)
     print(stamp(), arm, repeat, json.dumps({p['peer']: p['latency_ms'] for p in results}), flush=True)
     return dict(arm=arm, repeat=repeat, path=str(out), manifest=manifest, peers=results)
@@ -231,8 +267,10 @@ def summarize(cases, repeats, selected):
                                preview_ms_per_actor_tick=p['preview_ms_per_actor_tick'], delay_min=p['delay_min'], delay_max=p['delay_max']))
     complete = repeats >= 3 and set(selected) == set(ARMS) and len(cases) == repeats * len(ARMS) and all(
         c['manifest']['complete'] and c['manifest']['quiet'] and c['manifest']['binary_unchanged'] for c in cases)
-    return dict(complete=complete, single_player_repeat_noise=noise, rows=judged,
-                pass_check=complete and coverage and all(all(p[k] for k in ('b1_delay_pass', 'b2_depth_pass', 'b3_pass', 'b4_overlay_pass')) for p in judged),
+    rise_checks = [case['manifest']['live_resize'] for case in cases if case['manifest'].get('lag_step')]
+    return dict(complete=complete, single_player_repeat_noise=noise, rows=judged, live_resize_checks=rise_checks,
+                pass_check=complete and coverage and all(r['pass_check'] for r in rise_checks) and
+                           all(all(p[k] for k in ('b1_delay_pass', 'b2_depth_pass', 'b3_pass', 'b4_overlay_pass')) for p in judged),
                 definition='Existing feel.report.input_latencies: first completed presentation whose local actor changes aim/velocity in the requested direction and carries that input. Every missing response remains RED. Each network p50 must lie inside the measured single-player repeat p50 range, in milliseconds and presented frames; no added tolerance.',
                 scope='Headed Linux local two-engine fake-RTT measurement, not a spread/relay proof or physical display scanout measurement.')
 
@@ -244,11 +282,19 @@ def main():
     parser.add_argument('--only', nargs='+', choices=tuple(ARMS), default=list(ARMS))
     parser.add_argument('--port', type=int, required=True)
     parser.add_argument('--size', type=int, nargs=2, default=[960, 540], metavar=('WIDTH', 'HEIGHT'))
+    parser.add_argument('--lag-step', type=int, nargs=2, metavar=('FRAME', 'PER_ENGINE_LAG_MS'),
+                        help='raise the 30 ms pair to 200 ms RTT at a live outgoing frame (use 600 100)')
+    parser.add_argument('--preview-cap', type=int, default=20,
+                        help='private legacy preview cap setting; bounded matches must still cover their whole delay')
     args = parser.parse_args()
     if sys.platform != 'linux' or args.repeats < 1 or not 1024 <= args.port <= 49151:
         parser.error('requires Linux, positive repeats, and a lane-owned port below 49152')
     if not 640 <= args.size[0] <= 1920 or not 480 <= args.size[1] <= 1080:
         parser.error('size must be within 640x480 and 1920x1080')
+    if args.lag_step and (args.only != ['30ms'] or not 180 <= args.lag_step[0] <= 900 or args.lag_step[1] != 100):
+        parser.error('the live rise requires --only 30ms and a frame in 180..900 with per-engine lag 100')
+    if not 0 <= args.preview_cap <= 65535:
+        parser.error('preview cap must be within 0..65535')
     os.environ.pop('CCCP_HEADLESS', None)
     os.environ.update(CC_RUNNER_HEADED='1', DISPLAY=':0', PYTHONDONTWRITEBYTECODE='1')
     root = args.out.resolve()
@@ -256,12 +302,13 @@ def main():
     binary_sha = sha(engine_executable(REPO))
     write_json(root / 'plan.json', dict(binary_sha256=binary_sha, source_head=subprocess.check_output(
         ['git', 'rev-parse', 'HEAD'], cwd=REPO, text=True).strip(), repeats=args.repeats, arms=args.only,
+        lag_step=args.lag_step, preview_cap=args.preview_cap,
         single_player_repeat_noise='Range of repeated SP p50 values; fixed before looking at the network cases.',
         draw_boundary='Completed UploadFrame, including the software swap; no physical scanout claim.'))
     cases = []
     for repeat in range(1, args.repeats + 1):
         for arm in args.only:
-            case = launch_case(root, arm, repeat, args.port, binary_sha, args.size)
+            case = launch_case(root, arm, repeat, args.port, binary_sha, args.size, args.lag_step, args.preview_cap)
             cases.append(case)
             write_json(root / 'results.json', summarize(cases, args.repeats, args.only))
             if not case['manifest']['complete']:

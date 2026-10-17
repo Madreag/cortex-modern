@@ -1,0 +1,4594 @@
+{
+  "binary_sha256": "2c224533eea61753a91b2298b12829579f7d34591ab67ef60cce34e0560a0135",
+  "cases": [
+    {
+      "source_path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B1-native-live-rise/01-30ms",
+      "manifest": {
+        "started": "2026-10-16 11:17:01 PM MST",
+        "arm": "30ms",
+        "repeat": 1,
+        "requested_rtt_ms": 30,
+        "ticks": 1200,
+        "per_engine_lag_ms": 15,
+        "headed": true,
+        "display": ":0",
+        "size": [
+          960,
+          540
+        ],
+        "lag_step": [
+          600,
+          100
+        ],
+        "local_prediction_max_ticks_setting": 20,
+        "binary": "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand",
+        "binary_sha256": "2c224533eea61753a91b2298b12829579f7d34591ab67ef60cce34e0560a0135",
+        "quiet_samples": [
+          {
+            "time": "2026-10-16 11:17:02 PM MST",
+            "foreign": [],
+            "loadavg": [
+              1.65966796875,
+              1.7314453125,
+              2.58837890625
+            ]
+          },
+          {
+            "time": "2026-10-16 11:17:03 PM MST",
+            "foreign": [],
+            "loadavg": [
+              1.65966796875,
+              1.7314453125,
+              2.58837890625
+            ]
+          },
+          {
+            "time": "2026-10-16 11:17:04 PM MST",
+            "foreign": [],
+            "loadavg": [
+              1.65966796875,
+              1.7314453125,
+              2.58837890625
+            ]
+          },
+          {
+            "time": "2026-10-16 11:17:05 PM MST",
+            "foreign": [],
+            "loadavg": [
+              1.65966796875,
+              1.7314453125,
+              2.58837890625
+            ]
+          },
+          {
+            "time": "2026-10-16 11:17:06 PM MST",
+            "foreign": [],
+            "loadavg": [
+              1.92724609375,
+              1.7861328125,
+              2.6015625
+            ]
+          },
+          {
+            "time": "2026-10-16 11:17:07 PM MST",
+            "foreign": [],
+            "loadavg": [
+              1.92724609375,
+              1.7861328125,
+              2.6015625
+            ]
+          },
+          {
+            "time": "2026-10-16 11:17:08 PM MST",
+            "foreign": [],
+            "loadavg": [
+              1.92724609375,
+              1.7861328125,
+              2.6015625
+            ]
+          },
+          {
+            "time": "2026-10-16 11:17:09 PM MST",
+            "foreign": [],
+            "loadavg": [
+              1.92724609375,
+              1.7861328125,
+              2.6015625
+            ]
+          },
+          {
+            "time": "2026-10-16 11:17:10 PM MST",
+            "foreign": [],
+            "loadavg": [
+              1.92724609375,
+              1.7861328125,
+              2.6015625
+            ]
+          },
+          {
+            "time": "2026-10-16 11:17:11 PM MST",
+            "foreign": [],
+            "loadavg": [
+              1.93310546875,
+              1.7900390625,
+              2.59814453125
+            ]
+          },
+          {
+            "time": "2026-10-16 11:17:12 PM MST",
+            "foreign": [],
+            "loadavg": [
+              1.93310546875,
+              1.7900390625,
+              2.59814453125
+            ]
+          },
+          {
+            "time": "2026-10-16 11:17:13 PM MST",
+            "foreign": [],
+            "loadavg": [
+              1.93310546875,
+              1.7900390625,
+              2.59814453125
+            ]
+          },
+          {
+            "time": "2026-10-16 11:17:14 PM MST",
+            "foreign": [],
+            "loadavg": [
+              1.93310546875,
+              1.7900390625,
+              2.59814453125
+            ]
+          },
+          {
+            "time": "2026-10-16 11:17:15 PM MST",
+            "foreign": [],
+            "loadavg": [
+              1.93310546875,
+              1.7900390625,
+              2.59814453125
+            ]
+          },
+          {
+            "time": "2026-10-16 11:17:16 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.0986328125,
+              1.8271484375,
+              2.60595703125
+            ]
+          },
+          {
+            "time": "2026-10-16 11:17:17 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.0986328125,
+              1.8271484375,
+              2.60595703125
+            ]
+          },
+          {
+            "time": "2026-10-16 11:17:18 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.0986328125,
+              1.8271484375,
+              2.60595703125
+            ]
+          },
+          {
+            "time": "2026-10-16 11:17:19 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.0986328125,
+              1.8271484375,
+              2.60595703125
+            ]
+          },
+          {
+            "time": "2026-10-16 11:17:20 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.0986328125,
+              1.8271484375,
+              2.60595703125
+            ]
+          },
+          {
+            "time": "2026-10-16 11:17:21 PM MST",
+            "foreign": [],
+            "loadavg": [
+              3.0517578125,
+              2.029296875,
+              2.66748046875
+            ]
+          },
+          {
+            "time": "2026-10-16 11:17:22 PM MST",
+            "foreign": [],
+            "loadavg": [
+              3.0517578125,
+              2.029296875,
+              2.66748046875
+            ]
+          },
+          {
+            "time": "2026-10-16 11:17:23 PM MST",
+            "foreign": [],
+            "loadavg": [
+              3.0517578125,
+              2.029296875,
+              2.66748046875
+            ]
+          },
+          {
+            "time": "2026-10-16 11:17:24 PM MST",
+            "foreign": [],
+            "loadavg": [
+              3.0517578125,
+              2.029296875,
+              2.66748046875
+            ]
+          },
+          {
+            "time": "2026-10-16 11:17:25 PM MST",
+            "foreign": [],
+            "loadavg": [
+              3.0517578125,
+              2.029296875,
+              2.66748046875
+            ]
+          },
+          {
+            "time": "2026-10-16 11:17:26 PM MST",
+            "foreign": [],
+            "loadavg": [
+              3.1279296875,
+              2.0625,
+              2.6748046875
+            ]
+          },
+          {
+            "time": "2026-10-16 11:17:27 PM MST",
+            "foreign": [],
+            "loadavg": [
+              3.1279296875,
+              2.0625,
+              2.6748046875
+            ]
+          },
+          {
+            "time": "2026-10-16 11:17:28 PM MST",
+            "foreign": [],
+            "loadavg": [
+              3.1279296875,
+              2.0625,
+              2.6748046875
+            ]
+          },
+          {
+            "time": "2026-10-16 11:17:29 PM MST",
+            "foreign": [],
+            "loadavg": [
+              3.1279296875,
+              2.0625,
+              2.6748046875
+            ]
+          },
+          {
+            "time": "2026-10-16 11:17:30 PM MST",
+            "foreign": [],
+            "loadavg": [
+              3.1279296875,
+              2.0625,
+              2.6748046875
+            ]
+          },
+          {
+            "time": "2026-10-16 11:17:31 PM MST",
+            "foreign": [],
+            "loadavg": [
+              3.11767578125,
+              2.078125,
+              2.6767578125
+            ]
+          },
+          {
+            "time": "2026-10-16 11:17:32 PM MST",
+            "foreign": [],
+            "loadavg": [
+              3.11767578125,
+              2.078125,
+              2.6767578125
+            ]
+          },
+          {
+            "time": "2026-10-16 11:17:33 PM MST",
+            "foreign": [],
+            "loadavg": [
+              3.11767578125,
+              2.078125,
+              2.6767578125
+            ]
+          },
+          {
+            "time": "2026-10-16 11:17:34 PM MST",
+            "foreign": [],
+            "loadavg": [
+              3.11767578125,
+              2.078125,
+              2.6767578125
+            ]
+          },
+          {
+            "time": "2026-10-16 11:17:35 PM MST",
+            "foreign": [],
+            "loadavg": [
+              3.11767578125,
+              2.078125,
+              2.6767578125
+            ]
+          },
+          {
+            "time": "2026-10-16 11:17:36 PM MST",
+            "foreign": [],
+            "loadavg": [
+              3.02783203125,
+              2.07666015625,
+              2.6728515625
+            ]
+          },
+          {
+            "time": "2026-10-16 11:17:37 PM MST",
+            "foreign": [],
+            "loadavg": [
+              3.02783203125,
+              2.07666015625,
+              2.6728515625
+            ]
+          }
+        ],
+        "quiet": true,
+        "binary_unchanged": true,
+        "complete": true,
+        "finished": "2026-10-16 11:17:38 PM MST",
+        "peer_hashes": {
+          "first": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B1-native-live-rise/01-30ms/host_trace.json",
+          "second": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B1-native-live-rise/01-30ms/client_trace.json",
+          "cross_peer": true,
+          "sim_gated_pass": true,
+          "existing_comparator": {
+            "compared_ticks": 1200,
+            "first_divergence": null,
+            "divergent_subsystems": [],
+            "reasons": [],
+            "paused_ticks": 0,
+            "per_peer_excluded": [
+              "controller_route"
+            ],
+            "host_info": {
+              "run": {
+                "final_total_hash": "518991ddf176927d95bcf3a4c9b02ba8b6bcf787ff667ae1f3c109f0cc16cb5f",
+                "numeric": {
+                  "__wall_seconds": 22.116953881,
+                  "final_tick": 1200.0
+                },
+                "passed": true,
+                "scenario": "P4 Alpha Duel",
+                "seed": 42,
+                "sim_config": {
+                  "ai_update_interval": "2",
+                  "automatic_gold_deposit": "1",
+                  "crab_bombs": "off",
+                  "delta_time_bits": "0x3c888865",
+                  "enabled_global_scripts": "",
+                  "mo_subtraction": "1",
+                  "particle_settling": "1",
+                  "pathfinder_grid_node_size": "24",
+                  "recommended_moid_count": "512"
+                },
+                "strings": {
+                  "completion": "completed",
+                  "completion_reason": "the match ran to its end",
+                  "scenario": "FeelBaseline"
+                },
+                "ticks": 1200
+              }
+            },
+            "client_info": {
+              "run": {
+                "final_total_hash": "518991ddf176927d95bcf3a4c9b02ba8b6bcf787ff667ae1f3c109f0cc16cb5f",
+                "numeric": {
+                  "__wall_seconds": 22.28575682,
+                  "final_tick": 1200.0
+                },
+                "passed": true,
+                "scenario": "P4 Alpha Duel",
+                "seed": 42,
+                "sim_config": {
+                  "ai_update_interval": "2",
+                  "automatic_gold_deposit": "1",
+                  "crab_bombs": "off",
+                  "delta_time_bits": "0x3c888865",
+                  "enabled_global_scripts": "",
+                  "mo_subtraction": "1",
+                  "particle_settling": "1",
+                  "pathfinder_grid_node_size": "24",
+                  "recommended_moid_count": "512"
+                },
+                "strings": {
+                  "completion": "completed",
+                  "completion_reason": "the match ran to its end",
+                  "scenario": "FeelBaseline"
+                },
+                "ticks": 1200
+              }
+            },
+            "client_away_ticks": 0,
+            "client_replayed_ticks": 0,
+            "subsystem_sets_seen": [
+              [
+                "actor_timers",
+                "actors",
+                "attachables",
+                "carve_math",
+                "controller",
+                "controller_route",
+                "funds",
+                "lua_state",
+                "particles",
+                "rot_angle",
+                "rot_angvel",
+                "scene",
+                "sim_rng",
+                "terrain",
+                "tick"
+              ],
+              [
+                "actor_timers",
+                "actors",
+                "attachables",
+                "carve_math",
+                "controller",
+                "controller_route",
+                "funds",
+                "lua_state",
+                "rot_angle",
+                "rot_angvel",
+                "scene",
+                "sim_rng",
+                "terrain",
+                "tick"
+              ],
+              [
+                "actor_timers",
+                "actors",
+                "attachables",
+                "controller",
+                "controller_route",
+                "funds",
+                "lua_state",
+                "rot_angle",
+                "rot_angvel",
+                "scene",
+                "sim_rng",
+                "terrain",
+                "tick"
+              ]
+            ],
+            "coverage": "active core hashes; paused ticks cover the same census, per-object subsystems only when the world holds objects"
+          },
+          "all_tick_hashes_identical": true,
+          "first_full_row_difference": null,
+          "pass": true
+        },
+        "live_resize": {
+          "changes": {
+            "host": [
+              [
+                1,
+                114,
+                5
+              ],
+              [
+                2,
+                151,
+                5
+              ],
+              [
+                2,
+                679,
+                14
+              ],
+              [
+                1,
+                710,
+                14
+              ],
+              [
+                1,
+                830,
+                15
+              ]
+            ],
+            "client": [
+              [
+                1,
+                114,
+                5
+              ],
+              [
+                2,
+                151,
+                5
+              ],
+              [
+                2,
+                679,
+                14
+              ],
+              [
+                1,
+                710,
+                14
+              ],
+              [
+                1,
+                830,
+                15
+              ]
+            ]
+          },
+          "faults": {
+            "host": [
+              [
+                600,
+                600,
+                100,
+                1,
+                1,
+                50,
+                50
+              ]
+            ],
+            "client": [
+              [
+                600,
+                600,
+                100,
+                1,
+                1,
+                50,
+                50
+              ]
+            ]
+          },
+          "same_applied_frames": true,
+          "rises_after_fault": true,
+          "pass_check": true,
+          "measured_rtt_reaches_200ms": true
+        }
+      },
+      "peers": {
+        "host": {
+          "peer": "host",
+          "requested_rtt_ms": 30,
+          "raw": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B1-native-live-rise/01-30ms/host/feel/raw.jsonl.gz",
+          "raw_sha256": "0a26c119d11e1553f688dd33ca08d1cd9bc5d6e19e16c8ea168068f7550f6186",
+          "input_coverage": {
+            "expected_responses": 32,
+            "observed_responses": 32,
+            "missing_script_edges": [],
+            "responses_not_drawn": 3
+          },
+          "latency_ms": {
+            "count": 29,
+            "p50": 41.33623003959656,
+            "p95": 127.91720998287201,
+            "p99": 178.48886901140213,
+            "max": 178.48886901140213
+          },
+          "latency_frames": {
+            "count": 29,
+            "p50": 2,
+            "p95": 7,
+            "p99": 9,
+            "max": 9
+          },
+          "delay_min": 4,
+          "delay_max": 15,
+          "delay_depth_counts": [
+            {
+              "delay": 4,
+              "depth": 4,
+              "frames": 89
+            },
+            {
+              "delay": 5,
+              "depth": 5,
+              "frames": 549
+            },
+            {
+              "delay": 14,
+              "depth": 14,
+              "frames": 92
+            },
+            {
+              "delay": 15,
+              "depth": 15,
+              "frames": 291
+            }
+          ],
+          "depth_mismatches": [],
+          "missing_activity_state": [],
+          "preview": {
+            "enabled": true,
+            "previews": 1104,
+            "actor_ticks": 9458,
+            "ms_total": 4994.14,
+            "shadows": 3033,
+            "taken": 0,
+            "violations": 0,
+            "events_played_at_preview": 21,
+            "events_suppressed_at_commit": 21,
+            "events_expired": 0,
+            "events_retimed": 0,
+            "event_starts": [
+              {
+                "committed_tick": 181,
+                "event_tick": 186,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 181,
+                "event_tick": 186,
+                "emitter": 1048577,
+                "kind": 2,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 186,
+                "event_tick": 186,
+                "emitter": 1048577,
+                "kind": 2,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 186,
+                "event_tick": 186,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 301,
+                "event_tick": 306,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 301,
+                "event_tick": 306,
+                "emitter": 1048577,
+                "kind": 2,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 306,
+                "event_tick": 306,
+                "emitter": 1048577,
+                "kind": 2,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 421,
+                "event_tick": 426,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 421,
+                "event_tick": 426,
+                "emitter": 1048577,
+                "kind": 2,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 426,
+                "event_tick": 426,
+                "emitter": 1048577,
+                "kind": 2,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 541,
+                "event_tick": 546,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 541,
+                "event_tick": 546,
+                "emitter": 1048577,
+                "kind": 2,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 546,
+                "event_tick": 546,
+                "emitter": 1048577,
+                "kind": 2,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 661,
+                "event_tick": 666,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 661,
+                "event_tick": 666,
+                "emitter": 1048577,
+                "kind": 2,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 666,
+                "event_tick": 666,
+                "emitter": 1048577,
+                "kind": 2,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 901,
+                "event_tick": 916,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 901,
+                "event_tick": 916,
+                "emitter": 1048577,
+                "kind": 2,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 916,
+                "event_tick": 916,
+                "emitter": 1048577,
+                "kind": 2,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 926,
+                "event_tick": 926,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 926,
+                "event_tick": 926,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 942,
+                "event_tick": 942,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 942,
+                "event_tick": 942,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 1021,
+                "event_tick": 1036,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 1021,
+                "event_tick": 1036,
+                "emitter": 1048577,
+                "kind": 2,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 1036,
+                "event_tick": 1036,
+                "emitter": 1048577,
+                "kind": 2,
+                "seq": 0,
+                "predicted": false
+              }
+            ]
+          },
+          "preview_ms_per_actor_tick": 0.5280334108691056,
+          "delay_watches": [
+            {
+              "active_frames": 543,
+              "cost_us": 25918,
+              "flush": "periodic",
+              "frames": 544,
+              "offences": 0,
+              "rule": "input_delay",
+              "state": "running",
+              "through_tick": 600,
+              "violations": 0,
+              "watch": "b4-delay",
+              "worst_us": 718
+            },
+            {
+              "active_frames": 1021,
+              "cost_us": 49121,
+              "flush": "periodic",
+              "frames": 1022,
+              "offences": 0,
+              "rule": "input_delay",
+              "state": "running",
+              "through_tick": 1200,
+              "violations": 0,
+              "watch": "b4-delay",
+              "worst_us": 718
+            },
+            {
+              "active_frames": 1023,
+              "cost_us": 49164,
+              "flush": "final",
+              "frames": 1024,
+              "offences": 0,
+              "rule": "input_delay",
+              "state": "running",
+              "through_tick": 1201,
+              "violations": 0,
+              "watch": "b4-delay",
+              "worst_us": 718
+            }
+          ],
+          "b1_delay_pass": true,
+          "b2_depth_pass": true,
+          "b3_coverage_pass": false,
+          "b4_overlay_pass": true,
+          "wait_stats": {
+            "missing_frame_stalls": 240,
+            "blocking_frame_waits": 240,
+            "longest_stall_ms": 344
+          },
+          "measured_rtt_min_ms": 30,
+          "measured_rtt_max_ms": 201,
+          "stdout_sha256": "79416950ee7b3e84a4b5af78b95fddeb3467fbe45c1be45eb3442ec1a149c27d"
+        },
+        "client": {
+          "peer": "client",
+          "requested_rtt_ms": 30,
+          "raw": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B1-native-live-rise/01-30ms/client/feel/raw.jsonl.gz",
+          "raw_sha256": "943da0586733955fb309b5bb2e9a25da576369f7bb057f0f916ac4a01e594be9",
+          "input_coverage": {
+            "expected_responses": 32,
+            "observed_responses": 32,
+            "missing_script_edges": [],
+            "responses_not_drawn": 2
+          },
+          "latency_ms": {
+            "count": 30,
+            "p50": 37.21995794773102,
+            "p95": 345.9442650079727,
+            "p99": 1042.2321810126305,
+            "max": 1042.2321810126305
+          },
+          "latency_frames": {
+            "count": 30,
+            "p50": 2,
+            "p95": 18,
+            "p99": 42,
+            "max": 42
+          },
+          "delay_min": 4,
+          "delay_max": 14,
+          "delay_depth_counts": [
+            {
+              "delay": 4,
+              "depth": 4,
+              "frames": 128
+            },
+            {
+              "delay": 5,
+              "depth": 5,
+              "frames": 481
+            },
+            {
+              "delay": 14,
+              "depth": 14,
+              "frames": 451
+            }
+          ],
+          "depth_mismatches": [],
+          "missing_activity_state": [],
+          "preview": {
+            "enabled": true,
+            "previews": 1119,
+            "actor_ticks": 9848,
+            "ms_total": 5102.6,
+            "shadows": 5329,
+            "taken": 0,
+            "violations": 0,
+            "events_played_at_preview": 22,
+            "events_suppressed_at_commit": 22,
+            "events_expired": 0,
+            "events_retimed": 0,
+            "event_starts": [
+              {
+                "committed_tick": 157,
+                "event_tick": 157,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 157,
+                "event_tick": 157,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 174,
+                "event_tick": 174,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 174,
+                "event_tick": 174,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 181,
+                "event_tick": 186,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 181,
+                "event_tick": 186,
+                "emitter": 1048596,
+                "kind": 2,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 186,
+                "event_tick": 186,
+                "emitter": 1048596,
+                "kind": 2,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 238,
+                "event_tick": 238,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 254,
+                "event_tick": 254,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 254,
+                "event_tick": 254,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 254,
+                "event_tick": 254,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 269,
+                "event_tick": 269,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 269,
+                "event_tick": 269,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 285,
+                "event_tick": 285,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 285,
+                "event_tick": 285,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 301,
+                "event_tick": 301,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 301,
+                "event_tick": 306,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 301,
+                "event_tick": 306,
+                "emitter": 1048596,
+                "kind": 1,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 301,
+                "event_tick": 306,
+                "emitter": 1048596,
+                "kind": 2,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 306,
+                "event_tick": 306,
+                "emitter": 1048596,
+                "kind": 2,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 317,
+                "event_tick": 317,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 317,
+                "event_tick": 317,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 333,
+                "event_tick": 333,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 333,
+                "event_tick": 333,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 421,
+                "event_tick": 426,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 421,
+                "event_tick": 426,
+                "emitter": 1048596,
+                "kind": 2,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 426,
+                "event_tick": 426,
+                "emitter": 1048596,
+                "kind": 2,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 541,
+                "event_tick": 546,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 541,
+                "event_tick": 546,
+                "emitter": 1048596,
+                "kind": 2,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 546,
+                "event_tick": 546,
+                "emitter": 1048596,
+                "kind": 2,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 603,
+                "event_tick": 603,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 603,
+                "event_tick": 603,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 733,
+                "event_tick": 733,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 733,
+                "event_tick": 733,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 781,
+                "event_tick": 795,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 781,
+                "event_tick": 795,
+                "emitter": 1048596,
+                "kind": 2,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 795,
+                "event_tick": 795,
+                "emitter": 1048596,
+                "kind": 2,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 901,
+                "event_tick": 915,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 901,
+                "event_tick": 915,
+                "emitter": 1048596,
+                "kind": 2,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 907,
+                "event_tick": 907,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 915,
+                "event_tick": 915,
+                "emitter": 1048596,
+                "kind": 2,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 1021,
+                "event_tick": 1035,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 1021,
+                "event_tick": 1035,
+                "emitter": 1048596,
+                "kind": 2,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 1035,
+                "event_tick": 1035,
+                "emitter": 1048596,
+                "kind": 2,
+                "seq": 0,
+                "predicted": false
+              }
+            ]
+          },
+          "preview_ms_per_actor_tick": 0.5181356620633631,
+          "delay_watches": [
+            {
+              "active_frames": 568,
+              "cost_us": 27737,
+              "flush": "periodic",
+              "frames": 575,
+              "offences": 0,
+              "rule": "input_delay",
+              "state": "running",
+              "through_tick": 600,
+              "violations": 0,
+              "watch": "b4-delay",
+              "worst_us": 350
+            },
+            {
+              "active_frames": 1060,
+              "cost_us": 51393,
+              "flush": "periodic",
+              "frames": 1067,
+              "offences": 0,
+              "rule": "input_delay",
+              "state": "running",
+              "through_tick": 1200,
+              "violations": 0,
+              "watch": "b4-delay",
+              "worst_us": 596
+            },
+            {
+              "active_frames": 1062,
+              "cost_us": 51435,
+              "flush": "final",
+              "frames": 1069,
+              "offences": 0,
+              "rule": "input_delay",
+              "state": "running",
+              "through_tick": 1201,
+              "violations": 0,
+              "watch": "b4-delay",
+              "worst_us": 596
+            }
+          ],
+          "b1_delay_pass": true,
+          "b2_depth_pass": true,
+          "b3_coverage_pass": false,
+          "b4_overlay_pass": true,
+          "wait_stats": {
+            "missing_frame_stalls": 76,
+            "blocking_frame_waits": 76,
+            "longest_stall_ms": 359
+          },
+          "measured_rtt_min_ms": 30,
+          "measured_rtt_max_ms": 200,
+          "stdout_sha256": "5531936d0be359b5c72b217fc21dd233b29da2d880b23dae95fca4a8d7f1432e"
+        }
+      }
+    },
+    {
+      "source_path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B2-native-cap-one/01-30ms",
+      "manifest": {
+        "started": "2026-10-16 11:17:55 PM MST",
+        "arm": "30ms",
+        "repeat": 1,
+        "requested_rtt_ms": 30,
+        "ticks": 1200,
+        "per_engine_lag_ms": 15,
+        "headed": true,
+        "display": ":0",
+        "size": [
+          960,
+          540
+        ],
+        "lag_step": null,
+        "local_prediction_max_ticks_setting": 1,
+        "binary": "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand",
+        "binary_sha256": "2c224533eea61753a91b2298b12829579f7d34591ab67ef60cce34e0560a0135",
+        "quiet_samples": [
+          {
+            "time": "2026-10-16 11:17:56 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.75439453125,
+              2.072265625,
+              2.65771484375
+            ]
+          },
+          {
+            "time": "2026-10-16 11:17:57 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.75439453125,
+              2.072265625,
+              2.65771484375
+            ]
+          },
+          {
+            "time": "2026-10-16 11:17:58 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.75439453125,
+              2.072265625,
+              2.65771484375
+            ]
+          },
+          {
+            "time": "2026-10-16 11:17:59 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.75439453125,
+              2.072265625,
+              2.65771484375
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:00 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.75439453125,
+              2.072265625,
+              2.65771484375
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:01 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.8544921875,
+              2.1044921875,
+              2.6650390625
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:02 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.8544921875,
+              2.1044921875,
+              2.6650390625
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:03 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.8544921875,
+              2.1044921875,
+              2.6650390625
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:04 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.8544921875,
+              2.1044921875,
+              2.6650390625
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:05 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.8544921875,
+              2.1044921875,
+              2.6650390625
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:06 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.78564453125,
+              2.1025390625,
+              2.6611328125
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:07 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.78564453125,
+              2.1025390625,
+              2.6611328125
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:08 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.78564453125,
+              2.1025390625,
+              2.6611328125
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:09 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.78564453125,
+              2.1025390625,
+              2.6611328125
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:10 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.78564453125,
+              2.1025390625,
+              2.6611328125
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:11 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.80322265625,
+              2.11767578125,
+              2.6630859375
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:12 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.80322265625,
+              2.11767578125,
+              2.6630859375
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:13 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.80322265625,
+              2.11767578125,
+              2.6630859375
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:14 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.80322265625,
+              2.11767578125,
+              2.6630859375
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:15 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.80322265625,
+              2.11767578125,
+              2.6630859375
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:16 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.8994140625,
+              2.14892578125,
+              2.67041015625
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:17 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.8994140625,
+              2.14892578125,
+              2.67041015625
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:18 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.8994140625,
+              2.14892578125,
+              2.67041015625
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:19 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.8994140625,
+              2.14892578125,
+              2.67041015625
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:20 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.8994140625,
+              2.14892578125,
+              2.67041015625
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:21 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.90771484375,
+              2.1630859375,
+              2.67236328125
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:22 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.90771484375,
+              2.1630859375,
+              2.67236328125
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:23 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.90771484375,
+              2.1630859375,
+              2.67236328125
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:24 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.90771484375,
+              2.1630859375,
+              2.67236328125
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:25 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.90771484375,
+              2.1630859375,
+              2.67236328125
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:26 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.91552734375,
+              2.17724609375,
+              2.67431640625
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:27 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.91552734375,
+              2.17724609375,
+              2.67431640625
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:28 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.91552734375,
+              2.17724609375,
+              2.67431640625
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:29 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.91552734375,
+              2.17724609375,
+              2.67431640625
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:30 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.91552734375,
+              2.17724609375,
+              2.67431640625
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:31 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.76171875,
+              2.1572265625,
+              2.6650390625
+            ]
+          }
+        ],
+        "quiet": true,
+        "binary_unchanged": true,
+        "complete": true,
+        "finished": "2026-10-16 11:18:33 PM MST",
+        "peer_hashes": {
+          "first": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B2-native-cap-one/01-30ms/host_trace.json",
+          "second": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B2-native-cap-one/01-30ms/client_trace.json",
+          "cross_peer": true,
+          "sim_gated_pass": true,
+          "existing_comparator": {
+            "compared_ticks": 1200,
+            "first_divergence": null,
+            "divergent_subsystems": [],
+            "reasons": [],
+            "paused_ticks": 0,
+            "per_peer_excluded": [
+              "controller_route"
+            ],
+            "host_info": {
+              "run": {
+                "final_total_hash": "3654981d4986bc138324e0490c3a77f748045790f9e1ea81c56574419de52a04",
+                "numeric": {
+                  "__wall_seconds": 22.226502597,
+                  "final_tick": 1200.0
+                },
+                "passed": true,
+                "scenario": "P4 Alpha Duel",
+                "seed": 42,
+                "sim_config": {
+                  "ai_update_interval": "2",
+                  "automatic_gold_deposit": "1",
+                  "crab_bombs": "off",
+                  "delta_time_bits": "0x3c888865",
+                  "enabled_global_scripts": "",
+                  "mo_subtraction": "1",
+                  "particle_settling": "1",
+                  "pathfinder_grid_node_size": "24",
+                  "recommended_moid_count": "512"
+                },
+                "strings": {
+                  "completion": "completed",
+                  "completion_reason": "the match ran to its end",
+                  "scenario": "FeelBaseline"
+                },
+                "ticks": 1200
+              }
+            },
+            "client_info": {
+              "run": {
+                "final_total_hash": "3654981d4986bc138324e0490c3a77f748045790f9e1ea81c56574419de52a04",
+                "numeric": {
+                  "__wall_seconds": 22.320923814,
+                  "final_tick": 1200.0
+                },
+                "passed": true,
+                "scenario": "P4 Alpha Duel",
+                "seed": 42,
+                "sim_config": {
+                  "ai_update_interval": "2",
+                  "automatic_gold_deposit": "1",
+                  "crab_bombs": "off",
+                  "delta_time_bits": "0x3c888865",
+                  "enabled_global_scripts": "",
+                  "mo_subtraction": "1",
+                  "particle_settling": "1",
+                  "pathfinder_grid_node_size": "24",
+                  "recommended_moid_count": "512"
+                },
+                "strings": {
+                  "completion": "completed",
+                  "completion_reason": "the match ran to its end",
+                  "scenario": "FeelBaseline"
+                },
+                "ticks": 1200
+              }
+            },
+            "client_away_ticks": 0,
+            "client_replayed_ticks": 0,
+            "subsystem_sets_seen": [
+              [
+                "actor_timers",
+                "actors",
+                "attachables",
+                "carve_math",
+                "controller",
+                "controller_route",
+                "funds",
+                "lua_state",
+                "particles",
+                "rot_angle",
+                "rot_angvel",
+                "scene",
+                "sim_rng",
+                "terrain",
+                "tick"
+              ],
+              [
+                "actor_timers",
+                "actors",
+                "attachables",
+                "carve_math",
+                "controller",
+                "controller_route",
+                "funds",
+                "lua_state",
+                "rot_angle",
+                "rot_angvel",
+                "scene",
+                "sim_rng",
+                "terrain",
+                "tick"
+              ],
+              [
+                "actor_timers",
+                "actors",
+                "attachables",
+                "controller",
+                "controller_route",
+                "funds",
+                "lua_state",
+                "rot_angle",
+                "rot_angvel",
+                "scene",
+                "sim_rng",
+                "terrain",
+                "tick"
+              ]
+            ],
+            "coverage": "active core hashes; paused ticks cover the same census, per-object subsystems only when the world holds objects"
+          },
+          "all_tick_hashes_identical": true,
+          "first_full_row_difference": null,
+          "pass": true
+        }
+      },
+      "peers": {
+        "host": {
+          "peer": "host",
+          "requested_rtt_ms": 30,
+          "raw": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B2-native-cap-one/01-30ms/host/feel/raw.jsonl.gz",
+          "raw_sha256": "baf1008cbfef812b25db60bb68c29befaf37334ed100857dd49335bbb22241e3",
+          "input_coverage": {
+            "expected_responses": 32,
+            "observed_responses": 32,
+            "missing_script_edges": [],
+            "responses_not_drawn": 0
+          },
+          "latency_ms": {
+            "count": 32,
+            "p50": 37.63265299797058,
+            "p95": 162.59017902612686,
+            "p99": 170.76311498880386,
+            "max": 170.76311498880386
+          },
+          "latency_frames": {
+            "count": 32,
+            "p50": 2,
+            "p95": 8,
+            "p99": 9,
+            "max": 9
+          },
+          "delay_min": 4,
+          "delay_max": 5,
+          "delay_depth_counts": [
+            {
+              "delay": 4,
+              "depth": 4,
+              "frames": 77
+            },
+            {
+              "delay": 5,
+              "depth": 5,
+              "frames": 1003
+            }
+          ],
+          "depth_mismatches": [],
+          "missing_activity_state": [],
+          "preview": {
+            "enabled": true,
+            "previews": 1180,
+            "actor_ticks": 5814,
+            "ms_total": 5038.16,
+            "shadows": 3750,
+            "taken": 0,
+            "violations": 0,
+            "events_played_at_preview": 24,
+            "events_suppressed_at_commit": 24,
+            "events_expired": 0,
+            "events_retimed": 0,
+            "event_starts": [
+              {
+                "committed_tick": 181,
+                "event_tick": 186,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 181,
+                "event_tick": 186,
+                "emitter": 1048577,
+                "kind": 2,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 186,
+                "event_tick": 186,
+                "emitter": 1048577,
+                "kind": 2,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 301,
+                "event_tick": 306,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 301,
+                "event_tick": 306,
+                "emitter": 1048577,
+                "kind": 2,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 306,
+                "event_tick": 306,
+                "emitter": 1048577,
+                "kind": 2,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 421,
+                "event_tick": 426,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 421,
+                "event_tick": 426,
+                "emitter": 1048577,
+                "kind": 2,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 426,
+                "event_tick": 426,
+                "emitter": 1048577,
+                "kind": 2,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 541,
+                "event_tick": 546,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 541,
+                "event_tick": 546,
+                "emitter": 1048577,
+                "kind": 2,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 546,
+                "event_tick": 546,
+                "emitter": 1048577,
+                "kind": 2,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 661,
+                "event_tick": 666,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 661,
+                "event_tick": 666,
+                "emitter": 1048577,
+                "kind": 2,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 666,
+                "event_tick": 666,
+                "emitter": 1048577,
+                "kind": 2,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 781,
+                "event_tick": 786,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 781,
+                "event_tick": 786,
+                "emitter": 1048577,
+                "kind": 2,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 786,
+                "event_tick": 786,
+                "emitter": 1048577,
+                "kind": 2,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 846,
+                "event_tick": 846,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 846,
+                "event_tick": 846,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 860,
+                "event_tick": 860,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 901,
+                "event_tick": 906,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 901,
+                "event_tick": 906,
+                "emitter": 1048577,
+                "kind": 2,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 906,
+                "event_tick": 906,
+                "emitter": 1048577,
+                "kind": 2,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 957,
+                "event_tick": 957,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 957,
+                "event_tick": 957,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 973,
+                "event_tick": 973,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 989,
+                "event_tick": 989,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 1005,
+                "event_tick": 1005,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 1005,
+                "event_tick": 1005,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 1021,
+                "event_tick": 1021,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 1021,
+                "event_tick": 1021,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 1021,
+                "event_tick": 1026,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 1021,
+                "event_tick": 1026,
+                "emitter": 1048577,
+                "kind": 2,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 1026,
+                "event_tick": 1026,
+                "emitter": 1048577,
+                "kind": 2,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 1037,
+                "event_tick": 1037,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 1037,
+                "event_tick": 1037,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 1053,
+                "event_tick": 1053,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 1053,
+                "event_tick": 1053,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              }
+            ]
+          },
+          "preview_ms_per_actor_tick": 0.8665565875472996,
+          "delay_watches": [
+            {
+              "active_frames": 534,
+              "cost_us": 25508,
+              "flush": "periodic",
+              "frames": 535,
+              "offences": 0,
+              "rule": "input_delay",
+              "state": "running",
+              "through_tick": 600,
+              "violations": 0,
+              "watch": "b4-delay",
+              "worst_us": 566
+            },
+            {
+              "active_frames": 1080,
+              "cost_us": 52566,
+              "flush": "periodic",
+              "frames": 1081,
+              "offences": 0,
+              "rule": "input_delay",
+              "state": "running",
+              "through_tick": 1200,
+              "violations": 0,
+              "watch": "b4-delay",
+              "worst_us": 740
+            },
+            {
+              "active_frames": 1082,
+              "cost_us": 52616,
+              "flush": "final",
+              "frames": 1083,
+              "offences": 0,
+              "rule": "input_delay",
+              "state": "running",
+              "through_tick": 1201,
+              "violations": 0,
+              "watch": "b4-delay",
+              "worst_us": 740
+            }
+          ],
+          "b1_delay_pass": true,
+          "b2_depth_pass": true,
+          "b3_coverage_pass": true,
+          "b4_overlay_pass": true,
+          "wait_stats": {
+            "missing_frame_stalls": 0,
+            "blocking_frame_waits": 0,
+            "longest_stall_ms": 0
+          },
+          "measured_rtt_min_ms": 30,
+          "measured_rtt_max_ms": 31,
+          "stdout_sha256": "5235897d40ecc73f360e9c024834e4095a5ae493710ef026545fd4e8708e2433"
+        },
+        "client": {
+          "peer": "client",
+          "requested_rtt_ms": 30,
+          "raw": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B2-native-cap-one/01-30ms/client/feel/raw.jsonl.gz",
+          "raw_sha256": "bec7bb81028e1f151fe2dda9c20ee5379bdd21edcfa019ff2308450ae01dbb28",
+          "input_coverage": {
+            "expected_responses": 32,
+            "observed_responses": 32,
+            "missing_script_edges": [],
+            "responses_not_drawn": 0
+          },
+          "latency_ms": {
+            "count": 32,
+            "p50": 33.28435695171356,
+            "p95": 114.35506600141525,
+            "p99": 144.80070900917053,
+            "max": 144.80070900917053
+          },
+          "latency_frames": {
+            "count": 32,
+            "p50": 2,
+            "p95": 6,
+            "p99": 8,
+            "max": 8
+          },
+          "delay_min": 4,
+          "delay_max": 5,
+          "delay_depth_counts": [
+            {
+              "delay": 4,
+              "depth": 4,
+              "frames": 69
+            },
+            {
+              "delay": 5,
+              "depth": 5,
+              "frames": 1028
+            }
+          ],
+          "depth_mismatches": [],
+          "missing_activity_state": [],
+          "preview": {
+            "enabled": true,
+            "previews": 1180,
+            "actor_ticks": 5822,
+            "ms_total": 5003.88,
+            "shadows": 5988,
+            "taken": 0,
+            "violations": 0,
+            "events_played_at_preview": 27,
+            "events_suppressed_at_commit": 27,
+            "events_expired": 0,
+            "events_retimed": 0,
+            "event_starts": [
+              {
+                "committed_tick": 157,
+                "event_tick": 157,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 157,
+                "event_tick": 157,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 174,
+                "event_tick": 174,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 174,
+                "event_tick": 174,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 181,
+                "event_tick": 186,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 181,
+                "event_tick": 186,
+                "emitter": 1048596,
+                "kind": 2,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 186,
+                "event_tick": 186,
+                "emitter": 1048596,
+                "kind": 2,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 186,
+                "event_tick": 186,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 237,
+                "event_tick": 237,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 253,
+                "event_tick": 253,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 269,
+                "event_tick": 269,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 269,
+                "event_tick": 269,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 285,
+                "event_tick": 285,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 285,
+                "event_tick": 285,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 301,
+                "event_tick": 301,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 301,
+                "event_tick": 306,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 301,
+                "event_tick": 306,
+                "emitter": 1048596,
+                "kind": 1,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 301,
+                "event_tick": 306,
+                "emitter": 1048596,
+                "kind": 2,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 306,
+                "event_tick": 306,
+                "emitter": 1048596,
+                "kind": 2,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 317,
+                "event_tick": 317,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 317,
+                "event_tick": 317,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 333,
+                "event_tick": 333,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 333,
+                "event_tick": 333,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 421,
+                "event_tick": 426,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 421,
+                "event_tick": 426,
+                "emitter": 1048596,
+                "kind": 2,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 426,
+                "event_tick": 426,
+                "emitter": 1048596,
+                "kind": 2,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 541,
+                "event_tick": 546,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 541,
+                "event_tick": 546,
+                "emitter": 1048596,
+                "kind": 1,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 541,
+                "event_tick": 546,
+                "emitter": 1048596,
+                "kind": 2,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 546,
+                "event_tick": 546,
+                "emitter": 1048596,
+                "kind": 2,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 587,
+                "event_tick": 587,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 587,
+                "event_tick": 587,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 603,
+                "event_tick": 603,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 603,
+                "event_tick": 603,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 661,
+                "event_tick": 666,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 661,
+                "event_tick": 666,
+                "emitter": 1048596,
+                "kind": 2,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 666,
+                "event_tick": 666,
+                "emitter": 1048596,
+                "kind": 2,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 668,
+                "event_tick": 668,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 668,
+                "event_tick": 668,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 716,
+                "event_tick": 716,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 716,
+                "event_tick": 716,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 731,
+                "event_tick": 731,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 731,
+                "event_tick": 731,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 747,
+                "event_tick": 747,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 747,
+                "event_tick": 747,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 763,
+                "event_tick": 763,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 763,
+                "event_tick": 763,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 781,
+                "event_tick": 786,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 781,
+                "event_tick": 786,
+                "emitter": 1048596,
+                "kind": 2,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 786,
+                "event_tick": 786,
+                "emitter": 1048596,
+                "kind": 2,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 901,
+                "event_tick": 906,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 901,
+                "event_tick": 906,
+                "emitter": 1048596,
+                "kind": 2,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 906,
+                "event_tick": 906,
+                "emitter": 1048596,
+                "kind": 2,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 1005,
+                "event_tick": 1005,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 1005,
+                "event_tick": 1005,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 1005,
+                "event_tick": 1005,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 1021,
+                "event_tick": 1021,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 1021,
+                "event_tick": 1021,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 1021,
+                "event_tick": 1026,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 1021,
+                "event_tick": 1026,
+                "emitter": 1048596,
+                "kind": 1,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 1021,
+                "event_tick": 1026,
+                "emitter": 1048596,
+                "kind": 2,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 1026,
+                "event_tick": 1026,
+                "emitter": 1048596,
+                "kind": 2,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 1037,
+                "event_tick": 1037,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 1037,
+                "event_tick": 1037,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              }
+            ]
+          },
+          "preview_ms_per_actor_tick": 0.8594778426657507,
+          "delay_watches": [
+            {
+              "active_frames": 546,
+              "cost_us": 26873,
+              "flush": "periodic",
+              "frames": 557,
+              "offences": 0,
+              "rule": "input_delay",
+              "state": "running",
+              "through_tick": 600,
+              "violations": 0,
+              "watch": "b4-delay",
+              "worst_us": 765
+            },
+            {
+              "active_frames": 1097,
+              "cost_us": 53196,
+              "flush": "periodic",
+              "frames": 1108,
+              "offences": 0,
+              "rule": "input_delay",
+              "state": "running",
+              "through_tick": 1200,
+              "violations": 0,
+              "watch": "b4-delay",
+              "worst_us": 765
+            },
+            {
+              "active_frames": 1099,
+              "cost_us": 53244,
+              "flush": "final",
+              "frames": 1110,
+              "offences": 0,
+              "rule": "input_delay",
+              "state": "running",
+              "through_tick": 1201,
+              "violations": 0,
+              "watch": "b4-delay",
+              "worst_us": 765
+            }
+          ],
+          "b1_delay_pass": true,
+          "b2_depth_pass": true,
+          "b3_coverage_pass": true,
+          "b4_overlay_pass": true,
+          "wait_stats": {
+            "missing_frame_stalls": 0,
+            "blocking_frame_waits": 0,
+            "longest_stall_ms": 0
+          },
+          "measured_rtt_min_ms": 30,
+          "measured_rtt_max_ms": 31,
+          "stdout_sha256": "5384970975b744af6057b7c2a67c9ea27d3a93d70f30ac341287801006acebef"
+        }
+      }
+    },
+    {
+      "source_path": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B2-native-cap-one/01-200ms",
+      "manifest": {
+        "started": "2026-10-16 11:18:35 PM MST",
+        "arm": "200ms",
+        "repeat": 1,
+        "requested_rtt_ms": 200,
+        "ticks": 1200,
+        "per_engine_lag_ms": 100,
+        "headed": true,
+        "display": ":0",
+        "size": [
+          960,
+          540
+        ],
+        "lag_step": null,
+        "local_prediction_max_ticks_setting": 1,
+        "binary": "/home/erol/cortex-workers/session-plane-engineer/build-gcc/CortexCommand",
+        "binary_sha256": "2c224533eea61753a91b2298b12829579f7d34591ab67ef60cce34e0560a0135",
+        "quiet_samples": [
+          {
+            "time": "2026-10-16 11:18:36 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.70068359375,
+              2.154296875,
+              2.6611328125
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:37 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.70068359375,
+              2.154296875,
+              2.6611328125
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:38 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.70068359375,
+              2.154296875,
+              2.6611328125
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:39 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.70068359375,
+              2.154296875,
+              2.6611328125
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:40 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.70068359375,
+              2.154296875,
+              2.6611328125
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:41 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.80517578125,
+              2.18505859375,
+              2.66845703125
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:42 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.80517578125,
+              2.18505859375,
+              2.66845703125
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:43 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.80517578125,
+              2.18505859375,
+              2.66845703125
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:44 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.80517578125,
+              2.18505859375,
+              2.66845703125
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:45 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.80517578125,
+              2.18505859375,
+              2.66845703125
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:46 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.740234375,
+              2.181640625,
+              2.66455078125
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:47 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.740234375,
+              2.181640625,
+              2.66455078125
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:48 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.740234375,
+              2.181640625,
+              2.66455078125
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:49 PM MST",
+            "foreign": [],
+            "loadavg": [
+              2.740234375,
+              2.181640625,
+              2.66455078125
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:51 PM MST",
+            "foreign": [],
+            "loadavg": [
+              3.88232421875,
+              2.427734375,
+              2.74169921875
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:52 PM MST",
+            "foreign": [],
+            "loadavg": [
+              3.88232421875,
+              2.427734375,
+              2.74169921875
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:53 PM MST",
+            "foreign": [],
+            "loadavg": [
+              3.88232421875,
+              2.427734375,
+              2.74169921875
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:54 PM MST",
+            "foreign": [],
+            "loadavg": [
+              3.88232421875,
+              2.427734375,
+              2.74169921875
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:55 PM MST",
+            "foreign": [],
+            "loadavg": [
+              3.88232421875,
+              2.427734375,
+              2.74169921875
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:56 PM MST",
+            "foreign": [],
+            "loadavg": [
+              3.89208984375,
+              2.4541015625,
+              2.74853515625
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:57 PM MST",
+            "foreign": [],
+            "loadavg": [
+              3.89208984375,
+              2.4541015625,
+              2.74853515625
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:58 PM MST",
+            "foreign": [],
+            "loadavg": [
+              3.89208984375,
+              2.4541015625,
+              2.74853515625
+            ]
+          },
+          {
+            "time": "2026-10-16 11:18:59 PM MST",
+            "foreign": [],
+            "loadavg": [
+              3.89208984375,
+              2.4541015625,
+              2.74853515625
+            ]
+          },
+          {
+            "time": "2026-10-16 11:19:00 PM MST",
+            "foreign": [],
+            "loadavg": [
+              3.89208984375,
+              2.4541015625,
+              2.74853515625
+            ]
+          },
+          {
+            "time": "2026-10-16 11:19:01 PM MST",
+            "foreign": [],
+            "loadavg": [
+              3.90087890625,
+              2.47998046875,
+              2.75537109375
+            ]
+          },
+          {
+            "time": "2026-10-16 11:19:02 PM MST",
+            "foreign": [],
+            "loadavg": [
+              3.90087890625,
+              2.47998046875,
+              2.75537109375
+            ]
+          },
+          {
+            "time": "2026-10-16 11:19:03 PM MST",
+            "foreign": [],
+            "loadavg": [
+              3.90087890625,
+              2.47998046875,
+              2.75537109375
+            ]
+          },
+          {
+            "time": "2026-10-16 11:19:04 PM MST",
+            "foreign": [],
+            "loadavg": [
+              3.90087890625,
+              2.47998046875,
+              2.75537109375
+            ]
+          },
+          {
+            "time": "2026-10-16 11:19:05 PM MST",
+            "foreign": [],
+            "loadavg": [
+              3.90087890625,
+              2.47998046875,
+              2.75537109375
+            ]
+          },
+          {
+            "time": "2026-10-16 11:19:06 PM MST",
+            "foreign": [],
+            "loadavg": [
+              3.82861328125,
+              2.48876953125,
+              2.7568359375
+            ]
+          },
+          {
+            "time": "2026-10-16 11:19:07 PM MST",
+            "foreign": [],
+            "loadavg": [
+              3.82861328125,
+              2.48876953125,
+              2.7568359375
+            ]
+          },
+          {
+            "time": "2026-10-16 11:19:08 PM MST",
+            "foreign": [],
+            "loadavg": [
+              3.82861328125,
+              2.48876953125,
+              2.7568359375
+            ]
+          },
+          {
+            "time": "2026-10-16 11:19:09 PM MST",
+            "foreign": [],
+            "loadavg": [
+              3.82861328125,
+              2.48876953125,
+              2.7568359375
+            ]
+          },
+          {
+            "time": "2026-10-16 11:19:10 PM MST",
+            "foreign": [],
+            "loadavg": [
+              3.82861328125,
+              2.48876953125,
+              2.7568359375
+            ]
+          },
+          {
+            "time": "2026-10-16 11:19:11 PM MST",
+            "foreign": [],
+            "loadavg": [
+              3.60205078125,
+              2.4638671875,
+              2.7470703125
+            ]
+          },
+          {
+            "time": "2026-10-16 11:19:12 PM MST",
+            "foreign": [],
+            "loadavg": [
+              3.60205078125,
+              2.4638671875,
+              2.7470703125
+            ]
+          },
+          {
+            "time": "2026-10-16 11:19:13 PM MST",
+            "foreign": [],
+            "loadavg": [
+              3.60205078125,
+              2.4638671875,
+              2.7470703125
+            ]
+          },
+          {
+            "time": "2026-10-16 11:19:14 PM MST",
+            "foreign": [],
+            "loadavg": [
+              3.60205078125,
+              2.4638671875,
+              2.7470703125
+            ]
+          },
+          {
+            "time": "2026-10-16 11:19:15 PM MST",
+            "foreign": [],
+            "loadavg": [
+              3.60205078125,
+              2.4638671875,
+              2.7470703125
+            ]
+          }
+        ],
+        "quiet": true,
+        "binary_unchanged": true,
+        "complete": true,
+        "finished": "2026-10-16 11:19:16 PM MST",
+        "peer_hashes": {
+          "first": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B2-native-cap-one/01-200ms/host_trace.json",
+          "second": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B2-native-cap-one/01-200ms/client_trace.json",
+          "cross_peer": true,
+          "sim_gated_pass": true,
+          "existing_comparator": {
+            "compared_ticks": 1200,
+            "first_divergence": null,
+            "divergent_subsystems": [],
+            "reasons": [],
+            "paused_ticks": 0,
+            "per_peer_excluded": [
+              "controller_route"
+            ],
+            "host_info": {
+              "run": {
+                "final_total_hash": "58f5064fbf45fdc3486cbaa6a9357b1d82ee4dbfd78ba53d622039ecd3e9a289",
+                "numeric": {
+                  "__wall_seconds": 22.156094573,
+                  "final_tick": 1200.0
+                },
+                "passed": true,
+                "scenario": "P4 Alpha Duel",
+                "seed": 42,
+                "sim_config": {
+                  "ai_update_interval": "2",
+                  "automatic_gold_deposit": "1",
+                  "crab_bombs": "off",
+                  "delta_time_bits": "0x3c888865",
+                  "enabled_global_scripts": "",
+                  "mo_subtraction": "1",
+                  "particle_settling": "1",
+                  "pathfinder_grid_node_size": "24",
+                  "recommended_moid_count": "512"
+                },
+                "strings": {
+                  "completion": "completed",
+                  "completion_reason": "the match ran to its end",
+                  "scenario": "FeelBaseline"
+                },
+                "ticks": 1200
+              }
+            },
+            "client_info": {
+              "run": {
+                "final_total_hash": "58f5064fbf45fdc3486cbaa6a9357b1d82ee4dbfd78ba53d622039ecd3e9a289",
+                "numeric": {
+                  "__wall_seconds": 22.254613829,
+                  "final_tick": 1200.0
+                },
+                "passed": true,
+                "scenario": "P4 Alpha Duel",
+                "seed": 42,
+                "sim_config": {
+                  "ai_update_interval": "2",
+                  "automatic_gold_deposit": "1",
+                  "crab_bombs": "off",
+                  "delta_time_bits": "0x3c888865",
+                  "enabled_global_scripts": "",
+                  "mo_subtraction": "1",
+                  "particle_settling": "1",
+                  "pathfinder_grid_node_size": "24",
+                  "recommended_moid_count": "512"
+                },
+                "strings": {
+                  "completion": "completed",
+                  "completion_reason": "the match ran to its end",
+                  "scenario": "FeelBaseline"
+                },
+                "ticks": 1200
+              }
+            },
+            "client_away_ticks": 0,
+            "client_replayed_ticks": 0,
+            "subsystem_sets_seen": [
+              [
+                "actor_timers",
+                "actors",
+                "attachables",
+                "carve_math",
+                "controller",
+                "controller_route",
+                "funds",
+                "lua_state",
+                "particles",
+                "rot_angle",
+                "rot_angvel",
+                "scene",
+                "sim_rng",
+                "terrain",
+                "tick"
+              ],
+              [
+                "actor_timers",
+                "actors",
+                "attachables",
+                "carve_math",
+                "controller",
+                "controller_route",
+                "funds",
+                "lua_state",
+                "rot_angle",
+                "rot_angvel",
+                "scene",
+                "sim_rng",
+                "terrain",
+                "tick"
+              ],
+              [
+                "actor_timers",
+                "actors",
+                "attachables",
+                "controller",
+                "controller_route",
+                "funds",
+                "lua_state",
+                "rot_angle",
+                "rot_angvel",
+                "scene",
+                "sim_rng",
+                "terrain",
+                "tick"
+              ]
+            ],
+            "coverage": "active core hashes; paused ticks cover the same census, per-object subsystems only when the world holds objects"
+          },
+          "all_tick_hashes_identical": true,
+          "first_full_row_difference": null,
+          "pass": true
+        }
+      },
+      "peers": {
+        "host": {
+          "peer": "host",
+          "requested_rtt_ms": 200,
+          "raw": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B2-native-cap-one/01-200ms/host/feel/raw.jsonl.gz",
+          "raw_sha256": "82174c8f3174472c165d01b032d3e9e2fc8f6ca17dcf58f86d91b9781c1cdd4d",
+          "input_coverage": {
+            "expected_responses": 32,
+            "observed_responses": 32,
+            "missing_script_edges": [],
+            "responses_not_drawn": 0
+          },
+          "latency_ms": {
+            "count": 32,
+            "p50": 35.652397990226746,
+            "p95": 118.08279997110367,
+            "p99": 136.36516100168228,
+            "max": 136.36516100168228
+          },
+          "latency_frames": {
+            "count": 32,
+            "p50": 2,
+            "p95": 6,
+            "p99": 7,
+            "max": 7
+          },
+          "delay_min": 15,
+          "delay_max": 15,
+          "delay_depth_counts": [
+            {
+              "delay": 15,
+              "depth": 15,
+              "frames": 1011
+            }
+          ],
+          "depth_mismatches": [],
+          "missing_activity_state": [],
+          "preview": {
+            "enabled": true,
+            "previews": 1163,
+            "actor_ticks": 17445,
+            "ms_total": 5912.48,
+            "shadows": 4221,
+            "taken": 0,
+            "violations": 0,
+            "events_played_at_preview": 24,
+            "events_suppressed_at_commit": 24,
+            "events_expired": 0,
+            "events_retimed": 0,
+            "event_starts": [
+              {
+                "committed_tick": 181,
+                "event_tick": 196,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 181,
+                "event_tick": 196,
+                "emitter": 1048577,
+                "kind": 2,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 196,
+                "event_tick": 196,
+                "emitter": 1048577,
+                "kind": 2,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 301,
+                "event_tick": 316,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 301,
+                "event_tick": 316,
+                "emitter": 1048577,
+                "kind": 2,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 316,
+                "event_tick": 316,
+                "emitter": 1048577,
+                "kind": 2,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 421,
+                "event_tick": 436,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 421,
+                "event_tick": 436,
+                "emitter": 1048577,
+                "kind": 2,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 436,
+                "event_tick": 436,
+                "emitter": 1048577,
+                "kind": 2,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 541,
+                "event_tick": 556,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 541,
+                "event_tick": 556,
+                "emitter": 1048577,
+                "kind": 2,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 556,
+                "event_tick": 556,
+                "emitter": 1048577,
+                "kind": 2,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 661,
+                "event_tick": 676,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 661,
+                "event_tick": 676,
+                "emitter": 1048577,
+                "kind": 2,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 662,
+                "event_tick": 662,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 662,
+                "event_tick": 662,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 676,
+                "event_tick": 676,
+                "emitter": 1048577,
+                "kind": 2,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 678,
+                "event_tick": 678,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 678,
+                "event_tick": 678,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 695,
+                "event_tick": 695,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 695,
+                "event_tick": 695,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 710,
+                "event_tick": 710,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 710,
+                "event_tick": 710,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 727,
+                "event_tick": 727,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 727,
+                "event_tick": 727,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 743,
+                "event_tick": 743,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 743,
+                "event_tick": 743,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 775,
+                "event_tick": 775,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 775,
+                "event_tick": 775,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 775,
+                "event_tick": 775,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 775,
+                "event_tick": 775,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 781,
+                "event_tick": 796,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 781,
+                "event_tick": 796,
+                "emitter": 1048577,
+                "kind": 2,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 791,
+                "event_tick": 791,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 791,
+                "event_tick": 791,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 796,
+                "event_tick": 796,
+                "emitter": 1048577,
+                "kind": 2,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 807,
+                "event_tick": 807,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 807,
+                "event_tick": 807,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 823,
+                "event_tick": 823,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 823,
+                "event_tick": 823,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 839,
+                "event_tick": 839,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 855,
+                "event_tick": 855,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 870,
+                "event_tick": 870,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 887,
+                "event_tick": 887,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 902,
+                "event_tick": 916,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 902,
+                "event_tick": 916,
+                "emitter": 1048577,
+                "kind": 2,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 916,
+                "event_tick": 916,
+                "emitter": 1048577,
+                "kind": 2,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 1021,
+                "event_tick": 1036,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 1021,
+                "event_tick": 1036,
+                "emitter": 1048577,
+                "kind": 2,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 1036,
+                "event_tick": 1036,
+                "emitter": 1048577,
+                "kind": 2,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 1131,
+                "event_tick": 1131,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 1147,
+                "event_tick": 1147,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 1147,
+                "event_tick": 1147,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 1163,
+                "event_tick": 1163,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 1163,
+                "event_tick": 1163,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 1163,
+                "event_tick": 1163,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 1179,
+                "event_tick": 1179,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 1179,
+                "event_tick": 1179,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 1179,
+                "event_tick": 1179,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 1195,
+                "event_tick": 1195,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 1195,
+                "event_tick": 1195,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 1195,
+                "event_tick": 1195,
+                "emitter": 1048577,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              }
+            ]
+          },
+          "preview_ms_per_actor_tick": 0.3389211808541129,
+          "delay_watches": [
+            {
+              "active_frames": 518,
+              "cost_us": 24463,
+              "flush": "periodic",
+              "frames": 519,
+              "offences": 0,
+              "rule": "input_delay",
+              "state": "running",
+              "through_tick": 600,
+              "violations": 0,
+              "watch": "b4-delay",
+              "worst_us": 579
+            },
+            {
+              "active_frames": 1011,
+              "cost_us": 48949,
+              "flush": "periodic",
+              "frames": 1012,
+              "offences": 0,
+              "rule": "input_delay",
+              "state": "running",
+              "through_tick": 1200,
+              "violations": 0,
+              "watch": "b4-delay",
+              "worst_us": 986
+            },
+            {
+              "active_frames": 1013,
+              "cost_us": 49014,
+              "flush": "final",
+              "frames": 1014,
+              "offences": 0,
+              "rule": "input_delay",
+              "state": "running",
+              "through_tick": 1201,
+              "violations": 0,
+              "watch": "b4-delay",
+              "worst_us": 986
+            }
+          ],
+          "b1_delay_pass": true,
+          "b2_depth_pass": true,
+          "b3_coverage_pass": true,
+          "b4_overlay_pass": true,
+          "wait_stats": {
+            "missing_frame_stalls": 0,
+            "blocking_frame_waits": 0,
+            "longest_stall_ms": 0
+          },
+          "measured_rtt_min_ms": 200,
+          "measured_rtt_max_ms": 201,
+          "stdout_sha256": "58d989010374c12ba8426567ac51db93742b77dde7f282b3bbbeece1f14a19f1"
+        },
+        "client": {
+          "peer": "client",
+          "requested_rtt_ms": 200,
+          "raw": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/B2-native-cap-one/01-200ms/client/feel/raw.jsonl.gz",
+          "raw_sha256": "55368a7bb83c1dde52363a0ecfb7d4235aa25d2a093f1d98c196d5953a7078e8",
+          "input_coverage": {
+            "expected_responses": 32,
+            "observed_responses": 32,
+            "missing_script_edges": [],
+            "responses_not_drawn": 0
+          },
+          "latency_ms": {
+            "count": 32,
+            "p50": 31.20957499742508,
+            "p95": 88.22866797447205,
+            "p99": 132.58095902204514,
+            "max": 132.58095902204514
+          },
+          "latency_frames": {
+            "count": 32,
+            "p50": 2,
+            "p95": 5,
+            "p99": 7,
+            "max": 7
+          },
+          "delay_min": 15,
+          "delay_max": 15,
+          "delay_depth_counts": [
+            {
+              "delay": 15,
+              "depth": 15,
+              "frames": 1057
+            }
+          ],
+          "depth_mismatches": [],
+          "missing_activity_state": [],
+          "preview": {
+            "enabled": true,
+            "previews": 1157,
+            "actor_ticks": 17355,
+            "ms_total": 5853.42,
+            "shadows": 5053,
+            "taken": 0,
+            "violations": 0,
+            "events_played_at_preview": 24,
+            "events_suppressed_at_commit": 24,
+            "events_expired": 0,
+            "events_retimed": 0,
+            "event_starts": [
+              {
+                "committed_tick": 181,
+                "event_tick": 196,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 181,
+                "event_tick": 196,
+                "emitter": 1048596,
+                "kind": 2,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 196,
+                "event_tick": 196,
+                "emitter": 1048596,
+                "kind": 2,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 196,
+                "event_tick": 196,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 301,
+                "event_tick": 316,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 301,
+                "event_tick": 316,
+                "emitter": 1048596,
+                "kind": 2,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 316,
+                "event_tick": 316,
+                "emitter": 1048596,
+                "kind": 2,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 421,
+                "event_tick": 436,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 421,
+                "event_tick": 436,
+                "emitter": 1048596,
+                "kind": 2,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 436,
+                "event_tick": 436,
+                "emitter": 1048596,
+                "kind": 2,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 541,
+                "event_tick": 556,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 541,
+                "event_tick": 556,
+                "emitter": 1048596,
+                "kind": 2,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 556,
+                "event_tick": 556,
+                "emitter": 1048596,
+                "kind": 2,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 589,
+                "event_tick": 589,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 661,
+                "event_tick": 676,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 661,
+                "event_tick": 676,
+                "emitter": 1048596,
+                "kind": 2,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 676,
+                "event_tick": 676,
+                "emitter": 1048596,
+                "kind": 2,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 781,
+                "event_tick": 796,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 781,
+                "event_tick": 796,
+                "emitter": 1048596,
+                "kind": 2,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 795,
+                "event_tick": 795,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 796,
+                "event_tick": 796,
+                "emitter": 1048596,
+                "kind": 2,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 811,
+                "event_tick": 811,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 811,
+                "event_tick": 811,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 811,
+                "event_tick": 811,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 827,
+                "event_tick": 827,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 827,
+                "event_tick": 827,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 843,
+                "event_tick": 843,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 843,
+                "event_tick": 843,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 860,
+                "event_tick": 860,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 860,
+                "event_tick": 860,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 901,
+                "event_tick": 916,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 901,
+                "event_tick": 916,
+                "emitter": 1048596,
+                "kind": 2,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 908,
+                "event_tick": 908,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 908,
+                "event_tick": 908,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 916,
+                "event_tick": 916,
+                "emitter": 1048596,
+                "kind": 2,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 924,
+                "event_tick": 924,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 924,
+                "event_tick": 924,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 924,
+                "event_tick": 924,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 924,
+                "event_tick": 924,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 924,
+                "event_tick": 924,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 940,
+                "event_tick": 940,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 940,
+                "event_tick": 940,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 940,
+                "event_tick": 940,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 956,
+                "event_tick": 956,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 956,
+                "event_tick": 956,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 956,
+                "event_tick": 956,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 956,
+                "event_tick": 956,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 956,
+                "event_tick": 956,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 971,
+                "event_tick": 971,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 971,
+                "event_tick": 971,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 987,
+                "event_tick": 987,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 987,
+                "event_tick": 987,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 1003,
+                "event_tick": 1003,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 1003,
+                "event_tick": 1003,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 1019,
+                "event_tick": 1019,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 1019,
+                "event_tick": 1019,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": false
+              },
+              {
+                "committed_tick": 1021,
+                "event_tick": 1036,
+                "emitter": 1048596,
+                "kind": 0,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 1021,
+                "event_tick": 1036,
+                "emitter": 1048596,
+                "kind": 2,
+                "seq": 0,
+                "predicted": true
+              },
+              {
+                "committed_tick": 1036,
+                "event_tick": 1036,
+                "emitter": 1048596,
+                "kind": 2,
+                "seq": 0,
+                "predicted": false
+              }
+            ]
+          },
+          "preview_ms_per_actor_tick": 0.33727571305099396,
+          "delay_watches": [
+            {
+              "active_frames": 537,
+              "cost_us": 25468,
+              "flush": "periodic",
+              "frames": 554,
+              "offences": 0,
+              "rule": "input_delay",
+              "state": "running",
+              "through_tick": 600,
+              "violations": 0,
+              "watch": "b4-delay",
+              "worst_us": 519
+            },
+            {
+              "active_frames": 1057,
+              "cost_us": 51159,
+              "flush": "periodic",
+              "frames": 1074,
+              "offences": 0,
+              "rule": "input_delay",
+              "state": "running",
+              "through_tick": 1200,
+              "violations": 0,
+              "watch": "b4-delay",
+              "worst_us": 519
+            },
+            {
+              "active_frames": 1059,
+              "cost_us": 51210,
+              "flush": "final",
+              "frames": 1076,
+              "offences": 0,
+              "rule": "input_delay",
+              "state": "running",
+              "through_tick": 1201,
+              "violations": 0,
+              "watch": "b4-delay",
+              "worst_us": 519
+            }
+          ],
+          "b1_delay_pass": true,
+          "b2_depth_pass": true,
+          "b3_coverage_pass": true,
+          "b4_overlay_pass": true,
+          "wait_stats": {
+            "missing_frame_stalls": 14,
+            "blocking_frame_waits": 14,
+            "longest_stall_ms": 25
+          },
+          "measured_rtt_min_ms": 200,
+          "measured_rtt_max_ms": 201,
+          "stdout_sha256": "66d8b7d32b83141c844a0e935c861222fd75a535a56e9149d12184d7e632e2c0"
+        }
+      }
+    }
+  ],
+  "scope": "Native headed Linux local two-engine controls; B3 stays RED and slow-host zero-wait gate is separate."
+}
