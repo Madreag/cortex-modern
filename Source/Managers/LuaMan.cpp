@@ -6756,7 +6756,8 @@ _F5Handles.unreached = _F5Unreached and _F5Unreached:GetFirstPieSliceByPresetNam
 			LuaScriptGraphNativeCaptureScope lookups;
 			lua.SerializeScriptGraph(unreachedText, unreachedProblems);
 			try {
-				const bool carried = lua.CaptureScriptGraph(unreachedFrozen, unreachedFrozenProblems, true);
+				// A frozen capture's worker writes its text; reading the text raises what the worker refused.
+				const bool carried = lua.CaptureScriptGraph(unreachedFrozen, unreachedFrozenProblems, true) && !unreachedFrozen.Text().empty();
 				if (unreachedFrozenProblems.empty()) unreachedFrozenProblems.emplace_back(carried ? "the frozen capture carried it" : "the frozen capture failed with no problem named");
 			} catch (const ScriptGraphRefusal& refused) {
 				unreachedFrozenProblems.insert(unreachedFrozenProblems.end(), refused.problems.begin(), refused.problems.end());
@@ -6768,15 +6769,6 @@ _F5Handles.unreached = _F5Unreached and _F5Unreached:GetFirstPieSliceByPresetNam
 		if (!refusedByName) {
 			for (const std::string& problem: unreachedProblems) std::cout << "[engine-handle-selftest] unreached live: " << problem << std::endl;
 			for (const std::string& problem: unreachedFrozenProblems) std::cout << "[engine-handle-selftest] unreached frozen: " << problem << std::endl;
-			// What the frozen capture wrote after the unreached field: its length, and the text that follows the field's name.
-			try {
-				const std::string& graph = unreachedFrozen.Text();
-				const size_t field = graph.find("unreached");
-				std::cout << "[engine-handle-selftest] unreached frozen text_bytes=" << graph.size() << " after_field="
-				          << (field == std::string::npos ? std::string("none") : graph.substr(field, std::min<size_t>(200, graph.size() - field))) << std::endl;
-			} catch (const std::exception& error) {
-				std::cout << "[engine-handle-selftest] unreached frozen text unreadable: " << error.what() << std::endl;
-			}
 		}
 		luaL_unref(L, LUA_REGISTRYINDEX, keep);
 		lua.RunScriptString("if _F5Handles then _F5Handles.unreached = nil end");
