@@ -17651,10 +17651,12 @@ void LuaMan::StartAsyncGarbageCollection(uint64_t tick, bool everyState) {
 					    lua_gc(state, LUA_GCCOLLECT, 0);
 				    }
 				    if (CheckpointNativeStorage::Enabled()) luaState->NoteFullCollection(inUse, static_cast<size_t>(G(state)->gc.total));
+				    lua_gc(state, LUA_GCSTOP, 0);
 			    } else {
+				    // Keep allocation-triggered collection on in single player. A fixed tick-end step alone cannot keep up
+				    // with sustained script churn; stopping here lets unreachable objects fill the heap before it can trim.
 				    lua_gc(state, LUA_GCSTEP, 100);
 			    }
-			    lua_gc(state, LUA_GCSTOP, 0);
 			    luaState->TrimHeap();
 		    }));
 	}
