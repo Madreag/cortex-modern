@@ -1,0 +1,593 @@
+{
+  "fix_commit": "99dd25fe78c19cc791f8fd07a9044dd2e0b880ab",
+  "reason": "The final match report runs after coordinator teardown; retain the active preview configuration with its lifetime counters.",
+  "rows": {
+    "red": {
+      "binary_sha256": "7053dbd6951fa58f337ad33db39c8c01f8c9d721ae40955f9ed91f35fb2d2c03",
+      "complete": true,
+      "quiet": true,
+      "full_hashes_equal": true,
+      "peers": {
+        "host": {
+          "source": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/merged-A-C-own-hold/01-30ms/host-measurement.json",
+          "sha256": "78380a22acbf09e8a45471a8a157f5462db6c4e38d4d39d9faa875f08970f873",
+          "counters": {
+            "previews": 997,
+            "actor_ticks": 4946,
+            "last_depth": 5,
+            "input_delay_ticks": 0,
+            "configured_max_ticks": 1,
+            "effective_max_ticks": 1
+          },
+          "report_pass": false,
+          "per_frame_depth_pass": false,
+          "depth_mismatches": [
+            {
+              "line": 42027,
+              "tick": 730,
+              "frame": 617,
+              "delay": 5,
+              "depth": 0
+            },
+            {
+              "line": 42031,
+              "tick": 736,
+              "frame": 618,
+              "delay": 5,
+              "depth": 0
+            },
+            {
+              "line": 42035,
+              "tick": 742,
+              "frame": 619,
+              "delay": 5,
+              "depth": 0
+            },
+            {
+              "line": 42038,
+              "tick": 748,
+              "frame": 620,
+              "delay": 5,
+              "depth": 0
+            },
+            {
+              "line": 42041,
+              "tick": 754,
+              "frame": 621,
+              "delay": 5,
+              "depth": 0
+            },
+            {
+              "line": 42046,
+              "tick": 760,
+              "frame": 622,
+              "delay": 5,
+              "depth": 0
+            },
+            {
+              "line": 42049,
+              "tick": 766,
+              "frame": 623,
+              "delay": 5,
+              "depth": 0
+            },
+            {
+              "line": 42054,
+              "tick": 772,
+              "frame": 624,
+              "delay": 5,
+              "depth": 0
+            },
+            {
+              "line": 42057,
+              "tick": 778,
+              "frame": 625,
+              "delay": 5,
+              "depth": 0
+            },
+            {
+              "line": 42060,
+              "tick": 784,
+              "frame": 626,
+              "delay": 5,
+              "depth": 0
+            },
+            {
+              "line": 42064,
+              "tick": 790,
+              "frame": 627,
+              "delay": 5,
+              "depth": 0
+            },
+            {
+              "line": 42068,
+              "tick": 796,
+              "frame": 628,
+              "delay": 5,
+              "depth": 0
+            },
+            {
+              "line": 42071,
+              "tick": 801,
+              "frame": 629,
+              "delay": 5,
+              "depth": 0
+            },
+            {
+              "line": 42076,
+              "tick": 807,
+              "frame": 630,
+              "delay": 5,
+              "depth": 0
+            },
+            {
+              "line": 42079,
+              "tick": 813,
+              "frame": 631,
+              "delay": 5,
+              "depth": 0
+            }
+          ],
+          "own_hold_watches": [
+            {
+              "active_frames": 0,
+              "cost_us": 5909,
+              "flush": "periodic",
+              "frames": 594,
+              "offences": 0,
+              "rule": "sentence",
+              "state": "local_held",
+              "through_tick": 600,
+              "violations": 0,
+              "watch": "c-own-hold",
+              "worst_us": 67
+            },
+            {
+              "active_frames": 47,
+              "cost_us": 12286,
+              "flush": "periodic",
+              "frames": 1013,
+              "offences": 0,
+              "rule": "sentence",
+              "state": "local_held",
+              "through_tick": 1200,
+              "violations": 0,
+              "watch": "c-own-hold",
+              "worst_us": 99
+            },
+            {
+              "active_frames": 47,
+              "cost_us": 12299,
+              "flush": "final",
+              "frames": 1015,
+              "offences": 0,
+              "rule": "sentence",
+              "state": "local_held",
+              "through_tick": 1201,
+              "violations": 0,
+              "watch": "c-own-hold",
+              "worst_us": 99
+            }
+          ],
+          "duplicate_pass": true,
+          "overlay_pass": true
+        },
+        "client": {
+          "source": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/merged-A-C-own-hold/01-30ms/client-measurement.json",
+          "sha256": "e6cdae4cdd0ea91df2795e3d0ab7f61da93f8d973a1dbf0bbda4c2f202773ffb",
+          "counters": {
+            "previews": 1191,
+            "actor_ticks": 4764,
+            "last_depth": 4,
+            "input_delay_ticks": 0,
+            "configured_max_ticks": 1,
+            "effective_max_ticks": 1
+          },
+          "report_pass": false,
+          "per_frame_depth_pass": false,
+          "depth_mismatches": [],
+          "own_hold_watches": [
+            {
+              "active_frames": 0,
+              "cost_us": 6286,
+              "flush": "periodic",
+              "frames": 597,
+              "offences": 0,
+              "rule": "sentence",
+              "state": "local_held",
+              "through_tick": 600,
+              "violations": 0,
+              "watch": "c-own-hold",
+              "worst_us": 66
+            },
+            {
+              "active_frames": 0,
+              "cost_us": 13013,
+              "flush": "periodic",
+              "frames": 1197,
+              "offences": 0,
+              "rule": "sentence",
+              "state": "local_held",
+              "through_tick": 1200,
+              "violations": 0,
+              "watch": "c-own-hold",
+              "worst_us": 105
+            },
+            {
+              "active_frames": 0,
+              "cost_us": 13029,
+              "flush": "final",
+              "frames": 1199,
+              "offences": 0,
+              "rule": "sentence",
+              "state": "local_held",
+              "through_tick": 1201,
+              "violations": 0,
+              "watch": "c-own-hold",
+              "worst_us": 105
+            }
+          ],
+          "duplicate_pass": true,
+          "overlay_pass": true
+        }
+      }
+    },
+    "green": {
+      "binary_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
+      "complete": true,
+      "quiet": true,
+      "full_hashes_equal": true,
+      "peers": {
+        "host": {
+          "source": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-A-C-own-hold/01-30ms/host-measurement.json",
+          "sha256": "fb6b5d60783ac7537dc64dab3aecfe00c655b1d7a2fecb38f5a97ece867c1b17",
+          "counters": {
+            "previews": 1001,
+            "actor_ticks": 5005,
+            "last_depth": 5,
+            "input_delay_ticks": 5,
+            "configured_max_ticks": 1,
+            "effective_max_ticks": 5
+          },
+          "report_pass": true,
+          "per_frame_depth_pass": false,
+          "depth_mismatches": [
+            {
+              "line": 48135,
+              "tick": 730,
+              "frame": 620,
+              "delay": 5,
+              "depth": 0
+            },
+            {
+              "line": 48139,
+              "tick": 736,
+              "frame": 621,
+              "delay": 5,
+              "depth": 0
+            },
+            {
+              "line": 48142,
+              "tick": 742,
+              "frame": 622,
+              "delay": 5,
+              "depth": 0
+            },
+            {
+              "line": 48145,
+              "tick": 748,
+              "frame": 623,
+              "delay": 5,
+              "depth": 0
+            },
+            {
+              "line": 48148,
+              "tick": 754,
+              "frame": 624,
+              "delay": 5,
+              "depth": 0
+            },
+            {
+              "line": 48151,
+              "tick": 760,
+              "frame": 625,
+              "delay": 5,
+              "depth": 0
+            },
+            {
+              "line": 48154,
+              "tick": 766,
+              "frame": 626,
+              "delay": 5,
+              "depth": 0
+            },
+            {
+              "line": 48157,
+              "tick": 772,
+              "frame": 627,
+              "delay": 5,
+              "depth": 0
+            },
+            {
+              "line": 48160,
+              "tick": 778,
+              "frame": 628,
+              "delay": 5,
+              "depth": 0
+            },
+            {
+              "line": 48163,
+              "tick": 784,
+              "frame": 629,
+              "delay": 5,
+              "depth": 0
+            },
+            {
+              "line": 48166,
+              "tick": 790,
+              "frame": 630,
+              "delay": 5,
+              "depth": 0
+            },
+            {
+              "line": 48170,
+              "tick": 796,
+              "frame": 631,
+              "delay": 5,
+              "depth": 0
+            },
+            {
+              "line": 48173,
+              "tick": 797,
+              "frame": 632,
+              "delay": 5,
+              "depth": 0
+            },
+            {
+              "line": 48226,
+              "tick": 798,
+              "frame": 633,
+              "delay": 5,
+              "depth": 0
+            },
+            {
+              "line": 48335,
+              "tick": 799,
+              "frame": 634,
+              "delay": 5,
+              "depth": 0
+            },
+            {
+              "line": 48414,
+              "tick": 800,
+              "frame": 635,
+              "delay": 5,
+              "depth": 0
+            },
+            {
+              "line": 48509,
+              "tick": 801,
+              "frame": 636,
+              "delay": 5,
+              "depth": 0
+            },
+            {
+              "line": 48580,
+              "tick": 802,
+              "frame": 637,
+              "delay": 5,
+              "depth": 0
+            },
+            {
+              "line": 48651,
+              "tick": 803,
+              "frame": 638,
+              "delay": 5,
+              "depth": 0
+            },
+            {
+              "line": 48718,
+              "tick": 804,
+              "frame": 639,
+              "delay": 5,
+              "depth": 0
+            },
+            {
+              "line": 48789,
+              "tick": 805,
+              "frame": 640,
+              "delay": 5,
+              "depth": 0
+            },
+            {
+              "line": 48900,
+              "tick": 806,
+              "frame": 641,
+              "delay": 5,
+              "depth": 0
+            },
+            {
+              "line": 49003,
+              "tick": 807,
+              "frame": 642,
+              "delay": 5,
+              "depth": 0
+            },
+            {
+              "line": 49104,
+              "tick": 808,
+              "frame": 643,
+              "delay": 5,
+              "depth": 0
+            },
+            {
+              "line": 49203,
+              "tick": 809,
+              "frame": 644,
+              "delay": 5,
+              "depth": 0
+            },
+            {
+              "line": 49288,
+              "tick": 810,
+              "frame": 645,
+              "delay": 5,
+              "depth": 0
+            },
+            {
+              "line": 49379,
+              "tick": 811,
+              "frame": 646,
+              "delay": 5,
+              "depth": 0
+            },
+            {
+              "line": 49452,
+              "tick": 812,
+              "frame": 647,
+              "delay": 5,
+              "depth": 0
+            },
+            {
+              "line": 49563,
+              "tick": 813,
+              "frame": 648,
+              "delay": 5,
+              "depth": 0
+            },
+            {
+              "line": 49674,
+              "tick": 814,
+              "frame": 649,
+              "delay": 5,
+              "depth": 0
+            },
+            {
+              "line": 49797,
+              "tick": 815,
+              "frame": 650,
+              "delay": 5,
+              "depth": 0
+            },
+            {
+              "line": 49910,
+              "tick": 816,
+              "frame": 651,
+              "delay": 5,
+              "depth": 0
+            },
+            {
+              "line": 50031,
+              "tick": 817,
+              "frame": 652,
+              "delay": 5,
+              "depth": 0
+            }
+          ],
+          "own_hold_watches": [
+            {
+              "active_frames": 0,
+              "cost_us": 6053,
+              "flush": "periodic",
+              "frames": 597,
+              "offences": 0,
+              "rule": "sentence",
+              "state": "local_held",
+              "through_tick": 600,
+              "violations": 0,
+              "watch": "c-own-hold",
+              "worst_us": 44
+            },
+            {
+              "active_frames": 54,
+              "cost_us": 12910,
+              "flush": "periodic",
+              "frames": 1034,
+              "offences": 0,
+              "rule": "sentence",
+              "state": "local_held",
+              "through_tick": 1200,
+              "violations": 0,
+              "watch": "c-own-hold",
+              "worst_us": 124
+            },
+            {
+              "active_frames": 54,
+              "cost_us": 12935,
+              "flush": "final",
+              "frames": 1036,
+              "offences": 0,
+              "rule": "sentence",
+              "state": "local_held",
+              "through_tick": 1201,
+              "violations": 0,
+              "watch": "c-own-hold",
+              "worst_us": 124
+            }
+          ],
+          "duplicate_pass": true,
+          "overlay_pass": true
+        },
+        "client": {
+          "source": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-A-C-own-hold/01-30ms/client-measurement.json",
+          "sha256": "589a4900d25e47c577176c247dde9af8f24eec1af81e31275cc6b1bc3344f6bd",
+          "counters": {
+            "previews": 1194,
+            "actor_ticks": 5393,
+            "last_depth": 4,
+            "input_delay_ticks": 4,
+            "configured_max_ticks": 1,
+            "effective_max_ticks": 4
+          },
+          "report_pass": true,
+          "per_frame_depth_pass": true,
+          "depth_mismatches": [],
+          "own_hold_watches": [
+            {
+              "active_frames": 0,
+              "cost_us": 6278,
+              "flush": "periodic",
+              "frames": 600,
+              "offences": 0,
+              "rule": "sentence",
+              "state": "local_held",
+              "through_tick": 600,
+              "violations": 0,
+              "watch": "c-own-hold",
+              "worst_us": 48
+            },
+            {
+              "active_frames": 0,
+              "cost_us": 12352,
+              "flush": "periodic",
+              "frames": 1200,
+              "offences": 0,
+              "rule": "sentence",
+              "state": "local_held",
+              "through_tick": 1200,
+              "violations": 0,
+              "watch": "c-own-hold",
+              "worst_us": 64
+            },
+            {
+              "active_frames": 0,
+              "cost_us": 12369,
+              "flush": "final",
+              "frames": 1202,
+              "offences": 0,
+              "rule": "sentence",
+              "state": "local_held",
+              "through_tick": 1201,
+              "violations": 0,
+              "watch": "c-own-hold",
+              "worst_us": 64
+            }
+          ],
+          "duplicate_pass": true,
+          "overlay_pass": true
+        }
+      }
+    }
+  },
+  "scope": "Report lifetime detector and native A/C hold. The host generic per-frame depth row remains RED for AI-held frames; its property was not relaxed. Intentional hold input censoring is not a B3 result."
+}

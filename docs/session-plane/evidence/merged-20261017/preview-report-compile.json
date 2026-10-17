@@ -1,0 +1,11 @@
+{
+  "command": "ninja -C build-gcc -j4",
+  "started": 1792263880.6845162,
+  "finished": 1792263952.5354,
+  "exit_code": 0,
+  "source_head": "99dd25fe78c19cc791f8fd07a9044dd2e0b880ab",
+  "gns_root": "/home/erol/deps/gns-turnfix-v6",
+  "log": "/home/erol/cortex-workers/claude-runs/opus-session-plane-20261012/s07local/final-v6-compile-transcript.txt",
+  "binary_sha256": "6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa",
+  "log_sha256": "2ec539b4a8cd9a559bba8b1e889148671079a8323d9cd91b9e49e3365ed7d332"
+}
