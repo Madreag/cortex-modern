@@ -1,0 +1,20 @@
+diff --git a/Source/Network/NetLockstep.cpp b/Source/Network/NetLockstep.cpp
+index 5bb9cf35d..d2c6ea424 100644
+--- a/Source/Network/NetLockstep.cpp
++++ b/Source/Network/NetLockstep.cpp
+@@ -10475,9 +10475,13 @@ namespace RTE {
+ 				// its own) delivers the return after that hold was taken, and the return's delivery must leave it standing.
+ 				const auto laterHold = m_HoldTransactions.find(reclaim->peerId);
+ 				const auto laterBack = m_ReclaimTransactions.find(reclaim->peerId);
+-				if (laterHold != m_HoldTransactions.end() && laterHold->second.cutoffFrame > outFrame.frame) {
++				uint64_t laterHoldFrame = laterHold == m_HoldTransactions.end() ? 0 : laterHold->second.cutoffFrame;
++				// The certificate holds the seat before its AI handoff stages the simulation event.
++				if (UsesPeerFrameGroups()) if (const auto bridge = m_PeerBridges.find(reclaim->peerId); bridge != m_PeerBridges.end() && bridge->second.committedHold)
++					laterHoldFrame = std::max(laterHoldFrame, bridge->second.fromFrame);
++				if (laterHoldFrame > outFrame.frame) {
+ 					DiagnosticLine() << "[net-lockstep] return of peer " << static_cast<int>(reclaim->peerId) << " delivered at " << outFrame.frame
+-					          << " after its hold at " << laterHold->second.cutoffFrame << " was agreed: the hold stands" << std::endl;
++					          << " after its hold at " << laterHoldFrame << " was agreed: the hold stands" << std::endl;
+ 					NoteSeatTransition(reclaim->peerId, outFrame.frame, SeatTransition::Back);
+ 				} else if (laterBack != m_ReclaimTransactions.end() && laterBack->second.activationFrame > outFrame.frame) {
+ 					NoteSeatTransition(reclaim->peerId, outFrame.frame, SeatTransition::Back);

@@ -1,0 +1,85 @@
+{
+  "seed-841": {
+    "log_sha256": "1d749dca79c853a3a5acba4d3f32af4a87bcc71276f09bd16e9e367408133072",
+    "failures": [
+      "[net-session-plane-selftest] FAIL three_direct_seats_252ms_jitter_5ms_seat2_late_100ms_more_3510ms_back_at_120pc_seat3_late_200ms_more_6000ms_back_at_120pc seed=841 property=bound kind=survivor_waits: seat 3 waited 73 ms for frame 363 from 6117 ms, the spells then [2:late]"
+    ],
+    "fixed_delivery_lines": []
+  },
+  "seed-2316": {
+    "log_sha256": "8f6066bf2b53c93ad481eac3587b574007362fe8a9b0c765ce430d858f137dc4",
+    "failures": [
+      "[net-session-plane-selftest] FAIL three_internet_seats_58ms_jitter_10ms_directory_40ms_host_silent_dark_672ms_back_at_100pc_seat2_late_400ms_more_240ms_seat2_slow_55pc_2581ms_seat2_stopped_975ms_loss_60pc_seat3_rematch seed=2316 property=return kind=held_seat_returns_late: seat 3 held at 13857 ms, its trouble over at 9591 ms and its 0 ms backlog closed by 9591 ms, returned at 14987 ms against 11591 ms"
+    ],
+    "fixed_delivery_lines": [
+      {
+        "line": 402,
+        "text": "[net-lockstep] return of peer 2 delivered at 466 after its hold at 559 was agreed: the hold stands"
+      }
+    ]
+  },
+  "seed-260": {
+    "log_sha256": "4ed895b40a9916b0959a407ca35e37427c8c3ed5b90413436fcf4a4f17442fec",
+    "failures": [
+      "[net-session-plane-selftest] FAIL four_direct_seats_120ms_jitter_40ms_seat2_slow_69pc_9677ms_back_at_120pc_host_slow_84pc_9820ms_back_at_100pc_seat3_stopped_3060ms_loss_90pc_seat2_loss_90pc_seat2 seed=260 property=bound kind=survivor_waits: seat 4 waited 30322 ms for frame 623 from 11892 ms, the spells then [2:slow,1:slow]"
+    ],
+    "fixed_delivery_lines": []
+  },
+  "seed-2303": {
+    "log_sha256": "2920e99644ce54e2a70645afbb3002d2ae57d98127bbcb585d2c7a9fce082ac6",
+    "failures": [],
+    "fixed_delivery_lines": [
+      {
+        "line": 427,
+        "text": "[net-lockstep] return of peer 1 delivered at 532 after its hold at 616 was agreed: the hold stands"
+      }
+    ]
+  },
+  "seed-1476": {
+    "log_sha256": "c26f9da9793ad2898deb530ff205ae485c9937eac28997cc309fd6a3d3c12dfc",
+    "failures": [
+      "[net-session-plane-selftest] FAIL three_internet_seats_250ms_jitter_5ms_directory_240ms_host_silent_dark_750ms_back_at_105pc_host_silent_750ms_back_at_105pc_loss_60pc_host_loss_60pc_seat3 seed=1476 property=history kind=fixture: local input precedes the sender's admission delay at 8773 ms"
+    ],
+    "fixed_delivery_lines": []
+  },
+  "seed-3092": {
+    "log_sha256": "c11e06821e7f8b0fc34a237f04ccf71b7dbc9e9433388fb63f1386fdeea210b4",
+    "failures": [
+      "[net-session-plane-selftest] FAIL three_internet_seats_60ms_jitter_23ms_directory_160ms_host_stopped_404ms_seat2_late_50ms_more_872ms_host_late_100ms_more_1575ms seed=3092 property=return kind=held_without_its_own_trouble: seat 3 was held at 9083 ms with no trouble of its own since 6083 ms"
+    ],
+    "fixed_delivery_lines": []
+  },
+  "seed-3221": {
+    "log_sha256": "c9df7d66f0617c487386459938c5edadb5f22d29ca397492a05b6c9eb38eb87c",
+    "failures": [
+      "[net-session-plane-selftest] FAIL four_internet_seats_114ms_jitter_40ms_directory_160ms_seat4_late_200ms_more_6780ms seed=3221 property=bound kind=survivor_waits: seat 1 waited 59 ms for frame 278 from 4692 ms, the spells then [4:late] referee_seat2=asked:73,waiting:72,decided:1,requests:1,first_decided_ms:211 referee_seat3=asked:103,waiting:103,decided:0,requests:1,first_decided_ms:never referee_seat4=asked:151,waiting:150,decided:1,requests:30,first_decided_ms:214"
+    ],
+    "fixed_delivery_lines": []
+  },
+  "seed-2491": {
+    "log_sha256": "8daccd771a2dad78f75c9e000eb35f9085dbbc41c85b09d3fa536fa32506694b",
+    "failures": [
+      "[net-session-plane-selftest] FAIL four_internet_seats_57ms_jitter_28ms_directory_240ms_host_stopped_170ms seed=2491 property=history kind=never_started: the seats never all displayed their first second of a round"
+    ],
+    "fixed_delivery_lines": []
+  },
+  "seed-984": {
+    "log_sha256": "8e5c3ba17601a10adabeed8b01cbe206287b465c8400c2c21a955f87f38b1a53",
+    "failures": [
+      "[net-session-plane-selftest] FAIL four_internet_seats_280ms_jitter_10ms_directory_40ms_host_silent_952ms_back_at_100pc_seat3_late_400ms_more_448ms seed=984 property=rules kind=directory_refused: 1 tie check-ins refused, the first seat 4 frame 495: frame_tie_request referee_seat1=asked:218,waiting:216,decided:2,requests:5,first_decided_ms:6958 referee_seat2=asked:72,waiting:71,decided:1,requests:1,first_decided_ms:41 referee_seat3=asked:44,waiting:43,decided:1,requests:1,first_decided_ms:44 referee_seat4=asked:88,waiting:76,decided:1,requests:3,first_decided_ms:8617"
+    ],
+    "fixed_delivery_lines": []
+  },
+  "seed-1221": {
+    "log_sha256": "ebe87890f85a40ba94926340e80f857396723acabd2a64dbf0ed249d20bb5c79",
+    "failures": [
+      "[net-session-plane-selftest] FAIL four_direct_seats_272ms_jitter_20ms_seat2_stopped_2910ms_host_hung_3000ms_back_at_120pc_loss_30pc_seat3_loss_10pc_host seed=1221 property=bound kind=survivor_waits: seat 2 waited 534 ms for frame 580 from 12017 ms, the spells then []"
+    ],
+    "fixed_delivery_lines": []
+  },
+  "seed-4716": {
+    "log_sha256": "2d0ce542985b034e5a647b8d72a530c479e4730092a3dc852cc67fc614c24e14",
+    "failures": [],
+    "fixed_delivery_lines": []
+  }
+}

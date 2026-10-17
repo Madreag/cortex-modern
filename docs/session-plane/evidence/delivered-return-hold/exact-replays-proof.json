@@ -1,0 +1,75 @@
+{
+  "source_head": "e5fa020ec5aa6b1ccbb9bdefbbae5247d621119f",
+  "binary_sha256": "f4de2990a9157a636c5d1e70e38f8ccf651178c0fa7f6665a6503e677f042ae2",
+  "scope": "Headed Linux single-box exact schedule safety replays; proof=false for a field/spread match",
+  "results": [
+    {
+      "name": "seed-841",
+      "group": "history:engine_failed:3:direct",
+      "schedule": "seed=841 seats=3 internet=0 exchange=160 end=23924 rtt=207,237,252 jitter=5,5,0 recover=300,120,120 phase=3062,680,2132 spell=2:late:5511:3510:100 spell=3:late:8924:6000:200",
+      "exit_code": 1
+    },
+    {
+      "name": "seed-2316",
+      "group": "history:engine_failed:3:internet",
+      "schedule": "seed=2316 seats=3 internet=1 exchange=40 end=30347 rtt=42,55,58 jitter=0,5,10 recover=100,300,105 phase=527,1494,3331 spell=1:silent:9432:672:dark spell=2:late:6771:240:400 spell=2:slow:9144:2581:55 spell=2:stopped:20885:975 burst=3:7266:2325:60 rematch=14687",
+      "exit_code": 1
+    },
+    {
+      "name": "seed-260",
+      "group": "history:engine_failed:4:direct",
+      "schedule": "seed=260 seats=4 internet=0 exchange=240 end=42213 rtt=120,115,107,116,86,113 jitter=0,0,40,5,0,0 recover=100,120,300,300 phase=3753,4006,1269,3487 spell=2:slow:9541:9677:69 spell=1:slow:4643:9820:84 spell=3:stopped:8045:3060 burst=2:8153:1584:90 burst=2:5083:1023:90",
+      "exit_code": 1
+    },
+    {
+      "name": "seed-2303",
+      "group": "history:engine_failed:4:internet",
+      "schedule": "seed=2303 seats=4 internet=1 exchange=40 end=22346 rtt=49,52,43,47,57,46 jitter=0,0,0,5,10,23 recover=300,300,105,300 phase=605,3146,2774,4900 spell=1:silent:7597:452 spell=4:late:9773:464:50 spell=1:slow:9937:4160:88 burst=4:7003:2635:60 burst=1:11857:2412:30",
+      "exit_code": 0
+    },
+    {
+      "name": "seed-1476",
+      "group": "history:fixture:3:internet",
+      "schedule": "seed=1476 seats=3 internet=1 exchange=240 end=32100 rtt=210,210,250 jitter=0,5,0 recover=105,120,120 phase=2206,2473,1607 spell=1:silent:8350:750:dark spell=1:silent:4327:750 burst=1:4180:1183:60 burst=3:4370:1958:60",
+      "exit_code": 1
+    },
+    {
+      "name": "seed-3092",
+      "group": "history:histories_differ:3:internet",
+      "schedule": "seed=3092 seats=3 internet=1 exchange=160 end=18607 rtt=60,45,46 jitter=0,10,23 recover=300,300,300 phase=884,4124,2490 spell=1:stopped:4073:404 spell=2:late:8897:872:50 spell=1:late:8982:1575:100",
+      "exit_code": 1
+    },
+    {
+      "name": "seed-3221",
+      "group": "history:histories_differ:4:internet",
+      "schedule": "seed=3221 seats=4 internet=1 exchange=160 end=19410 rtt=106,113,114,93,84,82 jitter=5,40,5,0,10,40 recover=300,120,105,300 phase=4632,1951,3863,3845 spell=4:late:4530:6780:200",
+      "exit_code": 1
+    },
+    {
+      "name": "seed-2491",
+      "group": "history:never_started:4:internet",
+      "schedule": "seed=2491 seats=4 internet=1 exchange=240 end=13424 rtt=49,50,44,57,52,48 jitter=5,0,0,28,20,0 recover=300,100,120,100 phase=942,2574,2628,2395 spell=1:stopped:5169:170",
+      "exit_code": 1
+    },
+    {
+      "name": "seed-984",
+      "group": "rules:directory_refused:4:internet",
+      "schedule": "seed=984 seats=4 internet=1 exchange=40 end=17016 rtt=225,220,242,280,272,267 jitter=5,0,0,0,10,10 recover=100,100,300,120 phase=4649,785,3707,4875 spell=1:silent:7588:952 spell=3:late:8045:448:400",
+      "exit_code": 1
+    },
+    {
+      "name": "seed-1221",
+      "group": "rules:two_return_frames:4:direct",
+      "schedule": "seed=1221 seats=4 internet=0 exchange=100 end=33895 rtt=267,247,232,205,222,272 jitter=0,20,0,0,0,20 recover=120,300,300,120 phase=4828,4277,4748,1564 spell=2:stopped:4405:2910 spell=1:hung:7895:3000 burst=3:8792:2269:30 burst=1:4862:2259:10",
+      "exit_code": 1
+    },
+    {
+      "name": "seed-4716",
+      "group": "rules:two_return_frames:4:internet",
+      "schedule": "seed=4716 seats=4 internet=1 exchange=100 end=17922 rtt=108,99,103,115,88,116 jitter=0,0,40,20,0,20 recover=300,300,300,300 phase=171,4818,4675,4235 spell=1:silent:6182:172:dark spell=2:stopped:4361:440 spell=1:hung:7492:1620",
+      "exit_code": 0
+    }
+  ],
+  "complete": true,
+  "running": null
+}
