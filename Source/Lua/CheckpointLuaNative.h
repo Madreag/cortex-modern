@@ -1360,7 +1360,7 @@ namespace RTE::CheckpointLua {
 				// gone movable object's field, a past frame's alarm).
 				const bool readsProperties = className == "Vector" || className == "Timer" || className == "AlarmEvent";
 				// A reference a script kept past its object's end, restored or not, is named as gone.
-				const bool namedWhenGone = movable || className == "Area";
+				const bool namedWhenGone = movable || className == "Area" || className == "PieSlice";
 				detached = (!object->ptr() && (!namedWhenGone || owned)) ||(readsProperties && object->ptr() && !owned && !ScriptGraphNativeAlive(State(), object));
 				if (movable && object->ptr() && ScriptGraphNativeAlive(State(), object)) {
 					const auto* mo = static_cast<const MovableObject*>(object->ptr());
