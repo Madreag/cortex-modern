@@ -308,6 +308,10 @@ namespace RTE {
 			    (message.voterMask & SeatBit(message.senderPeerId)) != 0 && (message.voterMask >> m_Config.peerCount) == 0) {
 				heard();
 				m_PeerFrameWitnesses[message.frame].try_emplace(message.senderPeerId, message);
+				NetHash32 prefix{};
+				std::copy_n(message.bytes.begin(), prefix.size(), prefix.begin());
+				if (!m_PeerAppliedPrefixes.contains(message.senderPeerId) || m_PeerAppliedPrefixes.at(message.senderPeerId).first < message.frame)
+					m_PeerAppliedPrefixes[message.senderPeerId] = {message.frame, prefix};
 				if (m_PeerTailVotes.contains(message.frame)) ConfirmPeerTail(message.frame, nowMs);
 				return true;
 			}
@@ -440,10 +444,16 @@ namespace RTE {
 			return true;
 		}
 		if (message.type == NetHostMigrationMessageType::PeerHeartbeat) {
-			if (message.bytes.size() != 8 || (message.connectedMask & ~((1U << m_Config.peerCount) - 1)) != 0) return true;
+			if ((message.bytes.size() != 8 && message.bytes.size() != 8 + NetHash32{}.size()) || (message.connectedMask & ~((1U << m_Config.peerCount) - 1)) != 0) return true;
 			size_t offset = 0; uint32_t rtt = 0, jitter = 0;
 			if (!TakeSize(message.bytes, offset, rtt) || !TakeSize(message.bytes, offset, jitter) || rtt > 60000 || jitter > 60000) return true;
 			heard();
+			if (message.bytes.size() == 8 + NetHash32{}.size() &&
+			    (!m_PeerAppliedPrefixes.contains(message.senderPeerId) || m_PeerAppliedPrefixes.at(message.senderPeerId).first <= message.appliedFrame)) {
+				NetHash32 prefix{};
+				std::copy_n(message.bytes.begin() + 8, prefix.size(), prefix.begin());
+				m_PeerAppliedPrefixes[message.senderPeerId] = {message.appliedFrame, prefix};
+			}
 			m_Stats.peers[message.senderPeerId].pingMs = rtt; m_Stats.peers[message.senderPeerId].jitterMs = jitter;
 			m_PeerAdminReady[message.senderPeerId] = {message.completeFrom, nowMs};
 			m_Stats.peers[message.senderPeerId].pingMeasured = rtt != 0;

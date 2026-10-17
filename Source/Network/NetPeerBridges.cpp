@@ -334,6 +334,12 @@ namespace RTE {
 				// Require the reader to have displayed certified bridge history
 				// before admitting its next producible input again.
 				if (applied->second < bridge.fromFrame) continue;
+				// A live opposing half also reports advancing ticks. Only a reader that has actually applied this branch's
+				// held history can return without an image; an unresolved split keeps playing with its existing local holds.
+				const auto confirmation = m_PeerAppliedPrefixes.find(peer);
+				if (confirmation == m_PeerAppliedPrefixes.end() || confirmation->second.first < bridge.fromFrame ||
+				    !m_MigrationHistory.contains(confirmation->second.first) ||
+				    confirmation->second.second != PeerAppliedFramePrefix(confirmation->second.first)) continue;
 				// Compare displayed progress; the remaining trail fits the return's capped neutral interval.
 				const uint64_t displayed = m_LastCompletedSimulationTick.value_or(frame - 1);
 				const uint64_t allowance = std::max<uint64_t>(delay + m_Config.slowPlayerBoundTicks,

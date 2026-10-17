@@ -5458,6 +5458,7 @@ namespace RTE {
 		m_PeerArrivalLatencyMs.clear(); m_PeerForwardedInputs.clear(); m_PeerInputDecodes.clear(); m_PeerAcceptedThrough.clear(); m_PeerInputReceipts.clear(); m_PeerAcceptedAhead.clear(); m_PeerSourceInputs.clear();
 		m_PeerOwnReceiptProgress.clear(); m_PeerReceiptSampleFloorMs.clear(); m_PeerReceiptRepairs = 0;
 		m_PeerCommittedTail.clear(); m_PeerFrameIncoming.clear(); m_PeerTailThrough.reset(); m_PeerAppliedThrough.clear(); m_PeerAppliedAtMs.clear();
+		m_PeerAppliedPrefixes.clear();
 		m_PeerAppliedProgress.clear(); m_OwnDisplayProgress.clear();
 		m_PeerTailRequestedUntil.clear(); m_PeerTailLastSentMs.clear(); m_PeerTailResendFrames.clear(); m_PeerTailSendRanges.clear();
 		m_PeerTailDonor = 0; m_PeerTailDuplicateFrames = 0;
@@ -10278,6 +10279,7 @@ namespace RTE {
 				(void)BeginHostMigration(nowMs);
 			}
 		}
+		if (UsesPeerFrameGroups() && IsRunning()) PollPeerFrameTies(m_TimingNowMs);
 		if (completedTick % 60 == 0) PruneSeatTransitions(completedTick);
 		if (IsRunning() && !m_Playback && IsSynchronizedCapturePark(completedTick)) {
 			m_ParkFrameSimulated = completedTick;

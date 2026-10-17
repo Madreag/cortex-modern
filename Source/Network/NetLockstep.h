@@ -1803,6 +1803,7 @@ namespace RTE {
 		uint8_t m_PeerPaceReference = 0;
 		bool m_PeerHadHitch = false;
 		std::map<uint8_t, uint64_t> m_PeerAppliedThrough;
+		std::map<uint8_t, std::pair<uint64_t, NetHash32>> m_PeerAppliedPrefixes;
 		std::map<uint8_t, uint64_t> m_PeerAppliedAtMs;
 		std::map<uint8_t, std::deque<std::pair<uint64_t, uint64_t>>> m_PeerAppliedProgress; //!< When each seat's applied frame rose, and to which, over the last seconds.
 		std::deque<std::pair<uint64_t, uint64_t>> m_OwnDisplayProgress; //!< When this machine displayed each recent tick, over the last seconds.

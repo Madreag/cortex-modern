@@ -270,6 +270,11 @@ namespace RTE {
 			if (arbitration.holdFrame == 0 || m_Stats.nextFrame <= arbitration.holdFrame) continue;
 			const uint32_t playing = PeerFrameMembersAt(arbitration.holdFrame) & owners;
 			if ((winner & local) == 0 && (playing & local) != 0 && (playing & winner) == 0) {
+				// Preparation may lead the displayed world by several ticks. Finish any granted tick, then discard that
+				// unplayed preparation: the private image replaces this branch at its actual completed boundary.
+				if (m_GrantedSimulationTick) continue;
+				m_Stats.nextFrame = GetResumeFrame();
+				m_ReadyFrames.clear();
 				m_LocalSeatHeld = true; m_LocalHoldFrame = m_Stats.nextFrame;
 				m_State = NetLockstepState::Stopped;
 				m_Stats.timeoutReason = "PeerHeld:the directory selected the other split; returning through a private image";
@@ -387,6 +392,9 @@ namespace RTE {
 			    m_Config.migrationGeneration != UINT64_MAX)
 				heartbeat.completeFrom = m_Config.migrationGeneration + 1;
 			PutSize(heartbeat.bytes, m_Stats.peers[m_Config.localPeerId].pingMs); PutSize(heartbeat.bytes, m_Stats.peers[m_Config.localPeerId].jitterMs);
+			// Progress alone cannot distinguish a private reader from a live split with different history.
+			const auto appliedPrefix = PeerAppliedFramePrefix(heartbeat.appliedFrame);
+			heartbeat.bytes.insert(heartbeat.bytes.end(), appliedPrefix.begin(), appliedPrefix.end());
 			heartbeat.totalBytes = static_cast<uint32_t>(heartbeat.bytes.size());
 			// A newer progress report replaces an older one without waiting on the ordered stream.
 			SendPeerFrameMessage(std::move(heartbeat), NetTransportLane::InputUnreliable);
