@@ -234,7 +234,9 @@ namespace RTE {
 		Clear();
 		s_PhaseMs[0] += std::chrono::duration<double, std::milli>(RTE::SteadyClock::now() - dropStart).count();
 		const int delay = s_DepthOverride > 0 ? s_DepthOverride : static_cast<int>(ScenarioRunner::GetLockstepLocalInputDelay());
-		const int depth = ScenarioRunner::UsesBoundedLockstepWait() ? delay : std::min(delay, std::max(0, g_SettingsMan.GetLocalPredictionMaxTicks()));
+		const int configuredCap = std::max(0, g_SettingsMan.GetLocalPredictionMaxTicks());
+		const int effectiveCap = ScenarioRunner::UsesBoundedLockstepWait() ? std::max(delay, configuredCap) : configuredCap;
+		const int depth = std::min(delay, effectiveCap);
 		if (depth <= 0) {
 			return;
 		}

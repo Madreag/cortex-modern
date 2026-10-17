@@ -10893,6 +10893,9 @@ std::string BuildNetMatchServiceE2EReportJson(int exitCode, const std::string& s
 	out << "\"frames_planned\":" << (s_netLockstepTicks > 0 ? s_netLockstepTicks : 600) << ",";
 	out << "\"local_prediction\":{\"enabled\":" << (LocalPrediction::IsEnabled() ? "true" : "false")
 	    << ",\"previews\":" << LocalPrediction::GetPreviewCount() << ",\"actor_ticks\":" << LocalPrediction::GetPreviewTicks()
+	    << ",\"last_depth\":" << LocalPrediction::GetLastDepth()
+	    << ",\"configured_max_ticks\":" << g_SettingsMan.GetLocalPredictionMaxTicks()
+	    << ",\"effective_max_ticks\":" << (ScenarioRunner::UsesBoundedLockstepWait() ? std::max(LocalPrediction::GetLastDepth(), g_SettingsMan.GetLocalPredictionMaxTicks()) : g_SettingsMan.GetLocalPredictionMaxTicks())
 	    << ",\"ms_total\":" << LocalPrediction::GetPreviewMs() << ",\"shadows\":" << LocalPrediction::GetShadows() << ",\"taken\":" << LocalPrediction::GetTaken()
 	    << ",\"violations\":" << LocalPrediction::GetViolations()
 	    << ",\"events_played_at_preview\":" << PreviewEventLedger::GetCounters().playedAtPreview
