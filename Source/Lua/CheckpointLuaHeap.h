@@ -1127,31 +1127,6 @@ namespace RTE::CheckpointLua {
 				copy.armed.notify_all();
 				return true;
 			}
-			// At a tick boundary no script writes the heap, so a heap about to be written all over is copied whole at once:
-			// no page is fenced, so none faults, opens again or takes the reopened page's first-write fault.
-			static bool ArmByCopy(void* context, uintptr_t address, size_t bytes) noexcept {
-				auto& prepared = *static_cast<Prepared*>(context);
-				auto& coordinator = *prepared.coordinator;
-				Locked guard(coordinator.lock);
-				auto& copy = *prepared.copy;
-				if (copy.completed || copy.armed.load(std::memory_order_relaxed) != 0 || bytes != copy.saved.size() * copy.pageBytes) return false;
-				const auto copyStarted = RTE::SteadyClock::now();
-				CopyCheckpointPages(copy.destination, reinterpret_cast<const void*>(address), bytes);
-				std::fill(copy.saved.begin(), copy.saved.end(), 1);
-				if (copy.faults) {
-					copy.faults->armCopyUs = MicrosecondsSince(copyStarted);
-					copy.faults->armCopiedPages = copy.saved.size();
-					copy.faults->armWhole = true;
-				}
-				coordinator.armedHotRuns = 0;
-				coordinator.armedWhole = true;
-				coordinator.armedTick = SaverThreads::TickStarts();
-				coordinator.hotTicks = coordinator.hotCount ? c_HotTicks : c_FirstHotTicks;
-				copy.armed.store(1, std::memory_order_release);
-				copy.armed.notify_all();
-				return true;
-			}
-
 			// A write fault saves and opens the aligned run of pages around it: a collector's pass writes the neighbours
 			// next, and taking a fault costs several times what copying a page does.
 			static constexpr size_t c_FaultRunPages = 16;
@@ -1854,6 +1829,8 @@ namespace RTE::CheckpointLua {
 		void CopyPages(size_t first, size_t count) const noexcept;
 		/// Fences what the plan did not copy and publishes the snapshot.
 		bool Finish(size_t copiedPages, int64_t copyUs) noexcept;
+		/// A session armed alone: copies its plan's pages on this thread, then finishes.
+		bool FinishAlone() noexcept;
 	private:
 		friend class HeapOwner;
 		friend class HeapOwner::Prepared;
@@ -1874,20 +1851,12 @@ namespace RTE::CheckpointLua {
 		bool Current(const HeapOwner& owner) const noexcept {
 			return m_Data->state == owner.m_State && m_Data->committed == owner.m_PublishedCommitted.load(std::memory_order_acquire);
 		}
-		bool Arm(HeapOwner& owner, bool byCopy = false) noexcept {
-			std::unique_lock preparations(owner.m_PrepareMutex, std::try_to_lock);
-			if (!preparations || !Current(owner) || owner.m_CowCoordinator != m_Coordinator) return false;
-			if (owner.m_CopyPending.load(std::memory_order_acquire) && !owner.m_CowGateFree.load(std::memory_order_acquire)) return false;
-			std::unique_lock lock(m_Mutex, std::try_to_lock);
-			if (!lock || m_Finished || m_Copy->armed.load(std::memory_order_relaxed) != 0) return false;
-			const auto started = RTE::SteadyClock::now();
-			if (!BeginWrites() || !owner.FillHoles()) return false;
-			m_Data->serial = G(owner.m_State)->objserial;
-			CowCoordinator::Prepared prepared{m_Coordinator.get(), m_Copy};
-			if (!(byCopy ? CowCoordinator::ArmByCopy : CowCoordinator::Arm)(&prepared, m_Data->base, m_Data->committed)) return false;
-			owner.m_CowGateFree.store(true, std::memory_order_release);
-			m_Data->freezeUs = MicrosecondsSince(started);
-			return true;
+		/// One heap's boundary arm alone on this thread, through the plan, copies and fence a boundary takes; whole copies it all.
+		bool Arm(HeapOwner& owner, bool whole = false) noexcept {
+			try {
+				ArmSession session;
+				return BeginArm(owner, whole, false, session) && session.FinishAlone();
+			} catch (const std::exception&) { return false; }
 		}
 		Snapshot Image() const { return Snapshot(m_Data); }
 		/// Commits the copy buffer and makes it resident, so a boundary's copies and the faults after it write resident pages;
@@ -2025,10 +1994,11 @@ namespace RTE::CheckpointLua {
 		return alive && m_Life->owner && prepared.Current(*m_Life->owner);
 	}
 
-	inline bool HeapOwner::PreparationLease::Arm(Prepared& prepared, bool byCopy) const noexcept {
-		if (!m_Life) return false;
-		std::unique_lock alive(m_Life->mutex, std::try_to_lock);
-		return alive && m_Life->owner && prepared.Arm(*m_Life->owner, byCopy);
+	inline bool HeapOwner::PreparationLease::Arm(Prepared& prepared, bool whole) const noexcept {
+		try {
+			ArmSession session;
+			return BeginArm(prepared, whole, false, session) && session.FinishAlone();
+		} catch (const std::exception&) { return false; }
 	}
 
 	inline std::array<uint32_t, 5> HeapOwner::TakeTickFaults() noexcept {
@@ -2073,6 +2043,16 @@ namespace RTE::CheckpointLua {
 
 	inline bool HeapOwner::ArmSession::Finish(size_t copiedPages, int64_t copyUs) noexcept {
 		return m_Prepared && m_Prepared->FinishArm(*m_Owner, m_Whole, m_Learn, copiedPages, copyUs, m_Started);
+	}
+
+	inline bool HeapOwner::ArmSession::FinishAlone() noexcept {
+		const auto started = RTE::SteadyClock::now();
+		size_t copied = 0;
+		for (const auto& [first, count]: m_Spans) {
+			CopyPages(first, count);
+			copied += count;
+		}
+		return Finish(copied, MicrosecondsSince(started));
 	}
 
 	inline std::shared_ptr<HeapOwner::Prepared> HeapOwner::PrepareFreeze() {
