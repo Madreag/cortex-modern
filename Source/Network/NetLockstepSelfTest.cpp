@@ -438,6 +438,35 @@ namespace RTE {
 			return true;
 		}
 
+		static bool SilenceDoesNotChangeTheSendingRate(std::string* error) {
+			Wire wire; NetLockstepCoordinator peer;
+			Configure(peer, wire);
+			peer.m_Config.peerFrameGroups = true;
+			peer.m_TickCosts.assign(60, 1.0);
+			peer.m_PeerEffectiveStart[1] = 1;
+			auto& stats = peer.m_Stats.peers[1];
+			// A steady 60 tick/s sender has paid ordinary receipt waits. Its
+			// last packet arrives at 4000 ms, immediately before a stopped loop.
+			stats.arrivals = {{1000, 4000}, {2000, 4060}, {3000, 4120}, {4000, 4180}};
+			stats.waitCosts.emplace_back(4000, 200);
+			for (uint64_t now: {4000ULL, 4050ULL, 4100ULL}) {
+				if (peer.CostsPastTolerance(1, 4423, now)) {
+					*error = "the same 60 tick/s packet history became a slow machine after " + std::to_string(now - 4000) + " ms of silence";
+					return false;
+				}
+			}
+			// A real 40 tick/s producer still has the same slow-machine
+			// judgement at the packet and while its next packet is in flight.
+			stats.arrivals = {{1000, 4000}, {2000, 4040}, {3000, 4080}, {4000, 4120}};
+			for (uint64_t now: {4000ULL, 4050ULL}) if (!peer.CostsPastTolerance(1, 4423, now)) {
+				*error = "a measured 40 tick/s sender escaped the slow-machine judgement"; return false;
+			}
+			if (peer.CostsPastTolerance(1, 4423, 4101)) {
+				*error = "a silent sender kept the fresh slow-machine judgement"; return false;
+			}
+			return true;
+		}
+
 		static bool FutureDepartureKeepsFramePrefix(std::string* error) {
 			std::array<Wire, 2> wires;
 			std::array<NetLockstepCoordinator, 2> peers;
@@ -30042,6 +30071,13 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "sender-rate-silence") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::SilenceDoesNotChangeTheSendingRate(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS a_silent_interval_does_not_lower_the_measured_sending_rate" << std::endl;
+				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "future-removal-authority") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::FutureRemovalKeepsPastAuthority(&error)) return fail(error);
@@ -30130,6 +30166,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::ReturnMemberStarts, "a_return_keeps_each_authenticated_members_start");
 		row(&SessionPlaneRecoveryTest::RemovalNoticeRetries, "a_roster_removal_keeps_its_frame_after_a_cut");
 		row(&SessionPlaneRecoveryTest::FutureDepartureKeepsFramePrefix, "a_future_removal_does_not_rewrite_an_earlier_frame_prefix");
+		row(&SessionPlaneRecoveryTest::SilenceDoesNotChangeTheSendingRate, "a_silent_interval_does_not_lower_the_measured_sending_rate");
 		row(&SessionPlaneRecoveryTest::HoldInvitation, "an_unsigned_hold_invitation_never_fences_an_input");
 		row(&SessionPlaneRecoveryTest::OwnAheadHoldFence, "a_seat_co_signs_and_fences_its_own_future_hold");
 		row(&SessionPlaneRecoveryTest::HeldHostBaseCapture, "held_host_names_a_private_base_through_the_playing_seats");
