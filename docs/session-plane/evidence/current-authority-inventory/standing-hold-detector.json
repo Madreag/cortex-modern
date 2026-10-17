@@ -1,0 +1,27 @@
+{
+  "before": {
+    "state": "RED",
+    "receipt": "retained-evidence/standing-hold-before/stdout.log",
+    "original_log_sha256": "25beac30ade6428561e4d6e68c8858e2d0a40e91f5273d4926271407952b033d",
+    "observations": [
+      {
+        "line": 1466,
+        "observation": "[net-lockstep-seat-succession-selftest] FAIL TestSurvivorsReadOneAuthorityDuringHandover: authority ruling: playing peer 1 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory; now_ms=21200 applied=361 next=362 blocked=own-input-acceptance consumer=362 wait_since=21149 members=15 local_held=0 granted=none hold_certificate=0"
+      }
+    ]
+  },
+  "after": {
+    "state": "GREEN",
+    "receipt": "retained-evidence/final-authority-suite/runs/net-lockstep-seat-succession-selftest/stdout.log",
+    "original_log_sha256": "d8e9e081116cebb06ae60cf4acfc93123e3eba989019ba20d6854959a93c8c70",
+    "observations": [
+      {
+        "line": 1891,
+        "observation": "[net-lockstep-selftest] PASS survivors_read_one_authority_during_handover"
+      }
+    ]
+  },
+  "closing_commit": "7a4846c2b",
+  "binary_sha256": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+  "scope": "A standing hold certificate must survive the input-history horizon. The unaltered succession check completes both the20s and15.1s held-host administration arms. Other succession and authority assertions remain RED as recorded separately."
+}

@@ -1,0 +1,1062 @@
+{
+  "exe_sha256": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+  "repo": ".",
+  "passed": 51,
+  "total": 55,
+  "quiet_rows": [
+    "net-match"
+  ],
+  "sanitizer": null,
+  "complete": true,
+  "running": null,
+  "results": {
+    "controller-frame": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "row_elapsed_s": 0.6275878669985104,
+      "start_load": [
+        0.2841796875,
+        1.810546875,
+        1.92724609375
+      ],
+      "topology": "single-peer"
+    },
+    "net-protocol": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "row_elapsed_s": 0.5434217799993348,
+      "start_load": [
+        0.2841796875,
+        1.810546875,
+        1.92724609375
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-identity": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "row_elapsed_s": 0.5436244330012414,
+      "start_load": [
+        0.2841796875,
+        1.810546875,
+        1.92724609375
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-session": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "row_elapsed_s": 0.5408908329991391,
+      "start_load": [
+        0.2841796875,
+        1.810546875,
+        1.92724609375
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-lockstep": {
+      "pass": false,
+      "exit_code": 1,
+      "timed_out": false,
+      "pass_lines": 2,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "exit_code=1",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "row_elapsed_s": 58.36930909700095,
+      "start_load": [
+        0.2841796875,
+        1.810546875,
+        1.92724609375
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-session-plane": {
+      "pass": false,
+      "exit_code": 1,
+      "timed_out": false,
+      "pass_lines": 0,
+      "fail_lines": [
+        "[net-session-plane-selftest] FAIL",
+        "[net-session-plane-selftest] FAIL",
+        "[net-session-plane-selftest] FAIL"
+      ],
+      "fatal": [
+        "[net-session-plane-selftest] FAIL steady_rtt_250ms_120s: seed=0 authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory; now_ms=1630 applied=67 next=68 blocked=own-input-acceptance consumer=68 wait_since=1579 members=15 local_held=0 granted=none hold_certificate=0",
+        "[net-session-plane-selftest] FAIL repeated_host_changes_bound_the_tail_or_answer_missing: seed=0 admin generation 3: authority ruling: playing peer 1 waited 55ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory; now_ms=83180 applied=3790 next=3791 blocked=private-peer-tail consumer=3791 wait_since=83125 members=14 local_held=0 granted=none hold_certificate=1",
+        "[net-session-plane-selftest] FAIL relay_link_blackout_return: seed=0 lag ended participation or required a manual rejoin: peer 3 stopped: PeerHeld:the direct host link is unavailable; returning through a private image"
+      ],
+      "reason": "exit_code=1",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "fixed_failure_report": {
+        "path": "retained-evidence/final-authority-suite/runs/net-session-plane-selftest/fixed-failure-groups.txt",
+        "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+        "digest": "2722f9981e9f8366dfa2781a53f8a1de624cacfeda2804e60f67992380accfa1",
+        "suite_root": "retained-evidence/final-authority-suite/runs",
+        "saved_cases_ran": 108
+      },
+      "row_elapsed_s": 110.20585117600058,
+      "start_load": [
+        0.41943359375,
+        1.56884765625,
+        1.8349609375
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-session-plane-hold-schedules": {
+      "pass": false,
+      "exit_code": 1,
+      "timed_out": false,
+      "pass_lines": 0,
+      "fail_lines": [
+        "[net-session-plane-selftest] FAIL",
+        "[net-session-plane-selftest] FAIL",
+        "[net-session-plane-selftest] FAIL"
+      ],
+      "fatal": [
+        "[net-session-plane-selftest] FAIL random_hold_schedules group=bound:survivor_waits:2:direct seeds=25,34,36,40,66,88,97,102,107,112,126,136,153: reproduced by fixed row two_direct_seats_238ms_host_silent_200ms_survivor_waits_seed_2453",
+        "[net-session-plane-selftest] FAIL random_hold_schedules group=bound:survivor_waits:3:direct seeds=15,16,26,143,193: reproduced by fixed row three_direct_seats_270ms_jitter_20ms_seat2_stopped_200ms_host_silent_360ms_survivor_waits_seed_2469",
+        "[net-session-plane-selftest] FAIL random_hold_schedules shape=two_internet_seats_56ms_jitter_28ms_seat2_hung_200ms_survivor_waits_seed_104 group=bound:survivor_waits:3:internet seeds=104 property=bound kind=survivor_waits minimize_runs=31 repeats=1: authority ruling: playing peer 1 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory; now_ms=8417 applied=498 next=499 blocked=private-peer-tail consumer=499 wait_since=8366 members=2 local_held=0 granted=none hold_certificate=1 at 8417 ms"
+      ],
+      "reason": "exit_code=1",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "schedule_summary": "[net-session-plane-selftest] random_hold_schedules schedules=200 ran=200 seeds=1..200",
+      "fixed_failure_report": {
+        "path": "retained-evidence/final-authority-suite/runs/net-session-plane-selftest/fixed-failure-groups.txt",
+        "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+        "digest": "2722f9981e9f8366dfa2781a53f8a1de624cacfeda2804e60f67992380accfa1",
+        "suite_root": "retained-evidence/final-authority-suite/runs",
+        "saved_cases_ran": 108
+      },
+      "row_elapsed_s": 184.91687420900053,
+      "start_load": [
+        1.67041015625,
+        1.68896484375,
+        1.8505859375
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-input-acceptance": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "row_elapsed_s": 3.6503893490007613,
+      "start_load": [
+        1.6748046875,
+        1.74658203125,
+        1.8515625
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-input-acceptance-steady": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "row_elapsed_s": 3.0442333669998334,
+      "start_load": [
+        1.6748046875,
+        1.74658203125,
+        1.8515625
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-lockstep-released-claims": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "row_elapsed_s": 3.6504784139979165,
+      "start_load": [
+        1.701171875,
+        1.7509765625,
+        1.8525390625
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-lockstep-release-paths": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "row_elapsed_s": 6.859383879000234,
+      "start_load": [
+        1.64501953125,
+        1.73828125,
+        1.84765625
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-lockstep-seat-succession": {
+      "pass": false,
+      "exit_code": 1,
+      "timed_out": false,
+      "pass_lines": 0,
+      "fail_lines": [
+        "[net-lockstep-seat-succession-selftest] FAIL",
+        "[net-lockstep-seat-succession-selftest] FAIL"
+      ],
+      "fatal": [
+        "[net-lockstep-seat-succession-selftest] FAIL TestAnnouncedLeaveLoneOutcome: lag ended participation or required a manual rejoin: peer 2 stopped: PeerHeld:the direct host link is unavailable; returning through a private image",
+        "[net-lockstep-seat-succession-selftest] FAIL"
+      ],
+      "reason": "exit_code=1",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "row_elapsed_s": 39.10884139100017,
+      "start_load": [
+        1.59326171875,
+        1.7255859375,
+        1.8427734375
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-lockstep-seat-admission": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "row_elapsed_s": 21.87655199299843,
+      "start_load": [
+        1.37109375,
+        1.6494140625,
+        1.81005859375
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-lockstep-cli": {
+      "pass": true,
+      "reason": "",
+      "fail_lines": [],
+      "exit_code": 0,
+      "timed_out": false,
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "row_elapsed_s": 12.393644152998604,
+      "start_load": [
+        1.32763671875,
+        1.62255859375,
+        1.79833984375
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-auth": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "row_elapsed_s": 0.5414830820009229,
+      "start_load": [
+        1.31689453125,
+        1.60791015625,
+        1.79150390625
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-admission": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "row_elapsed_s": 0.5434488069986401,
+      "start_load": [
+        1.31689453125,
+        1.60791015625,
+        1.79150390625
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-reconnect": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "row_elapsed_s": 0.5442905839990999,
+      "start_load": [
+        1.31689453125,
+        1.60791015625,
+        1.79150390625
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-reconnect-session": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "row_elapsed_s": 0.8435580719997233,
+      "start_load": [
+        1.31689453125,
+        1.60791015625,
+        1.79150390625
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-world-join": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "row_elapsed_s": 11.45252829599849,
+      "start_load": [
+        1.31689453125,
+        1.60791015625,
+        1.79150390625
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-directory": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "service_python": "/usr/bin/python3",
+      "service_exit_code": 0,
+      "service_log": "retained-evidence/final-authority-suite/runs/net-directory-selftest/service-tests.log",
+      "row_elapsed_s": 124.91879638400133,
+      "start_load": [
+        1.10498046875,
+        1.54541015625,
+        1.767578125
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-rejoin-matrix": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "row_elapsed_s": 57.45520178299921,
+      "start_load": [
+        0.2314453125,
+        1.0634765625,
+        1.5595703125
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-roster": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "row_elapsed_s": 0.5450990620010998,
+      "start_load": [
+        0.6953125,
+        1.05078125,
+        1.52490234375
+      ],
+      "topology": "single-box: not proof"
+    },
+    "camera-null-scene": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "row_elapsed_s": 2.14166759499858,
+      "start_load": [
+        0.6953125,
+        1.05078125,
+        1.52490234375
+      ],
+      "topology": "single-peer"
+    },
+    "rotate-primitive": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "row_elapsed_s": 0.5443230730015785,
+      "start_load": [
+        0.7998046875,
+        1.06689453125,
+        1.52783203125
+      ],
+      "topology": "single-peer"
+    },
+    "lua-numeric-policy": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "row_elapsed_s": 0.54369977800161,
+      "start_load": [
+        0.7998046875,
+        1.06689453125,
+        1.52783203125
+      ],
+      "topology": "single-peer"
+    },
+    "fp-environment": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "row_elapsed_s": 0.5433874219997961,
+      "start_load": [
+        0.7998046875,
+        1.06689453125,
+        1.52783203125
+      ],
+      "topology": "single-peer"
+    },
+    "deterministic-math": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "row_elapsed_s": 0.5447984240017831,
+      "start_load": [
+        0.7998046875,
+        1.06689453125,
+        1.52783203125
+      ],
+      "topology": "single-peer"
+    },
+    "sim-checksum": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "row_elapsed_s": 0.5436526759986009,
+      "start_load": [
+        0.7998046875,
+        1.06689453125,
+        1.52783203125
+      ],
+      "topology": "single-peer"
+    },
+    "cow-checkpoint": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "row_elapsed_s": 0.5436161300021922,
+      "start_load": [
+        0.7998046875,
+        1.06689453125,
+        1.52783203125
+      ],
+      "topology": "single-peer"
+    },
+    "frame-recorder": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "row_elapsed_s": 2.541096535001998,
+      "start_load": [
+        0.7998046875,
+        1.06689453125,
+        1.52783203125
+      ],
+      "topology": "single-peer"
+    },
+    "float-text": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "row_elapsed_s": 0.8402421530008723,
+      "start_load": [
+        0.81591796875,
+        1.0654296875,
+        1.52490234375
+      ],
+      "topology": "single-peer"
+    },
+    "combo-key": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "row_elapsed_s": 0.5437277509990963,
+      "start_load": [
+        0.81591796875,
+        1.0654296875,
+        1.52490234375
+      ],
+      "topology": "single-peer"
+    },
+    "rteerror": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "row_elapsed_s": 0.8436107470006391,
+      "start_load": [
+        0.81591796875,
+        1.0654296875,
+        1.52490234375
+      ],
+      "topology": "single-peer"
+    },
+    "steady-clock": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "row_elapsed_s": 0.5438694229997054,
+      "start_load": [
+        0.81591796875,
+        1.0654296875,
+        1.52490234375
+      ],
+      "topology": "single-peer"
+    },
+    "swap-wait": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "row_elapsed_s": 0.5437077730020974,
+      "start_load": [
+        0.81591796875,
+        1.0654296875,
+        1.52490234375
+      ],
+      "topology": "single-peer"
+    },
+    "module-version": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "warning_acknowledgment": {
+        "window": 37748738,
+        "engine_pid": 239294,
+        "owner_pid": 239301,
+        "runtime": "retained-evidence/final-authority-suite/runs/module-version-selftest/runtime",
+        "caption": "RTE Warning! (>_<)",
+        "action": "Return",
+        "expected_warning_modules": [
+          "StubA.rte",
+          "StubB.rte"
+        ]
+      },
+      "row_elapsed_s": 0.5413825439973152,
+      "start_load": [
+        0.81591796875,
+        1.0654296875,
+        1.52490234375
+      ],
+      "topology": "single-peer"
+    },
+    "ext-validate-version": {
+      "selftest": "ext-validate-version",
+      "exit_code": 1,
+      "timed_out": false,
+      "reason_line": "[module] StubBad.rte was developed for Cortex Command v6.1.0, so this version of Cortex Command (v7.0.0) may not support it. boxes=0",
+      "dialog": false,
+      "continued": false,
+      "exe_sha256": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "stdout": "retained-evidence/final-authority-suite/runs/ext-validate-version-selftest/run/stdout.log",
+      "pass": true,
+      "reason": "",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "row_elapsed_s": 0.5518945559997519,
+      "start_load": [
+        0.9111328125,
+        1.0810546875,
+        1.52783203125
+      ],
+      "topology": "single-peer"
+    },
+    "path-prefix": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "row_elapsed_s": 0.5455356290003692,
+      "start_load": [
+        0.9111328125,
+        1.0810546875,
+        1.52783203125
+      ],
+      "topology": "single-peer"
+    },
+    "limb-path": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "row_elapsed_s": 7.347689969999919,
+      "start_load": [
+        0.9111328125,
+        1.0810546875,
+        1.52783203125
+      ],
+      "topology": "single-peer"
+    },
+    "menu-automation": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "row_elapsed_s": 0.5466725660007796,
+      "start_load": [
+        0.99853515625,
+        1.0966796875,
+        1.53076171875
+      ],
+      "topology": "single-peer"
+    },
+    "mod-api-shims": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "row_elapsed_s": 7.347124439002073,
+      "start_load": [
+        0.99853515625,
+        1.0966796875,
+        1.53076171875
+      ],
+      "topology": "single-peer"
+    },
+    "settings-preferences": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "row_elapsed_s": 0.5406975010009774,
+      "start_load": [
+        0.99951171875,
+        1.0927734375,
+        1.52490234375
+      ],
+      "topology": "single-peer"
+    },
+    "single-module-harness": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "row_elapsed_s": 8.457396292997146,
+      "start_load": [
+        0.99951171875,
+        1.0927734375,
+        1.52490234375
+      ],
+      "topology": "single-peer"
+    },
+    "headless-assert-continues": {
+      "selftest": "headless-assert-continues",
+      "exit_code": 1,
+      "timed_out": false,
+      "fault_line": "RTE Assert (headless, continued like Ignore): Assertion in file '../Source/Menus/MenuAutomation.cpp', line 1968,",
+      "verdicts_after_assert": [
+        "[menu-script] assert_screen expected=MainScreen actual=MainScreen PASS"
+      ],
+      "shutdown_line": "[assert] the run continued past an assert; see the RTE Assert line above",
+      "exe_sha256": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "stdout": "retained-evidence/final-authority-suite/runs/headless-assert-continues-selftest/run/stdout.log",
+      "pass": true,
+      "reason": "",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "presentation": "default headless-policy probe",
+      "row_elapsed_s": 7.849864687999798,
+      "start_load": [
+        1.0732421875,
+        1.10595703125,
+        1.52490234375
+      ],
+      "topology": "single-peer"
+    },
+    "render-window-scripts": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "row_elapsed_s": 2.0431864179990953,
+      "start_load": [
+        1.06689453125,
+        1.10400390625,
+        1.52197265625
+      ],
+      "topology": "single-peer"
+    },
+    "text-wrap": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "row_elapsed_s": 2.0420225500020024,
+      "start_load": [
+        1.0615234375,
+        1.10205078125,
+        1.51904296875
+      ],
+      "topology": "single-peer"
+    },
+    "save-refusal-diagnosis": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "row_elapsed_s": 8.747761471000558,
+      "start_load": [
+        1.0615234375,
+        1.10205078125,
+        1.51904296875
+      ],
+      "topology": "single-peer"
+    },
+    "headless-render-cap": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "cap": "60hz",
+      "frames": 132,
+      "interval_s": 2.1929982840009035,
+      "presentations_per_second": 59.735568858268216,
+      "gpu_max": 22.0,
+      "gpu_avg": 4.681818181818182,
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "presentation": "default headless-policy probe",
+      "row_elapsed_s": 9.951790203998826,
+      "start_load": [
+        1.2060546875,
+        1.13232421875,
+        1.52490234375
+      ],
+      "topology": "single-peer"
+    },
+    "single-player-reference": {
+      "pass": true,
+      "reason": "",
+      "fail_lines": [],
+      "exit_code": 0,
+      "timed_out": false,
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "reference": {
+        "dump_sha256": "f2c46632cd337cfd5bc2eec5307bc4661c715d54a4ce3c251c4b6e9f86bcce79",
+        "dump_bytes": 5445623,
+        "portable_dump_sha256": "fae01e06aa2665c34cdd3676efbc3f10bbcfd000d85383af5ecd20949e79e266",
+        "tick_hashes_sha256": "ddd5a0c7a4d20b9ef5f3be9cdd6d30376f97304c4feaa93283409adc0dc0d89f",
+        "compared_trace_sha256": "fecd87e5e76c4419b0ef74b2ca73a03526dab9214532fe5cbbb98c5a2ff6f9a1"
+      },
+      "observed": {
+        "dump_sha256": "91fcc5f1a4ebddf6cf6ade63f4cda4b79e9258ae80c3dbc1b063cf7aaa1e5e01",
+        "dump_bytes": 3617129,
+        "portable_dump_sha256": "fae01e06aa2665c34cdd3676efbc3f10bbcfd000d85383af5ecd20949e79e266",
+        "tick_count": 320,
+        "tick_hashes_sha256": "ddd5a0c7a4d20b9ef5f3be9cdd6d30376f97304c4feaa93283409adc0dc0d89f",
+        "compared_trace_sha256": "fecd87e5e76c4419b0ef74b2ca73a03526dab9214532fe5cbbb98c5a2ff6f9a1"
+      },
+      "row_elapsed_s": 12.895549136999762,
+      "start_load": [
+        1.80908203125,
+        1.26123046875,
+        1.56298828125
+      ],
+      "topology": "single-peer"
+    },
+    "preview-invariance": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "verdicts": [
+        [
+          "PASS",
+          "153",
+          "8",
+          "8"
+        ]
+      ],
+      "fail_lines": [],
+      "reason": "",
+      "exe_sha256": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "row_elapsed_s": 10.650990537000325,
+      "start_load": [
+        1.75830078125,
+        1.26904296875,
+        1.56201171875
+      ],
+      "topology": "single-peer"
+    },
+    "preview-hotplug": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "verdicts": [
+        [
+          "PASS",
+          "153",
+          "8",
+          "8"
+        ]
+      ],
+      "fail_lines": [],
+      "reason": "",
+      "hotplug": [
+        [
+          "60",
+          "4"
+        ]
+      ],
+      "exe_sha256": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "row_elapsed_s": 10.650592851998226,
+      "start_load": [
+        1.64111328125,
+        1.259765625,
+        1.55517578125
+      ],
+      "topology": "single-peer"
+    },
+    "preview-binding-exhaustive": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "budget_s": 1800,
+      "elapsed_s": 143.353,
+      "walked_classes": 89,
+      "row_elapsed_s": 143.50542247799967,
+      "start_load": [
+        1.486328125,
+        1.24609375,
+        1.54541015625
+      ],
+      "topology": "single-peer"
+    },
+    "capture-window": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "row_elapsed_s": 20.660247474999778,
+      "start_load": [
+        1.7587890625,
+        1.39306640625,
+        1.5537109375
+      ],
+      "topology": "single-peer"
+    },
+    "joystick-updater": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "row_elapsed_s": 0.9439451069993083,
+      "start_load": [
+        1.54248046875,
+        1.36669921875,
+        1.54052734375
+      ],
+      "topology": "single-peer"
+    },
+    "net-match": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "973d9b79fb5969060c5b912b721ff79fb2702e7c5c660c9b7f03b3b02dbb6e83",
+      "load_sensitive": true,
+      "box": {
+        "engines": [],
+        "builds": [],
+        "load": [
+          1.42,
+          1.34,
+          1.53
+        ]
+      },
+      "row_elapsed_s": 107.00045394300105,
+      "start_load": [
+        1.4189453125,
+        1.34375,
+        1.5322265625
+      ],
+      "topology": "single-box: not proof"
+    }
+  },
+  "topology": "single-box: not proof"
+}
