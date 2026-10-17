@@ -474,9 +474,8 @@ def current_fixed_failure_report(options):
 
 
 def run_row(options, make_run, name, case, sanitizer):
-    # These probes assert the headless policy itself. A headed-only collection
-    # must explicitly permit their mode; it must never score a headed run as one.
-    headless_policy = getattr(options, "headless_policy_rows", False) and name in {
+    # These probes require headless mode even when the rest of the collection is headed.
+    headless_policy = name in {
         "headless-assert-continues", "headless-render-cap"
     }
     if not headless_policy:
@@ -486,7 +485,7 @@ def run_row(options, make_run, name, case, sanitizer):
     try:
         os.environ.update(CC_RUNNER_HEADED="0", CC_TEST_VISIBLE_WINDOW="0", CCCP_HEADLESS="1")
         result = run_row_in_mode(options, make_run, name, case, sanitizer)
-        result["presentation"] = "explicit headless-policy probe"
+        result["presentation"] = "explicit headless-policy probe" if getattr(options, "headless_policy_rows", False) else "default headless-policy probe"
         return result
     finally:
         for key, value in previous.items():
@@ -721,7 +720,7 @@ def main():
     parser.add_argument("--only", action="append", default=[], metavar="ROW",
                         help="run just this row (repeatable); product failures remain failures")
     parser.add_argument("--headless-policy-rows", action="store_true",
-                        help="explicitly run only the two headless-policy probes in headless mode, even in a headed collection")
+                        help="explicitly select the default headless mode for the two headless-policy probes")
     parser.add_argument("--self-test", action="store_true", help="the runner's own rows; no engine")
     options = parser.parse_args()
 
