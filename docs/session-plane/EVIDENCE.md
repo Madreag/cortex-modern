@@ -1,8 +1,19 @@
 # Session-plane evidence
 
-The records below preserve individual failing and passing observations. A green
-coordinator detector does not make its complete match green. The [completed
-validation](evidence/kept-b41-20261016/gate.json) of engine source `51b578e56`
+The [final native measurements](evidence/final-linux-20261017/native-input-delay.json)
+use engine source `99dd25fe7`, with `d1cbc8e09a` merged. Delay, full preview depth,
+retained native counters and live overlay checks pass; B3 remains RED on ten of
+twelve peer observations. The [own-hold run](evidence/final-linux-20261017/own-hold.json)
+keeps all 1,200 full hash rows and handoff object dumps equal. The [complete final
+suite](evidence/final-linux-20261017/suite.json) is **49/55**: the four network rows
+and two headless-policy probes remain RED under the mandatory headed policy. The
+[reviewer audit](evidence/final-linux-20261017/reviewer-shapes.json) covers all 121
+shapes: 64 GREEN / 57 RED. The [final evidence index](evidence/final-linux-20261017/README.md)
+names the remaining failures and the proven pending-directory limit.
+
+The historical records below preserve individual failing and passing observations.
+A green coordinator detector does not make its complete match green. The earlier
+[completed validation](evidence/kept-b41-20261016/gate.json) of engine source `51b578e56`
 is RED: suite 48/54, 3218 failures in 5000 schedules, and 63 GREEN / 58 RED of
 121 listed shapes. Every schedule ran, seeds 1 through 5000, on the same frozen
 executable. The earlier complete gate under `evidence/20261016` used `ec5d90c835`.

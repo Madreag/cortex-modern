@@ -1,8 +1,9 @@
 # NEEDS TESTING
 
 These runs belong to the lead. This lane has used only the assigned Linux box.
-The engine source under test is `6316cd948`; the Linux executable SHA-256 is
-`5a0ada0c38a725321cfda6d135e9ee7c82f2897c7366bb573ce1042dbece3c68`.
+The engine source under test is `99dd25fe7`, including `origin/cm-dev`
+`d1cbc8e09a` through merge `667b621c0`; the Linux executable SHA-256 is
+`6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa`.
 Each peer must build the same source and the private patched native dependency.
 The lead supplies the box facts, assigns free boxes and records their build receipts.
 Every run below needs a quiet interval without another engine or build on its peers.
@@ -69,16 +70,38 @@ The unchanged pending-directory survivor bound is still RED. A healthy seat wait
 an immediate request cannot fit the latter inside the brief's maximum six-tick
 30 ms-link reserve plus the 50 ms survivor bound. The lead needs to resolve this
 authority/availability conflict; no property has been waived. See
-[the quiet counterexamples](evidence/authority-wait-floor/README.md).
+[the authority proof](evidence/authority-wait-floor/README.md) and
+[the final-binary repeats](evidence/final-linux-20261017/authority-floor.json).
 
-The local B3 measurement also remains RED against its unchanged repeat-noise
-oracle. All three median response counts are two drawn frames, but seven of twelve
-network peer medians lie outside the measured SP millisecond envelope. The
-[retained quiet matrix](evidence/link-delay/cadence-repeat-findings.json) includes
-both original loaded arms and their explicitly mapped quiet replacements.
+The final local B3 measurement remains RED against its unchanged repeat-noise
+oracle. SP/30 ms/200 ms aggregate medians are 31.263/30.811/30.802 ms, but ten of
+twelve network peer observations lie outside the SP range 30.459–31.602 ms.
+The [final quiet matrix](evidence/final-linux-20261017/native-input-delay.json)
+contains every peer and repeat; all 32 responses per peer are measured. No loaded
+arm was substituted in this final matrix. The earlier measurements remain retained.
 
-The direct-host partition row remains reachable and RED: its symmetric partition
+The final steady-link observations pass the delay caps (maximum 5/16 ticks at
+30/200 ms), complete preview depth, native report counters and visible delay line.
+The [live resize](evidence/final-linux-20261017/live-resize.json) applies the same
+changes on both peers at frames 675/722/870 and covers the full 14/15-tick delay
+with configured cap 1. Its stalls and two undrawn client responses remain RED.
+The [own-hold control](evidence/final-linux-20261017/own-hold.json) has 1,200 equal
+full hash rows, identical handoff object dumps and 54 actively checked held frames
+with no sentence or duplicate-line violations. It also records a 42 ms survivor
+wait at frame 606, intentional missing host inputs, and 33 RED generic preview
+obligations on AI-held frames 730–817. That generic check incorrectly requires a
+human preview while the AI owns the seat; the property was not relaxed.
+
+Five of the six original slow-host schedules pass. Four seats at 200 ms still
+hold the healthy host at 1,016 ms, before the fault at 6,000 ms. That startup and
+return failure is separate from the proven pending-directory floor.
+
+The direct-host partition rows `two_direct_host_3s` and
+`two_host_3s_no_directory_configured` remain RED (2,972 ms survivor waits): their symmetric partition
 holds the joiner while the documented no-referee host half continues. The lead must
 resolve that row's expected survivor against the existing host-half rule; this lane
-does not waive either check. The default suite's headless-only policy rows remain
-measured under the owner's mandatory visible Linux policy.
+does not waive either check. The complete final suite is 49/55, with the four network rows and
+`headless-assert-continues` / `headless-render-cap` RED. Rulebook A25 requires every
+Linux engine to be visible, so this lane did not use `--headless-policy-rows`.
+The lead must route those policy probes to an authorized mode or box; neither
+headed refusal was counted as a pass. The other 53 rows were run, with 49 passing.
