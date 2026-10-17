@@ -62,6 +62,9 @@ namespace RTE {
 		static uint64_t GetLastFillTick() { return s_LastFillTick; }
 		/// The ticks the last preview ran ahead of the committed state.
 		static int GetLastDepth() { return s_LastDepth; }
+		/// The last active preview configuration, retained through teardown for the match report.
+		static int GetLastInputDelay() { return s_LastInputDelay; }
+		static int GetLastEffectiveMaxTicks() { return s_LastEffectiveMaxTicks; }
 		static uint64_t GetPreviewCount() { return s_PreviewCount; }
 		static uint64_t GetPreviewTicks() { return s_PreviewTicks; }
 		static double GetPreviewMs() { return s_PreviewMs; }
@@ -91,6 +94,8 @@ namespace RTE {
 		static long long s_PreviewedTick;
 		static uint64_t s_LastFillTick;
 		static int s_LastDepth;
+		static int s_LastInputDelay;
+		static int s_LastEffectiveMaxTicks;
 		static uint64_t s_PreviewCount;
 		static uint64_t s_PreviewTicks;
 		static double s_PreviewMs;

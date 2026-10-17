@@ -123,6 +123,11 @@ def reduce_peer(folder, peer, rtt, plan, lag_step=None):
     preview = native.get('local_prediction', {})
     lockstep = native.get('service', {}).get('runner', {}).get('lockstep', {})
     preview_cost = preview.get('ms_total', 0) / preview['actor_ticks'] if preview.get('actor_ticks') else None
+    preview_report_pass = rtt is None or bool(
+        preview.get('enabled') and preview.get('previews', 0) > 0 and preview.get('actor_ticks', 0) > 0 and
+        preview.get('input_delay_ticks', 0) > 0 and preview.get('last_depth') == preview['input_delay_ticks'] and
+        preview.get('configured_max_ticks', -1) >= 0 and
+        preview.get('effective_max_ticks') == max(preview['input_delay_ticks'], preview['configured_max_ticks']))
     watches = watch_results(folder / peer / 'stdout.log')
     delay_watches = [w for w in watches if w['watch'] == 'b4-delay']
     duplicate_watches = [w for w in watches if w['watch'] == 'screen-duplicates']
@@ -148,9 +153,8 @@ def reduce_peer(folder, peer, rtt, plan, lag_step=None):
                   c_own_hold_pass=bool(own_hold_watches) and all(w['violations'] == 0 for w in own_hold_watches),
                   b1_delay_pass=bool(delay_values) and max(delay_values) <= limit and
                                 (not lag_step or bool(low_delay) and max(low_delay) <= 6),
-                  b2_depth_pass=bool(owed) and not mismatches and not missing_state and (rtt is None or preview.get('enabled') and preview.get('previews', 0) > 0 and
-                      preview.get('actor_ticks', 0) > 0 and preview.get('last_depth', -1) >= 0 and preview.get('input_delay_ticks', -1) >= 0 and
-                      preview.get('effective_max_ticks', -1) >= max(preview['last_depth'], preview['input_delay_ticks'])),
+                  b2_report_pass=preview_report_pass,
+                  b2_depth_pass=bool(owed) and not mismatches and not missing_state and preview_report_pass,
                   b3_coverage_pass=coverage,
                   b4_overlay_pass=rtt is None or bool(delay_watches) and all(w['active_frames'] > 0 and w['violations'] == 0 for w in delay_watches))
     write_json(folder / f'{peer}-measurement.json', result)

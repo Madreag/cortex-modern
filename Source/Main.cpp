@@ -10923,9 +10923,9 @@ std::string BuildNetMatchServiceE2EReportJson(int exitCode, const std::string& s
 	out << "\"local_prediction\":{\"enabled\":" << (LocalPrediction::IsEnabled() ? "true" : "false")
 	    << ",\"previews\":" << LocalPrediction::GetPreviewCount() << ",\"actor_ticks\":" << LocalPrediction::GetPreviewTicks()
 	    << ",\"last_depth\":" << LocalPrediction::GetLastDepth()
-	    << ",\"input_delay_ticks\":" << ScenarioRunner::GetLockstepLocalInputDelay()
+	    << ",\"input_delay_ticks\":" << LocalPrediction::GetLastInputDelay()
 	    << ",\"configured_max_ticks\":" << g_SettingsMan.GetLocalPredictionMaxTicks()
-	    << ",\"effective_max_ticks\":" << (ScenarioRunner::UsesBoundedLockstepWait() ? std::max<int>(ScenarioRunner::GetLockstepLocalInputDelay(), std::max(0, g_SettingsMan.GetLocalPredictionMaxTicks())) : std::max(0, g_SettingsMan.GetLocalPredictionMaxTicks()))
+	    << ",\"effective_max_ticks\":" << LocalPrediction::GetLastEffectiveMaxTicks()
 	    << ",\"ms_total\":" << LocalPrediction::GetPreviewMs() << ",\"shadows\":" << LocalPrediction::GetShadows() << ",\"taken\":" << LocalPrediction::GetTaken()
 	    << ",\"violations\":" << LocalPrediction::GetViolations()
 	    << ",\"events_played_at_preview\":" << PreviewEventLedger::GetCounters().playedAtPreview

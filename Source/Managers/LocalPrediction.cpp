@@ -51,6 +51,8 @@ namespace RTE {
 	LocalPrediction::Outcome LocalPrediction::s_LastOutcome;
 	bool LocalPrediction::s_Rendering = false;
 	int LocalPrediction::s_LastDepth = 0;
+	int LocalPrediction::s_LastInputDelay = 0;
+	int LocalPrediction::s_LastEffectiveMaxTicks = 0;
 	bool LocalPrediction::s_RenderScriptsWereFrozen = false;
 	int LocalPrediction::s_Override = -1;
 	int LocalPrediction::s_DepthOverride = 0;
@@ -236,6 +238,10 @@ namespace RTE {
 		const int delay = s_DepthOverride > 0 ? s_DepthOverride : static_cast<int>(ScenarioRunner::GetLockstepLocalInputDelay());
 		const int configuredCap = std::max(0, g_SettingsMan.GetLocalPredictionMaxTicks());
 		const int effectiveCap = ScenarioRunner::UsesBoundedLockstepWait() ? std::max(delay, configuredCap) : configuredCap;
+		// The coordinator is cleared before the final match report is assembled. Keep the
+		// configuration here, including frames when the local seat is held to the AI.
+		s_LastInputDelay = delay;
+		s_LastEffectiveMaxTicks = effectiveCap;
 		const int depth = std::min(delay, effectiveCap);
 		if (depth <= 0) {
 			return;
