@@ -9885,6 +9885,10 @@ namespace RTE {
 			// The startup holds belong to the boundary; a seat that joined past it takes its seat state from
 			// the reclaim it was admitted with, not from a resolution the round already made.
 			if (boundaryPassed || (start.heldPeerMask & (uint32_t{1} << (peer - 1))) == 0) continue;
+			DiagnosticLine() << "[net-peer-hold-trigger] local=" << static_cast<int>(m_Config.localPeerId)
+			    << " peer=" << static_cast<int>(peer) << " frame=" << start.agreedFirstFrame
+			    << " now_ms=" << nowMs << " cause=agreed_start_record authority=" << static_cast<int>(GetHostPeerId())
+			    << " published_mask=" << start.publishedPeerMask << " held_mask=" << start.heldPeerMask << std::endl;
 			m_AiHeldSeats[peer] = start.agreedFirstFrame;
 			m_PeerLeaveFrames[peer] = start.agreedFirstFrame;
 			NoteSeatTransition(peer, start.agreedFirstFrame, SeatTransition::Held);

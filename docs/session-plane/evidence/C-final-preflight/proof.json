@@ -1,0 +1,20 @@
+{
+  "source_parent": "4c87aa91790b64a0744972aa1a0e57e442f6048a",
+  "binary_sha256": "b41bdef11752db24df328be81a5b30506c8fe2c4e393d83f74ede2e263521c8a",
+  "results": [
+    {
+      "name": "C-ui",
+      "exit_code": 0
+    },
+    {
+      "name": "A-authority",
+      "exit_code": 0
+    },
+    {
+      "name": "held-host-base-capture",
+      "exit_code": 0
+    }
+  ],
+  "complete": true,
+  "running": null
+}

@@ -1801,7 +1801,6 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 		if (menuLobby) return "In the lobby";
 		if (hostLost) return snapshot.statusText.starts_with("Changing hosts") ? "Changing hosts - the match picks up in a moment" : "Host lost - contacting the next host...";
 		// The toast and the full-screen wait say the rest; the box's line never repeats theirs.
-		if (ownRejoin) return "Rejoining - catching up with the match";
 		if (ownHeld) return NetPlayerPresentation::PlayingSummary(true, 0, {});
 		if (resyncing) return "Match repair in progress";
 		if (placing) {

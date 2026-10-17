@@ -1,0 +1,39 @@
+diff --git a/Source/Menus/NetModerationGUI.cpp b/Source/Menus/NetModerationGUI.cpp
+index 0a3626814..2cc94976b 100644
+--- a/Source/Menus/NetModerationGUI.cpp
++++ b/Source/Menus/NetModerationGUI.cpp
+@@ -1801,7 +1801,6 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
+ 		if (menuLobby) return "In the lobby";
+ 		if (hostLost) return snapshot.statusText.starts_with("Changing hosts") ? "Changing hosts - the match picks up in a moment" : "Host lost - contacting the next host...";
+ 		// The toast and the full-screen wait say the rest; the box's line never repeats theirs.
+-		if (ownRejoin) return "Rejoining - catching up with the match";
+ 		if (ownHeld) return NetPlayerPresentation::PlayingSummary(true, 0, {});
+ 		if (resyncing) return "Match repair in progress";
+ 		if (placing) {
+diff --git a/Source/Network/NetLockstep.cpp b/Source/Network/NetLockstep.cpp
+index 6028f1f00..e8b8501f6 100644
+--- a/Source/Network/NetLockstep.cpp
++++ b/Source/Network/NetLockstep.cpp
+@@ -9885,6 +9885,10 @@ namespace RTE {
+ 			// The startup holds belong to the boundary; a seat that joined past it takes its seat state from
+ 			// the reclaim it was admitted with, not from a resolution the round already made.
+ 			if (boundaryPassed || (start.heldPeerMask & (uint32_t{1} << (peer - 1))) == 0) continue;
++			DiagnosticLine() << "[net-peer-hold-trigger] local=" << static_cast<int>(m_Config.localPeerId)
++			    << " peer=" << static_cast<int>(peer) << " frame=" << start.agreedFirstFrame
++			    << " now_ms=" << nowMs << " cause=agreed_start_record authority=" << static_cast<int>(GetHostPeerId())
++			    << " published_mask=" << start.publishedPeerMask << " held_mask=" << start.heldPeerMask << std::endl;
+ 			m_AiHeldSeats[peer] = start.agreedFirstFrame;
+ 			m_PeerLeaveFrames[peer] = start.agreedFirstFrame;
+ 			NoteSeatTransition(peer, start.agreedFirstFrame, SeatTransition::Held);
+diff --git a/Source/Network/NetPeerBridges.cpp b/Source/Network/NetPeerBridges.cpp
+index 1c4686d75..974a6f6d0 100644
+--- a/Source/Network/NetPeerBridges.cpp
++++ b/Source/Network/NetPeerBridges.cpp
+@@ -11,6 +11,7 @@
+ #include <cmath>
+ #include <cstdlib>
+ #include <limits>
++#include <map>
+ #include <string_view>
+ 
+ namespace RTE {
