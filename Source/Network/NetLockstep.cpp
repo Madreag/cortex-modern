@@ -7328,11 +7328,13 @@ namespace RTE {
 			return published != m_PublishedCapacity.end() && published->second > 0 && published->second < own - tolerance;
 		}
 		// Only a machine that feeds below this one's rate is slow; a seat late by a fixed trip or a lossy link feeds at the round's rate.
-		if (arrivals.size() < 2 || nowMs < arrivals.front().first || nowMs - arrivals.front().first < 1000) return false;
+		// Measure only time between received packets. The silence after the
+		// last packet belongs to the missing-input bound, not to its rate.
+		if (arrivals.size() < 2 || nowMs < arrivals.front().first || arrivals.back().first < arrivals.front().first || arrivals.back().first - arrivals.front().first < 1000) return false;
 		// Counted in the seat's own ticks: a delay re-size moves its target frames without the seat running faster or slower.
 		const auto ownTick = [this, peerId](uint64_t target) { const uint64_t delay = InputDelayAt(peerId, target); return target > delay ? target - delay : 0; };
 		const uint64_t newest = ownTick(arrivals.back().second), oldest = ownTick(arrivals.front().second);
-		const double fed = static_cast<double>(newest > oldest ? newest - oldest : 0) * 1000.0 / static_cast<double>(nowMs - arrivals.front().first);
+		const double fed = static_cast<double>(newest > oldest ? newest - oldest : 0) * 1000.0 / static_cast<double>(arrivals.back().first - arrivals.front().first);
 		return fed < own - tolerance;
 	}
 

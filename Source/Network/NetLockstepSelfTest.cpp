@@ -464,6 +464,9 @@ namespace RTE {
 			if (peer.CostsPastTolerance(1, 4423, 4101)) {
 				*error = "a silent sender kept the fresh slow-machine judgement"; return false;
 			}
+			if (peer.CostsPastTolerance(1, 4423, 999)) {
+				*error = "a reversed local clock supplied a slow-machine judgement"; return false;
+			}
 			return true;
 		}
 
