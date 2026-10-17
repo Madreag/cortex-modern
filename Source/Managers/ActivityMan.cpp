@@ -1011,12 +1011,10 @@ void ActivityMan::PrepareAutosave() {
 void ActivityMan::ExpectAutosave(double seconds) {
 	// Warming takes the saver tens of milliseconds, so five seconds keeps it ahead of a busy game's idle time.
 	constexpr double c_WarmSeconds = 5.0;
-	CheckpointNativeStorage::ExpectCaptures(seconds < std::numeric_limits<double>::infinity());
 	if (m_PreparedAutosave) m_PreparedAutosave->queue.SetWarm(seconds <= c_WarmSeconds);
 }
 
 bool ActivityMan::WarmAutosaveNow() {
-	CheckpointNativeStorage::ExpectCaptures(true);
 	if (!m_PreparedAutosave) return false;
 	m_PreparedAutosave->queue.SetWarm(true);
 	return m_PreparedAutosave->queue.WaitUntilWarm(std::chrono::seconds(5));

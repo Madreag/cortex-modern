@@ -1100,12 +1100,6 @@ CheckpointNativeStorage::WorldAllocationScope::~WorldAllocationScope() {
 bool CheckpointNativeStorage::WorldEnabled() noexcept { return s_WorldEnabled.load(std::memory_order_acquire); }
 bool CheckpointNativeStorage::SetWorldEnabled(bool enabled) noexcept { return s_WorldEnabled.exchange(enabled, std::memory_order_acq_rel); }
 
-namespace {
-	std::atomic<bool> s_CapturesExpected{false};
-}
-
-void CheckpointNativeStorage::ExpectCaptures(bool expected) noexcept { s_CapturesExpected.store(expected, std::memory_order_release); }
-
 CheckpointNativeStorage::CoolingPause::CoolingPause() { s_CoolingPauses.fetch_add(1, std::memory_order_acq_rel); }
 CheckpointNativeStorage::CoolingPause::~CoolingPause() { s_CoolingPauses.fetch_sub(1, std::memory_order_acq_rel); }
 
@@ -1118,15 +1112,15 @@ void CheckpointNativeStorage::StartSettling() {
 		while (!stop.stop_requested()) {
 			const uint64_t generation = CheckpointPagePool::InventoryGeneration();
 			bool more = false;
-			// With no capture coming a fence buys nothing, and each one costs the game a write fault.
-			const bool expected = WorldEnabled() && s_CapturesExpected.load(std::memory_order_acquire);
-			if (expected && generation != settled) {
+			// Every lockstep match settles and cools, whatever its autosave setting: a join's or a return's base and a manual save
+			// come with a few ticks' warning, and the pages no boundary has seen would be fenced while the simulation waits.
+			if (WorldEnabled() && generation != settled) {
 				more = CheckpointPagePool::SettleInventory(2048) > 0;
 				if (!more) settled = generation;
 			}
 			// A page that stopped changing for a pass is fenced again, so the next boundary copies only pages still written.
 			static const bool s_Cooling = std::getenv("CCCP_TEST_CHECKPOINT_NO_COOLING") == nullptr;
-			if (s_Cooling && expected && s_CoolingPauses.load(std::memory_order_acquire) == 0 && RTE::SteadyClock::now() - cooled >= std::chrono::seconds(1)) {
+			if (s_Cooling && WorldEnabled() && s_CoolingPauses.load(std::memory_order_acquire) == 0 && RTE::SteadyClock::now() - cooled >= std::chrono::seconds(1)) {
 				CheckpointPagePool::CoolInventory();
 				cooled = RTE::SteadyClock::now();
 			}
