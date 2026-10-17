@@ -1,0 +1,37 @@
+{
+  "source_head": "a920a0ece5e190ad629425218fef4ac8e9dd854b",
+  "binary_sha256": "c9467dfb6bb9c75a4060313cad010e79e684c29f804b788c7c40ea51afdcb0de",
+  "scope": "Headed Linux single-box exact schedule safety replays; proof=false for a field/spread match",
+  "results": [
+    {
+      "name": "joiner_catching_up_at_105_percent_returns_over_100ms",
+      "exit_code": 1
+    },
+    {
+      "name": "four_seats_held_joiner_catches_up_then_runs_at_round_rate_over_100ms",
+      "exit_code": 1
+    },
+    {
+      "name": "four_seats_held_joiner_catches_up_then_runs_at_round_rate_over_200ms",
+      "exit_code": 1
+    },
+    {
+      "name": "three_seats_held_host_catches_up_then_runs_at_round_rate_over_100ms",
+      "exit_code": 1
+    },
+    {
+      "name": "three_seats_held_host_catches_up_then_runs_at_round_rate_over_250ms",
+      "exit_code": 1
+    },
+    {
+      "name": "four_seats_two_joiners_held_at_once_catch_up_at_105_percent_over_100ms",
+      "exit_code": 1
+    },
+    {
+      "name": "image_return_three_seats_over_100ms_keeps_equal_histories_and_bound",
+      "exit_code": 0
+    }
+  ],
+  "complete": true,
+  "running": null
+}

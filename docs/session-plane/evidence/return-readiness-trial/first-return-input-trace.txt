@@ -1,0 +1,39 @@
+[net-peer-return-runway] peer=2 activation=1283 delay_ticks=9 neutral_through=1311
+[net-frame-group] return frame=1283 members=7 voters=5
+[net-frame-group] return frame=1283 members=7 voters=7
+[net-frame-group] return frame=1283 members=7 voters=7
+[lockstep] returning seat queues input produced=1262 target=1271 reclaim=1283 next=1264 clock=381679391
+[lockstep] returning seat queues input produced=1263 target=1272 reclaim=1283 next=1265 clock=381679392
+[lockstep] returning seat queues input produced=1264 target=1273 reclaim=1283 next=1266 clock=381679393
+[net-lockstep] return of peer 2 rides frame 1283
+[net-lockstep] return of peer 2 rides frame 1283
+[net-peer-hold-trigger] local=1 peer=2 frame=1312 ai_frame=1432 observed_frame=1312 now_ms=21816 cause=input_missing ahead=0 first_missing_ms=21800 last_heard_ms=21816 last_progress_ms=5998 received_through=362 accepted_through=362 input_voters=2 delay_ticks=8 bound_ticks=3 transport_rtt_ms=100 transport_measured=1 receipt_p95_ms=100 reliable_bytes=1021 queue_ms=0 send_rate=0 lost_tps=0 own_capacity_tps=60 route=
+[net-peer-hold-vote] local=1 frame=1312 displayed=1305 reference=1 now_ms=21816 members=5 missing=2:362/1300
+[net-return-input-send] local=2 peer=1 frame=1312 wanted=1 sent=1 prepared=1311 displayed=1303 reference=1 catching_up=1 now_ms=21825
+[net-return-input-send] local=2 peer=3 frame=1312 wanted=0 sent=0 prepared=1311 displayed=1303 reference=1 catching_up=1 now_ms=21825
+[net-return-input-send] local=2 peer=1 frame=1312 wanted=0 sent=0 prepared=1311 displayed=1303 reference=1 catching_up=1 now_ms=21825
+[net-return-input-send] local=2 peer=3 frame=1312 wanted=1 sent=1 prepared=1311 displayed=1303 reference=1 catching_up=1 now_ms=21825
+[net-return-input-send] local=2 peer=1 frame=1313 wanted=1 sent=1 prepared=1312 displayed=1304 reference=1 catching_up=1 now_ms=21840
+[net-return-input-send] local=2 peer=3 frame=1313 wanted=0 sent=0 prepared=1312 displayed=1304 reference=1 catching_up=1 now_ms=21840
+[net-return-input-send] local=2 peer=1 frame=1313 wanted=0 sent=0 prepared=1312 displayed=1304 reference=1 catching_up=1 now_ms=21840
+[net-return-input-send] local=2 peer=3 frame=1313 wanted=1 sent=1 prepared=1312 displayed=1304 reference=1 catching_up=1 now_ms=21840
+[net-peer-hold-trigger] local=3 peer=2 frame=1312 ai_frame=1432 observed_frame=1312 now_ms=21849 cause=input_missing ahead=0 first_missing_ms=21836 last_heard_ms=21849 last_progress_ms=5998 received_through=362 accepted_through=362 input_voters=2 delay_ticks=8 bound_ticks=3 transport_rtt_ms=100 transport_measured=1 receipt_p95_ms=100 reliable_bytes=1533 queue_ms=0 send_rate=0 lost_tps=0 own_capacity_tps=60 route=
+[net-peer-hold-vote] local=3 frame=1312 displayed=1309 reference=1 now_ms=21849 members=5 missing=2:362/1302
+[net-return-input-send] local=2 peer=1 frame=1314 wanted=1 sent=1 prepared=1312 displayed=1305 reference=1 catching_up=1 now_ms=21856
+[net-return-input-send] local=2 peer=3 frame=1314 wanted=0 sent=0 prepared=1312 displayed=1305 reference=1 catching_up=1 now_ms=21856
+[net-return-input-send] local=2 peer=1 frame=1314 wanted=0 sent=0 prepared=1312 displayed=1305 reference=1 catching_up=1 now_ms=21856
+[net-return-input-send] local=2 peer=3 frame=1314 wanted=1 sent=1 prepared=1312 displayed=1305 reference=1 catching_up=1 now_ms=21856
+[net-peer-pace] local=3 frame=1312 members=5 reference=1
+[net-peer-hold-installed] local=3 peer=2 frame=1312 ai_frame=1432 voters=5 proposer=1 certificate_sender=3 next=1312 displayed=1310 now_ms=21866 cause=input_missing
+[net-return-input-read] local=1 owner=2 frame=1312 prepared=1312 session_matches=1 round_matches=1 setup_matches=1 removed=0 now_ms=21875
+[net-peer-input-at-vote] local=1 owner=2 frame=1312 prepared=1312 displayed=1309 now_ms=21875
+[net-return-input-read] local=3 owner=2 frame=1312 prepared=1314 session_matches=1 round_matches=1 setup_matches=1 removed=0 now_ms=21875
+[net-return-input-read] local=1 owner=2 frame=1313 prepared=1312 session_matches=1 round_matches=1 setup_matches=1 removed=0 now_ms=21890
+[lockstep] first frame of returning peer 2 accepted: target=1313 next=1312 reclaim=1283 window=0 clock=381679430
+[net-peer-pace] local=1 frame=1312 members=5 reference=1
+[net-peer-hold-installed] local=1 peer=2 frame=1312 ai_frame=1432 voters=5 proposer=1 certificate_sender=1 next=1312 displayed=1310 now_ms=21899 cause=input_missing
+[net-peer-pace] local=2 frame=1312 members=5 reference=1
+[net-peer-hold-installed] local=2 peer=2 frame=1312 ai_frame=1432 voters=5 proposer=1 certificate_sender=3 next=1312 displayed=1309 now_ms=21916 cause=certified_peer_decision
+[net-return-input-read] local=2 owner=2 frame=1312 prepared=1312 session_matches=1 round_matches=1 setup_matches=1 removed=0 now_ms=21925
+[net-return-input-read] local=3 owner=2 frame=1312 prepared=1317 session_matches=1 round_matches=1 setup_matches=1 removed=0 now_ms=21925
+[net-return-input-read] local=2 owner=2 frame=1313 prepared=1312 session_matches=1 round_matches=1 setup_matches=1 removed=0 now_ms=21940
