@@ -1,6 +1,7 @@
 #include "AudioMan.h"
 #include "SteadyClock.h"
 #include "CheckpointNativeSnapshot.h"
+#include <cstddef>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
@@ -64,6 +65,26 @@ using namespace RTE;
 
 namespace {
 	void ClearPendingAudioArchives();
+	/// Moves a table whose links or elements the native pools do not hold into them, so a frozen read finds every node.
+	template<class Container> void OwnCheckpointStorage(Container& container) {
+		const auto owned = [&container](const void* storage) {
+			const auto* at = static_cast<const std::byte*>(storage);
+			const auto* self = reinterpret_cast<const std::byte*>(&container);
+			// A library that keeps a container's head inside the container leaves nothing outside it to move.
+			return !storage || (at >= self && at < self + sizeof(Container)) || CheckpointNativeStorage::Owns(storage);
+		};
+		bool inPools;
+		if constexpr (requires { container.capacity(); }) inPools = owned(container.capacity() ? container.data() : nullptr);
+		else {
+			inPools = owned(CheckpointContainerDetail::Node(CheckpointContainerDetail::End(container)));
+			for (auto at = container.begin(); inPools && at != container.end(); ++at) inPools = owned(CheckpointContainerDetail::Node(at));
+		}
+		if (inPools) return;
+		Container moved;
+		if constexpr (requires { moved.reserve(container.size()); }) moved.reserve(container.size());
+		for (auto& value: container) moved.insert(moved.end(), std::move(value));
+		container.swap(moved);
+	}
 	struct SavedSoundOperations {
 		std::unordered_map<uint64_t, SoundContainer*> pending;
 		std::unordered_set<SoundContainer*> logical;
@@ -1469,6 +1490,18 @@ std::string AudioMan::CheckpointStartupLinksSelfTestMismatch() {
 
 void AudioMan::PrepareCheckpointBackendValues() {
 	if (!CheckpointNativeStorage::Enabled() || CheckpointNativeStorage::Reading()) return;
+	// The manager built these before any world's storage existed; a frozen capture walks each of them.
+	OwnCheckpointStorage(m_CommittedAudibility);
+	OwnCheckpointStorage(m_CurrentActivityHumanPlayerPositions);
+	for (int player = 0; player < c_MaxClients; ++player) {
+		std::lock_guard lock(g_SoundEventsListMutex[player]);
+		OwnCheckpointStorage(m_SoundEvents[player]);
+	}
+	OwnCheckpointStorage(m_PlayingVoices);
+	{
+		std::scoped_lock lock(m_SoundChannelMinimumAudibleDistancesMutex);
+		OwnCheckpointStorage(m_SoundChannelMinimumAudibleDistances);
+	}
 	auto values = std::make_unique<CheckpointBackend>();
 	if (m_AudioEnabled) {
 		AudioCheckpoint::MixerLock mixer(m_AudioSystem);
@@ -3286,6 +3319,43 @@ std::string AudioMan::CheckpointBackendSelfTestMismatch() {
 			if (!live.TakePendingSoundOpContainers().empty()) return "saved sound queue did not clear its private owner";
 		}
 		if (live.m_PendingSoundOpContainers != pending) return "saved position getter changes the live sound queue";
+		{
+			// A sound saved through its frozen page names the channels it played at the boundary, whatever the game plays after.
+			auto played = std::make_unique<SoundContainer>();
+			for (int identity: {101, 102, 103}) played->m_PlayingChannels.insert(identity);
+			played->AddToGroup("checkpoint-selftest-before");
+			const std::string before = played->SaveCheckpoint();
+			const auto playedPages = CheckpointNativeStorage::Prepare();
+			for (const auto& part: playedPages) part->Arm();
+			played->m_PlayingChannels.clear();
+			for (int identity = 200; identity < 264; ++identity) played->m_PlayingChannels.insert(identity);
+			for (int group = 0; group < 64; ++group) played->AddToGroup("checkpoint-selftest-after-" + std::to_string(group));
+			std::string frozen;
+			{
+				CheckpointNativeStorage::ReadScope read(playedPages);
+				try { frozen = CheckpointNativeStorage::Source(played.get())->SaveCheckpoint(); } catch (const std::exception&) {}
+			}
+			if (frozen != before) return "a sound saved through its frozen page names the channels or groups it has after the boundary";
+		}
+		// The manager's tables predate every world's storage; a capture prepared as the autosave prepares one still reads them.
+		const SoundObservationKey key{7, 11, 13, 17, 19};
+		live.m_CommittedAudibility[key][3] = {23, 0.25F};
+		live.PrepareCheckpointBackendValues();
+		const auto audioPages = CheckpointNativeStorage::Prepare();
+		for (const auto& part: audioPages) part->Arm();
+		CheckpointNativeStorage::Root<AudioMan> audioRoot(&live);
+		audioRoot.Freeze();
+		bool frozenAudibility = false;
+		{
+			const std::array roots{audioRoot.Range()};
+			CheckpointNativeStorage::ReadScope read(audioPages, roots);
+			try {
+				const auto captured = CheckpointNativeStorage::Source(&live)->CaptureFrozenCheckpointState(false);
+				frozenAudibility = std::any_of(captured->state.audibility.begin(), captured->state.audibility.end(), [&key](const auto& reading) { return reading.key == key && reading.peer == 3 && reading.frame == 23; });
+			} catch (const std::logic_error&) {}
+		}
+		live.m_CommittedAudibility.erase(key);
+		if (!frozenAudibility) return "the saved committed audibility is outside its frozen inventory";
 	}
 	return {};
 }

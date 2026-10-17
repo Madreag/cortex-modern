@@ -2905,6 +2905,7 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 			auto marker = std::make_unique<Actor>();
 			Actor* const nextGameplaySlot = marker.get();
 			marker.reset();
+			const int actorsInUse = Entity::ClassInfo::GetClass("Actor")->GetInstancesInUse();
 			const auto uid = MovableObject::GetUniqueIDCounter();
 			const auto simDraws = g_SimRNG.GetDrawCount(), renderDraws = g_RenderRNG.GetDrawCount();
 			bool refused = true;
@@ -2923,7 +2924,14 @@ bool RTE::RunOwnedCheckpointSelfTest() {
 			snapshot->SealBoundary();
 			const bool aliases = snapshot->Object(actor.get()) == frozen && snapshot->ValueObject(actor->GetController()) == frozen->GetController();
 			marker = std::make_unique<Actor>();
+#ifdef __SANITIZE_ADDRESS__
+			// The sanitizer build allocates every instance apart, so the class's count says whether the snapshot took gameplay memory.
+			const bool poolUnchanged = Entity::ClassInfo::GetClass("Actor")->GetInstancesInUse() == actorsInUse + 1;
+			(void)nextGameplaySlot;
+#else
 			const bool poolUnchanged = marker.get() == nextGameplaySlot;
+			(void)actorsInUse;
+#endif
 			marker.reset();
 			actor->SetPos(Vector(99, 101)); actor->SetStringValue(std::string("a\0key", 5), "changed");
 			actor->SetDescription("changed description"); actor->RemoveFromGroup("capture-only group"); actor.reset();

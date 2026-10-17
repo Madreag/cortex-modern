@@ -46,6 +46,11 @@ namespace RTE {
 		/// Prepares saved strings before the multiplayer page inventory is built.
 		void PrepareCheckpointValues();
 		void NotifyCheckpointTick();
+		/// How far the next capture is: within a few seconds the prepared capture commits and warms its copies, further away it
+		/// holds address space only.
+		void ExpectAutosave(double seconds);
+		/// A capture comes now, with no tick for the saver to warm ahead: warms the prepared capture and waits for it.
+		bool WarmAutosaveNow();
 #pragma region Creation
 		/// Constructor method used to instantiate an ActivityMan object in system memory. Create() should be called before using the object.
 		ActivityMan();
@@ -288,6 +293,11 @@ namespace RTE {
 
 		/// Plants a dead script upvalue, requests a save capture, and checks the player line.
 		bool RunSaveRefusalDiagnosisSelfTest();
+
+		/// Self-test seam: one world capture of the running match world through its prepared saver, with beforeArm run just before
+		/// the boundary arms and inWindow after it, before the saver reads anything. Whether the capture was written; the problems
+		/// its script graph refusal named, or the reason it was not taken or written.
+		bool RunWorldCaptureWindow(const std::function<void()>& beforeArm, const std::function<void()>& inWindow, std::vector<std::string>& problems);
 
 		/// Self-test of the activity flags' checkpoint scopes: this machine's pause-menu skip stays out of the shared state and its neighbours stay in.
 		/// @return The failure seen, or empty when the scopes hold.

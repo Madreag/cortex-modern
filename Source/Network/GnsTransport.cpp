@@ -31,12 +31,18 @@
 #if !defined(STEAMNETWORKINGSOCKETS_TURN_LIFETIME) || STEAMNETWORKINGSOCKETS_TURN_LIFETIME < 5 || !defined(STEAMNETWORKINGSOCKETS_ICE_CANDIDATE_POLICY) || STEAMNETWORKINGSOCKETS_ICE_CANDIDATE_POLICY < 2 || !defined(STEAMNETWORKINGSOCKETS_TURN_STREAMS) || STEAMNETWORKINGSOCKETS_TURN_STREAMS < 2 || !defined(STEAMNETWORKINGSOCKETS_NETWORK_RECOVERY)
 #error "GameNetworkingSockets without external/patches/gns-turn-lifetime.patch; build it into <GNS_ROOT>-turnfix, see docs/turn-relay.md"
 #endif
+#if !defined(STEAMNETWORKINGSOCKETS_TRANSPORT_DIAGNOSTICS)
+#error "GameNetworkingSockets without external/patches/gns-transport-diagnostics.patch; rebuild the patched library, see docs/turn-relay.md"
+#endif
 #endif
 
 namespace RTE {
 	bool ApplyCrossTransportFault(int lagMs, float lossPercent, float jitterMs, uint64_t durationMs);
 	uint64_t NetLockstepSharedClockMs();
 	static std::atomic<uint64_t> s_CrossTransportResetMs{0};
+#ifdef CCCP_WITH_GNS
+	static bool ApplyTimedTransportFault(int lagMs, float lossPercent, float jitterMs, uint64_t durationMs);
+#endif
 
 	std::string GnsTransport::TurnHostReceipts(const std::string& servers) {
 		std::istringstream input(servers);
@@ -253,6 +259,7 @@ namespace RTE {
 		float s_SimulatedReorderPercent = 0;
 		float s_SimulatedDuplicatePercent = 0;
 		int s_RendezvousLogLevel = 0;
+		std::atomic<bool> s_AllRendezvousDiagnostics{false};
 		static constexpr size_t c_MaxHeldBytesBeforeAnnounce = 256 * 1024;
 
 		std::string HeldPacketOverflowReason(size_t bytes) {
@@ -284,24 +291,25 @@ namespace RTE {
 		void GnsDebugOutput(ESteamNetworkingSocketsDebugOutputType type, const char* message) {
 			// ICE authentication stays out of the relay diagnostics.
 			if (message && (std::string_view(message).find("pwd_frag") != std::string_view::npos || std::string_view(message).find("key_data") != std::string_view::npos)) return;
+			if (!s_AllRendezvousDiagnostics.load() && type > k_ESteamNetworkingSocketsDebugOutputType_Warning && message &&
+			    std::string_view(message).find("TURN") == std::string_view::npos && std::string_view(message).find("last recv") == std::string_view::npos) return;
 			static std::mutex mutex;
 			std::istringstream lines(message ? message : "");
 			std::lock_guard<std::mutex> lock(mutex);
 			for (std::string line; std::getline(lines, line);) {
 				if (!line.empty()) {
-					System::PrintDiagnosticLine("[net-gns] " + std::to_string(static_cast<int>(type)) + " " + NetRelayLogins::Scrub(line));
+					System::PrintDiagnosticLine("[net-gns] now_ms=" + std::to_string(GnsNowMs()) + " level=" + std::to_string(static_cast<int>(type)) + " " + NetRelayLogins::Scrub(line));
 				}
 			}
 		}
 
 		// Diagnostics: routes GNS's own rendezvous spew into the run's log.
-		void ApplyRendezvousLog() {
-			int level = s_RendezvousLogLevel;
+		void ApplyRendezvousLog(int connectionLevel = 0) {
+			int level = std::max(s_RendezvousLogLevel, connectionLevel);
 			if (const char* trace = std::getenv("CC_TEST_GNS_RENDEZVOUS_LOG_LEVEL"); trace && level <= 0)
 				level = static_cast<int>(std::clamp(std::strtol(trace, nullptr, 10), 0L, 8L));
-			if (level <= 0) {
-				return;
-			}
+			s_AllRendezvousDiagnostics.store(level > 0);
+			level = std::max(level, static_cast<int>(k_ESteamNetworkingSocketsDebugOutputType_Verbose));
 			SteamNetworkingUtils()->SetDebugOutputFunction(static_cast<ESteamNetworkingSocketsDebugOutputType>(level), GnsDebugOutput);
 			SteamNetworkingUtils()->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_LogLevel_P2PRendezvous, level);
 		}
@@ -469,12 +477,18 @@ namespace RTE {
 				return false;
 			}
 			s_TestUplinkStall.Update(UplinkStallClockMs());
+			auto& flow = m_PacketFlow[connectionIt->second];
+			flow.lastAttemptUs = SteamNetworkingUtils()->GetLocalTimestamp();
 			const EResult result = m_Interface->SendMessageToConnection(
 				connectionIt->second,
 				bytes.data(),
 				static_cast<uint32>(bytes.size()),
 				SendFlags(lane),
 				nullptr);
+			flow.lastResult = static_cast<int>(result);
+			// The liveness sender keeps this evidence fresh even while the game thread cannot poll.
+			if (!m_LastHealthTraceUs.contains(connectionIt->second) || flow.lastAttemptUs - m_LastHealthTraceUs.at(connectionIt->second) >= 5000000)
+				TraceConnectionHealth(connectionIt->second, "sample");
 			if (result != k_EResultOK) {
 				// LimitExceeded means the queue is full, not that the peer is gone: the message was
 				// never taken, so the caller holds it rather than giving up on a reachable player.
@@ -485,6 +499,7 @@ namespace RTE {
 				return false;
 			}
 			m_BytesHandedOver[peerId] += bytes.size();
+			flow.lastHandedOffUs = flow.lastAttemptUs; flow.sentBytes += bytes.size(); ++flow.sentMessages;
 			TraceLobbyDelivery(connectionIt->second, bytes, "sent");
 			return true;
 		}
@@ -560,6 +575,7 @@ namespace RTE {
 			}
 			const HSteamNetConnection connection = connectionIt->second;
 			const auto closing = GetPeerConnectionInfo(peerId);
+			TraceConnectionHealth(connection, "local-close", reason);
 			// Bypass the Nagle timer so queued reliable data (e.g. a join-reject) beats the close onto the wire.
 			m_Interface->FlushMessagesOnConnection(connection);
 			m_Interface->CloseConnection(connection, 0, reason.c_str(), true);
@@ -574,6 +590,7 @@ namespace RTE {
 		}
 
 		void Stop() {
+			for (const auto& [connection, owner]: s_ConnectionOwners) if (owner == this) TraceConnectionHealth(connection, "stop", "transport stopped");
 			m_RouteLogged.clear(); m_CandidateIdentities.clear(); m_CandidateTypes.clear();
 			m_ConnectionOffers.clear(); m_RouteReceipts.clear(); m_RelayOffer = "none";
 			m_RouteTracker.Clear(); m_DialedMs.clear();
@@ -616,6 +633,7 @@ namespace RTE {
 			m_BytesHandedOver.clear();
 			m_LastDetailUs.clear();
 			m_LastDeliveryTraceUs.clear();
+			m_PacketFlow.clear(); m_LastHealthTraceUs.clear();
 			m_LiveTurnLogin.clear();
 			m_PendingEvents.clear();
 		}
@@ -636,6 +654,10 @@ namespace RTE {
 					PollIncomingMessages();
 				}
 				PollCallbacks();
+				const auto nowUs = SteamNetworkingUtils()->GetLocalTimestamp();
+				for (const auto& [connection, peer]: m_PeersByConnection)
+					if (!m_LastHealthTraceUs.contains(connection) || nowUs - m_LastHealthTraceUs.at(connection) >= 5000000)
+						TraceConnectionHealth(connection, "sample");
 			}
 
 			std::vector<NetTransportEvent> events;
@@ -675,6 +697,43 @@ namespace RTE {
 			    static_cast<uint32_t>(std::max(0, status.m_nSendRateBytesPerSecond))};
 		}
 
+		void TraceConnectionHealth(HSteamNetConnection connection, const char* event, const std::string& reason = {}) {
+			if (!m_Interface) return;
+			const auto nowUs = SteamNetworkingUtils()->GetLocalTimestamp();
+			m_LastHealthTraceUs[connection] = nowUs;
+			const auto peer = m_PeersByConnection.find(connection);
+			const NetPeerId peerId = peer == m_PeersByConnection.end() ? c_InvalidNetPeerId : peer->second;
+			const auto info = ConnectionInfo(connection, peerId);
+			SteamNetworkingMicroseconds sentUs = 0, receivedUs = 0;
+			const bool packetTimes = SteamNetworkingSockets_GetConnectionPacketTimes(connection, &sentUs, &receivedUs);
+			const auto ageMs = [nowUs](SteamNetworkingMicroseconds stamp) { return stamp > 0 ? std::max<SteamNetworkingMicroseconds>(0, nowUs - stamp) / 1000 : -1; };
+			const auto flowIt = m_PacketFlow.find(connection);
+			const PacketFlow flow = flowIt == m_PacketFlow.end() ? PacketFlow{} : flowIt->second;
+			const bool queueStatsAvailable = info.state == k_ESteamNetworkingConnectionState_Connected;
+			const auto queue = queueStatsAvailable ? GetPeerQueueStats(peerId) : NetTransportQueueStats{};
+			const auto receipt = m_RouteReceipts.find(connection);
+			const std::string& route = info.connectedRoute.empty() && receipt != m_RouteReceipts.end() ? receipt->second.route : info.connectedRoute;
+			std::ostringstream line;
+			line << "[net-transport-health] event=" << event << " peer=" << peerId << " connection=" << connection
+			     << " side=" << (m_IsHost ? "host" : "client") << " state=" << info.state << " end_reason=" << info.endReason
+			     << " reason=\"" << (reason.empty() ? info.endDebug : reason) << "\" gns_clock_ms=" << nowUs / 1000
+			     << " packet_times_available=" << packetTimes << " last_sent_packet_ms=" << sentUs / 1000 << " sent_packet_age_ms=" << ageMs(sentUs)
+			     << " last_received_packet_ms=" << receivedUs / 1000 << " received_packet_age_ms=" << ageMs(receivedUs)
+			     << " last_send_attempt_ms=" << flow.lastAttemptUs / 1000 << " last_send_result=" << flow.lastResult
+			     << " last_message_handoff_ms=" << flow.lastHandedOffUs / 1000 << " last_message_received_ms=" << flow.lastReceivedUs / 1000
+			     << " sent_messages=" << flow.sentMessages << " sent_bytes=" << flow.sentBytes
+			     << " received_messages=" << flow.receivedMessages << " received_bytes=" << flow.receivedBytes
+			     << " queue_stats_available=" << queueStatsAvailable << " pending_reliable_bytes=" << queue.reliableBytes << " queue_ms=" << queue.queueMs
+			     << " route=\"" << route << "\"";
+			if (std::string_view(event) != "sample") {
+				std::string detail = GetPeerDetailedStatus(peerId);
+				std::replace(detail.begin(), detail.end(), '\n', ' ');
+				std::replace(detail.begin(), detail.end(), '\r', ' ');
+				line << " detail=\"" << detail << "\"";
+			}
+			System::PrintDiagnosticLine(NetRelayLogins::Scrub(line.str()));
+		}
+
 		bool Acquire(std::string* error) {
 			if (m_HasGnsRef) {
 				return true;
@@ -697,7 +756,7 @@ namespace RTE {
 			const uint64_t reset = s_CrossTransportResetMs.load();
 			const uint64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now().time_since_epoch()).count();
 			if (reset && now >= reset && s_CrossTransportResetMs.exchange(0)) {
-				const bool accepted = ApplyCrossTransportFault(0, 0, 0, 0);
+				const bool accepted = ApplyTimedTransportFault(0, 0, 0, 0);
 				System::PrintDiagnosticLine("[cross-transport] timed_reset send_recv_armed=" + std::to_string(accepted));
 			}
 			m_Interface->RunCallbacks();
@@ -726,6 +785,9 @@ namespace RTE {
 
 				const auto peerIt = m_PeersByConnection.find(message->m_conn);
 				if (peerIt != m_PeersByConnection.end() && RouteAllowed(message->m_conn)) {
+					auto& flow = m_PacketFlow[message->m_conn];
+					flow.lastReceivedUs = SteamNetworkingUtils()->GetLocalTimestamp();
+					flow.receivedBytes += message->m_cbSize; ++flow.receivedMessages;
 					const uint8_t* data = static_cast<const uint8_t*>(message->m_pData);
 					NetTransportEvent received{
 						NetTransportEventType::PacketReceived,
@@ -757,7 +819,8 @@ namespace RTE {
 		}
 
 		mutable std::set<HSteamNetConnection> m_RouteLogged;
-		mutable std::map<HSteamNetConnection, std::string> m_RouteReceipts; //!< Each connection's latest [net-route] line.
+		struct RouteReceipt { std::string text, route; };
+		mutable std::map<HSteamNetConnection, RouteReceipt> m_RouteReceipts; //!< Each connection's latest receipt and selected route, retained through close diagnostics.
 		mutable GnsRouteTracker m_RouteTracker; //!< The route each receipt named, so a live change gets its own receipt.
 		std::map<HSteamNetConnection, uint64_t> m_DialedMs; //!< When each ICE connection was dialed or accepted.
 		std::map<HSteamNetConnection, std::string> m_ConnectionOffers; //!< The relay offer each connection's TURN lists came from.
@@ -805,7 +868,7 @@ namespace RTE {
 				line << " change=" << change;
 				if (const auto dialed = m_DialedMs.find(connection); dialed != m_DialedMs.end()) line << " after_ms=" << SteadyMs() - dialed->second;
 			}
-			m_RouteReceipts[connection] = line.str();
+			m_RouteReceipts[connection] = {line.str(), relayed ? "relay" : "direct"};
 			DiagnosticLine() << line.str() << std::endl;
 		}
 
@@ -838,6 +901,7 @@ namespace RTE {
 			                : "The joining player's Connection is Direct only. Ask that player to switch it to Automatic to allow this relay route.")
 			    : (m_IsHost ? "The host's Connection is Relay only, but this route is direct. Ask the host to check the relay, then retry."
 			                : "The joining player's Connection is Relay only, but this route is direct. Ask that player to check the relay, then retry.");
+			TraceConnectionHealth(connection, "policy-close", remoteReason);
 			m_Interface->CloseConnection(connection, 0, remoteReason, false);
 			HandleConnectionClosed(connection, localReason, k_ESteamNetworkingConnectionState_Connecting);
 		}
@@ -875,7 +939,6 @@ namespace RTE {
 					// A terminal callback still owns a native connection until the
 					// application closes it. Retiring only our maps leaks its ICE
 					// requests and relay allocations into every later retry.
-					m_Interface->CloseConnection(info->m_hConn, 0, nullptr, false);
 					HandleConnectionClosed(info->m_hConn, reason, info->m_eOldState, info->m_info.m_eState == k_ESteamNetworkingConnectionState_ClosedByPeer, info->m_info.m_eEndReason, remote);
 					break;
 				}
@@ -891,6 +954,7 @@ namespace RTE {
 				for (const NetTransportEvent& event : found->second) bytes += event.bytes.size();
 			if (!QueueHeldPacket(m_HeldPackets, connection, std::move(received))) {
 				const std::string reason = HeldPacketOverflowReason(bytes);
+				TraceConnectionHealth(connection, "payload-overflow", reason);
 				m_Interface->CloseConnection(connection, 0, reason.c_str(), false);
 				HandleConnectionClosed(connection, reason, k_ESteamNetworkingConnectionState_Connecting);
 				return;
@@ -923,12 +987,14 @@ namespace RTE {
 			m_ConnectionOffers[connection] = m_RelayOffer;
 			if (m_P2PMode >= 0) m_DialedMs[connection] = SteadyMs();
 			if (m_Interface->AcceptConnection(connection) != k_EResultOK) {
+				TraceConnectionHealth(connection, "accept-failed", "GNS AcceptConnection failed");
 				m_Interface->CloseConnection(connection, 0, "accept failed", false);
 				ForgetConnection(connection);
 				m_PendingEvents.push_back({NetTransportEventType::TransportError, c_InvalidNetPeerId, NetTransportLane::ControlReliable, {}, "GNS AcceptConnection failed"});
 				return;
 			}
 			if (m_PollGroup != k_HSteamNetPollGroup_Invalid && !m_Interface->SetConnectionPollGroup(connection, m_PollGroup)) {
+				TraceConnectionHealth(connection, "poll-group-failed", "GNS SetConnectionPollGroup failed");
 				m_Interface->CloseConnection(connection, 0, "poll group assignment failed", false);
 				ForgetConnection(connection);
 				m_PendingEvents.push_back({NetTransportEventType::TransportError, c_InvalidNetPeerId, NetTransportLane::ControlReliable, {}, "GNS SetConnectionPollGroup failed"});
@@ -952,14 +1018,14 @@ namespace RTE {
 		}
 
 		void HandleConnectionClosed(HSteamNetConnection connection, const std::string& reason, ESteamNetworkingConnectionState oldState, bool closedByPeer = false, int endReason = 0, const std::string& remote = {}) {
+			TraceConnectionHealth(connection, closedByPeer ? "remote-close" : "fault", reason);
+			if (m_Interface) m_Interface->CloseConnection(connection, 0, nullptr, false);
 			const auto peerIt = m_PeersByConnection.find(connection);
 			if (peerIt == m_PeersByConnection.end()) {
 				if (oldState == k_ESteamNetworkingConnectionState_Connecting) {
 					m_PendingEvents.push_back({NetTransportEventType::ConnectionFailed, c_InvalidNetPeerId, NetTransportLane::ControlReliable, {}, reason});
 				}
-				if (m_Interface) {
-					m_Interface->CloseConnection(connection, 0, nullptr, false);
-				}
+				m_PacketFlow.erase(connection); m_LastHealthTraceUs.erase(connection);
 				s_ConnectionOwners.erase(connection);
 				return;
 			}
@@ -993,6 +1059,7 @@ namespace RTE {
 			s_ConnectionOwners.erase(connection);
 			m_LastDetailUs.erase(connection);
 			m_LastDeliveryTraceUs.erase(connection);
+			m_PacketFlow.erase(connection); m_LastHealthTraceUs.erase(connection);
 			if (connection == m_ServerConnection) {
 				m_ServerConnection = k_HSteamNetConnection_Invalid;
 			}
@@ -1030,7 +1097,7 @@ namespace RTE {
 				return false;
 			}
 			ApplySimulatedLag();
-			ApplyRendezvousLog();
+			ApplyRendezvousLog(config.rendezvousLogLevel);
 			std::vector<SteamNetworkingConfigValue_t> connectionConfigs = P2PConnectionConfigs(config);
 			m_ListenSocket = m_Interface->CreateListenSocketP2P(virtualPort, static_cast<int>(connectionConfigs.size()), connectionConfigs.data());
 			if (m_ListenSocket == k_HSteamListenSocket_Invalid) {
@@ -1072,7 +1139,7 @@ namespace RTE {
 				m_Interface = SteamNetworkingSockets();
 				if (ApplyP2PIdentity(config, error)) {
 					ApplySimulatedLag();
-					ApplyRendezvousLog();
+					ApplyRendezvousLog(config.rendezvousLogLevel);
 					std::vector<SteamNetworkingConfigValue_t> connectionConfigs = P2PConnectionConfigs(config);
 					if (config.localVirtualPort >= 0) {
 						connectionConfigs.emplace_back();
@@ -1161,7 +1228,7 @@ namespace RTE {
 				}
 			}
 			result.relayOffer = RouteOffer(connection, (info.m_nFlags & k_nSteamNetworkConnectionInfoFlags_Relayed) != 0);
-			if (const auto receipt = m_RouteReceipts.find(connection); receipt != m_RouteReceipts.end()) result.routeReceipt = receipt->second;
+			if (const auto receipt = m_RouteReceipts.find(connection); receipt != m_RouteReceipts.end()) result.routeReceipt = receipt->second.text;
 
 			const std::pair<const char*, ESteamNetworkingConfigValue> numbers[] = {
 				{"P2P_Transport_ICE_Enable", k_ESteamNetworkingConfig_P2P_Transport_ICE_Enable},
@@ -1401,6 +1468,13 @@ namespace RTE {
 		std::map<NetPeerId, uint64_t> m_BytesHandedOver; //!< What we actually gave the socket, to read the pending figure against.
 		std::map<HSteamNetConnection, SteamNetworkingMicroseconds> m_LastDetailUs; //!< When each connection last produced a detailed status.
 		std::map<HSteamNetConnection, SteamNetworkingMicroseconds> m_LastDeliveryTraceUs;
+		struct PacketFlow {
+			SteamNetworkingMicroseconds lastAttemptUs = 0, lastHandedOffUs = 0, lastReceivedUs = 0;
+			uint64_t sentMessages = 0, sentBytes = 0, receivedMessages = 0, receivedBytes = 0;
+			int lastResult = 0;
+		};
+		std::map<HSteamNetConnection, PacketFlow> m_PacketFlow;
+		std::map<HSteamNetConnection, SteamNetworkingMicroseconds> m_LastHealthTraceUs;
 		std::set<HSteamNetConnection> m_Announced; //!< Connections whose PeerConnected we have already handed up.
 		std::map<HSteamNetConnection, std::vector<NetTransportEvent>> m_HeldPackets; //!< Payloads GNS delivered before that.
 		std::string m_LiveTurnLogin; //!< The TURN server, user and password lists the live connections run with.
@@ -1734,10 +1808,11 @@ namespace RTE {
 #endif
 	}
 
-	bool ApplyCrossTransportFault(int lagMs, float lossPercent, float jitterMs, uint64_t durationMs) {
 #ifdef CCCP_WITH_GNS
-		const char* headless = std::getenv("CCCP_HEADLESS");
-		if (!headless || std::string_view(headless) != "1" || lagMs < 0 || lagMs > 20000 ||
+	// A fault that was armed resets even if presentation changes before its deadline. The public harness entry still
+	// requires headless mode; the internal operation also lets the headed selftest verify actual readback and expiry.
+	static bool ApplyTimedTransportFault(int lagMs, float lossPercent, float jitterMs, uint64_t durationMs) {
+		if (lagMs < 0 || lagMs > 20000 ||
 		    !std::isfinite(lossPercent) || !std::isfinite(jitterMs) || lossPercent < 0 || lossPercent > 100 || jitterMs < 0 || jitterMs > 10000 || durationMs > 600000) return false;
 		auto* utils = SteamNetworkingUtils();
 		if (!utils) return false;
@@ -1756,10 +1831,46 @@ namespace RTE {
 		accepted &= utils->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_SendTimeSincePreviousPacket, jitterMs > 0 || s_SimulatedJitterMs > 0 ? 1 : -1);
 		s_CrossTransportResetMs.store(durationMs ? std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now().time_since_epoch()).count() + durationMs : 0);
 		return accepted;
+	}
+#endif
+
+	bool ApplyCrossTransportFault(int lagMs, float lossPercent, float jitterMs, uint64_t durationMs) {
+#ifdef CCCP_WITH_GNS
+		const char* headless = std::getenv("CCCP_HEADLESS");
+		if (!headless || std::string_view(headless) != "1") return false;
+		return ApplyTimedTransportFault(lagMs, lossPercent, jitterMs, durationMs);
 #else
 		(void)lagMs; (void)lossPercent; (void)jitterMs; (void)durationMs;
 		return false;
 #endif
+	}
+
+	bool GnsTimedTransportFaultSelfTest(std::string* error) {
+#ifdef CCCP_WITH_GNS
+		GnsTransport transport;
+		if (!transport.StartHost(43610, error)) return false;
+		const char* headless = std::getenv("CCCP_HEADLESS");
+		const bool harnessAllowed = headless && std::string_view(headless) == "1";
+		// Retain the public presentation guard and every bounds check, and exercise the same setter/reset under a visible window.
+		if (ApplyCrossTransportFault(-1, 0, 0, 10) || ApplyCrossTransportFault(0, 101, 0, 10) ||
+		    ApplyCrossTransportFault(10, 5, 2, 1) != harnessAllowed ||
+		    ApplyTimedTransportFault(-1, 0, 0, 10) || ApplyTimedTransportFault(0, 101, 0, 10) ||
+		    ApplyTimedTransportFault(0, 0, -1, 10) || ApplyTimedTransportFault(0, 0, 0, 600001) ||
+		    ApplyTimedTransportFault(0, std::numeric_limits<float>::quiet_NaN(), 0, 10) ||
+		    ApplyTimedTransportFault(0, 0, std::numeric_limits<float>::infinity(), 10) ||
+		    !ApplyTimedTransportFault(10, 5, 2, 1)) {
+			SetError(error, "transport hook accepted invalid bounds or changed its presentation guard, or the timed operation refused a valid setting");
+			return false;
+		}
+		float loss = 0; size_t bytes = sizeof(loss); ESteamNetworkingConfigDataType type;
+		const auto read = [&] { bytes = sizeof(loss); return SteamNetworkingUtils()->GetConfigValue(k_ESteamNetworkingConfig_FakePacketLoss_Send,
+		    k_ESteamNetworkingConfig_Global, 0, &type, &loss, &bytes) > 0; };
+		if (!read() || loss != 5) { SetError(error, "loss hook has no GNS readback"); return false; }
+		std::this_thread::sleep_for(std::chrono::milliseconds(3));
+		transport.PollEvents();
+		if (!read() || loss != 0) { SetError(error, "timed fault did not reset without simulation progress"); return false; }
+#endif
+		return true;
 	}
 
 	bool GnsPacketSpacingSelfTest(std::string* error) {

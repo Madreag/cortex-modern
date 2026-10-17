@@ -31,15 +31,51 @@
 
 #include "GUI.h"
 #include "AllegroBitmap.h"
+#include "ACDropShip.h"
+#include "HeldDevice.h"
+#include "MovableMan.h"
+
+#include <memory>
 
 using namespace RTE;
+
+namespace {
+	// Only the incoming object's address is read until the known objects say it is still in the world.
+	MOSRotating* FreezeIncomingObject(MOSRotating* incoming, CheckpointNativeSnapshot& snapshot) {
+		if (!incoming || !g_MovableMan.IsKnownObject(incoming)) return nullptr;
+		// An object's slot another object took since is gone too.
+		if (!dynamic_cast<const MOSRotating*>(CheckpointNativeStorage::Source(static_cast<const MovableObject*>(incoming)))) return nullptr;
+		return snapshot.Object(incoming);
+	}
+} // namespace
 
 ACraft::Exit::Exit(const Exit& source, CheckpointNativeSnapshot& snapshot) :
 	m_Offset(source.m_Offset), m_Velocity(source.m_Velocity), m_VelSpread(source.m_VelSpread),
 	m_Radius(source.m_Radius), m_Range(source.m_Range), m_Clear(source.m_Clear),
-	m_pIncomingMO(snapshot.Object(source.m_pIncomingMO)), m_FaithfulIncomingMOUID(source.m_FaithfulIncomingMOUID),
+	m_pIncomingMO(FreezeIncomingObject(source.m_pIncomingMO, snapshot)), m_FaithfulIncomingMOUID(source.m_FaithfulIncomingMOUID),
 	m_CheckpointOwner(nullptr) {
 	snapshot.BindValue(source, this);
+}
+
+bool ACraft::RunGoneIncomingObjectSelfTest() {
+	bool gone = false;
+	{
+		CheckpointNativeStorage::AllocationScope storage(true);
+		auto ship = std::make_unique<ACDropShip>();
+		auto device = std::make_unique<HeldDevice>();
+		ship->m_Exits.emplace_back();
+		ship->m_Exits.back().m_pIncomingMO = device.get();
+		// Deleted at the end of a tick, before the boundary; the exit clears it only on the craft's next update.
+		device.reset();
+		CheckpointNativeSnapshot snapshot;
+		try {
+			const ACraft* frozen = snapshot.Object(static_cast<ACraft*>(ship.get()));
+			gone = frozen && frozen->m_Exits.size() == 1 && !frozen->m_Exits.front().m_pIncomingMO;
+		} catch (const std::exception& error) { std::cout << "[craft-incoming-selftest] capture refused: " << error.what() << std::endl; }
+		ship->m_Exits.back().m_pIncomingMO = nullptr;
+	}
+	std::cout << "[craft-incoming-selftest] " << (gone ? "PASS" : "FAIL") << " saved_none=" << gone << std::endl;
+	return gone;
 }
 
 AbstractClassInfo(ACraft, Actor);

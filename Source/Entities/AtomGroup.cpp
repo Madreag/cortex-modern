@@ -214,7 +214,9 @@ int AtomGroup::Create(MOSRotating* ownerMOSRotating, Material const* material, i
 std::string AtomGroup::SaveCheckpoint() const {
 	CheckpointWriter writer("AtomGroup2");
 	VisitCheckpoint(writer, *this);
-	writer(std::set<std::string>(m_Groups.begin(), m_Groups.end()), CheckpointWriter::Native([&] { return m_CheckpointMaterialReference.empty() ? g_SceneMan.SaveMaterialReference(m_Material) : m_CheckpointMaterialReference.Value(); }),
+	std::set<std::string> groups;
+	for (const CheckpointString& group: CheckpointValues(m_Groups)) groups.insert(group.Value());
+	writer(groups, CheckpointWriter::Native([&] { return m_CheckpointMaterialReference.empty() ? g_SceneMan.SaveMaterialReference(m_Material) : m_CheckpointMaterialReference.Value(); }),
 	    m_HasCheckpointOwner ? m_CheckpointOwnerID : (m_OwnerMOSR ? m_OwnerMOSR->GetUniqueID() : 0));
 	std::vector<CheckpointText> atoms;
 	std::unordered_map<const Atom*, size_t> indices;

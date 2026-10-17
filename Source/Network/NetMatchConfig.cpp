@@ -9,6 +9,7 @@
 #include <cctype>
 #include <cmath>
 #include <deque>
+#include <iterator>
 #include <limits>
 #include <mutex>
 #include <set>
@@ -200,14 +201,14 @@ namespace RTE {
 	void NetInputDelayEstimator::Observe(uint64_t nowMs, uint32_t rttMs) {
 		ForgetSilencesBefore(nowMs);
 		if (!m_Samples.empty() && nowMs < m_Samples.back().first) {
-			m_Samples.clear();
+			m_Samples.clear(); ++m_SamplesRevision;
 			m_LastMeasuredRttMs = 0;
 			m_BelowSince.reset();
 		}
-		while (!m_Samples.empty() && nowMs - m_Samples.front().first > c_WindowMs) m_Samples.pop_front();
+		while (!m_Samples.empty() && nowMs - m_Samples.front().first > c_WindowMs) { m_Samples.pop_front(); ++m_SamplesRevision; }
 		if (rttMs == 0) return;
 		if (!m_Samples.empty() && nowMs - m_Samples.back().first < c_SampleMs) return;
-		m_Samples.emplace_back(nowMs, rttMs);
+		m_Samples.emplace_back(nowMs, rttMs); ++m_SamplesRevision;
 		m_LastMeasuredRttMs = rttMs;
 	}
 
@@ -230,11 +231,17 @@ namespace RTE {
 
 	uint32_t NetInputDelayEstimator::Percentile(unsigned percent) const {
 		if (m_Samples.empty()) return 0;
+		// Every peer asks every tick while its samples change a few times a second.
+		if (m_RankedRevision != m_SamplesRevision) { m_RankedRevision = m_SamplesRevision; m_Ranked = {}; }
+		for (const auto& [rank, value]: m_Ranked) if (rank == percent) return value;
 		std::vector<uint32_t> values;
 		values.reserve(m_Samples.size());
 		for (const auto& [when, rtt]: m_Samples) values.push_back(rtt);
-		std::sort(values.begin(), values.end());
-		return values[(values.size() * percent + 99) / 100 - 1];
+		const auto rank = std::next(values.begin(), static_cast<long>((values.size() * percent + 99) / 100 - 1));
+		std::nth_element(values.begin(), rank, values.end());
+		auto& slot = m_Ranked[0].first == 0 ? m_Ranked[0] : m_Ranked[1].first == 0 ? m_Ranked[1] : m_Ranked[0];
+		slot = {percent, *rank};
+		return *rank;
 	}
 
 	void NetInputDelayEstimator::Rebase(uint64_t nowMs) {
@@ -272,9 +279,10 @@ namespace RTE {
 	uint32_t NetInputDelayEstimator::SenderRequiredFrames(double tickMs, uint16_t bound, uint16_t floor) const {
 		if (!std::isfinite(tickMs) || tickMs <= 0) return std::numeric_limits<uint32_t>::max();
 		const uint32_t rtt = std::max(P95Ms(), m_Samples.empty() ? 0U : m_Samples.back().second);
-		// The reserve absorbs a short spike before a quorum has to substitute a press.
-		const double margin = std::max(c_NetInputJitterReserveMs, JitterMs()) + std::ceil((bound + 1) * tickMs);
-		return static_cast<uint32_t>(std::clamp(std::ceil((rtt + margin) / tickMs), static_cast<double>(floor), static_cast<double>(NetMatchConfigUtil::c_MaxInputDelayFrames)));
+		// The RTT percentile already includes the link's jitter. One production tick covers a receipt delivered between samples;
+		// the combat wait bound belongs to a hold decision, never to every player's permanent input delay.
+		(void)bound;
+		return static_cast<uint32_t>(std::clamp(std::ceil(rtt / tickMs) + 1, static_cast<double>(floor), static_cast<double>(NetMatchConfigUtil::c_MaxInputDelayFrames)));
 	}
 
 	namespace {

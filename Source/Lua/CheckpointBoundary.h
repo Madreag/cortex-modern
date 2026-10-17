@@ -20,6 +20,7 @@
 #include <memory>
 #include <numeric>
 #include <span>
+#include <tuple>
 #include <vector>
 
 namespace RTE::CheckpointLua {
@@ -64,8 +65,21 @@ namespace RTE::CheckpointLua {
 				result->m_Heaps.push_back({lease, lease.Prepare()});
 			}
 			result->m_Native = CheckpointNativeStorage::PrepareInventory();
-			for (const auto& pages: result->m_Native->Pages()) pages->WarmShadow();
 			return result;
+		}
+		/// Commits every copy and makes the pages a boundary writes resident, ahead of a capture; a boundary begun meanwhile
+		/// ends it and commits the rest itself.
+		void Warm() {
+			for (const Heap& heap: m_Heaps) {
+				heap.lease.FillHoles(*heap.prepared);
+				heap.prepared->Warm();
+			}
+			try { m_Native->Warm(); } catch (const std::logic_error&) {}
+		}
+		/// Gives every copy's memory back while no boundary has begun.
+		void Cool() noexcept {
+			for (const Heap& heap: m_Heaps) heap.prepared->Cool();
+			m_Native->Cool();
 		}
 		~Boundary() { Cancel(); }
 		Boundary(const Boundary&) = delete;
@@ -85,26 +99,66 @@ namespace RTE::CheckpointLua {
 			Status expected = Status::Prepared;
 			if (!m_Status.compare_exchange_strong(expected, Status::Arming, std::memory_order_acq_rel)) return false;
 			try {
+				// The saver's walk asks what memory was free or retained as of this fence, not as the game moves it on.
+				m_Held = CheckpointHeldMemory::Open();
 				std::vector<uint64_t> until(m_Heaps.size(), 0);
 				if (m_TicksUntilCollection) for (size_t index = 0; index < m_Heaps.size(); ++index) until[index] = m_TicksUntilCollection(index);
 				OrderDrains(until);
-				const std::vector<bool> byCopy = CopiedWhole(until);
+				std::vector<bool> learn;
+				const std::vector<bool> byCopy = CopiedWhole(until, learn);
 				// The Lua heaps are fenced on another thread while this one arms the native pages.
 				static const bool s_SerialArm = std::getenv("CCCP_TEST_CHECKPOINT_SERIAL_ARM") != nullptr;
-				auto heaps = std::async(s_SerialArm ? std::launch::deferred : std::launch::async, [this, &byCopy] {
+				const size_t threads = s_SerialArm ? 1 : std::min<size_t>(4, std::max<size_t>(1, m_Heaps.size()));
+				auto heaps = std::async(s_SerialArm ? std::launch::deferred : std::launch::async, [this, &byCopy, &learn, threads] {
 					const auto begun = RTE::SteadyClock::now();
-					// The heaps are fenced or copied side by side: protection calls and copies both scale across threads.
-					const size_t parts = s_SerialArm ? 1 : std::min<size_t>(4, std::max<size_t>(1, m_Heaps.size()));
-					const auto armSome = [this, parts, &byCopy](size_t part) {
-						bool armed = true;
-						for (size_t index = part; armed && index < m_Heaps.size(); index += parts) armed = m_Heaps[index].lease.Arm(*m_Heaps[index].prepared, byCopy[index]);
-						return armed;
+					// This thread plans every heap and holds the plans' locks until all are fenced. The copies are cut into chunks
+					// of a megabyte that every arming thread takes in turn, so one large heap does not set the boundary's length;
+					// then the heaps are fenced side by side.
+					std::vector<HeapOwner::ArmSession> sessions(m_Heaps.size());
+					bool armed = true;
+					for (size_t index = 0; armed && index < m_Heaps.size(); ++index)
+						armed = m_Heaps[index].lease.BeginArm(*m_Heaps[index].prepared, byCopy[index], learn[index], sessions[index]);
+					struct Chunk { uint32_t heap, first, count; };
+					std::vector<Chunk> chunks;
+					std::vector<size_t> copied(m_Heaps.size(), 0);
+					const size_t chunkPages = std::max<size_t>(1, (size_t{1} << 20) / std::max<size_t>(1, PageWriteFence::SystemPageBytes()));
+					for (size_t index = 0; armed && index < sessions.size(); ++index) {
+						for (const auto& [first, count]: sessions[index].Spans()) {
+							for (size_t at = 0; at < count; at += chunkPages)
+								chunks.push_back({static_cast<uint32_t>(index), static_cast<uint32_t>(first + at), static_cast<uint32_t>(std::min<size_t>(chunkPages, count - at))});
+							copied[index] += count;
+						}
+					}
+					const auto planned = RTE::SteadyClock::now();
+					std::atomic<size_t> next{0};
+					const auto copySome = [&chunks, &next, &sessions] {
+						for (size_t at; (at = next.fetch_add(1, std::memory_order_relaxed)) < chunks.size();) sessions[chunks[at].heap].CopyPages(chunks[at].first, chunks[at].count);
 					};
-					std::vector<std::future<bool>> helpers;
-					for (size_t part = 1; part < parts; ++part) helpers.push_back(std::async(std::launch::async, armSome, part));
-					bool armed = armSome(0);
-					for (auto& helper: helpers) armed = helper.get() && armed;
-					return std::pair{armed, std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - begun).count()};
+					if (armed) {
+						std::vector<std::future<void>> helpers;
+						for (size_t part = 1; part < threads; ++part) helpers.push_back(std::async(std::launch::async, copySome));
+						copySome();
+						for (auto& helper: helpers) helper.get();
+					}
+					const auto copiedAt = RTE::SteadyClock::now();
+					const int64_t copyUs = std::chrono::duration_cast<std::chrono::microseconds>(copiedAt - planned).count();
+					if (armed) {
+						AssignArmParts(copied, threads);
+						const auto fenceSome = [this, &sessions, &copied, copyUs](size_t part) {
+							bool fenced = true;
+							for (size_t index = 0; fenced && index < sessions.size(); ++index)
+								if (m_ArmParts[index] == part) fenced = sessions[index].Finish(copied[index], copyUs);
+							return fenced;
+						};
+						std::vector<std::future<bool>> helpers;
+						for (size_t part = 1; part < threads; ++part) helpers.push_back(std::async(std::launch::async, fenceSome, part));
+						armed = fenceSome(0);
+						for (auto& helper: helpers) armed = helper.get() && armed;
+					}
+					const auto finished = RTE::SteadyClock::now();
+					const auto us = [](auto from, auto to) { return std::chrono::duration_cast<std::chrono::microseconds>(to - from).count(); };
+					m_ArmPhaseUs = {us(begun, planned), copyUs, us(copiedAt, finished)};
+					return std::pair{armed, us(begun, finished)};
 				});
 				bool nativeArmed = false;
 				std::exception_ptr failure;
@@ -127,8 +181,14 @@ namespace RTE::CheckpointLua {
 		void Drain() {
 			if (m_Status.load(std::memory_order_acquire) != Status::Armed) throw std::logic_error("checkpoint boundary is not armed");
 			try {
-				for (const auto& pages: m_Native->Pages()) pages->Drain();
+				// A busy heap the boundary left mostly fenced is copied at once, beside the game: the ticks after the boundary write
+				// it all over, and as their own faults and as its collections that cost the game several times more. The heaps
+				// drain before the native pages, which the game writes far less.
+				constexpr size_t c_EagerFencedBytes = size_t{32} << 20;
+				for (const Heap& heap: m_Heaps)
+					if (heap.prepared->Image().Busy() && heap.prepared->FencedBytes() >= c_EagerFencedBytes) heap.prepared->CopyFencedNow();
 				DrainHeaps();
+				for (const auto& pages: m_Native->Pages()) pages->Drain();
 				CheckpointFailure::Check(CheckpointFailure::Point::NativeRoots);
 				m_ReadRoots = m_Roots;
 				m_ReadRoots.reserve(m_Roots.size() + m_Heaps.size());
@@ -156,7 +216,19 @@ namespace RTE::CheckpointLua {
 		size_t StateCount() const { return m_Heaps.size(); }
 		/// The fence's own clock: the native ranges, then every Lua heap.
 		std::pair<int64_t, int64_t> ArmSplitUs() const { return m_ArmSplitUs; }
+		/// The arming thread that fenced a heap.
+		size_t ArmPart(size_t heap) const { return heap < m_ArmParts.size() ? m_ArmParts[heap] : 0; }
+		/// The Lua arm's plan, copy and fence, in microseconds.
+		std::array<int64_t, 3> ArmPhaseUs() const { return m_ArmPhaseUs; }
+		/// Whether the saver had warmed this plan when it armed, how long before the arm its warm was asked (-1: not asked), and
+		/// how long the saver's last finished warm took.
+		void NoteWarm(bool warmed, int64_t askedUsBefore, int64_t warmUs) noexcept { m_WarmAtArm = warmed; m_WarmAskedUsBefore = askedUsBefore; m_WarmUs = warmUs; }
+		std::tuple<bool, int64_t, int64_t> WarmAtArm() const noexcept { return {m_WarmAtArm, m_WarmAskedUsBefore, m_WarmUs}; }
 		const BindingLease& Bindings() const { return m_Bindings; }
+		/// What the engine held free or retained at the fence, for the walk of the frozen script graphs.
+		const CheckpointHeldMemory* HeldMemory() const noexcept { return m_Held.get(); }
+		/// Ends the record once the script graphs are walked; nothing after them asks.
+		void CloseHeldMemory() const noexcept { m_Held.reset(); }
 		static std::string SelfTestMismatch() {
 			CheckpointNativeStorage::AllocationScope allocations(true);
 			auto state = HeapOwner::Create();
@@ -175,7 +247,7 @@ namespace RTE::CheckpointLua {
 				inlineValue = static_cast<uint64_t*>(lua_newuserdata(lua, sizeof(uint64_t)));
 				*inlineValue = 29; lua_setglobal(lua, "boundaryNativeValue");
 			});
-			auto prepared = std::async(std::launch::async, [&] { return Prepare(states, roots); }).get();
+			auto prepared = std::async(std::launch::async, [&] { auto boundary = Prepare(states, roots); boundary->Warm(); return boundary; }).get();
 			header.tick = 2; value->number = 13;
 			ProtectedCall(lua, [&] { lua_pushinteger(lua, 17); lua_setglobal(lua, "boundaryValue"); });
 			if (!prepared->Arm()) return "prepared native and Lua boundary refused";
@@ -227,11 +299,14 @@ namespace RTE::CheckpointLua {
 		enum class Status { Prepared, Arming, Armed, Frozen, Cancelled };
 		struct Heap { HeapOwner::PreparationLease lease; std::shared_ptr<HeapOwner::Prepared> prepared; };
 		// A collection writes every page of its state's heap, so the heap collected in the next tick, which comes before any
-		// idle time, and those collected soon after while they fit a few milliseconds of copying, are copied whole at the
-		// boundary instead of fenced.
-		std::vector<bool> CopiedWhole(const std::vector<uint64_t>& until) const {
-			constexpr size_t c_WholeCopyBytes = size_t{40} << 20;
+		// idle time, and those collected soon after while they fit a couple of milliseconds of copying, are copied whole at
+		// the boundary instead of fenced; a saver copies the rest in the order they collect. A busy heap (see
+		// HeapOwner::NoteFullCollection) whose hot runs cover less than an eighth of it has not learned what the ticks after a
+		// boundary write: it is copied whole and fenced to learn them, while all the whole copies fit c_BusyCopyBytes.
+		std::vector<bool> CopiedWhole(const std::vector<uint64_t>& until, std::vector<bool>& learn) const {
+			constexpr size_t c_WholeCopyBytes = size_t{16} << 20, c_BusyCopyBytes = size_t{96} << 20;
 			std::vector<bool> whole(m_Heaps.size(), false);
+			learn.assign(m_Heaps.size(), false);
 			size_t bytes = 0;
 			for (const size_t index: m_DrainOrder) {
 				if (!until[index]) break;
@@ -240,7 +315,32 @@ namespace RTE::CheckpointLua {
 				whole[index] = true;
 				bytes += heapBytes;
 			}
+			for (const size_t index: m_DrainOrder) {
+				const auto image = m_Heaps[index].prepared->Image();
+				if (whole[index] || !image.Busy() || m_Heaps[index].prepared->HotBytes() * 8 >= image.ByteCount() || bytes + image.ByteCount() > c_BusyCopyBytes) continue;
+				whole[index] = true;
+				learn[index] = true;
+				bytes += image.ByteCount();
+			}
 			return whole;
+		}
+		// The heaps are fenced side by side, each by the arming thread with the least to fence so far, the largest first.
+		void AssignArmParts(const std::vector<size_t>& copiedPages, size_t parts) {
+			std::vector<size_t> cost(m_Heaps.size()), order(m_Heaps.size());
+			const size_t pageBytes = PageWriteFence::SystemPageBytes();
+			for (size_t index = 0; index < m_Heaps.size(); ++index) {
+				const size_t bytes = m_Heaps[index].prepared->Image().ByteCount();
+				cost[index] = bytes - std::min(bytes, copiedPages[index] * pageBytes);
+			}
+			std::iota(order.begin(), order.end(), size_t{0});
+			std::stable_sort(order.begin(), order.end(), [&cost](size_t left, size_t right) { return cost[left] > cost[right]; });
+			std::vector<size_t> load(parts, 0);
+			m_ArmParts.assign(m_Heaps.size(), 0);
+			for (const size_t index: order) {
+				const size_t part = static_cast<size_t>(std::min_element(load.begin(), load.end()) - load.begin());
+				m_ArmParts[index] = static_cast<uint8_t>(part);
+				load[part] += cost[index];
+			}
 		}
 		// Heaps whose state collects sooner copy first, then the larger ones, so the live writes that fault on a page not yet
 		// copied stop soonest.
@@ -270,8 +370,13 @@ namespace RTE::CheckpointLua {
 		}
 		std::function<uint64_t(size_t)> m_TicksUntilCollection;
 		std::vector<size_t> m_DrainOrder;
+		std::vector<uint8_t> m_ArmParts;
+		std::array<int64_t, 3> m_ArmPhaseUs{};
+		bool m_WarmAtArm = false;
+		int64_t m_WarmAskedUsBefore = -1, m_WarmUs = 0;
 		std::atomic<Status> m_Status{Status::Prepared};
 		std::unique_ptr<CheckpointNativeStorage::Prepared> m_Native;
+		mutable std::shared_ptr<CheckpointHeldMemory> m_Held;
 		BindingLease m_Bindings;
 		std::vector<Heap> m_Heaps;
 		std::unique_ptr<std::byte[]> m_HeaderBytes;

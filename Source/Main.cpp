@@ -78,6 +78,7 @@
 #include "CheckpointImage.h"
 #include "CheckpointPagePool.h"
 #include "CheckpointNativeStorage.h"
+#include "SceneLayer.h"
 #include "PrimitiveMan.h"
 #include "ThreadMan.h"
 #include "LuaMan.h"
@@ -1342,6 +1343,7 @@ struct MenuTraceCoverage {
 };
 static MenuTraceCoverage s_menuTraceCoverage;
 static bool s_cowCheckpointAutosave = false;
+static bool s_captureWindowSelfTest = false;
 static bool s_checkpointRestoreContinue = false;
 static uint64_t s_checkpointRestoreTick = 0;
 static uint32_t s_checkpointRestoreAutosaveTicks = 0;
@@ -1746,6 +1748,9 @@ static void PostMemoryCensus(uint64_t simTick, const std::string& when = std::st
 	const std::string world = timed("world", [] { return g_NetMatchService.MemoryCensus(); });
 	const std::string storage = timed("storage", [] { return CheckpointNativeStorage::InventoryCensus(); });
 	const std::string textures = timed("gl", [] { return g_GLResourceMan.Census(); });
+	const std::string checkpoint = timed("checkpoint", [] {
+		return CheckpointPagePool::CommitCensus() + ' ' + CheckpointNativeStorage::PoolCensus() + ' ' + PixelAllocationCensus() + ' ' + LuaMan::CheckpointHeapCensus();
+	});
 	std::ostringstream rest;
 	// Rounds restart their ticks, so the census names its own instant for a slope across a rematching run.
 	rest << " uptime_ms=" << std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - s_CensusProcessStart).count();
@@ -1753,7 +1758,8 @@ static void PostMemoryCensus(uint64_t simTick, const std::string& when = std::st
 	rest << " in_flight=autosave:" << g_ActivityMan.UnwrittenAutosaves() << ",fullstate:" << g_ActivityMan.UnfinishedFullStateCaptures() << when;
 	rest << " tick_hashes=" << g_MetricsCollector.GetTickHashCount() << " lua_bytes=" << lua << " lua_live_bytes=" << luaLive
 	     << " actors=" << g_MovableMan.GetActorCount() << " particles=" << g_MovableMan.GetParticleCount() << " cow: " << cow
-	     << " movable: " << movable << ' ' << atoms << " audio: " << audio << ' ' << runner << ' ' << console << ' ' << world << " storage: " << storage << ' ' << textures << pace;
+	     << " movable: " << movable << ' ' << atoms << " audio: " << audio << ' ' << runner << ' ' << console << ' ' << world << " storage: " << storage << ' ' << textures << pace
+	     << " checkpoint: " << checkpoint;
 	CensusWorker::Get().Post([simTick, rest = std::move(rest).str(), costs = std::move(costs)]() mutable {
 		// The worker's whole job is the census's cost too, charged to the frame it ends in.
 		const auto began = RTE::SteadyClock::now();
@@ -3485,6 +3491,10 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			}
 			continue;
 		}
+		if (currentArg == "-capture-window-selftest") {
+			// The row plays the pickup_fire replay, a match world in the world's storage with its prepared saver.
+			s_captureWindowSelfTest = true;
+		}
 		if (currentArg == "-preview-binding-exhaustive-selftest") {
 			// Fixtures join the world at 150 and the walk runs at 154, off the 30-tick desync sample; the row plays the pickup_fire replay.
 			LuaBindingExhaustiveSelfTest::Arm(150, 154);
@@ -3922,7 +3932,7 @@ static bool RunSwapWaitSelfTest() {
 	};
 	using Action = SwapWaitGuard::Action;
 	{
-		// The Z13's panel switched off: 165 Hz, every waited swap 80.7 ms.
+		// A panel switched off: 165 Hz, every waited swap 80.7 ms.
 		SwapWaitGuard guard;
 		double now = 0;
 		int suspendedAt = -1;
@@ -3961,7 +3971,7 @@ static bool RunSwapWaitSelfTest() {
 		      "a wait outside a match was let go or the end kept it");
 	}
 	{
-		// Where the compositor counts the display's refreshes: the Z13's dark panel counted 0.33 a second, a lit one 165.
+		// Where the compositor counts the display's refreshes: a dark panel counted 0.33 a second, a lit one 165.
 		SwapWaitGuard dark, lit;
 		double now = 0;
 		for (int swap = 0; swap < SwapWaitGuard::c_LongSwapsToSuspend; ++swap, now += 80.7) {
@@ -3983,7 +3993,7 @@ static bool RunSwapWaitSelfTest() {
 	}
 	{
 		// A window on another display: the compositor counts only the primary display (60 Hz here), which still tells whether the
-		// desktop is composed at all - the Z13's dark desktop counted 0.33 refreshes a second.
+		// desktop is composed at all - a dark desktop counted 0.33 refreshes a second.
 		SwapWaitGuard dark, lit;
 		double now = 0;
 		for (int swap = 0; swap < SwapWaitGuard::c_LongSwapsToSuspend; ++swap, now += 80.7) {
@@ -8564,6 +8574,7 @@ void RunGameLoop() {
 						const auto tally = CheckpointPagePool::TakeFaultTally();
 						const auto [luaFaults, luaFaultUs] = LuaMan::TakeHeapFaultTally();
 						System::PrintDiagnosticLine(std::format("[native-fault-tick] tick={} faults={} fault_us={} settled={} cooled={} lua_faults={} lua_fault_us={}", tick, tally.faults, tally.faultNs / 1000, tally.settled, tally.cooled, luaFaults, luaFaultUs));
+						if (const std::string heaps = LuaMan::TakeHeapFaultsByState(); !heaps.empty()) System::PrintDiagnosticLine(std::format("[lua-fault-heaps] tick={}{}", tick, heaps));
 					}
 				}
 			} restoreTickCost{s_checkpointRestoreContinue, nextSimTick, s_checkpointRestoreContinue ? RTE::SteadyClock::now() : RTE::SteadyClock::time_point{}};
@@ -9187,11 +9198,19 @@ void RunGameLoop() {
 				g_MovableMan.StartMOIDDrawTask();
 			}
 
-			if (ScenarioRunner::IsLockstepControllerSyncActive() && simTick % 300 == 0) {
-				// A particle wave can leave hundreds of thousands of returned blocks. Keep two refills, not the wave's peak.
-				Entity::ClassInfo::ReleaseUnusedPoolMemory();
-				Atom::ReleaseUnusedPoolMemory();
+			// A particle wave can leave hundreds of thousands of returned blocks, in single player as in a match: keep two
+			// refills, not the wave's peak, giving back a few thousand a tick so no one tick pays for the whole wave.
+			static bool s_poolReleasePending = false;
+			if (s_poolReleasePending || simTick % 300 == 0) {
+				constexpr size_t c_PoolBlocksPerTick = 2048;
+				const bool entities = Entity::ClassInfo::ReleaseUnusedPoolMemory(c_PoolBlocksPerTick);
+				const bool atoms = Atom::ReleaseUnusedPoolMemory(c_PoolBlocksPerTick);
+				s_poolReleasePending = entities || atoms;
 			}
+			static const bool s_staleActivityLever = std::getenv("CCCP_TEST_STALE_ACTIVITY") != nullptr;
+			if (s_staleActivityLever && simTick > 0 && simTick % 600 == 0) g_LuaMan.NameStaleActivityValues();
+			static const bool s_pieSliceLever = std::getenv("CCCP_TEST_PIE_SLICE_HANDLES") != nullptr;
+			if (s_pieSliceLever && simTick == 1) g_LuaMan.PlantPieSliceHandles();
 			RecordActorHistory(simTick);
 			DumpSimStateIfArmed(simTick);
 			LocalPrediction::CompareFidelityAtTick(simTick);
@@ -9200,6 +9219,10 @@ void RunGameLoop() {
 			LocalPredictionInvarianceOnTick(simTick);
 			if (LuaBindingExhaustiveSelfTest::OnTick(simTick) > 0) {
 				s_netReplayExitCode = 5;
+			}
+			if (s_captureWindowSelfTest && simTick == 150) {
+				s_captureWindowSelfTest = false;
+				if (!g_LuaMan.RunCaptureWindowSelfTest()) s_netReplayExitCode = 5;
 			}
 			PreviewEventLedgerFrameOnTick();
 			TrackUidsIfArmed(simTick);
@@ -9399,6 +9422,12 @@ void RunGameLoop() {
 					System::SetQuit(true);
 				}
 			}
+			// The harness's captures come on its own cadence, so it says how near the next one is.
+			if (s_cowCheckpointAutosave && s_checkpointRestoreContinue && s_checkpointRestoreAutosaveTicks > 0 && simTick >= s_checkpointRestoreTick) {
+				const uint64_t into = (simTick - s_checkpointRestoreTick) % s_checkpointRestoreAutosaveTicks;
+				g_ActivityMan.ExpectAutosave(static_cast<double>((s_checkpointRestoreAutosaveTicks - into) % s_checkpointRestoreAutosaveTicks) * g_TimerMan.GetDeltaTimeSecs());
+			}
+			if (s_cowCheckpointAutosave && !s_checkpointRestoreContinue) g_ActivityMan.ExpectAutosave(0);
 			// A continued restore repeats its capture at the boundary the live autosave uses.
 			if (s_cowCheckpointAutosave && s_checkpointRestoreContinue && s_checkpointRestoreAutosaveTicks > 0 && g_ActivityMan.ActivityRunning() &&
 			    simTick > s_checkpointRestoreTick && (simTick - s_checkpointRestoreTick) % s_checkpointRestoreAutosaveTicks == 0 &&
@@ -12447,7 +12476,7 @@ int main(int argc, char** argv) {
 			line << "[record-video] recording to " << s_recordVideoDirectory << " at " << s_recordVideoFps << " fps";
 			System::PrintDiagnosticLine(line.str());
 		}
-		// The first copy of the screen pays the driver's one-time setup (57-97 ms on the Ally); it is paid here, before any frame.
+		// The first copy of the screen pays the driver's one-time setup (57-97 ms on one device); it is paid here, before any frame.
 		if (const auto screenBuffer = g_WindowMan.GetScreenBuffer()) FrameRecorder::Instance().WarmTextureReadback(screenBuffer->GetColorTexture().id, g_WindowMan.GetResX(), g_WindowMan.GetResY());
 	}
 
@@ -12799,6 +12828,7 @@ int main(int argc, char** argv) {
 					// Recapture the restored instant before simulation advances. The
 					// fixture's absolute two-tick cap can precede the saved tick.
 					const uint64_t tick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
+					g_ActivityMan.WarmAutosaveNow();
 					if (!g_ActivityMan.SaveAutosaveSnapshot("c0de-a1", tick) || (!s_checkpointRestoreContinue && !g_ActivityMan.WaitForAutosaveVerdict())) s_loadGameFailed = true;
 					if (!s_checkpointRestoreContinue || s_loadGameFailed) System::SetQuit(true);
 				}

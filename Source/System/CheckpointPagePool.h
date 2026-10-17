@@ -39,8 +39,10 @@ namespace RTE {
 			bool CanBorrow(const void* source, size_t bytes) const;
 			/// Materializes the remaining pages on the calling worker.
 			void Drain() const;
-			/// Makes prepared shadow pages resident before any live page is fenced.
+			/// Commits the prepared shadow and makes the pages its boundary copies resident, before any live page is fenced.
 			void WarmShadow() const;
+			/// Gives back a prepared shadow's commit while no boundary has begun on it; the first save commits it again.
+			void CoolShadow() const noexcept;
 			/// Fences prepared ranges without allocating; writers pause only until this returns.
 			void Arm() const;
 			void Cancel() const noexcept;
@@ -49,6 +51,9 @@ namespace RTE {
 			size_t RangeBytes() const { size_t bytes = 0; for (const Range& range: m_Ranges) bytes += range.bytes; return bytes; }
 			/// What an inventory boundary did: pages copied as written, pages fenced as unseen.
 			std::pair<size_t, size_t> ArmedPages() const;
+			/// For a refusal: the block's sizes and, per page of the live span, whether the copy kept it, its fence state, whether the
+			/// boundary copied it and whether its run is committed.
+			std::string Describe(const void* source, size_t bytes) const;
 		private:
 			friend class CheckpointPagePool;
 			friend class Allocation;
@@ -86,6 +91,8 @@ namespace RTE {
 		static size_t SettleInventory(size_t pages);
 		/// Fences again the written inventory pages that stopped changing since the last pass; returns how many.
 		static size_t CoolInventory();
+		/// The census's view: mapped live and copy ranges, the inventory's blocks and the copies they still hold.
+		static std::string CommitCensus();
 		/// Test lever CCCP_TEST_FAULT_TICKS: the native write faults taken and the pages settled and cooled since the last call.
 		struct FaultTally { uint64_t faults = 0, faultNs = 0, settled = 0, cooled = 0; };
 		static bool TallyingFaults();

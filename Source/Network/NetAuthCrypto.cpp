@@ -6,7 +6,9 @@
 #include <memory>
 
 #ifdef CCCP_WITH_GNS
+#include <openssl/core_names.h>
 #include <openssl/evp.h>
+#include <openssl/params.h>
 #include <openssl/rand.h>
 #endif
 
@@ -29,8 +31,21 @@ namespace RTE {
 				if (key == nullptr || keyCount == 0 || (message == nullptr && messageCount > 0)) {
 					return false;
 				}
+				// Fetching the algorithm by name takes the provider store's lock and a lookup on every message: each thread keeps one
+				// context with its digest set, and every message only gives it its key.
+				thread_local std::unique_ptr<EVP_MAC_CTX, decltype(&EVP_MAC_CTX_free)> context{nullptr, EVP_MAC_CTX_free};
+				if (!context) {
+					static EVP_MAC* const hmac = EVP_MAC_fetch(nullptr, "HMAC", nullptr);
+					if (hmac == nullptr) return false;
+					std::unique_ptr<EVP_MAC_CTX, decltype(&EVP_MAC_CTX_free)> fresh{EVP_MAC_CTX_new(hmac), EVP_MAC_CTX_free};
+					char digest[] = "SHA256";
+					const OSSL_PARAM params[] = {OSSL_PARAM_construct_utf8_string(OSSL_MAC_PARAM_DIGEST, digest, 0), OSSL_PARAM_construct_end()};
+					if (!fresh || EVP_MAC_CTX_set_params(fresh.get(), params) != 1) return false;
+					context = std::move(fresh);
+				}
 				size_t macCount = 0;
-				return EVP_Q_mac(nullptr, "HMAC", nullptr, "SHA256", nullptr, key, keyCount, message, messageCount, mac, sizeof(mac), &macCount) != nullptr && macCount == sizeof(mac);
+				return EVP_MAC_init(context.get(), key, keyCount, nullptr) == 1 && EVP_MAC_update(context.get(), message, messageCount) == 1 &&
+				    EVP_MAC_final(context.get(), mac, &macCount, sizeof(mac)) == 1 && macCount == sizeof(mac);
 			}
 		};
 #endif

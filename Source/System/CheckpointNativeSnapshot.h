@@ -190,9 +190,13 @@ namespace RTE {
 		BITMAP* ReadBitmap(const BITMAP* source);
 		const BITMAP* Freeze(const BITMAP* source) { return Freeze(const_cast<BITMAP*>(source)); }
 		std::optional<std::pair<std::shared_ptr<const BitmapSnapshot>, CheckpointText>> Pixels(const BITMAP* bitmap) const;
+		/// The pixels of a header any snapshot froze in its source's place, which has no rows of its own; nothing for any other bitmap.
+		static std::optional<std::shared_ptr<const BitmapSnapshot>> FrozenPixels(const BITMAP* bitmap);
 		std::optional<const std::string*> BitmapPath(const BITMAP* bitmap, int& depth) const;
 		void MaterializePixels() const;
-		CheckpointText FreezeWriter(const Serializable* source);
+		/// An entity's writer text as it stood at the boundary, from its frozen bytes alone: the live object may be gone by now
+		/// and its memory another's.
+		CheckpointText FreezeWriter(const Entity* source);
 		SoundData Freeze(const SoundData& source);
 		/// The frozen copy of a container's sound set, shared by every container whose set freezes to an equal copy.
 		std::shared_ptr<SoundSet> FreezeSoundSet(const std::shared_ptr<SoundSet>& source);
@@ -234,7 +238,8 @@ namespace RTE {
 					if (preset) insidePreset = true;
 					struct Leave { bool active; ~Leave() { if (active) insidePreset = false; } } leave{preset};
 					CheckpointCloneCost cost(CheckpointCloneCost::Enabled() ? view->GetClassName().c_str() : nullptr);
-					target = view->FreezeCheckpointNative(*this);
+					try { target = view->FreezeCheckpointNative(*this); }
+					catch (const std::bad_typeid& error) { RefuseUnreadableObject(view, base, error); }
 				}
 				slot = {base, target};
 			}
@@ -243,7 +248,10 @@ namespace RTE {
 		template<class T> T* ValueObject(const T* source) {
 			if (!source) return nullptr;
 			const void* identity = CheckpointNativeStorage::Original(source);
-			source = static_cast<const T*>(CheckpointNativeStorage::View(source, sizeof(T)));
+			{
+				const CheckpointFrozenValue reading(typeid(T));
+				source = static_cast<const T*>(CheckpointNativeStorage::View(source, sizeof(T)));
+			}
 			CheckpointNativeStorage::CaptureScope allocation;
 			CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
 			void* memory = AllocateFrozen(sizeof(T), alignof(T));
@@ -394,6 +402,7 @@ namespace RTE {
 		}
 		template<class T> T* CopyValue(const T* source) {
 			if (source && CheckpointNativeStorage::Reading()) {
+				const CheckpointFrozenValue reading(typeid(T));
 				const auto* value = static_cast<const T*>(CheckpointNativeStorage::View(source, sizeof(T)));
 				if (CheckpointNativeStorage::Private(value, sizeof(T)) && CheckpointNativeStorage::Original(value) != value)
 					return const_cast<T*>(value);
@@ -403,7 +412,10 @@ namespace RTE {
 		template<class T, class Factory> T* RebuildValue(const T* source, const Factory& factory) {
 			if (!source) return nullptr;
 			const void* identity = CheckpointNativeStorage::Original(source);
-			source = static_cast<const T*>(CheckpointNativeStorage::View(source, sizeof(T)));
+			{
+				const CheckpointFrozenValue reading(typeid(T));
+				source = static_cast<const T*>(CheckpointNativeStorage::View(source, sizeof(T)));
+			}
 			CheckpointNativeStorage::CaptureScope allocation;
 			if (const auto known = m_Values.Find(identity)) return static_cast<T*>(*known);
 			auto& owner = AddValueOwner([](void* value) noexcept { delete static_cast<T*>(value); });
@@ -671,6 +683,8 @@ namespace RTE {
 			return record;
 		}
 		struct Pixel;
+		/// An object whose freeze met a class it cannot read refuses the capture, naming where it lay.
+		[[noreturn]] static void RefuseUnreadableObject(const Entity* view, const Entity* source, const std::bad_typeid& error);
 		void AppendBitmapReadValues(std::vector<CheckpointNativeStorage::RootRange>& roots) const;
 		using ValueOwner = std::pair<void*, void (*)(void*) noexcept>;
 		/// This thread's recent answers of this snapshot, read without a shard lock: the shared objects many owners

@@ -356,6 +356,23 @@ namespace RTE {
 		authority.m_LocalLease.emplace();
 		authority.m_LocalLease->directorySessionId = authority.DirectorySessionId();
 		if (!queuedAs(0x11)) { *error = "a new directory session inherited the old match identity"; return false; }
+		// The decided split is the same answer when the other half describes it, including a read after healing.
+		authority.m_FrameTieReply.state = NetFrameTieReply::State::Decided;
+		authority.m_FrameTieReply.members = {1};
+		auto otherHalf = tie; otherHalf.members = {0}; otherHalf.queryOnly = true;
+		const auto decided = authority.QueryFrameTie(otherHalf);
+		if (decided.state != NetFrameTieReply::State::Decided || decided.members != std::vector<uint16_t>{1}) {
+			*error = "a read of the same decided split lost its answer when the half changed"; return false;
+		}
+		// A failed exchange can still be in flight when an authenticated peer proves the link has recovered.
+		authority.m_FrameTieReply = {};
+		authority.m_FrameTie = std::make_unique<NetHttpClient>();
+		authority.m_FrameTieRetry.nextMs = authority.m_NextFrameTie = 2000;
+		authority.QueryFrameTie(otherHalf);
+		if (authority.m_FrameTie || authority.m_RetiredFrameTies.size() != 1 || authority.m_FrameTieRequest != otherHalf || authority.m_NextFrameTie != 0) {
+			*error = "a healed seat waited on its failed check-in before asking for the committed decision"; return false;
+		}
+		std::cout << "[net-directory-selftest] PASS recovered_frame_tie_reads_its_decision" << std::endl;
 		std::cout << "[net-directory-selftest] PASS recovery_uses_listed_match" << std::endl;
 		return true;
 	}

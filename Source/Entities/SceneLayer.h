@@ -20,6 +20,8 @@ namespace RTE {
 
 	/// The back buffers the scene layers hold right now, for the leak check over a scene reload.
 	int SceneLayerBackBufferCount();
+	/// The bitmaps whose pixels sit in their own page allocation, and those allocations' bytes.
+	std::string PixelAllocationCensus();
 
 	struct SceneLayerInfo {
 		std::string name;

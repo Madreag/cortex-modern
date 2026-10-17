@@ -101,7 +101,7 @@ namespace RTE {
 	bool RunCrossHistoryRecordSelfTest(std::string* error);
 	bool RunCrossInPlaceHistorySelfTest(std::string* error);
 	bool RunCrossReadyRevisionSelfTest(std::string* error);
-	bool ApplyCrossTransportFault(int lagMs, float lossPercent, float jitterMs, uint64_t durationMs);
+	bool GnsTimedTransportFaultSelfTest(std::string* error);
 	bool GnsPacketSpacingSelfTest(std::string* error);
 	bool RunLobbySeatHoldSelfTest(std::string* error);
 
@@ -284,21 +284,8 @@ namespace RTE {
 		}
 
 		bool TestCrossTimedTransport(std::string* error) {
-#ifdef CCCP_WITH_GNS
-			GnsTransport transport;
-			if (!transport.StartHost(43610, error)) return false;
-			if (ApplyCrossTransportFault(-1, 0, 0, 10) || ApplyCrossTransportFault(0, 101, 0, 10) || !ApplyCrossTransportFault(10, 5, 2, 1)) {
-				*error = "transport hook accepted invalid bounds or refused a valid timed setting"; return false;
-			}
-			float loss = 0; size_t bytes = sizeof(loss); ESteamNetworkingConfigDataType type;
-			const auto read = [&] { bytes = sizeof(loss); return SteamNetworkingUtils()->GetConfigValue(k_ESteamNetworkingConfig_FakePacketLoss_Send,
-			    k_ESteamNetworkingConfig_Global, 0, &type, &loss, &bytes) > 0; };
-			if (!read() || loss != 5) { *error = "loss hook has no GNS readback"; return false; }
-			std::this_thread::sleep_for(std::chrono::milliseconds(3));
-			transport.PollEvents();
-			if (!read() || loss != 0) { *error = "timed fault did not reset without simulation progress"; return false; }
+			if (!GnsTimedTransportFaultSelfTest(error)) return false;
 			std::cout << "[net-match-selftest] PASS timed_transport_faults_reset_without_committed_progress" << std::endl;
-#endif
 			return true;
 		}
 		bool TestCommittedEventStream(std::string* error) {
@@ -2566,7 +2553,9 @@ namespace RTE {
 				host.RequestStart();
 				const uint64_t deadline = row == 3 ? 800 : 2300;
 				while (now <= deadline && !(host.IsStarted() && client.IsStarted())) step();
-				const uint16_t expected = row == 1 ? 1 : row == 2 ? 36 : 24;
+				// Without timing replies the bounded fallback uses the measured link: 120 ms needs ceil(120/tick)+1 = 9,
+				// an unmeasured link keeps one tick, and the 800 ms leg retains the existing 36-tick startup ceiling.
+				const uint16_t expected = row == 1 ? 1 : row == 2 ? 36 : 9;
 				if (!host.IsStarted() || !client.IsStarted() || host.GetMatchConfigHash() != client.GetMatchConfigHash() ||
 				    NetMatchConfigUtil::PeerInputDelay(host.GetMatchConfig(), 1) != expected ||
 				    NetMatchConfigUtil::PeerInputDelay(host.GetMatchConfig(), 2) != expected ||
@@ -18563,7 +18552,7 @@ namespace RTE {
 		NetLobbyMember own; own.peerId = 1; own.connected = true;
 		connected.members.push_back(own);
 		NetMatchService::SeatView held; held.seat.owner = 1; held.state = "Held";
-		check(NetPlayerPresentation::PlayingSummary(NetPlayerPresentation::OwnSeatHeld(connected, held, false), 0, {}) == "The AI is playing for you",
+		check(NetPlayerPresentation::PlayingSummary(NetPlayerPresentation::OwnSeatHeld(connected, held, false), 0, {}) == "The AI is playing for you until you are back",
 		      "a connected local held seat reads as everyone playing");
 		held.state = "Reconnecting";
 		check(NetPlayerPresentation::OwnSeatHeld(connected, held, false), "a local returning seat reads as active control");
@@ -19409,6 +19398,7 @@ namespace RTE {
 			else if (name == "joining-lobby") passed = TestAJoiningLobbyWaitsForHostConfig(&error);
 			else if (name == "lobby-idle") passed = TestMenuLobbyWaitsForALiveHost(&error);
 			else if (name == "full-knock") passed = TestAFullMatchsKnockEndsAtTheBudget(&error);
+			else if (name == "transport-concurrency") passed = TestConnectionCallbacksReachTheirListener(&error) && TestTwoThreadsSendOnOneTransport(&error);
 			else if (name == "relay-core") {
 				// RunBeforeInitialization already checked settings and candidate policy,
 				// before the global SettingsMan singleton was constructed.

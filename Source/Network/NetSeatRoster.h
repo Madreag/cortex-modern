@@ -93,6 +93,7 @@ namespace RTE {
 		bool byChoice = false;         ///< LinkDropped: the owner left on purpose.
 		bool afterGrace = false;       ///< SlowMachine: the round is past its warm-up grace.
 		bool keptWorld = false;        ///< Returned: the owner's process kept the round's world.
+		bool excused = false;          ///< TransferAborted: the round or the host ended the return, not the returner; no failure is counted.
 		bool quorum = false;           ///< HostLinkLost: validated directory decision or unanimous survivor agreement.
 		std::vector<uint8_t> members;  ///< MemberSetProposed: the members the host proposes to start.
 		uint64_t frame = 0;           ///< A stage transition belongs to this committed frame.

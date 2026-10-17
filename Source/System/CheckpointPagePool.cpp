@@ -33,6 +33,7 @@
 #include <stdexcept>
 #include <stop_token>
 #include <string>
+#include <typeinfo>
 #include <thread>
 #include <type_traits>
 #include <utility>
@@ -44,6 +45,8 @@
 #include <set>
 #include <span>
 #include <string_view>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #ifndef _MSC_VER
@@ -67,30 +70,34 @@ namespace {
 	int64_t Since(RTE::SteadyClock::time_point start) {
 		return std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - start).count();
 	}
+	// Mapped bytes and ranges: [0] live blocks, [1] capture copies; and the copies' committed bytes.
+	std::atomic<uint64_t> s_MappedBytes[2]{}, s_MappedRanges[2]{}, s_CommittedCopyBytes{0};
 	struct Pages {
+		static constexpr size_t c_RunBytes = size_t{64} << 10; //!< A reserved range commits a run at a time.
 		unsigned char* data = nullptr;
 		size_t bytes;
 		bool betweenTicks = false; //!< A capture's copy goes back between the game's ticks.
-		/// @param reserved Address space only: Commit makes each range usable as it is needed.
-		explicit Pages(size_t bytes, bool betweenTicks = false, bool reserved = false) : bytes(bytes), betweenTicks(betweenTicks) {
+		bool committed = true; //!< Committed whole; otherwise only the runs marked below. The owner's lock guards both.
+		std::vector<unsigned char> runs;
+		size_t committedBytes = 0;
+		explicit Pages(size_t bytes, bool betweenTicks = false, bool reserveOnly = false) :
+		    bytes(bytes), betweenTicks(betweenTicks), committed(!reserveOnly), runs(reserveOnly ? (bytes + c_RunBytes - 1) / c_RunBytes : 0), committedBytes(reserveOnly ? 0 : bytes) {
 			CheckpointFailure::Check(CheckpointFailure::Point::NativePages);
 #ifdef _WIN32
-			data = static_cast<unsigned char*>(reserved ? VirtualAlloc(nullptr, bytes, MEM_RESERVE, PAGE_NOACCESS) : VirtualAlloc(nullptr, bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE));
+			data = static_cast<unsigned char*>(VirtualAlloc(nullptr, bytes, reserveOnly ? MEM_RESERVE : MEM_RESERVE | MEM_COMMIT, reserveOnly ? PAGE_NOACCESS : PAGE_READWRITE));
 #else
-			void* memory = mmap(nullptr, bytes, reserved ? PROT_NONE : PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+			void* memory = mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 			if (memory != MAP_FAILED) data = static_cast<unsigned char*>(memory);
 #endif
 			if (!data) throw std::bad_alloc();
-		}
-		/// False when the process may take no more memory.
-		bool Commit(size_t offset, size_t size) noexcept {
-#ifdef _WIN32
-			return VirtualAlloc(data + offset, size, MEM_COMMIT, PAGE_READWRITE) != nullptr;
-#else
-			return mprotect(data + offset, size, PROT_READ | PROT_WRITE) == 0;
-#endif
+			s_MappedBytes[betweenTicks].fetch_add(bytes, std::memory_order_relaxed);
+			s_MappedRanges[betweenTicks].fetch_add(1, std::memory_order_relaxed);
+			if (betweenTicks) s_CommittedCopyBytes.fetch_add(committedBytes, std::memory_order_relaxed);
 		}
 		~Pages() {
+			s_MappedBytes[betweenTicks].fetch_sub(bytes, std::memory_order_relaxed);
+			s_MappedRanges[betweenTicks].fetch_sub(1, std::memory_order_relaxed);
+			if (betweenTicks) s_CommittedCopyBytes.fetch_sub(committedBytes, std::memory_order_relaxed);
 			if (betweenTicks) ReleaseBetweenTicks(data, bytes);
 			else Release(data, bytes);
 		}
@@ -100,6 +107,39 @@ namespace {
 #else
 			munmap(data, bytes);
 #endif
+		}
+		/// Commits the runs that hold these bytes, each once.
+		bool Commit(size_t offset, size_t length) noexcept {
+			if (committed || !length) return true;
+			for (size_t run = offset / c_RunBytes; run <= (offset + length - 1) / c_RunBytes; ++run) {
+				if (runs[run]) continue;
+				const size_t first = run * c_RunBytes, runBytes = std::min(c_RunBytes, bytes - first);
+#ifdef _WIN32
+				if (!VirtualAlloc(data + first, runBytes, MEM_COMMIT, PAGE_READWRITE)) return false;
+#elif defined(__APPLE__)
+				// A run given back as reusable is taken back before it is written, so the footprint counts it again.
+				madvise(data + first, runBytes, MADV_FREE_REUSE);
+#endif
+				runs[run] = 1;
+				committedBytes += runBytes;
+				if (betweenTicks) s_CommittedCopyBytes.fetch_add(runBytes, std::memory_order_relaxed);
+			}
+			return true;
+		}
+		/// Gives a reserved range's committed runs back; a range committed whole keeps its memory.
+		void Decommit() noexcept {
+			if (committed || !committedBytes) return;
+#ifdef _WIN32
+			VirtualFree(data, bytes, MEM_DECOMMIT);
+#elif defined(__APPLE__)
+			// macOS keeps MADV_DONTNEED pages resident and in the footprint; reusable pages leave the footprint at once.
+			madvise(data, bytes, MADV_FREE_REUSABLE);
+#else
+			madvise(data, bytes, MADV_DONTNEED);
+#endif
+			std::fill(runs.begin(), runs.end(), 0);
+			if (betweenTicks) s_CommittedCopyBytes.fetch_sub(committedBytes, std::memory_order_relaxed);
+			committedBytes = 0;
 		}
 		// One large release holds the process's address space while the game faults on its own pages, so a saver gives
 		// the copy back a piece at a time, and a game thread leaves it to the savers.
@@ -161,45 +201,23 @@ struct CheckpointPagePool::Copy {
 	Pages pages;
 	std::vector<std::atomic<unsigned char>> saved;
 	std::vector<unsigned char> hot;
-	// An inventory's copy is address space until a page is saved into it: a boundary keeps only the pages written while it is
-	// read and the pages its reader copies, never a second copy of the whole inventory. Under the block's lock.
-	std::vector<unsigned char> committed;
-	size_t chunkBytes = 0;
-	std::atomic<uint64_t> committedBytes{0};
-	std::atomic<bool> exhausted{false}; //!< A page this copy had to keep found no memory, so its frozen view cannot be read.
 	std::thread::id simThread;
 	std::atomic<bool> armed{false};
 	std::atomic<int64_t> workerUs{0}, simFaultNs{0}, otherFaultNs{0};
 	std::atomic<uint64_t> simFaults{0}, otherFaults{0};
 	bool completed = false;
 	bool abandoned = false;
+	std::atomic<bool> lost{false}; //!< A save could not commit this copy; its readers refuse the capture.
 	const std::shared_ptr<ArmGate> gate;
-	Copy(size_t bytes, size_t pageBytes, std::shared_ptr<ArmGate> gate = {}) : pages(bytes, true, gate != nullptr), saved(bytes / pageBytes), hot(bytes / pageBytes, 0), gate(std::move(gate)) {
+	Copy(size_t bytes, size_t pageBytes, std::shared_ptr<ArmGate> gate = {}, bool reserveOnly = false) :
+	    pages(bytes, true, reserveOnly), saved(bytes / pageBytes), hot(bytes / pageBytes, 0), gate(std::move(gate)) {
 		for (auto& page: saved) page.store(0, std::memory_order_relaxed);
-		if (this->gate) {
-			chunkBytes = std::max<size_t>(size_t{64} << 10, pageBytes);
-			committed.assign((bytes + chunkBytes - 1) / chunkBytes, 0);
-		} else {
-			committedBytes.store(bytes, std::memory_order_relaxed);
-		}
-	}
-	/// Makes the copy's pages [first, first + count) usable; the caller holds the block's lock.
-	bool Commit(size_t first, size_t count, size_t pageBytes) noexcept {
-		if (committed.empty() || !count) return true;
-		const size_t last = ((first + count) * pageBytes - 1) / chunkBytes;
-		for (size_t chunk = first * pageBytes / chunkBytes; chunk <= last; ++chunk) {
-			if (committed[chunk]) continue;
-			const size_t offset = chunk * chunkBytes, size = std::min(chunkBytes, pages.bytes - offset);
-			if (!pages.Commit(offset, size)) {
-				exhausted.store(true, std::memory_order_release);
-				return false;
-			}
-			committed[chunk] = 1;
-			committedBytes.fetch_add(size, std::memory_order_relaxed);
-		}
-		return true;
 	}
 	bool Arming() const noexcept { return gate && gate->state.load(std::memory_order_acquire) == ArmGate::State::Arming; }
+	/// Whether no boundary has begun on this copy, so its pages may still be committed, touched or given back.
+	bool Waiting() const noexcept {
+		return !abandoned && !completed && (gate ? gate->state.load(std::memory_order_acquire) == ArmGate::State::Prepared : !armed.load(std::memory_order_acquire));
+	}
 	bool Armed() const noexcept { return gate ? gate->state.load(std::memory_order_acquire) == ArmGate::State::Armed : armed.load(std::memory_order_acquire); }
 	std::thread::id SimulationThread() const noexcept { return gate ? gate->simThread : simThread; }
 };
@@ -257,7 +275,7 @@ struct CheckpointPagePool::Block {
 		for (size_t page = 0; page < states.size();) {
 			if (states[page] == PageState::Hot) {
 				if (!copy.saved[page].load(std::memory_order_relaxed)) {
-					if (!copy.Commit(page, 1, pageBytes)) throw std::bad_alloc();
+					if (!copy.pages.Commit(page * pageBytes, pageBytes)) throw std::bad_alloc();
 					CopyCheckpointPages(copy.pages.data + page * pageBytes, live.data + page * pageBytes, pageBytes);
 					copy.saved[page].store(1, std::memory_order_release);
 					++copied;
@@ -291,12 +309,11 @@ struct CheckpointPagePool::Block {
 		}
 		// Every capture whose boundary has begun keeps the page as that boundary saw it.
 		for (const auto& copy: copies) {
-			if (copy->completed || copy->abandoned || copy->exhausted.load(std::memory_order_relaxed) || !(copy->Armed() || copy->Arming())) continue;
+			if (copy->completed || copy->abandoned || copy->lost.load(std::memory_order_relaxed) || !(copy->Armed() || copy->Arming())) continue;
 			for (size_t page = first; page < first + count; ++page) {
 				if (copy->saved[page].load(std::memory_order_relaxed)) continue;
-				// Without memory for the page its reader is refused; the game's write still goes ahead.
-				if (!copy->Commit(page, 1, pageBytes)) break;
 				const size_t offset = page * pageBytes;
+				if (!copy->pages.Commit(offset, pageBytes)) { copy->lost.store(true, std::memory_order_release); break; }
 				CopyCheckpointPages(copy->pages.data + offset, live.data + offset, pageBytes);
 				copy->saved[page].store(1, std::memory_order_release);
 			}
@@ -504,6 +521,23 @@ std::vector<std::shared_ptr<CheckpointPagePool::Block>> CheckpointPagePool::Live
 	return blocks;
 }
 
+std::string CheckpointPagePool::CommitCensus() {
+	uint64_t blocks = 0, blockBytes = 0, held = 0, heldBytes = 0, finished = 0, finishedBytes = 0;
+	for (const auto& block: LiveBlocks()) {
+		++blocks;
+		blockBytes += block->live.bytes;
+		Locked guard(block->lock);
+		for (const auto& copy: block->copies) {
+			++held;
+			heldBytes += copy->pages.bytes;
+			if (copy->completed) { ++finished; finishedBytes += copy->pages.bytes; }
+		}
+	}
+	return std::format("page_live_mb={} page_live_ranges={} page_copy_mb={} page_copy_committed_mb={} page_copy_ranges={} inventory_blocks={} inventory_mb={} held_copies={} held_copy_mb={} finished_copies={} finished_copy_mb={}",
+	    s_MappedBytes[0].load(std::memory_order_relaxed) >> 20, s_MappedRanges[0].load(std::memory_order_relaxed), s_MappedBytes[1].load(std::memory_order_relaxed) >> 20,
+	    s_CommittedCopyBytes.load(std::memory_order_relaxed) >> 20, s_MappedRanges[1].load(std::memory_order_relaxed), blocks, blockBytes >> 20, held, heldBytes >> 20, finished, finishedBytes >> 20);
+}
+
 size_t CheckpointPagePool::CoolInventory() {
 	// One pass at a time: the digests are the pass's own.
 	static std::mutex passes;
@@ -545,7 +579,7 @@ std::shared_ptr<const CheckpointPagePool::Snapshot> CheckpointPagePool::PrepareI
 	}
 	// Shadow storage and page watches are built after releasing the live allocation inventory.
 	for (auto& part: snapshot->m_Parts) {
-		part.copy = std::make_shared<Copy>(part.block->live.bytes, part.block->pageBytes, snapshot->m_ArmGate);
+		part.copy = std::make_shared<Copy>(part.block->live.bytes, part.block->pageBytes, snapshot->m_ArmGate, true);
 		part.block->Prepare(part.copy);
 	}
 	snapshot->Index();
@@ -621,9 +655,9 @@ std::span<const std::byte> CheckpointPagePool::Snapshot::ReadBytes(const void* s
 		for (size_t page = first; page <= last; ++page) {
 			if (!part.copy->saved[page].load(std::memory_order_acquire) && !part.block->SavePage(page, false))
 				throw std::runtime_error("could not read a frozen native page");
+			if (part.copy->lost.load(std::memory_order_acquire)) throw std::bad_alloc();
 		}
 	}
-	if (part.copy->exhausted.load(std::memory_order_acquire)) throw std::bad_alloc();
 	return {reinterpret_cast<const std::byte*>(part.copy->pages.data + offset), bytes};
 }
 
@@ -693,7 +727,7 @@ bool CheckpointPagePool::Snapshot::CanBorrow(const void* source, size_t bytes) c
 	if (end == m_Parts.begin()) return false;
 	const Part& part = *std::prev(end);
 	if (!part.block->Contains(source, bytes)) return false;
-	if (!part.copy->Armed()) return false;
+	if (!part.copy->Armed() || part.copy->lost.load(std::memory_order_acquire)) return false;
 	if (!bytes) return true;
 	const size_t first = (address - reinterpret_cast<uintptr_t>(part.block->live.data)) / part.block->pageBytes;
 	const size_t last = (address - reinterpret_cast<uintptr_t>(part.block->live.data) + bytes - 1) / part.block->pageBytes;
@@ -760,24 +794,54 @@ void CheckpointPagePool::Snapshot::Arm() const {
 	}
 }
 
+std::string CheckpointPagePool::Snapshot::Describe(const void* source, size_t bytes) const {
+	const uintptr_t address = reinterpret_cast<uintptr_t>(source);
+	const auto end = std::upper_bound(m_Parts.begin(), m_Parts.end(), address, [](uintptr_t address, const Part& part) {
+		return address < reinterpret_cast<uintptr_t>(part.block->live.data);
+	});
+	if (end == m_Parts.begin() || !std::prev(end)->block->Contains(source, bytes ? bytes : 1)) return "outside this snapshot";
+	const auto& part = *std::prev(end);
+	const size_t offset = address - reinterpret_cast<uintptr_t>(part.block->live.data), pageBytes = part.block->pageBytes;
+	std::string text = std::format("block_bytes={} slot_bytes={} offset={} copy_armed={} copy_lost={}", part.block->live.bytes, part.block->slotBytes, offset,
+	    part.copy->Armed(), part.copy->lost.load(std::memory_order_acquire));
+	Locked guard(part.block->lock);
+	text += std::format(" copies_in_block={}", part.block->copies.size());
+	for (size_t page = offset / pageBytes; page <= (offset + std::max<size_t>(bytes, 1) - 1) / pageBytes; ++page) {
+		const bool run = part.copy->pages.committed || part.copy->pages.runs[page * pageBytes / Pages::c_RunBytes];
+		text += std::format(" page{}:saved={},state={},hot={},run={}", page, part.copy->saved[page].load(std::memory_order_acquire), static_cast<int>(part.block->states[page]),
+		    part.copy->hot[page], run);
+	}
+	return text;
+}
+
 std::pair<size_t, size_t> CheckpointPagePool::Snapshot::ArmedPages() const {
 	return m_ArmGate && m_ArmGate->state.load(std::memory_order_acquire) == ArmGate::State::Armed ? std::pair{m_ArmGate->copiedPages, m_ArmGate->fencedPages} : std::pair<size_t, size_t>{};
 }
 
 void CheckpointPagePool::Snapshot::WarmShadow() const {
+	// A run of pages at a time under the block's lock: a boundary that begins meanwhile waits for one run at most, and
+	// nothing here touches a page after a boundary could have copied into it.
+	constexpr size_t runPages = 256;
 	for (const auto& part: m_Parts) {
-		if (part.copy->Armed() || part.copy->abandoned)
-			throw std::logic_error("native checkpoint shadow warming after its boundary");
 		auto* destination = static_cast<volatile unsigned char*>(part.copy->pages.data);
-		// An inventory boundary writes only the pages written since the last one; the saver fills the rest itself.
-		std::vector<unsigned char> written;
-		if (m_ArmGate) {
+		for (size_t first = 0; first < part.copy->saved.size(); first += runPages) {
 			Locked guard(part.block->lock);
-			written.reserve(part.block->states.size());
-			for (const auto state: part.block->states) written.push_back(state == Block::PageState::Hot);
-			for (size_t page = 0; page < written.size(); ++page) if (written[page] && !part.copy->Commit(page, 1, part.block->pageBytes)) throw std::bad_alloc();
+			if (!part.copy->Waiting()) throw std::logic_error("native checkpoint shadow warming after its boundary");
+			// An inventory boundary writes only the pages written since the last one; the saver fills the rest itself.
+			const size_t end = std::min(first + runPages, part.copy->saved.size()), pageBytes = part.block->pageBytes;
+			for (size_t page = first; page < end; ++page) {
+				if (m_ArmGate && part.block->states[page] != Block::PageState::Hot) continue;
+				if (!part.copy->pages.Commit(page * pageBytes, pageBytes)) throw std::bad_alloc();
+				destination[page * pageBytes] = 0;
+			}
 		}
-		for (size_t page = 0; page < part.copy->saved.size(); ++page) if (!m_ArmGate || written[page]) destination[page * part.block->pageBytes] = 0;
+	}
+}
+
+void CheckpointPagePool::Snapshot::CoolShadow() const noexcept {
+	for (const auto& part: m_Parts) {
+		Locked guard(part.block->lock);
+		if (part.copy->Waiting()) part.copy->pages.Decommit();
 	}
 }
 
@@ -806,7 +870,10 @@ CheckpointPagePool::Costs CheckpointPagePool::Snapshot::Cost() const {
 	Costs result;
 	for (const auto& part: m_Parts) {
 		result.bytes += part.copy->pages.bytes;
-		result.committedBytes += part.copy->committedBytes.load(std::memory_order_relaxed);
+		{
+			Locked guard(part.block->lock);
+			result.committedBytes += part.copy->pages.committedBytes;
+		}
 		result.workerUs += part.copy->workerUs.load(std::memory_order_relaxed);
 		result.simFaultUs += (part.copy->simFaultNs.load(std::memory_order_relaxed) + 999) / 1000;
 		result.otherFaultUs += (part.copy->otherFaultNs.load(std::memory_order_relaxed) + 999) / 1000;
@@ -962,6 +1029,7 @@ namespace {
 	struct NativeStorageRange {
 		size_t bytes = 0;
 		NativeStoragePool* pool = nullptr;
+		size_t slot = 0;
 	};
 	struct NativeStoragePools {
 		std::mutex mutex;
@@ -995,7 +1063,6 @@ namespace {
 	thread_local bool s_NativeStorageAllocation = false;
 	thread_local bool s_NativeStorageCapture = false;
 	thread_local std::optional<bool> s_NativeStorageWorldAllocation;
-	std::atomic<bool> s_NativeStorageWorldEnabled{false};
 	std::atomic<int> s_CoolingPauses{0};
 	NativeStoragePools& NativePools() {
 		static NativeStoragePools* const pools = [] {
@@ -1007,26 +1074,39 @@ namespace {
 	}
 }
 
+// Every scope counts itself while alive, so the inlined checks read their thread's scopes only while some scope exists.
 CheckpointNativeStorage::AllocationScope::AllocationScope(bool enabled) : m_Previous(s_NativeStorageAllocation) {
+	s_Scopes.fetch_add(1, std::memory_order_relaxed);
 	s_NativeStorageAllocation = s_NativeStorageAllocation || enabled;
 }
 
-CheckpointNativeStorage::AllocationScope::~AllocationScope() { s_NativeStorageAllocation = m_Previous; }
+CheckpointNativeStorage::AllocationScope::~AllocationScope() {
+	s_NativeStorageAllocation = m_Previous;
+	s_Scopes.fetch_sub(1, std::memory_order_relaxed);
+}
 
 CheckpointNativeStorage::CaptureScope::CaptureScope(bool enabled) : m_Previous(s_NativeStorageCapture) {
+	s_Scopes.fetch_add(1, std::memory_order_relaxed);
 	s_NativeStorageCapture = s_NativeStorageCapture || enabled;
 }
 
-CheckpointNativeStorage::CaptureScope::~CaptureScope() { s_NativeStorageCapture = m_Previous; }
+CheckpointNativeStorage::CaptureScope::~CaptureScope() {
+	s_NativeStorageCapture = m_Previous;
+	s_Scopes.fetch_sub(1, std::memory_order_relaxed);
+}
 
 CheckpointNativeStorage::WorldAllocationScope::WorldAllocationScope(bool enabled) : m_Previous(s_NativeStorageWorldAllocation) {
+	s_Scopes.fetch_add(1, std::memory_order_relaxed);
 	s_NativeStorageWorldAllocation = enabled;
 }
 
-CheckpointNativeStorage::WorldAllocationScope::~WorldAllocationScope() { s_NativeStorageWorldAllocation = m_Previous; }
+CheckpointNativeStorage::WorldAllocationScope::~WorldAllocationScope() {
+	s_NativeStorageWorldAllocation = m_Previous;
+	s_Scopes.fetch_sub(1, std::memory_order_relaxed);
+}
 
-bool CheckpointNativeStorage::WorldEnabled() noexcept { return s_NativeStorageWorldEnabled.load(std::memory_order_acquire); }
-bool CheckpointNativeStorage::SetWorldEnabled(bool enabled) noexcept { return s_NativeStorageWorldEnabled.exchange(enabled, std::memory_order_acq_rel); }
+bool CheckpointNativeStorage::WorldEnabled() noexcept { return s_WorldEnabled.load(std::memory_order_acquire); }
+bool CheckpointNativeStorage::SetWorldEnabled(bool enabled) noexcept { return s_WorldEnabled.exchange(enabled, std::memory_order_acq_rel); }
 
 CheckpointNativeStorage::CoolingPause::CoolingPause() { s_CoolingPauses.fetch_add(1, std::memory_order_acq_rel); }
 CheckpointNativeStorage::CoolingPause::~CoolingPause() { s_CoolingPauses.fetch_sub(1, std::memory_order_acq_rel); }
@@ -1040,6 +1120,8 @@ void CheckpointNativeStorage::StartSettling() {
 		while (!stop.stop_requested()) {
 			const uint64_t generation = CheckpointPagePool::InventoryGeneration();
 			bool more = false;
+			// Every lockstep match settles and cools, whatever its autosave setting: a join's or a return's base and a manual save
+			// come with a few ticks' warning, and the pages no boundary has seen would be fenced while the simulation waits.
 			if (WorldEnabled() && generation != settled) {
 				more = CheckpointPagePool::SettleInventory(2048) > 0;
 				if (!more) settled = generation;
@@ -1055,15 +1137,15 @@ void CheckpointNativeStorage::StartSettling() {
 	});
 }
 
-bool CheckpointNativeStorage::RetainingAllocations() noexcept {
+bool CheckpointNativeStorage::ScopedRetaining() noexcept {
 	return !s_NativeStorageCapture && (s_NativeStorageAllocation || s_NativeStorageWorldAllocation.value_or(WorldEnabled()));
 }
 
-bool CheckpointNativeStorage::Enabled(bool retained) {
+bool CheckpointNativeStorage::ScopedEnabled(bool retained) {
 	if (s_NativeStorageCapture) return false;
 	if (retained || s_NativeStorageAllocation) return true;
 	if (s_NativeStorageWorldAllocation) return *s_NativeStorageWorldAllocation;
-	return WorldEnabled() || ScenarioRunner::HasLockstepCoordinator();
+	return WorldEnabled() || LockstepAttached();
 }
 
 void* CheckpointNativeStorage::Allocate(size_t bytes, size_t alignment) {
@@ -1079,6 +1161,7 @@ void* CheckpointNativeStorage::Allocate(size_t bytes, size_t alignment) {
 		if (auto* counters = StorageCostsArmed()) counters->larges.fetch_add(1, std::memory_order_relaxed);
 		auto allocation = std::make_unique<CheckpointPagePool::Allocation>(requested);
 		void* address = allocation->Data();
+		s_OwnedRegions.Mark(address, allocation->Bytes());
 		const auto [entry, inserted] = pools.large.emplace(reinterpret_cast<uintptr_t>(address), std::move(allocation));
 		if (!inserted) throw std::logic_error("native allocation overlaps a live buffer");
 		try { entry->second->IncludeInInventory(); }
@@ -1095,23 +1178,29 @@ void* CheckpointNativeStorage::Allocate(size_t bytes, size_t alignment) {
 		auto node = pools.ranges.extract(staging);
 		const StorageCostSpan growth(&StorageCostCounters::grows, &StorageCostCounters::growNs);
 		const auto [address, bytes] = pool.pages.Grow(slot, 1, pool.free, c_NativeStorageBlockBytes);
+		s_OwnedRegions.Mark(address, bytes);
+		// A frozen walk's fence knew nothing of a block grown after it.
+		if (CheckpointHeldMemory::Recording()) CheckpointHeldMemory::Note(&pools.ranges, address, bytes, false);
 		node.key() = reinterpret_cast<uintptr_t>(address);
-		node.mapped() = {bytes, &pool};
+		node.mapped() = {bytes, &pool, slot};
 		pools.ranges.insert(std::move(node));
 		pool.bytes += pool.free.size() * slot;
 		(s_NativeStorageAllocation ? pools.explicitGrownBytes : pools.worldGrownBytes) += bytes;
 	}
 	void* address = pool.free.back();
+	if (CheckpointHeldMemory::Recording()) CheckpointHeldMemory::Note(&pool, address, slot, true);
 	pool.free.pop_back();
 	return address;
 }
 
-bool CheckpointNativeStorage::Deallocate(void* address) noexcept {
+bool CheckpointNativeStorage::ReleaseOwned(void* address) noexcept {
+	// Once the cost lever is known to be off, Deallocate answers heap memory without coming here.
+	if (s_CostLever.load(std::memory_order_relaxed) == 0) s_CostLever.store(StorageCostsArmed() ? c_CostLeverOn : c_CostLeverOff, std::memory_order_relaxed);
 	if (!address) return false;
 	const StorageCostSpan cost(&StorageCostCounters::frees, &StorageCostCounters::freeNs);
 	if (ForgetPrivate(address)) return false;
 	auto* pools = s_NativeStoragePools.load(std::memory_order_acquire);
-	if (!pools) return false;
+	if (!pools || !s_OwnedRegions.Maybe(address)) return false;
 	std::lock_guard lock(pools->mutex);
 	if (const auto found = pools->large.find(reinterpret_cast<uintptr_t>(address)); found != pools->large.end()) {
 		const size_t bytes = found->second->Bytes();
@@ -1142,6 +1231,7 @@ bool CheckpointNativeStorage::Deallocate(void* address) noexcept {
 		const auto& range = *std::prev(after);
 		if (value - range.first >= range.second.bytes) return false;
 		// Free lists reserve every slot at growth, so returning storage cannot allocate or discard frozen pages.
+		if (CheckpointHeldMemory::Recording()) CheckpointHeldMemory::Note(range.second.pool, address, range.second.slot, false);
 		range.second.pool->free.push_back(address);
 		return true;
 	}
@@ -1204,6 +1294,26 @@ std::string CheckpointNativeStorage::InventoryCensus() {
 	    retained, free, pools->largeBytes, pools->explicitGrownBytes, pools->worldGrownBytes);
 }
 
+std::string CheckpointNativeStorage::PoolCensus() {
+	auto* pools = s_NativeStoragePools.load(std::memory_order_acquire);
+	if (!pools) return "pool_classes=0 free_list_mb=0";
+	uint64_t classes = 0, freeList = 0;
+	std::vector<std::array<uint64_t, 3>> slack;
+	{
+		std::lock_guard lock(pools->mutex);
+		for (const auto& [slot, pool]: pools->sizes) {
+			++classes;
+			freeList += pool.free.capacity() * sizeof(void*);
+			slack.push_back({pool.free.size() * slot, slot, pool.bytes});
+		}
+	}
+	std::sort(slack.begin(), slack.end(), std::greater<>());
+	std::string top;
+	for (size_t index = 0; index < std::min<size_t>(slack.size(), 8); ++index)
+		top += std::format("{}{}:{}/{}", index ? "," : "", slack[index][1], slack[index][0] >> 10, slack[index][2] >> 10);
+	return std::format("pool_classes={} free_list_mb={} pool_free_top_kb={}", classes, freeList >> 20, top.empty() ? "none" : top);
+}
+
 std::string CheckpointNativeStorage::StorageCosts() {
 	const auto* counters = StorageCostsArmed();
 	if (!counters) return {};
@@ -1212,10 +1322,96 @@ std::string CheckpointNativeStorage::StorageCosts() {
 	    counters->frees.load(), ms(counters->freeNs), counters->grows.load(), ms(counters->growNs), counters->larges.load(), InventoryCensus());
 }
 
+struct CheckpointHeldMemory::Changes {
+	struct Key {
+		const void* holder;
+		const void* block;
+		bool operator==(const Key&) const = default;
+	};
+	struct KeyHash {
+		size_t operator()(const Key& key) const noexcept { return std::hash<const void*>{}(key.block) ^ (std::hash<const void*>{}(key.holder) * 31); }
+	};
+	struct Change {
+		size_t bytes;
+		bool held;
+	};
+	std::unordered_map<Key, Change, KeyHash> blocks;
+	std::unordered_map<const void*, std::vector<std::pair<const void*, size_t>>> heldThen;
+	bool incomplete = false; //!< A change could not be kept; every answer is then that nothing was held.
+};
+
+namespace {
+	// The open records and all their changes, under one lock a holder takes after its own.
+	std::mutex s_HeldRecordsMutex;
+	std::vector<CheckpointHeldMemory*> s_HeldRecords;
+}
+
+CheckpointHeldMemory::CheckpointHeldMemory() : m_Changes(std::make_unique<Changes>()) {}
+
+std::shared_ptr<CheckpointHeldMemory> CheckpointHeldMemory::Open() {
+	std::shared_ptr<CheckpointHeldMemory> record(new CheckpointHeldMemory);
+	std::lock_guard lock(s_HeldRecordsMutex);
+	s_HeldRecords.push_back(record.get());
+	s_Open.fetch_add(1, std::memory_order_acq_rel);
+	return record;
+}
+
+CheckpointHeldMemory::~CheckpointHeldMemory() {
+	std::lock_guard lock(s_HeldRecordsMutex);
+	if (std::erase(s_HeldRecords, this)) s_Open.fetch_sub(1, std::memory_order_acq_rel);
+}
+
+void CheckpointHeldMemory::Note(const void* holder, const void* block, size_t bytes, bool held) noexcept {
+	std::lock_guard lock(s_HeldRecordsMutex);
+	for (CheckpointHeldMemory* record: s_HeldRecords) {
+		Changes& changes = *record->m_Changes;
+		if (changes.incomplete) continue;
+		try {
+			if (changes.blocks.try_emplace(Changes::Key{holder, block}, Changes::Change{bytes, held}).second && held) changes.heldThen[holder].emplace_back(block, bytes);
+		} catch (...) { changes.incomplete = true; }
+	}
+}
+
+std::optional<bool> CheckpointHeldMemory::HeldThen(const void* holder, const void* block) const {
+	std::lock_guard lock(s_HeldRecordsMutex);
+	// A record that lost a change says nothing was held, so the walk refuses instead of carrying a wrong answer.
+	if (m_Changes->incomplete) return false;
+	const auto found = m_Changes->blocks.find(Changes::Key{holder, block});
+	if (found == m_Changes->blocks.end()) return std::nullopt;
+	return found->second.held;
+}
+
+void CheckpointHeldMemory::ForEachHeldThen(const void* holder, const std::function<void(const void* block, size_t bytes)>& visit) const {
+	std::lock_guard lock(s_HeldRecordsMutex);
+	if (m_Changes->incomplete) return;
+	if (const auto found = m_Changes->heldThen.find(holder); found != m_Changes->heldThen.end()) {
+		for (const auto& [block, bytes]: found->second) visit(block, bytes);
+	}
+}
+
+bool CheckpointNativeStorage::FreeSlotHolds(const void* address, size_t bytes) {
+	auto* pools = s_NativeStoragePools.load(std::memory_order_acquire);
+	if (!pools || !s_OwnedRegions.Maybe(address)) return false;
+	const uintptr_t value = reinterpret_cast<uintptr_t>(address);
+	std::lock_guard lock(pools->mutex);
+	const auto after = pools->ranges.upper_bound(value);
+	if (after == pools->ranges.begin()) return false;
+	const auto& [begin, range] = *std::prev(after);
+	if (!range.pool || !range.slot || value - begin >= range.bytes) return false;
+	const uintptr_t slot = begin + (value - begin) / range.slot * range.slot;
+	if (value + bytes > slot + range.slot) return false;
+	// A frozen walk answers as of its fence: a block grown since held nothing then, and a slot that changed since keeps its answer.
+	if (const CheckpointHeldMemory* held = CheckpointHeldMemory::Current()) {
+		if (const auto grown = held->HeldThen(&pools->ranges, reinterpret_cast<const void*>(begin)); grown && !*grown) return false;
+		if (const auto then = held->HeldThen(range.pool, reinterpret_cast<const void*>(slot))) return *then;
+	}
+	return std::find(range.pool->free.begin(), range.pool->free.end(), reinterpret_cast<void*>(slot)) != range.pool->free.end();
+}
+
 bool CheckpointNativeStorage::Owns(const void* address) {
 	if (Private(address)) return false;
 	auto* pools = s_NativeStoragePools.load(std::memory_order_acquire);
-	if (!pools) return false;
+	if (!pools || !s_OwnedRegions.Maybe(address)) return false;
 	std::lock_guard lock(pools->mutex);
 	const auto end = pools->large.upper_bound(reinterpret_cast<uintptr_t>(address));
 	if (end != pools->large.begin() && std::prev(end)->second->Contains(address, 1)) return true;
@@ -1250,6 +1446,14 @@ bool CheckpointNativeStorage::Prepared::Arm() const {
 
 void CheckpointNativeStorage::Prepared::Cancel() const noexcept {
 	for (const auto& pages: m_Pages) pages->Cancel();
+}
+
+void CheckpointNativeStorage::Prepared::Warm() const {
+	for (const auto& pages: m_Pages) pages->WarmShadow();
+}
+
+void CheckpointNativeStorage::Prepared::Cool() const noexcept {
+	for (const auto& pages: m_Pages) pages->CoolShadow();
 }
 
 std::vector<std::shared_ptr<const CheckpointPagePool::Snapshot>> CheckpointNativeStorage::Prepare() {
@@ -1367,12 +1571,31 @@ struct CheckpointNativeStorage::ReadState : std::enable_shared_from_this<ReadSta
 	const CheckpointRootIndex& sourceRoots;
 	const CheckpointRootIndex& viewRoots;
 	const CheckpointRootIndex& privateRoots;
-	std::map<std::pair<uintptr_t, size_t>, std::string> strings;
+	// One copy per distinct frozen string: a save reads the same names, file paths and reader positions from thousands of objects.
+	struct StringHash {
+		using is_transparent = void;
+		size_t operator()(std::string_view text) const noexcept { return std::hash<std::string_view>{}(text); }
+	};
+	std::unordered_set<std::string, StringHash, std::equal_to<>> strings;
+	// Frozen bytes do not change while the read lasts, so a string read again from the same place is the copy already kept.
+	struct SpanHash {
+		size_t operator()(const std::pair<const char*, size_t>& span) const noexcept { return std::hash<const char*>{}(span.first) ^ (span.second * 0x9E3779B97F4A7C15ull); }
+	};
+	std::unordered_map<std::pair<const char*, size_t>, const std::string*, SpanHash> stringsAt;
+	std::string scratch;
 	std::map<std::pair<uintptr_t, uintptr_t>, std::shared_ptr<const void>> indices;
 	std::shared_ptr<PrivateValues> privateValues;
 };
 
 thread_local CheckpointNativeStorage::ReadState* CheckpointNativeStorage::s_Read = nullptr;
+
+bool CheckpointNativeStorage::ReadingHere() noexcept { return s_Read != nullptr; }
+
+void* CheckpointNativeStorage::PrivateView(void* source, size_t bytes) {
+	void* value = const_cast<void*>(ViewObject(source));
+	if (!Private(value, bytes)) throw std::logic_error("a saved getter needs private native values before changing them");
+	return value;
+}
 
 CheckpointNativeStorage::ReadScope::ReadScope(std::span<const std::shared_ptr<const CheckpointPagePool::Snapshot>> pages, std::span<const RootRange> roots)
 	: ReadScope(ReadViews{true, pages, roots}) {}
@@ -1395,6 +1618,8 @@ CheckpointNativeStorage::ReadScope::ReadScope(ReadViews views) : m_Capture(views
 	m_State = std::make_shared<ReadState>(std::move(lookup));
 	m_State->sourceOwner = std::move(views.owner);
 	m_State->privateValues = views.privateValues ? std::move(views.privateValues) : (m_Previous ? m_Previous->privateValues : std::make_shared<PrivateValues>());
+	CheckpointActivity::Begin();
+	s_Readers.fetch_add(1, std::memory_order_relaxed);
 	s_Read = m_State.get();
 }
 
@@ -1506,7 +1731,12 @@ const void* CheckpointNativeStorage::RootView(const void* source, size_t bytes) 
 	return nullptr;
 }
 
-CheckpointNativeStorage::ReadScope::~ReadScope() { s_Read = m_Previous; }
+CheckpointNativeStorage::ReadScope::~ReadScope() {
+	s_Read = m_Previous;
+	if (!m_State) return;
+	s_Readers.fetch_sub(1, std::memory_order_relaxed);
+	CheckpointActivity::End();
+}
 
 bool CheckpointNativeStorage::ReadBytes(const void* source, void* target, size_t bytes) {
 	SaverThreads::YieldToGame();
@@ -1522,6 +1752,14 @@ const void* CheckpointNativeStorage::Original(const void* view) {
 		return static_cast<const std::byte*>(root->source) + (reinterpret_cast<uintptr_t>(view) - reinterpret_cast<uintptr_t>(root->view));
 	if (s_Read) for (const auto& pages: s_Read->pages) if (const void* source = pages->Original(view)) return source;
 	return view;
+}
+
+std::string CheckpointNativeStorage::DescribeView(const void* view, size_t bytes) {
+	if (!s_Read) return "no read";
+	const void* source = Original(view);
+	if (source == view) return Private(view, bytes) ? "a private value" : "not a view";
+	for (const auto& pages: s_Read->pages) if (pages->Contains(source, bytes)) return pages->Describe(source, bytes);
+	return "a root's view";
 }
 
 bool CheckpointNativeStorage::IsView(const void* address) {
@@ -1569,6 +1807,8 @@ namespace {
 	std::string OutsideInventory(const char* what, const void* source, size_t bytes) {
 		std::string message = std::format("native {} is outside the frozen inventory (address {:#x}, {} bytes", what, reinterpret_cast<uintptr_t>(source), bytes);
 		if (const std::string chain = CheckpointCloneCost::DescribeOpen(); !chain.empty()) message += ", freezing " + chain;
+		if (const std::type_info* walking = CheckpointFrozenWalk::Current()) message += std::string(", walking ") + walking->name();
+		if (const std::type_info* value = CheckpointFrozenValue::Current()) message += std::string(", value ") + value->name();
 		return message + ")";
 	}
 }
@@ -1599,16 +1839,34 @@ const void* CheckpointNativeStorage::ViewObject(const void* source) {
 	throw std::logic_error(OutsideInventory("object", source, 0));
 }
 
+namespace {
+	const bool s_CountStringReads = [] { const char* value = std::getenv("CCCP_CHECKPOINT_PHASES"); return value && std::string_view(value) == "1"; }();
+	std::atomic<uint64_t> s_StringReads{0}, s_StringCopiedBytes{0};
+}
+
+std::pair<uint64_t, uint64_t> CheckpointNativeStorage::StringReadCounts() noexcept {
+	return {s_StringReads.load(std::memory_order_relaxed), s_StringCopiedBytes.load(std::memory_order_relaxed)};
+}
+
 const std::string* CheckpointNativeStorage::ReadString(const char* source, size_t bytes) {
 	if (!s_Read) return nullptr;
 	static const std::string empty;
 	if (!bytes) return &empty;
-	const auto key = std::pair{reinterpret_cast<uintptr_t>(source), bytes};
-	if (const auto found = s_Read->strings.find(key); found != s_Read->strings.end()) return &found->second;
-	CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
-	std::string value(bytes, '\0');
-	if (!ReadBytes(source, value.data(), bytes)) throw std::logic_error("native string is outside the frozen inventory");
-	return &s_Read->strings.emplace(key, std::move(value)).first->second;
+	if (s_CountStringReads) s_StringReads.fetch_add(1, std::memory_order_relaxed);
+	if (const auto known = s_Read->stringsAt.find({source, bytes}); known != s_Read->stringsAt.end()) return known->second;
+	std::string& scratch = s_Read->scratch;
+	scratch.resize(bytes);
+	if (!ReadBytes(source, scratch.data(), bytes)) throw std::logic_error("native string is outside the frozen inventory");
+	if (s_CountStringReads) s_StringCopiedBytes.fetch_add(bytes, std::memory_order_relaxed);
+	const std::string* value;
+	if (const auto found = s_Read->strings.find(std::string_view(scratch)); found != s_Read->strings.end()) {
+		value = &*found;
+	} else {
+		CheckpointFailure::Check(CheckpointFailure::Point::NativeObjects);
+		value = &*s_Read->strings.emplace(scratch).first;
+	}
+	s_Read->stringsAt.emplace(std::pair{source, bytes}, value);
+	return value;
 }
 
 std::string CheckpointNativeStorage::SelfTestMismatch() {

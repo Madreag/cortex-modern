@@ -73,6 +73,9 @@
 #include "TimerMan.h"
 #include "OwnedMovableObjects.h"
 #include "System.h"
+#include "CheckpointNativeStorage.h"
+
+#include <typeinfo>
 #include "MenuAutomation.h"
 #include "NetModerationGUI.h"
 #include "MainMenuGUI.h"
@@ -598,6 +601,12 @@ template <class T> T* SeatStub(std::unique_ptr<T>& stub) {
 	if (!stub) {
 		CaptureSentinel::NoteCreation("seat stand-in", &stub);
 		stub = std::make_unique<T>();
+		// It stays in the world: one made outside the pools would be refused by every later capture.
+		if (CheckpointNativeStorage::LockstepAttached() && !CheckpointNativeStorage::Owns(stub.get())) {
+			const char* task = CaptureSentinel::CurrentTask();
+			System::PrintDiagnosticLine(std::string("[seat-stand-in] ") + typeid(T).name() + " made outside the native pools, task=" + (task ? task : "none") +
+			                            " saver=" + (SaverThreads::Current() ? "1" : "0"));
+		}
 	}
 	return stub.get();
 }
@@ -663,6 +672,25 @@ GUIBanner* GameActivity::GetBanner(int whichColor, int player) const {
 	if (IsFrozenCheckpointNative() && !(presented && live) && m_SavedStubBanner[whichColor == YELLOW ? YELLOW : RED][player])
 		return m_SavedStubBanner[whichColor == YELLOW ? YELLOW : RED][player];
 	return presented && live ? live : SeatStub(m_SeatStubBanner[whichColor == YELLOW ? YELLOW : RED][player]);
+}
+
+GameActivity::SeatInterfaces GameActivity::CapturedSeatInterfaces(int player) const {
+	return {GetExistingBuyGUI(player), GetExistingEditorGUI(player), GetExistingBanner(YELLOW, player), GetExistingBanner(RED, player)};
+}
+
+bool GameActivity::RunCapturedSeatInterfacesSelfTest() {
+	const auto activity = std::make_unique<GameActivity>();
+	{
+		const CheckpointNativeStorage::CaptureScope capturing(true);
+		for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) activity->CapturedSeatInterfaces(player);
+	}
+	int made = 0;
+	for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+		made += (activity->GetExistingBuyGUI(player) != nullptr) + (activity->GetExistingEditorGUI(player) != nullptr) +
+		        (activity->GetExistingBanner(YELLOW, player) != nullptr) + (activity->GetExistingBanner(RED, player) != nullptr);
+	}
+	System::PrintDiagnosticLine(std::string("[seat-interface-capture-selftest] ") + (made ? "FAIL" : "PASS") + " stand_ins_made=" + std::to_string(made));
+	return made == 0;
 }
 
 bool GameActivity::IsBuyGUIVisible(int which) const {
@@ -4955,7 +4983,7 @@ bool GameActivity::RunFight15SelfTest(const std::string& row) {
 		NetLobbySnapshot snapshot; snapshot.isHost = snapshot.inLobby = snapshot.occupancyComplete = true; snapshot.localPeerId = snapshot.hostPeerId = 1;
 		snapshot.activityPreset = "Skirmish Defense"; snapshot.sceneName = "Grasslands";
 		NetLobbyMember host; host.peerId = 1; host.displayName = "Captain"; host.isLocal = host.connected = host.ready = true;
-		NetLobbyMember player; player.peerId = 2; player.displayName = "Edith"; player.connected = true; snapshot.members = {host, player};
+		NetLobbyMember player; player.peerId = 2; player.displayName = "Guest"; player.connected = true; snapshot.members = {host, player};
 		const auto draw = [&] { menu.RefreshMultiplayerScreenControls(snapshot); menu.m_SubMenuScreenGUIControlManager->Draw(); present("fight15_R5"); };
 		const auto click = [&] {
 			GUIControl* start = menu.m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerStart"); if (!start) return false;
@@ -4973,12 +5001,12 @@ bool GameActivity::RunFight15SelfTest(const std::string& row) {
 			int commands = 0; GUIEvent event; while (menu.m_SubMenuScreenGUIControlManager->GetEvent(&event)) if (event.GetControl() == start && event.GetType() == GUIEvent::Command) ++commands;
 			return commands == 1;
 		};
-		draw(); check("before_start_only_names_unready_players", menu.m_MultiplayerStatusLabel->GetText() == "Waiting for Edith to press Ready");
+		draw(); check("before_start_only_names_unready_players", menu.m_MultiplayerStatusLabel->GetText() == "Waiting for Guest to press Ready");
 		check("host_start_takes_hand_press_release", click()); snapshot.startCountdownRunning = true; snapshot.startCountdownMs = 30000; draw();
 		check("started_countdown_is_visible", menu.m_MultiplayerStatusLabel->GetText().starts_with("Starting in 30 s"));
 		snapshot.startCountdownMs = 27000; draw(); check("countdown_counts_down", menu.m_MultiplayerStatusLabel->GetText().starts_with("Starting in 27 s"));
 		check("host_can_press_cancel", menu.m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerStart") && click());
-		snapshot.startCountdownRunning = false; draw(); check("canceled_countdown_returns_to_waiting", menu.m_MultiplayerStatusLabel->GetText() == "Waiting for Edith to press Ready");
+		snapshot.startCountdownRunning = false; draw(); check("canceled_countdown_returns_to_waiting", menu.m_MultiplayerStatusLabel->GetText() == "Waiting for Guest to press Ready");
 		snapshot.isHost = false; snapshot.localPeerId = 2; snapshot.members[0].isLocal = false; snapshot.members[1].isLocal = true;
 		snapshot.joiningWorld = snapshot.startCountdownRunning = true; snapshot.startCountdownMs = 30000;
 		snapshot.transferLine = "Receiving the world: 0.0 of 1.7 MB"; draw();

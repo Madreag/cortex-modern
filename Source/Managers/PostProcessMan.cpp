@@ -151,6 +151,10 @@ void PostProcessMan::Destroy() {
 }
 
 void PostProcessMan::PrepareCheckpointValues() {
+	// The queues made at start lie outside checkpoint storage; copies made in it replace them.
+	const auto own = [](auto& queue) { auto owned = queue; queue.swap(owned); };
+	own(m_PostScreenEffects); own(m_PostSceneEffects); own(m_PostScreenGlowBoxes); own(m_GlowAreas);
+	for (auto& effects: m_ScreenRelativeEffects) own(effects);
 	// The rotation images are cleared before each use, so fresh ones made in checkpoint storage replace the ones made at start.
 	decltype(m_TempEffectBitmaps) owned;
 	for (const auto& [size, previous]: m_TempEffectBitmaps) {
@@ -326,6 +330,30 @@ bool PostProcessMan::RunCheckpointSelfTest() {
 	ClearScenePostEffects();
 	check(m_PostSceneEffects.empty() && m_GlowAreas.empty() && m_PostScreenEffects.size() == 1 && m_ScreenRelativeEffects[3].size() == 1, "queue_clear_boundaries");
 	check(LoadCheckpoint(original) && SaveCheckpoint() == original, "original_manager_restored");
+	{
+		// The queues predate every world's storage; a capture prepared as the autosave prepares one still walks them.
+		CheckpointNativeStorage::AllocationScope storage(true);
+		PrepareCheckpointValues();
+		const auto pages = CheckpointNativeStorage::Prepare();
+		for (const auto& part: pages) part->Arm();
+		CheckpointNativeStorage::Root<PostProcessMan> root(this);
+		root.Freeze();
+		size_t live = m_PostSceneEffects.size() + m_PostScreenEffects.size() + m_PostScreenGlowBoxes.size() + m_GlowAreas.size(), frozenCount = 0;
+		for (const auto& effects: m_ScreenRelativeEffects) live += effects.size();
+		bool walked = false;
+		{
+			const std::array roots{root.Range()};
+			CheckpointNativeStorage::ReadScope read(pages, roots);
+			try {
+				const auto* frozen = CheckpointNativeStorage::Source(this);
+				frozenCount = CheckpointValues(frozen->m_PostSceneEffects).size() + CheckpointValues(frozen->m_PostScreenEffects).size() +
+				    CheckpointValues(frozen->m_PostScreenGlowBoxes).size() + CheckpointValues(frozen->m_GlowAreas).size();
+				for (const auto& effects: frozen->m_ScreenRelativeEffects) frozenCount += CheckpointValues(effects).size();
+				walked = true;
+			} catch (const std::logic_error&) {}
+		}
+		check(walked && frozenCount == live, "queues_made_at_start_read_frozen");
+	}
 	return passed;
 }
 

@@ -23,6 +23,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <format>
 #include <limits>
 #include <iostream>
 #include <stdexcept>
@@ -155,6 +156,15 @@ namespace {
 	}
 }
 
+std::string RTE::PixelAllocationCensus() {
+	auto* owner = PixelAllocations::storage.load();
+	if (!owner) return "pixel_allocations=0 pixel_mb=0";
+	uint64_t count = 0, bytes = 0;
+	std::lock_guard lock(owner->mutex);
+	for (const auto& [address, allocation]: owner->values) { ++count; bytes += allocation->Bytes(); }
+	return std::format("pixel_allocations={} pixel_mb={}", count, bytes >> 20);
+}
+
 int RTE::SceneLayerBackBufferCount() {
 	return s_BackBuffers.load(std::memory_order_relaxed);
 }
@@ -221,11 +231,19 @@ std::shared_ptr<const BitmapSnapshot> BitmapSnapshot::UniformRows(const BITMAP* 
 std::shared_ptr<const BitmapSnapshot> BitmapSnapshot::FreezeRows(const BITMAP* source, const std::shared_ptr<const BitmapSnapshot>& previous, const std::vector<uint8_t>* markedRows, bool markedAll) {
 	if (source && CheckpointNativeStorage::Reading()) {
 		source = static_cast<const BITMAP*>(CheckpointNativeStorage::View(source, sizeof(BITMAP)));
+		// Whichever snapshot this read names, a header frozen in the source's place reads its pixels from its owner.
+		if (auto frozen = CheckpointNativeSnapshot::FrozenPixels(source)) return *frozen;
 		if (source->w <= 0 || source->h <= 0) return {};
 		const int depth = bitmap_color_depth(const_cast<BITMAP*>(source));
 		if (depth != 8 && depth != 15 && depth != 16 && depth != 24 && depth != 32)
 			throw std::runtime_error("Unsupported scene layer bitmap snapshot");
 		const size_t rowBytes = static_cast<size_t>(source->w) * ((depth + 7) / 8);
+		if (!source->line) {
+			// The live bitmap behind the view, read for the refusal only.
+			const auto* live = static_cast<const BITMAP*>(CheckpointNativeStorage::Original(source));
+			throw std::runtime_error(std::format("a frozen {}x{} bitmap has no row table (frozen dat={} vtable={}; live {}x{} line={} dat={}; {})", source->w, source->h,
+			    source->dat, static_cast<const void*>(source->vtable), live->w, live->h, static_cast<const void*>(live->line), live->dat, CheckpointNativeStorage::DescribeView(source, sizeof(BITMAP))));
+		}
 		const auto* lines = static_cast<uint8_t* const*>(CheckpointNativeStorage::View(source->line, sizeof(uint8_t*) * source->h));
 		auto rows = std::make_unique<FrozenRows>();
 		rows->pages = CheckpointNativeStorage::PagesFor(lines[0], rowBytes);
