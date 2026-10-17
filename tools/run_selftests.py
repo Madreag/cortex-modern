@@ -432,6 +432,43 @@ def run_lockstep_cli(repo, make_run, case, timeout):
             "timed_out": any(record.get("timed_out") for record in records), "binary": records[0].get("exe_sha256")}
 
 
+def save_fixed_failure_report(options, case, stdout, record):
+    """Index failures just observed in this invocation, solely for the minimizer.
+
+    The fixed checks stay RED when they fail. No participant state is imported.
+    A partial, interrupted or different-executable run cannot provide the index.
+    """
+    options._fixed_failure_report = None
+    completed = re.findall(r"^\[net-session-plane-selftest\] saved_schedule_catalogue expected=(\d+) ran=(\d+)$", stdout, re.M)
+    closing = re.findall(r"^\[net-session-plane-selftest\] (PASS|FAIL)\s*$", stdout, re.M)
+    binary = getattr(options, "_suite_exe_sha256", None)
+    if (len(completed) != 1 or int(completed[0][0]) <= 0 or completed[0][0] != completed[0][1]
+            or len(closing) != 1 or record.get("timed_out") or record.get("exit_code") not in (0, 1)
+            or not binary or record.get("exe_sha256") != binary):
+        raise ValueError("fixed schedule prerequisite did not finish with the current executable")
+    groups = re.findall(r"^\[net-session-plane-selftest\] saved_schedule_group name=(\w+) group=(\S+)$", stdout, re.M)
+    if any(not re.search(rf"^\[net-session-plane-selftest\] FAIL {re.escape(name)}:", stdout, re.M)
+           for name, _ in groups):
+        raise ValueError("saved failure group has no corresponding failing fixed check")
+    report = case / "fixed-failure-groups.txt"
+    report.write_text("hold-fixed-groups-v1\n" + "".join(f"{group}\t{name}\n" for name, group in groups))
+    proof = {"path": str(report.resolve()), "binary": binary, "digest": sha256_of(report),
+             "suite_root": str(options._suite_root), "saved_cases_ran": int(completed[0][1])}
+    (case / "fixed-failure-groups.json").write_text(json.dumps(proof, indent=2))
+    options._fixed_failure_report = proof
+    return proof
+
+
+def current_fixed_failure_report(options):
+    """Only an in-memory proof from the preceding row of this invocation is used."""
+    proof = getattr(options, "_fixed_failure_report", None)
+    if (not proof or proof["binary"] != options._suite_exe_sha256
+            or proof["suite_root"] != str(options._suite_root)
+            or sha256_of(Path(proof["path"])) != proof["digest"]):
+        raise ValueError("missing or stale current-binary fixed schedule prerequisite")
+    return proof
+
+
 def run_row(options, make_run, name, case, sanitizer):
     # These probes assert the headless policy itself. A headed-only collection
     # must explicitly permit their mode; it must never score a headed run as one.
@@ -529,8 +566,15 @@ def run_row_in_mode(options, make_run, name, case, sanitizer):
                 "CC_TEST_HOLD_SCHEDULES": os.environ.get("CC_TEST_HOLD_SCHEDULES", "200" if driver else "0")}
             if driver:
                 row_env["CC_TEST_SESSION_PLANE_CASE"] = "random_hold_schedules"
+                proof = current_fixed_failure_report(options)
+                row_env["CC_TEST_HOLD_FIXED_FAILURE_REPORT"] = proof["path"]
                 if int(row_env["CC_TEST_HOLD_SCHEDULES"]) <= 0:
                     raise ValueError("the hold-schedule suite row requires at least one requested schedule")
+            elif "net-session-plane-hold-schedules" in getattr(options, "_planned_rows", ()):
+                # A fresh full fixed collection is a prerequisite, even if the shell
+                # supplied a case filter or an N intended for the random driver.
+                row_env["CC_TEST_SESSION_PLANE_CASE"] = "fixed_session_fixtures"
+                row_env["CC_TEST_HOLD_SCHEDULES"] = "0"
         run = make_run(options.repo, BINDING_WALK_ARGS if walk else [f"-{native_name}-selftest"], case, budget,
                        fixtures=BINDING_WALK_FIXTURES if walk else SELFTEST_FIXTURES.get(name), env=row_env)
         try:
@@ -546,12 +590,19 @@ def run_row_in_mode(options, make_run, name, case, sanitizer):
             stdout, record.get("exit_code"), record.get("timed_out"), f"{native_name}-selftest"
         )
         scored["binary"] = record.get("exe_sha256")
+        if name == "net-session-plane" and "net-session-plane-hold-schedules" in getattr(options, "_planned_rows", ()):
+            scored["fixed_failure_report"] = save_fixed_failure_report(options, case, stdout, record)
         if driver:
             completion = re.search(r"^\[net-session-plane-selftest\] random_hold_schedules schedules=(\d+) ran=(\d+) seeds=(\d+)\.\.(\d+)", stdout, re.M)
             expected = int(row_env["CC_TEST_HOLD_SCHEDULES"])
             scored["schedule_summary"] = completion.group(0) if completion else ""
             if not completion or tuple(map(int, completion.group(1, 2))) != (expected, expected):
                 scored.update(**{"pass": False, "reason": f"random driver did not complete all {expected} requested schedules"})
+            if not re.search(r"^\[net-session-plane-selftest\] random_hold_schedules schedules=.* saved_catalogue_reused=1(?: |$)", stdout, re.M):
+                scored.update(**{"pass": False, "reason": "random driver did not use its fresh fixed prerequisite"})
+            scored["fixed_failure_report"] = proof
+            if record.get("exe_sha256") != proof["binary"]:
+                scored.update(**{"pass": False, "reason": "executable changed after the fixed prerequisite"})
         if walk:
             scored.update(budget_s=budget, elapsed_s=record.get("elapsed_seconds"), walked_classes=len(BINDING_WALK_CLASS.findall(stdout)))
     if name == "net-directory":
@@ -585,6 +636,9 @@ def plan_rows(quiet_rows=None, only=()):
     rows = [] if quiet_rows == "only" else [name for name in SELFTESTS if name not in LOAD_SENSITIVE]
     tail = [name for name in LOAD_SENSITIVE if name in SELFTESTS or quiet_rows]
     if only:
+        only = set(only)
+        if "net-session-plane-hold-schedules" in only:
+            only.add("net-session-plane")
         rows = [name for name in SELFTESTS if name in only and name not in LOAD_SENSITIVE]
         tail = [name for name in LOAD_SENSITIVE if name in only]
     return rows, tail
@@ -607,8 +661,8 @@ def self_test():
     expect(rows.count("net-session-plane") == rows.count("net-session-plane-hold-schedules") == 1
            and rows.index("net-session-plane-hold-schedules") == rows.index("net-session-plane") + 1,
            "default retains fixed fixtures and the N=200 driver as separate budgeted rows")
-    expect(plan_rows(None, ["net-session-plane-hold-schedules"]) == (["net-session-plane-hold-schedules"], []),
-           "--only selects the complete hold-schedule driver")
+    expect(plan_rows(None, ["net-session-plane-hold-schedules"]) == (["net-session-plane", "net-session-plane-hold-schedules"], []),
+           "--only driver first runs its fresh fixed prerequisite")
     rows, tail = plan_rows("last")
     expect(tail == ["net-match", "script-graph"] and len(rows) + len(tail) == len(SELFTESTS) + 1, "--quiet-rows last: the tail adds script-graph")
     expect(plan_rows("only") == ([], ["net-match", "script-graph"]), "--quiet-rows only: the tail alone")
@@ -705,6 +759,9 @@ def main():
     sanitizer = sanitizer_build(exe)
     results = {}
     rows, tail = plan_rows(options.quiet_rows, options.only)
+    options._suite_exe_sha256 = exe_hash
+    options._suite_root = out
+    options._planned_rows = rows + tail
     summary = {"exe_sha256": exe_hash, "repo": str(options.repo), "passed": 0, "total": len(rows) + len(tail),
                "quiet_rows": tail, "sanitizer": sanitizer, "complete": False, "running": None, "results": results}
     for sig in (signal.SIGTERM, signal.SIGINT, getattr(signal, "SIGHUP", None)):
@@ -714,6 +771,7 @@ def main():
         for name in rows + tail:
             summary["running"] = name
             write_result(out, summary)
+            row_start, row_load = time.monotonic(), os.getloadavg() if hasattr(os, "getloadavg") else None
             try:
                 if name in tail:
                     scored = run_tail_row(options, make_run, name, out, sanitizer)
@@ -723,6 +781,7 @@ def main():
                 raise
             except Exception as exc:  # noqa: BLE001 - a runner failure is this row's red, never an empty result
                 scored = {"pass": False, "reason": f"runner error: {exc!r}"}
+            scored.update(row_elapsed_s=time.monotonic() - row_start, start_load=row_load)
             results[name] = scored
             scored["topology"] = "single-box: not proof" if name.startswith("net-") else "single-peer"
             summary["passed"] = sum(1 for row in results.values() if row["pass"])

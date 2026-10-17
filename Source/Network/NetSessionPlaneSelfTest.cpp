@@ -29,6 +29,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <deque>
+#include <fstream>
 #include <functional>
 #include <iostream>
 #include <map>
@@ -2336,7 +2337,8 @@ namespace RTE {
 		struct ScheduleDriver {
 			size_t count = 0, threads = 0, budget = 0, shapes = 0, failedCount = 0, fixedCount = 0;
 			uint64_t firstSeed = 0, elapsedMs = 0, budgetMs = 0;
-			bool runRandom = true;
+			bool runRandom = true, reusedFixedCatalogue = false;
+			std::map<std::string, std::string> priorFailures;
 			std::chrono::steady_clock::time_point began;
 			std::vector<Schedule> schedules;
 			std::vector<std::string> names, lines;
@@ -2345,6 +2347,30 @@ namespace RTE {
 			std::vector<uint8_t> ran;
 			std::atomic<size_t> ranCount{0};
 			std::vector<std::pair<std::string, bool>> fixedResults;
+			// This report is only the minimizer's index of failures just observed by the suite's
+			// fixed collection with the same executable. No fixture peer or property reads it.
+			bool ReadFixedFailureReport(const char* path) {
+				std::ifstream input(path);
+				std::string line;
+				if (!std::getline(input, line) || line != "hold-fixed-groups-v1") return false;
+				std::map<std::string, std::string> suffixes, reported;
+				for (const auto& row: FixedScheduleRows()) {
+					Schedule schedule;
+					if (!ParseSchedule(row.schedule, schedule)) return false;
+					suffixes.emplace(row.name, ":" + std::to_string(schedule.seats) + (schedule.internet ? ":internet" : ":direct"));
+				}
+				while (std::getline(input, line)) {
+					const auto tab = line.find('\t');
+					if (tab == std::string::npos || line.find('\t', tab + 1) != std::string::npos) return false;
+					const std::string group = line.substr(0, tab), name = line.substr(tab + 1);
+					const auto row = suffixes.find(name);
+					if (row == suffixes.end() || std::count(group.begin(), group.end(), ':') != 3 || !group.ends_with(row->second)) return false;
+					reported.try_emplace(group, name);
+				}
+				if (input.bad()) return false;
+				priorFailures = std::move(reported);
+				return true;
+			}
 			void Prepare(const char* selected) {
 				began = std::chrono::steady_clock::now();
 				count = EnvironmentNumber("CC_TEST_HOLD_SCHEDULES", 200);
@@ -2356,9 +2382,11 @@ namespace RTE {
 				// Only minimization spends the time budget; every requested schedule must run.
 				budgetMs = EnvironmentNumber("CC_TEST_HOLD_SCHEDULE_BUDGET_S", 200) * 1000;
 				const bool driverSelected = selected && std::string_view(selected) == "random_hold_schedules";
-				// The separate suite driver keeps the saved schedule catalogue in its pool. Re-minimization
-				// is skipped only when one of those rows just reproduced the same failure group.
+				if (driverSelected) if (const char* report = std::getenv("CC_TEST_HOLD_FIXED_FAILURE_REPORT"))
+					reusedFixedCatalogue = ReadFixedFailureReport(report);
+				// A standalone driver without a valid current report runs every saved schedule itself.
 				for (const auto& row: FixedScheduleRows()) {
+					if (reusedFixedCatalogue) break;
 					if (selected && !driverSelected && std::string_view(selected) != row.name) continue;
 					Schedule schedule;
 					if (!ParseSchedule(row.schedule, schedule)) { lines.push_back(std::string("FAIL ") + row.name + ": its schedule text does not parse"); fixedResults.emplace_back(row.name, false); continue; }
@@ -2385,20 +2413,23 @@ namespace RTE {
 				return " startup_waits_past_bound=" + std::to_string(over) + " startup_longest_ms=" + std::to_string(most) + (most ? " startup_longest_seed=" + std::to_string(seed) : "");
 			}
 			void Finish() {
+				const auto failureGroup = [&](size_t index) {
+					return results[index]->property + ":" + results[index]->kind + ":" + std::to_string(schedules[index].seats) +
+					       (schedules[index].internet ? ":internet" : ":direct");
+				};
 				for (size_t index = 0; index < fixedCount; ++index) {
 					const auto& result = results[index];
 					lines.push_back(std::string(result ? "FAIL " : "PASS ") + names[index] + (result ? ": seed=" + std::to_string(schedules[index].seed) + " property=" + result->property +
 					                " kind=" + result->kind + ": " + result->detail : ""));
 					fixedResults.emplace_back(names[index], !result);
+					if (result) lines.push_back("saved_schedule_group name=" + names[index] + " group=" + failureGroup(index));
 				}
+				if (!reusedFixedCatalogue) lines.push_back("saved_schedule_catalogue expected=" + std::to_string(FixedScheduleRows().size()) +
+				                                         " ran=" + std::to_string(std::count(ran.begin(), ran.begin() + fixedCount, uint8_t{1})));
 				if (!runRandom) { elapsedMs = Elapsed(began); return; }
 				// Group the failures by what failed, the seats and whether a referee decides ties, and minimize the smallest round of each
 				// group; the minimized shapes are kept once each.
-				const auto failureGroup = [&](size_t index) {
-					return results[index]->property + ":" + results[index]->kind + ":" + std::to_string(schedules[index].seats) +
-					       (schedules[index].internet ? ":internet" : ":direct");
-				};
-				std::map<std::string, std::string> reproduced;
+				std::map<std::string, std::string> reproduced = priorFailures;
 				for (size_t index = 0; index < fixedCount; ++index)
 					if (results[index]) reproduced.try_emplace(failureGroup(index), names[index]);
 				std::map<std::string, std::vector<size_t>> groups;
@@ -3640,6 +3671,7 @@ namespace RTE {
 		}
 		int passed = 0, failed = 0;
 		const char* selected = std::getenv("CC_TEST_SESSION_PLANE_CASE");
+		if (selected && std::string_view(selected) == "fixed_session_fixtures") selected = nullptr;
 		DiagnosticLine() << "[net-session-plane-selftest] topology=single-box proof=false forced_rows=" << (selected ? 1 : rows.size() + 40 + FixedScheduleRows().size()) << std::endl;
 		// Every row runs on a pool of worker threads: a named row keeps its engine lines and is printed as soon as it ends, the longest
 		// rows started first; the random driver's rounds follow them in the same pool.
@@ -3842,7 +3874,8 @@ namespace RTE {
 		for (const auto& [name, ok]: driver.fixedResults) { if (ok) ++passed; else ++failed; }
 		if (driver.runRandom) {
 			DiagnosticLine() << "[net-session-plane-selftest] random_hold_schedules schedules=" << driver.count << " ran=" << driver.ranCount.load() << " seeds=" << driver.firstSeed << ".." << driver.firstSeed + driver.count - 1
-			                 << " failed=" << driver.failedCount << " threads=" << driver.threads << " elapsed_s=" << driver.elapsedMs / 1000 << driver.StartupWaits();
+			                 << " failed=" << driver.failedCount << " threads=" << driver.threads << " elapsed_s=" << driver.elapsedMs / 1000
+			                 << " saved_catalogue_reused=" << driver.reusedFixedCatalogue << driver.StartupWaits();
 			const bool complete = driver.ranCount.load() == driver.count;
 			DiagnosticLine() << "[net-session-plane-selftest] " << (driver.failedCount || !complete ? "FAIL" : "PASS") << " random_hold_schedules"
 			                 << (!complete || driver.failedCount ? ": seeds=" + std::to_string(driver.firstSeed) + ".." + std::to_string(driver.firstSeed + driver.count - 1) + " " : "")
