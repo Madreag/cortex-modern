@@ -47,6 +47,10 @@ extern "C" {
 
 #ifndef _WIN32
 #include <sys/mman.h>
+#include <unistd.h>
+#endif
+#ifdef __APPLE__
+#include <mach/mach.h>
 #endif
 
 namespace RTE::CheckpointLua {
@@ -1534,8 +1538,21 @@ namespace RTE::CheckpointLua {
 			void* pages = mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 			return pages == MAP_FAILED ? nullptr : pages;
 		}
-		static bool CommitPages(void*, size_t) noexcept { return true; }
-		static void DecommitPages(void* pages, size_t bytes) noexcept { madvise(pages, bytes, MADV_DONTNEED); }
+		static bool CommitPages([[maybe_unused]] void* pages, [[maybe_unused]] size_t bytes) noexcept {
+#ifdef __APPLE__
+			// Pages given back as reusable are taken back before they are written, so the footprint counts them again.
+			madvise(pages, bytes, MADV_FREE_REUSE);
+#endif
+			return true;
+		}
+		// macOS keeps MADV_DONTNEED pages resident and in the footprint; reusable pages leave the footprint at once.
+		static void DecommitPages(void* pages, size_t bytes) noexcept {
+#ifdef __APPLE__
+			madvise(pages, bytes, MADV_FREE_REUSABLE);
+#else
+			madvise(pages, bytes, MADV_DONTNEED);
+#endif
+		}
 		static void Unmap(void* pages, size_t bytes) noexcept { munmap(pages, bytes); }
 		void Reserve(size_t shift) {
 			void* base = mmap(nullptr, c_ReserveBytes + c_Colors * c_PageStride, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
@@ -1550,7 +1567,7 @@ namespace RTE::CheckpointLua {
 		void Release() noexcept {
 			if (m_Reservation && m_Committed) ReleaseCommitted([](uintptr_t at, size_t bytes) {
 				mprotect(reinterpret_cast<void*>(at), bytes, PROT_NONE);
-				madvise(reinterpret_cast<void*>(at), bytes, MADV_DONTNEED);
+				DecommitPages(reinterpret_cast<void*>(at), bytes);
 			});
 			m_HeapMemory.reset();
 			m_Reservation = m_Base = 0;
@@ -2435,11 +2452,48 @@ namespace RTE::CheckpointLua {
 		const size_t grown = held();
 		lua_gc(state, LUA_GCCOLLECT, 0);
 		lua_gc(state, LUA_GCSTOP, 0);
+		// What the OS still holds of the granules the trim gave back: committed regions (Windows), resident pages (Linux), or
+		// where given-back pages may stay resident but leave the footprint (macOS), the footprint the trim did not give back.
+#ifdef __APPLE__
+		const auto footprint = [] {
+			task_vm_info_data_t info{};
+			mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+			return task_info(mach_task_self(), TASK_VM_INFO, reinterpret_cast<task_info_t>(&info), &count) == KERN_SUCCESS ? static_cast<int64_t>(info.phys_footprint) : int64_t{0};
+		};
+		const int64_t footprintBefore = footprint();
+#endif
+		const auto osHeld = [&]() -> size_t {
+			const size_t holes = owner->m_HoleBytes.load(std::memory_order_acquire);
+#ifdef __APPLE__
+			const int64_t returned = footprintBefore - footprint();
+			return returned >= static_cast<int64_t>(holes) ? 0 : holes - static_cast<size_t>(std::max<int64_t>(0, returned));
+#else
+			size_t heldBytes = 0;
+#ifdef _WIN32
+			for (size_t granule = 0; granule < owner->m_Committed / c_GranuleBytes; ++granule) {
+				MEMORY_BASIC_INFORMATION region{};
+				if (owner->Hole(granule) && VirtualQuery(reinterpret_cast<void*>(owner->m_Base + granule * c_GranuleBytes), &region, sizeof(region)) == sizeof(region) &&
+				    region.State == MEM_COMMIT)
+					heldBytes += c_GranuleBytes;
+			}
+#else
+			const size_t page = static_cast<size_t>(sysconf(_SC_PAGESIZE));
+			std::vector<unsigned char> resident(c_GranuleBytes / page);
+			for (size_t granule = 0; granule < owner->m_Committed / c_GranuleBytes; ++granule) {
+				if (!owner->Hole(granule) || mincore(reinterpret_cast<void*>(owner->m_Base + granule * c_GranuleBytes), c_GranuleBytes, resident.data()) != 0) continue;
+				for (unsigned char flags: resident) if (flags & 1) heldBytes += page;
+			}
+#endif
+			(void)holes;
+			return heldBytes;
+#endif
+		};
 		// A plan waiting for its boundary holds address space only, so the heap trims beside it; the arm commits what the trim
 		// gave back before it fences the heap, and the copy holds the survivor.
 		auto prepared = owner->PrepareFreeze();
 		for (int slice = 0; slice < 64; ++slice) owner->Trim();
 		const size_t trimmed = held();
+		const size_t givenBack = owner->m_HoleBytes.load(std::memory_order_acquire), stillHeld = osHeld();
 		const bool armed = prepared->Arm(*owner);
 		const bool filled = !owner->m_HoleBytes.load(std::memory_order_acquire);
 		if (!armed) {
@@ -2455,9 +2509,11 @@ namespace RTE::CheckpointLua {
 		garbage();
 		const size_t reused = held();
 		detail = "before_mb=" + std::to_string(before >> 20) + " grown_mb=" + std::to_string(grown >> 20) + " trimmed_mb=" + std::to_string(trimmed >> 20) +
-		         " reused_mb=" + std::to_string(reused >> 20) + " filled=" + std::to_string(filled) + " kept=" + std::to_string(kept);
+		         " reused_mb=" + std::to_string(reused >> 20) + " filled=" + std::to_string(filled) + " kept=" + std::to_string(kept) +
+		         " given_back_mb=" + std::to_string(givenBack >> 20) + " os_held_mb=" + std::to_string(stillHeld >> 20);
 		// Three quarters of what the garbage grew go back, and taking pages again commits no more than the first growth did.
-		return grown >= before + (size_t(32) << 20) && (trimmed <= before || (trimmed - before) * 4 <= grown - before) && filled && kept && reused <= grown + c_CommitStep;
+		return grown >= before + (size_t(32) << 20) && (trimmed <= before || (trimmed - before) * 4 <= grown - before) && filled && kept && reused <= grown + c_CommitStep &&
+		       givenBack && stillHeld * 4 <= givenBack;
 	}
 
 	// Every userdata hangs after the main thread in the GC chain; nothing before it is one.

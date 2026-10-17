@@ -114,6 +114,9 @@ namespace {
 				const size_t first = run * c_RunBytes, runBytes = std::min(c_RunBytes, bytes - first);
 #ifdef _WIN32
 				if (!VirtualAlloc(data + first, runBytes, MEM_COMMIT, PAGE_READWRITE)) return false;
+#elif defined(__APPLE__)
+				// A run given back as reusable is taken back before it is written, so the footprint counts it again.
+				madvise(data + first, runBytes, MADV_FREE_REUSE);
 #endif
 				runs[run] = 1;
 				committedBytes += runBytes;
@@ -126,6 +129,9 @@ namespace {
 			if (committed || !committedBytes) return;
 #ifdef _WIN32
 			VirtualFree(data, bytes, MEM_DECOMMIT);
+#elif defined(__APPLE__)
+			// macOS keeps MADV_DONTNEED pages resident and in the footprint; reusable pages leave the footprint at once.
+			madvise(data, bytes, MADV_FREE_REUSABLE);
 #else
 			madvise(data, bytes, MADV_DONTNEED);
 #endif
