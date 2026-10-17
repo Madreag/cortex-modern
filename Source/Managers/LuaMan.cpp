@@ -4521,14 +4521,14 @@ static bool PieSliceFreed(const void* slice) {
 
 void LuaMan::PlantPieSliceHandles() {
 	static constexpr const char* plant = R"lua(
-_F5LeverSlices = {}
-_F5LeverSlices.menu = CreatePieMenu("Constructor Pie Menu", "Base.rte")
-_F5LeverSlices.menuSlice = _F5LeverSlices.menu and _F5LeverSlices.menu:GetFirstPieSliceByPresetName("Constructor Spray Mode")
-_F5LeverSlices.options = CreatePieSlice("Constructor Options", "Base.rte")
-_F5LeverSlices.subSlice = _F5LeverSlices.options and _F5LeverSlices.options.SubPieMenu and _F5LeverSlices.options.SubPieMenu:GetFirstPieSliceByPresetName("Constructor Cancel Construction")
-_F5LeverSlices.presetEntity = PresetMan:GetPreset("PieSlice", "Menu", "Base.rte")
-_F5LeverSlices.presetSlice = _F5LeverSlices.presetEntity and ToPieSlice(_F5LeverSlices.presetEntity)
-assert(_F5LeverSlices.menuSlice and _F5LeverSlices.subSlice and _F5LeverSlices.presetSlice)
+_PieSliceLever = {}
+_PieSliceLever.menu = CreatePieMenu("Constructor Pie Menu", "Base.rte")
+_PieSliceLever.menuSlice = _PieSliceLever.menu and _PieSliceLever.menu:GetFirstPieSliceByPresetName("Constructor Spray Mode")
+_PieSliceLever.options = CreatePieSlice("Constructor Options", "Base.rte")
+_PieSliceLever.subSlice = _PieSliceLever.options and _PieSliceLever.options.SubPieMenu and _PieSliceLever.options.SubPieMenu:GetFirstPieSliceByPresetName("Constructor Cancel Construction")
+_PieSliceLever.presetEntity = PresetMan:GetPreset("PieSlice", "Menu", "Base.rte")
+_PieSliceLever.presetSlice = _PieSliceLever.presetEntity and ToPieSlice(_PieSliceLever.presetEntity)
+assert(_PieSliceLever.menuSlice and _PieSliceLever.subSlice and _PieSliceLever.presetSlice)
 )lua";
 	int planted = 0, states = 0;
 	const auto into = [&](LuaStateWrapper& state) {
@@ -6605,7 +6605,7 @@ static bool RunStaleActivityReferenceSelfTest(LuaStateWrapper& lua) {
 // alias of a living target's position, and the last position of a target that is gone.
 static bool RunEngineHandleSelfTest(LuaStateWrapper& lua) {
 	const bool planted = lua.RunScriptString(R"lua(
-_F5Handles = {}
+_EngineHandles = {}
 local function holding(x)
 	local holder = CreateAHuman("Green Dummy", "Base.rte")
 	holder.Pos = Vector(x, 200)
@@ -6615,28 +6615,28 @@ local function holding(x)
 	local options = holder.PieMenu:GetFirstPieSliceByPresetName("Constructor Options")
 	return holder, options and options.SubPieMenu and options.SubPieMenu:GetFirstPieSliceByPresetName("Constructor Order Construction")
 end
-_F5Handles.holder, _F5Handles.live = holding(300)
-_F5Handles.liveAlias = _F5Handles.live
-_F5Handles.dropper, _F5Handles.gone = holding(420)
-_F5Handles.goneAlias = _F5Handles.gone
-assert(_F5Handles.live ~= nil and _F5Handles.gone ~= nil, "a held Constructor put no options slice into its holder's menu")
+_EngineHandles.holder, _EngineHandles.live = holding(300)
+_EngineHandles.liveAlias = _EngineHandles.live
+_EngineHandles.dropper, _EngineHandles.gone = holding(420)
+_EngineHandles.goneAlias = _EngineHandles.gone
+assert(_EngineHandles.live ~= nil and _EngineHandles.gone ~= nil, "a held Constructor put no options slice into its holder's menu")
 -- Live slices no actor's menu holds: one of the script's own pie menu, one of its own slice's sub-menu, and a preset as the
 -- registry hands it out and as a cast holds it.
-_F5Handles.ownMenu = CreatePieMenu("Constructor Pie Menu", "Base.rte")
-_F5Handles.ownMenuSlice = _F5Handles.ownMenu and _F5Handles.ownMenu:GetFirstPieSliceByPresetName("Constructor Spray Mode")
-_F5Handles.ownMenuAlias = _F5Handles.ownMenuSlice
-_F5Handles.ownSlice = CreatePieSlice("Constructor Options", "Base.rte")
-_F5Handles.subSlice = _F5Handles.ownSlice and _F5Handles.ownSlice.SubPieMenu and _F5Handles.ownSlice.SubPieMenu:GetFirstPieSliceByPresetName("Constructor Cancel Construction")
-_F5Handles.presetEntity = PresetMan:GetPreset("PieSlice", "Menu", "Base.rte")
-_F5Handles.presetSlice = _F5Handles.presetEntity and ToPieSlice(_F5Handles.presetEntity)
-assert(_F5Handles.ownMenuSlice and _F5Handles.subSlice and _F5Handles.presetSlice, "a script's own menu slice, its own slice's sub-menu slice or a preset slice could not be made")
+_EngineHandles.ownMenu = CreatePieMenu("Constructor Pie Menu", "Base.rte")
+_EngineHandles.ownMenuSlice = _EngineHandles.ownMenu and _EngineHandles.ownMenu:GetFirstPieSliceByPresetName("Constructor Spray Mode")
+_EngineHandles.ownMenuAlias = _EngineHandles.ownMenuSlice
+_EngineHandles.ownSlice = CreatePieSlice("Constructor Options", "Base.rte")
+_EngineHandles.subSlice = _EngineHandles.ownSlice and _EngineHandles.ownSlice.SubPieMenu and _EngineHandles.ownSlice.SubPieMenu:GetFirstPieSliceByPresetName("Constructor Cancel Construction")
+_EngineHandles.presetEntity = PresetMan:GetPreset("PieSlice", "Menu", "Base.rte")
+_EngineHandles.presetSlice = _EngineHandles.presetEntity and ToPieSlice(_EngineHandles.presetEntity)
+assert(_EngineHandles.ownMenuSlice and _EngineHandles.subSlice and _EngineHandles.presetSlice, "a script's own menu slice, its own slice's sub-menu slice or a preset slice could not be made")
 -- The device leaves its holder's hands: the menu deletes the slices it put there, and the handles point at nothing.
-_F5Handles.dropper:UnequipArms()
+_EngineHandles.dropper:UnequipArms()
 local target = CreateMOPixel("Spark Yellow 1", "Base.rte")
 target.Pos = Vector(610, 190)
 target.Vel = Vector(0, 0)
 MovableMan:AddParticle(target)
-_F5Handles.targetUID = target.UniqueID
+_EngineHandles.targetUID = target.UniqueID
 local function waypointTo(mo)
 	return coroutine.create(function()
 		local Waypoint = {}
@@ -6645,11 +6645,11 @@ local function waypointTo(mo)
 		return Waypoint.Pos.X, Waypoint.Pos.Y, Waypoint.Pos
 	end)
 end
-_F5Handles.follower = waypointTo(_F5Handles.holder)
-_F5Handles.chaser = waypointTo(target)
+_EngineHandles.follower = waypointTo(_EngineHandles.holder)
+_EngineHandles.chaser = waypointTo(target)
 -- Whether a script may write through the position reference it keeps.
-_F5Handles.positionConstant = not pcall(function() local position = target.Pos; position.X = position.X end)
-assert(coroutine.resume(_F5Handles.follower) and coroutine.resume(_F5Handles.chaser))
+_EngineHandles.positionConstant = not pcall(function() local position = target.Pos; position.X = position.X end)
+assert(coroutine.resume(_EngineHandles.follower) and coroutine.resume(_EngineHandles.chaser))
 )lua") == 0;
 	// The chaser's target is deleted before the capture; the waypoint still holds its position.
 	bool targetGone = false;
@@ -6659,7 +6659,7 @@ assert(coroutine.resume(_F5Handles.follower) and coroutine.resume(_F5Handles.cha
 	Vector keptPosition;
 	if (planted) {
 		lua_State* L = lua.GetLuaState();
-		lua_getglobal(L, "_F5Handles");
+		lua_getglobal(L, "_EngineHandles");
 		lua_getfield(L, -1, "targetUID");
 		const long uid = static_cast<long>(lua_tointeger(L, -1));
 		lua_pop(L, 2);
@@ -6698,52 +6698,52 @@ assert(coroutine.resume(_F5Handles.follower) and coroutine.resume(_F5Handles.cha
 		restored = lua.RestoreScriptGraph(text, restoreProblems) && restoreProblems.empty();
 		for (const std::string& problem: restoreProblems) std::cout << "[engine-handle-selftest] restore: " << problem << std::endl;
 		kept = restored && lua.RunScriptString(R"lua(
-local options = _F5Handles.holder.PieMenu:GetFirstPieSliceByPresetName("Constructor Options")
+local options = _EngineHandles.holder.PieMenu:GetFirstPieSliceByPresetName("Constructor Options")
 local slice = options.SubPieMenu:GetFirstPieSliceByPresetName("Constructor Order Construction")
-assert(_ScriptGraphNativeAddress(_F5Handles.live) == _ScriptGraphNativeAddress(slice), "the slice handle came back as another slice")
-assert(rawequal(_F5Handles.live, _F5Handles.liveAlias), "one slice handle came back as two")
+assert(_ScriptGraphNativeAddress(_EngineHandles.live) == _ScriptGraphNativeAddress(slice), "the slice handle came back as another slice")
+assert(rawequal(_EngineHandles.live, _EngineHandles.liveAlias), "one slice handle came back as two")
 local enabled = slice.Enabled
-_F5Handles.live.Enabled = not enabled
+_EngineHandles.live.Enabled = not enabled
 assert(slice.Enabled == not enabled, "the slice handle stopped being an alias of the menu's slice")
-_F5Handles.live.Enabled = enabled
-assert(type(_F5Handles.gone) == "userdata" and rawequal(_F5Handles.gone, _F5Handles.goneAlias), "the gone slice's handle was dropped or split")
-assert(_ScriptGraphNative(_F5Handles.gone) == "invalid", "the gone slice's handle came back as a live slice")
+_EngineHandles.live.Enabled = enabled
+assert(type(_EngineHandles.gone) == "userdata" and rawequal(_EngineHandles.gone, _EngineHandles.goneAlias), "the gone slice's handle was dropped or split")
+assert(_ScriptGraphNative(_EngineHandles.gone) == "invalid", "the gone slice's handle came back as a live slice")
 )lua") == 0;
 		// The living target moves after the restore; the waypoint reads it through the reference it kept.
-		followed = restored && lua.RunScriptString("_F5Handles.holder.Pos = Vector(555.5, 201); local ok, x, y = coroutine.resume(_F5Handles.follower); assert(ok and x == 555.5 and y == 201, 'the follower read ' .. tostring(x) .. ', not its target')") == 0;
+		followed = restored && lua.RunScriptString("_EngineHandles.holder.Pos = Vector(555.5, 201); local ok, x, y = coroutine.resume(_EngineHandles.follower); assert(ok and x == 555.5 and y == 201, 'the follower read ' .. tostring(x) .. ', not its target')") == 0;
 		remembered = restored && targetMemory > 0 &&
-		             lua.RunScriptString(std::format("local ok, x, y, kept = coroutine.resume(_F5Handles.chaser); assert(ok and x == {} and y == {}, 'the chaser read ' .. tostring(x) .. ', ' .. tostring(y) .. ', not what its kept reference read'); "
-		                                             "assert(pcall(function() kept.X = kept.X end) ~= _F5Handles.positionConstant, 'the kept reference changed its constness')",
+		             lua.RunScriptString(std::format("local ok, x, y, kept = coroutine.resume(_EngineHandles.chaser); assert(ok and x == {} and y == {}, 'the chaser read ' .. tostring(x) .. ', ' .. tostring(y) .. ', not what its kept reference read'); "
+		                                             "assert(pcall(function() kept.X = kept.X end) ~= _EngineHandles.positionConstant, 'the kept reference changed its constness')",
 		                                             static_cast<double>(keptPosition.GetX()), static_cast<double>(keptPosition.GetY()))) == 0;
 		ownKept = restored && lua.RunScriptString(R"lua(
-local spray = _F5Handles.ownMenu:GetFirstPieSliceByPresetName("Constructor Spray Mode")
-assert(spray and _ScriptGraphNativeAddress(_F5Handles.ownMenuSlice) == _ScriptGraphNativeAddress(spray), "a slice of the script's own pie menu came back as another slice")
-assert(rawequal(_F5Handles.ownMenuSlice, _F5Handles.ownMenuAlias), "one slice of the script's own menu came back as two")
+local spray = _EngineHandles.ownMenu:GetFirstPieSliceByPresetName("Constructor Spray Mode")
+assert(spray and _ScriptGraphNativeAddress(_EngineHandles.ownMenuSlice) == _ScriptGraphNativeAddress(spray), "a slice of the script's own pie menu came back as another slice")
+assert(rawequal(_EngineHandles.ownMenuSlice, _EngineHandles.ownMenuAlias), "one slice of the script's own menu came back as two")
 local enabled = spray.Enabled
-_F5Handles.ownMenuSlice.Enabled = not enabled
+_EngineHandles.ownMenuSlice.Enabled = not enabled
 assert(spray.Enabled == not enabled, "the script's own menu slice stopped being an alias of the menu's slice")
-_F5Handles.ownMenuSlice.Enabled = enabled
-local cancel = _F5Handles.ownSlice.SubPieMenu:GetFirstPieSliceByPresetName("Constructor Cancel Construction")
-assert(cancel and _ScriptGraphNativeAddress(_F5Handles.subSlice) == _ScriptGraphNativeAddress(cancel), "a slice of the script's own slice's sub-menu came back as another slice")
+_EngineHandles.ownMenuSlice.Enabled = enabled
+local cancel = _EngineHandles.ownSlice.SubPieMenu:GetFirstPieSliceByPresetName("Constructor Cancel Construction")
+assert(cancel and _ScriptGraphNativeAddress(_EngineHandles.subSlice) == _ScriptGraphNativeAddress(cancel), "a slice of the script's own slice's sub-menu came back as another slice")
 )lua") == 0;
 		presetKept = restored && lua.RunScriptString(R"lua(
 local preset = PresetMan:GetPreset("PieSlice", "Menu", "Base.rte")
-assert(_ScriptGraphNativeAddress(_F5Handles.presetEntity) == _ScriptGraphNativeAddress(preset), "the preset the registry handed out came back as another object")
-assert(_ScriptGraphNativeAddress(_F5Handles.presetSlice) == _ScriptGraphNativeAddress(preset), "the preset slice came back as another object")
-assert(pcall(function() return _F5Handles.presetSlice.Direction end), "the preset slice came back without its class")
+assert(_ScriptGraphNativeAddress(_EngineHandles.presetEntity) == _ScriptGraphNativeAddress(preset), "the preset the registry handed out came back as another object")
+assert(_ScriptGraphNativeAddress(_EngineHandles.presetSlice) == _ScriptGraphNativeAddress(preset), "the preset slice came back as another object")
+assert(pcall(function() return _EngineHandles.presetSlice.Direction end), "the preset slice came back without its class")
 )lua") == 0;
 	}
 	// A live slice of a menu nothing in the graph reaches - the menu kept alive in the registry - is refused by name.
 	if (planted) {
 		lua_State* L = lua.GetLuaState();
 		lua.RunScriptString(R"lua(
-_F5Unreached = CreatePieMenu("Constructor Pie Menu", "Base.rte")
-_F5Handles.unreached = _F5Unreached and _F5Unreached:GetFirstPieSliceByPresetName("Constructor Order Construction")
+_UnreachedPieMenu = CreatePieMenu("Constructor Pie Menu", "Base.rte")
+_EngineHandles.unreached = _UnreachedPieMenu and _UnreachedPieMenu:GetFirstPieSliceByPresetName("Constructor Order Construction")
 )lua");
-		lua_getglobal(L, "_F5Unreached");
+		lua_getglobal(L, "_UnreachedPieMenu");
 		const int keep = luaL_ref(L, LUA_REGISTRYINDEX);
 		lua_pushnil(L);
-		lua_setglobal(L, "_F5Unreached");
+		lua_setglobal(L, "_UnreachedPieMenu");
 		const std::string refusal = "a PieSlice that no actor's pie menu, script's own pie menu or preset holds";
 		const auto named = [&refusal](const std::vector<std::string>& found) {
 			return std::any_of(found.begin(), found.end(), [&refusal](const std::string& problem) { return problem.find(refusal) != std::string::npos; });
@@ -6771,9 +6771,9 @@ _F5Handles.unreached = _F5Unreached and _F5Unreached:GetFirstPieSliceByPresetNam
 			for (const std::string& problem: unreachedFrozenProblems) std::cout << "[engine-handle-selftest] unreached frozen: " << problem << std::endl;
 		}
 		luaL_unref(L, LUA_REGISTRYINDEX, keep);
-		lua.RunScriptString("if _F5Handles then _F5Handles.unreached = nil end");
+		lua.RunScriptString("if _EngineHandles then _EngineHandles.unreached = nil end");
 	}
-	lua.RunScriptString("MovableMan:RemoveActor(_F5Handles.holder); MovableMan:RemoveActor(_F5Handles.dropper); _F5Handles = nil; collectgarbage()");
+	lua.RunScriptString("MovableMan:RemoveActor(_EngineHandles.holder); MovableMan:RemoveActor(_EngineHandles.dropper); _EngineHandles = nil; collectgarbage()");
 	const bool passed = planted && targetGone && captured && frozenSame && restored && kept && followed && remembered && ownKept && presetKept && refusedByName;
 	std::cout << "[engine-handle-selftest] " << (passed ? "PASS" : "FAIL") << " planted=" << planted << " target_gone=" << targetGone << " live_captured=" << captured
 	          << " frozen_same=" << frozenSame << " restored=" << restored << " slices_kept=" << kept << " follower_alias_live=" << followed << " chaser_kept_read=" << remembered << " target_memory=" << targetMemory << " kept=" << keptPosition.GetX() << "," << keptPosition.GetY()
