@@ -1800,7 +1800,7 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 		};
 		if (menuLobby) return "In the lobby";
 		if (hostLost) return snapshot.statusText.starts_with("Changing hosts") ? "Changing hosts - the match picks up in a moment" : "Host lost - contacting the next host...";
-		// The toast and the full-screen wait say the rest; the box's line never repeats theirs.
+		// The toast band suppresses this sentence when the status box already shows it.
 		if (ownHeld) return NetPlayerPresentation::PlayingSummary(true, 0, {});
 		if (resyncing) return "Match repair in progress";
 		if (placing) {
@@ -2536,6 +2536,11 @@ void NetModerationGUI::DrawMatchToasts(const std::string& screenLine) {
 	std::vector<size_t> indices;
 	std::vector<std::string> lines;
 	const auto sentence = [](const std::string& text) { return text.substr(0, text.find_last_not_of(". ") + 1); };
+	std::vector<std::string> statusLines;
+	if (m_StatusRect.visible && m_StatusWrap.active) {
+		std::istringstream status(m_StatusWrap.source);
+		for (std::string line; std::getline(status, line);) statusLines.push_back(sentence(line));
+	}
 	const uint8_t localPeer = ScenarioRunner::GetLockstepLocalPeerId();
 	const PauseMenuGUI* pauseMenu = g_MenuMan.GetActivePauseMenu();
 	const std::string menuSaveLine = pauseMenu ? pauseMenu->GetShownSaveLine() : std::string();
@@ -2544,6 +2549,8 @@ void NetModerationGUI::DrawMatchToasts(const std::string& screenLine) {
 		// A seat's toast reads its current state, so two events about one seat can read alike: the band shows that line once.
 		std::string line = ToastText(queued[index]);
 		if (std::find(lines.begin(), lines.end(), line) != lines.end()) continue;
+		// The status box was drawn this frame. Its full sentences need only one visible copy, even when they wrap.
+		if (std::find(statusLines.begin(), statusLines.end(), sentence(line)) != statusLines.end()) continue;
 		// The screen beneath shows its own line; the band does not read it out again, nor this seat's own state when that is the line.
 		const bool ownSeat = queued[index].senderPeerId == 0 || queued[index].senderPeerId == localPeer;
 		// The wait's own screen already says this seat is on its way back.

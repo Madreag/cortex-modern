@@ -125,6 +125,8 @@ def reduce_peer(folder, peer, rtt, plan, lag_step=None):
     preview_cost = preview.get('ms_total', 0) / preview['actor_ticks'] if preview.get('actor_ticks') else None
     watches = watch_results(folder / peer / 'stdout.log')
     delay_watches = [w for w in watches if w['watch'] == 'b4-delay']
+    duplicate_watches = [w for w in watches if w['watch'] == 'screen-duplicates']
+    own_hold_watches = [w for w in watches if w['watch'] == 'c-own-hold']
     delay_values = [r['delay'] for r in frames if r['actors']]
     limit = 16 if lag_step else 6 if rtt == 30 else 16 if rtt == 200 else 0
     low_delay = [r['delay'] for r in frames if r['actors'] and lag_step and r['tick'] < lag_step[0]]
@@ -141,9 +143,14 @@ def reduce_peer(folder, peer, rtt, plan, lag_step=None):
                   rtt_samples=[dict(tick=r['tick'], peer=p['peer'], ping_ms=p['ping_ms'])
                                for r in frames if r['tick'] % 60 == 0 for p in r.get('rtt', []) if not p['local']],
                   captures=[r for r in rows if r['type'] == 'capture'], delay_watches=delay_watches,
+                  duplicate_watches=duplicate_watches, own_hold_watches=own_hold_watches,
+                  c_duplicates_pass=rtt is None or bool(duplicate_watches) and all(w['active_frames'] > 0 and w['violations'] == 0 for w in duplicate_watches),
+                  c_own_hold_pass=bool(own_hold_watches) and all(w['violations'] == 0 for w in own_hold_watches),
                   b1_delay_pass=bool(delay_values) and max(delay_values) <= limit and
                                 (not lag_step or bool(low_delay) and max(low_delay) <= 6),
-                  b2_depth_pass=bool(owed) and not mismatches and not missing_state and (rtt is None or preview.get('enabled') and preview.get('previews', 0) > 0),
+                  b2_depth_pass=bool(owed) and not mismatches and not missing_state and (rtt is None or preview.get('enabled') and preview.get('previews', 0) > 0 and
+                      preview.get('actor_ticks', 0) > 0 and preview.get('last_depth', -1) >= 0 and
+                      preview.get('effective_max_ticks', -1) >= preview['last_depth']),
                   b3_coverage_pass=coverage,
                   b4_overlay_pass=rtt is None or bool(delay_watches) and all(w['active_frames'] > 0 and w['violations'] == 0 for w in delay_watches))
     write_json(folder / f'{peer}-measurement.json', result)
@@ -159,7 +166,7 @@ def launch_case(root, arm, repeat, port, exe_sha, size, lag_step=None, preview_c
     input_pattern(script)
     plan = json.loads(script.with_name('input-schedule.json').read_text())
     watches = out / 'screen-watches.txt'
-    watches.write_text('b4-delay input_delay running\nc-own-hold sentence local_held LabelNetMatchStatus The AI is playing for you until you are back\n', encoding='utf-8')
+    watches.write_text('b4-delay input_delay running\nc-own-hold sentence local_held LabelNetMatchStatus The AI is playing for you until you are back\nscreen-duplicates duplicates always\n', encoding='utf-8')
     rtt = ARMS[arm]
     peers = ['sp'] if rtt is None else ['host', 'client']
     runs, receipts = {}, {}
@@ -280,13 +287,14 @@ def summarize(cases, repeats, selected):
             judged.append(dict(arm=case['arm'], repeat=case['repeat'], peer=p['peer'], latency_ms=p['latency_ms'],
                                latency_frames=p['latency_frames'], b3_pass=feel_pass,
                                b1_delay_pass=p['b1_delay_pass'], b2_depth_pass=p['b2_depth_pass'], b4_overlay_pass=p['b4_overlay_pass'],
+                               c_duplicates_pass=p['c_duplicates_pass'], c_own_hold_pass=p['c_own_hold_pass'],
                                preview_ms_per_actor_tick=p['preview_ms_per_actor_tick'], delay_min=p['delay_min'], delay_max=p['delay_max']))
     complete = repeats >= 3 and set(selected) == set(ARMS) and len(cases) == repeats * len(ARMS) and all(
         c['manifest']['complete'] and c['manifest']['quiet'] and c['manifest']['binary_unchanged'] for c in cases)
     rise_checks = [case['manifest']['live_resize'] for case in cases if case['manifest'].get('lag_step')]
     return dict(complete=complete, single_player_repeat_noise=noise, rows=judged, live_resize_checks=rise_checks,
                 pass_check=complete and coverage and all(r['pass_check'] for r in rise_checks) and
-                           all(all(p[k] for k in ('b1_delay_pass', 'b2_depth_pass', 'b3_pass', 'b4_overlay_pass')) for p in judged),
+                           all(all(p[k] for k in ('b1_delay_pass', 'b2_depth_pass', 'b3_pass', 'b4_overlay_pass', 'c_duplicates_pass', 'c_own_hold_pass')) for p in judged),
                 definition='Existing feel.report.input_latencies: first completed presentation whose local actor changes aim/velocity in the requested direction and carries that input. Every missing response remains RED. Each network p50 must lie inside the measured single-player repeat p50 range, in milliseconds and presented frames; no added tolerance.',
                 scope='Headed Linux local two-engine fake-RTT measurement, not a spread/relay proof or physical display scanout measurement.')
 

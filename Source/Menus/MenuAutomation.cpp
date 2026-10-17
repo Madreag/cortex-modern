@@ -1455,6 +1455,13 @@ namespace RTE::MenuAutomation {
 		if (state == "running") return snapshot.serviceState == "Running";
 		if (state == "local_held" || state == "remote_held") {
 			const bool local = state == "local_held";
+			// The overlay reads the retained roster during continuity and private catch-up too. These are held frames even
+			// before the AI handoff or when the lobby member cache has already learned a future return.
+			if (local) {
+				const auto view = g_NetMatchService.GetSeatView(snapshot.localPeerId);
+				if (NetPlayerPresentation::OwnSeatHeld(snapshot, view, !view && ScenarioRunner::IsLockstepSeatReleased(snapshot.localPeerId)) ||
+				    ScenarioRunner::IsLockstepOwnSeatHeld()) return true;
+			}
 			// A catch-up alone is no hold: a host serves one and a late joiner runs one with nobody's seat held. This peer's
 			// own return is the catch-up or resync that follows the hold its host told it of.
 			const uint64_t frame = ScenarioRunner::GetLockstepCompletedFrame();
