@@ -1138,7 +1138,7 @@ namespace RTE {
 	}
 
 	bool NetMatchRunner::PumpWorldJoinLockstepStart(NetLockstepCoordinator& coordinator, uint64_t updateTick, std::string* error, const NetLockstepCoordinator* replay) {
-		if (replay) coordinator.AdoptReplayedFramePrefixes(*replay, updateTick);
+		if (replay) coordinator.AdoptReplayedSeatTransitions(*replay, updateTick);
 		if (!IsWorldJoinLockstepStarting()) {
 			return m_State == NetMatchRuntimeState::Running;
 		}

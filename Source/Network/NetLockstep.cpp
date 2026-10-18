@@ -6246,25 +6246,29 @@ namespace RTE {
 		return until;
 	}
 
-	void NetLockstepCoordinator::AdoptReplayedFramePrefixes(const NetLockstepCoordinator& replay, uint64_t throughFrame) {
+	bool NetLockstepCoordinator::AdoptReplayedFramePrefixes(const NetLockstepCoordinator& replay, uint64_t throughFrame) {
 		NET_PLANE_CHECK();
 		NetLockstepPlane::Check(&replay, "AdoptReplayedFramePrefixes (the replay)");
 		if (!UsesPeerFrameGroups() || !m_Config.joinsRunningRound || m_Playback || !replay.m_Playback ||
 		    m_Config.sessionId != replay.m_Config.sessionId || m_RoundId != replay.m_RoundId || m_RoundConfigHash != replay.m_RoundConfigHash ||
-		    m_Config.localPeerId != replay.m_Config.localPeerId || !replay.m_LastCompletedSimulationTick || m_Config.startFrame == 0) return;
+		    m_Config.localPeerId != replay.m_Config.localPeerId || !replay.m_LastCompletedSimulationTick || m_Config.startFrame == 0) return false;
 		const uint64_t through = std::min({throughFrame, *replay.m_LastCompletedSimulationTick, m_Config.startFrame - 1});
 		for (const auto& [frame, prefix]: replay.m_PeerReplayAppliedPrefixes) {
 			if (frame > through) break;
 			m_PeerReplayAppliedPrefixes.try_emplace(frame, prefix);
 		}
 		while (m_PeerReplayAppliedPrefixes.size() > NetHostMigrationCodec::c_PeerHistoryFrames) m_PeerReplayAppliedPrefixes.erase(m_PeerReplayAppliedPrefixes.begin());
+		return true;
 	}
 
 	void NetLockstepCoordinator::AdoptReplayedSeatTransitions(const NetLockstepCoordinator& replay, uint64_t throughFrame) {
 		NET_PLANE_CHECK();
 		// The replay's own maps are read here too.
 		NetLockstepPlane::Check(&replay, "AdoptReplayedSeatTransitions (the replay)");
-		AdoptReplayedFramePrefixes(replay, throughFrame);
+		if (UsesPeerFrameGroups()) {
+			if (!AdoptReplayedFramePrefixes(replay, throughFrame)) return;
+			throughFrame = std::min({throughFrame, *replay.m_LastCompletedSimulationTick, m_Config.startFrame - 1});
+		}
 		// Scripted switches at the return still read the preceding hold.
 		for (const auto& [peer, transitions]: replay.m_SeatTransitions) {
 			for (const auto& [frame, state]: transitions) {

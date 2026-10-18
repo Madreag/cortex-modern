@@ -10,6 +10,7 @@
 #include "NetLockstep.h"
 #include "NetPeerFrameHelpers.h"
 #include "NetMatchService.h"
+#include "NetMatchRunner.h"
 #include "NetAuthCrypto.h"
 #include "NetLobbySession.h"
 #include "PieMenu.h"
@@ -1790,6 +1791,43 @@ namespace RTE {
 				if (role == 0) check(!peer.IsFailed() && peer.m_RemoteStartsReceived.contains(3) && !wire.sent.empty() &&
 				    peer.m_PeerAdmissions.at(3).frame == 475 && peer.m_PeerAdmissions.at(3).delay == 4, arm + " replay-certified Start was not applied");
 				else check(peer.IsFailed() && !peer.m_RemoteStartsReceived.contains(3), arm + " uncertified Start survived the completed replay");
+			}
+			return passed;
+		}
+
+		static bool JoinStartTakesCompletedReplaySeats(std::string* error) {
+			bool passed = true;
+			for (unsigned role = 0; role < 10; ++role) {
+				Wire wire, replayWire; NetLockstepCoordinator peer, replay; Configure(peer, wire); Configure(replay, replayWire);
+				peer.m_Config.localPeerId = replay.m_Config.localPeerId = 3;
+				peer.m_Config.authorityPeerId = 1; peer.m_Config.peerFrameGroups = peer.m_Config.joinsRunningRound = true;
+				peer.m_Config.startFrame = 488; peer.m_Config.seatStateThroughFrame = 410;
+				peer.m_MigrationPhase = NetHostMigrationPhase::None; peer.m_State = NetLockstepState::WaitingForStart;
+				peer.m_Stats.nextFrame = 488; peer.m_LastCompletedSimulationTick.reset(); peer.m_AwaitingReplayedSeatState = true;
+				peer.m_FrameGroupMembers = 7; peer.m_FrameGroupChanges = {{1, 7}};
+				peer.m_RemotePeerIds = {1, 2}; peer.m_RemoteTransports = {{1, 41}, {2, 42}}; peer.m_RemoteStartsReceived = {1};
+				replay.m_Playback = role != 7; replay.m_LastCompletedSimulationTick = role == 1 ? 432 : 487;
+				if (role == 3) ++replay.m_Config.sessionId;
+				if (role == 4) --replay.m_RoundId;
+				if (role == 5) replay.m_RoundConfigHash[0] ^= 1;
+				if (role == 6) replay.m_Config.localPeerId = 2;
+				if (role == 8) replay.m_LastCompletedSimulationTick.reset();
+				const uint64_t held = role == 2 ? 500 : 433;
+				if (role != 9) {
+					replay.m_HoldTransactions[2] = {2, 0, held * 8 + 2, 1, held}; replay.m_AiHeldSeats[2] = held;
+					replay.m_SeatTransitions[2][held] = NetLockstepCoordinator::SeatTransition::Held;
+				}
+				NetMatchRunner runner;
+				(void)runner.PumpWorldJoinLockstepStart(peer, 487, error, &replay);
+				const bool imported = role == 0;
+				const bool completed = role == 0 || role == 2 || role == 9;
+				if (peer.IsSeatUnderAI(2, 488) != imported || peer.AllRemoteStartsReceived() != imported ||
+				    peer.m_AwaitingReplayedSeatState == completed || peer.m_RemoteStartsReceived.contains(2) ||
+				    peer.PeerFrameMembersAt(488) != (imported ? 5U : 7U) || peer.m_Stats.nextFrame != 488 || peer.m_LastCompletedSimulationTick ||
+				    (!imported && peer.m_SeatTransitions[2].contains(held))) {
+					passed = false; const std::string why = "role=" + std::to_string(role) + " join-start replay state disagrees with its completed source";
+					*error += why + "; "; std::cout << "[join-start-replay-seats] FAIL " << why << std::endl;
+				}
 			}
 			return passed;
 		}
@@ -32141,6 +32179,12 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS replay_does_not_await_live_admission\n[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "join-start-replay-seats") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::JoinStartTakesCompletedReplaySeats(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS join_start_takes_completed_replay_seats\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "stopped-start-handshake") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::StoppedContinuationHasNoStartHandshake(&error)) return fail(error);
@@ -32604,6 +32648,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::StoppedContinuationHasNoStartHandshake, "stopped_continuation_has_no_start_handshake");
 		row(&SessionPlaneRecoveryTest::PrivateStartsWaitForReplay, "private_starts_wait_for_replayed_admission");
 		row(&SessionPlaneRecoveryTest::ReplayDoesNotAwaitLiveAdmission, "replay_does_not_await_live_admission");
+		row(&SessionPlaneRecoveryTest::JoinStartTakesCompletedReplaySeats, "join_start_takes_completed_replay_seats");
 		row(&SessionPlaneRecoveryTest::RemovalNoticeRetries, "a_roster_removal_keeps_its_frame_after_a_cut");
 		row(&SessionPlaneRecoveryTest::FutureDepartureKeepsFramePrefix, "a_future_removal_does_not_rewrite_an_earlier_frame_prefix");
 		row(&SessionPlaneRecoveryTest::DeferredReturnKeepsItsFirstVote, "a_deferred_return_cannot_sign_a_second_activation");

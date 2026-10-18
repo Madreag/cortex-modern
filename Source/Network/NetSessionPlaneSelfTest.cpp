@@ -2423,7 +2423,8 @@ namespace RTE {
 				config.peerIncarnations[seat] = incarnation; config.seatStateThroughFrame = replay.applied;
 				fixture.peers[seat - 1] = std::make_unique<NetLockstepCoordinator>();
 				if (!fixture.peers[seat - 1]->Start(*fixture.wires[seat - 1], config, &error)) return false;
-				fixture.peers[seat - 1]->AdoptReplayedFramePrefixes(replayCoordinator, replay.applied);
+				// FLAGGED fixture departure: import completed replay seat state during the live handshake, as the runner does.
+				fixture.peers[seat - 1]->AdoptReplayedSeatTransitions(replayCoordinator, replay.applied);
 				fixture.peers[seat - 1]->DeferStopsToTickBoundary();
 				liveStarted = true;
 				return true;
@@ -2489,7 +2490,7 @@ namespace RTE {
 					    " next=" + std::to_string(replayCoordinator.GetStats().nextFrame) + " reason=" + replayCoordinator.GetStats().timeoutReason);
 					if (!replay.Apply(ready, error)) co_return false;
 					replayCoordinator.FinishSimulationTick(ready.frame);
-					if (liveStarted) fixture.peers[seat - 1]->AdoptReplayedFramePrefixes(replayCoordinator, replay.applied);
+					if (liveStarted) fixture.peers[seat - 1]->AdoptReplayedSeatTransitions(replayCoordinator, replay.applied);
 					receivedTail.erase(next);
 					credit -= 1; ++work;
 					// FLAGGED fixture departure: a private replay reports the same work cost as its supplied machine capacity.

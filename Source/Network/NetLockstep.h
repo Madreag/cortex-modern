@@ -1244,8 +1244,8 @@ namespace RTE {
 		void NoteReturnerCaughtUp(uint8_t peerId, uint64_t nowMs);
 		/// Host: a held seat that catches up in place on its own state and connection pays no restart, so none is owed to its return.
 		void NoteInPlaceReturn(uint8_t peerId);
-		/// Completed private replay history authenticates decisions received during the live handshake.
-		void AdoptReplayedFramePrefixes(const NetLockstepCoordinator& replay, uint64_t throughFrame);
+		/// Imports completed private replay prefixes; false rejects an unavailable or foreign source.
+		bool AdoptReplayedFramePrefixes(const NetLockstepCoordinator& replay, uint64_t throughFrame);
 		/// A joining round whose seat state was read before its first frame takes every hold and return of another seat that the replay
 		/// of its committed tail applied after that read, through the frame before its first; the host's own notice of them may never reach it.
 		void AdoptReplayedSeatTransitions(const NetLockstepCoordinator& replay, uint64_t throughFrame);
