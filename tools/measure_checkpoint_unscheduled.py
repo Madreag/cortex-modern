@@ -11,7 +11,6 @@ completion checks. A completed capture does not make a failed world join pass.
 """
 import argparse
 from datetime import datetime, timezone
-import hashlib
 import json
 import platform
 from pathlib import Path
@@ -36,7 +35,7 @@ def main():
     a = p.parse_args()
     repo = (a.checkout or a.repo).resolve()
     sys.path.insert(0, str(repo / 'tools'))
-    from run_sim_test import make_run, seed_settings
+    from run_sim_test import engine_executable, file_sha256, make_run, seed_settings
     out = a.out.resolve()
     out.mkdir(parents=True, exist_ok=False)
     (out / 'driver-as-run.py').write_bytes(Path(__file__).read_bytes())
@@ -109,7 +108,7 @@ def main():
               'warmup_ticks': a.warmup_ticks, 'maximum_concurrent_engines': 2,
               'authored_peer_capacity': int(peers), 'settings': settings, 'environment': env,
               'source_head': subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip(),
-              'exe_sha256': hashlib.sha256((repo / 'Cortex Command.exe').read_bytes()).hexdigest(),
+              'exe_sha256': file_sha256(engine_executable(repo)),
               'started_utc': datetime.now(timezone.utc).isoformat()}
     (out / 'configuration.json').write_text(json.dumps(config, indent=2))
 
@@ -179,7 +178,8 @@ def main():
     checks = {'no_driver_failure': failure is None, 'all_exit_zero': len(records) == expected_runs and all(r.get('exit_code') == 0 and not r.get('timed_out') for r in records.values()),
               'one_named_capture': len(named) == 1, 'minimum_lead': len(named) == 1 and named[0]['lead_ticks'] == int(delay) + 2,
               'one_measured_arm': len(selected) == 1 and all(k in selected[0] for k in ('native_arm_us', 'lua_arm_us')),
-              'no_capture_refusals': all('not taken:' not in log(role) and '[autosave] failed' not in log(role) for role in started)}
+              # A peer still replaying its catch-up is not live at a named tick and is not one of its writers; a live peer must take it.
+              'no_capture_refusals': all('not taken: catch_up=false' not in log(role) and '[autosave] failed' not in log(role) for role in started)}
     result = {**config, 'pass': all(checks.values()), 'checks': checks, 'failure': failure,
               'named': named, 'all_named': all_named, 'join_request_tick': join_request_tick,
               'measured_role': selected_role, 'measured_arms': selected, 'all_arms': arms,
