@@ -4027,6 +4027,7 @@ static std::string ResyncSaveName() {
 		if (!m_IsHost) return output;
 		if (output.capture && interval > 0 && m_NextAutosaveSimTime >= 0 && input.now >= m_NextAutosaveSimTime) {
 			m_NextAutosaveSimTime += ((input.now - m_NextAutosaveSimTime) / interval + 1) * interval;
+			m_PeriodicWaitSince = 0;
 		}
 		bool ask = input.manualRequested;
 		if (ask && input.hostProvisional) {
