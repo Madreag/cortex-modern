@@ -3807,9 +3807,7 @@ namespace RTE {
 	bool NetLockstepCoordinator::PeerConsumerHoldDue(uint64_t frame, uint64_t nowMs) const {
 		if (!m_ConsumerWaitingFrame || *m_ConsumerWaitingFrame > frame || nowMs < m_ConsumerWaitStartMs || m_Config.simTickMs <= 0) return false;
 		const auto deadline = PeerInputDeadlineMs(frame);
-		const uint64_t displayed = m_LastCompletedSimulationTick.value_or(m_Config.startFrame - 1);
-		const double reserve = displayed < m_Stats.effectiveStartFrame + m_Config.slowPlayerBoundTicks ? 0 : std::ceil(m_Config.simTickMs / 2);
-		return deadline && nowMs + reserve >= *deadline;
+		return deadline && nowMs >= *deadline;
 	}
 
 	bool NetLockstepCoordinator::PeerMissingInputReceipt(uint8_t peer, uint64_t frame) const {

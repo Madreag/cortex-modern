@@ -1036,6 +1036,11 @@ namespace RTE {
 						ping.pending.emplace(hub.now + trip, trip);
 					}
 					if (reliable) { auto& last = lastDelivery[{id, lane}]; at = std::max(at, last); last = at; }
+					if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) if (const char* watched = std::getenv("CC_TEST_LOCKSTEP_OBSERVE_TARGET");
+					    watched && peekInto(decision) && (decision.type == NetHostMigrationMessageType::PeerInput || decision.type == NetHostMigrationMessageType::PeerForwardInput) &&
+					    decision.frame == std::strtoull(watched, nullptr, 10))
+						DiagnosticLine() << "[session-plane-input-delivery] sender=" << unsigned(owner) << " receiver=" << unsigned(other->owner)
+						    << " frame=" << decision.frame << " sent_ms=" << hub.now << " arrival_ms=" << at << " reliable=" << reliable << " bytes=" << delivered.size() << std::endl;
 					other->events.push_back({at, {NetTransportEventType::PacketReceived, remote, lane, std::move(delivered), {}}, false}); return true;
 				}
 #if __has_include("NetPeerSessionWire.h")

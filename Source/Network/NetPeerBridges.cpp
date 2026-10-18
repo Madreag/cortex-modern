@@ -525,8 +525,8 @@ namespace RTE {
 			const uint64_t displayed = m_LastCompletedSimulationTick.value_or(m_Config.startFrame - 1);
 			if (displayed < m_Stats.effectiveStartFrame + m_Config.slowPlayerBoundTicks &&
 			    (m_ConsumerWaitingFrame != frame || nowMs < m_ConsumerWaitStartMs || nowMs - m_ConsumerWaitStartMs < boundMs)) return false;
-			// Reserve only local commit and consumption time; the hold requires no remote signature.
-			uint64_t agreementMs = static_cast<uint64_t>(std::ceil(m_Config.simTickMs / 2));
+			// A local hold needs no advance reservation.
+			uint64_t agreementMs = 0;
 			// The consumer's bound is already on the deadline below. Charge this co-sign its round trip and a poll, not the bound
 			// twice: an early speculative vote would fence a healthy returner's first input while it is still normally in flight.
 			if (!PeerGroupMayHold(proposal.connectedMask, proposal.frame)) for (uint8_t peer: proposal.members) {

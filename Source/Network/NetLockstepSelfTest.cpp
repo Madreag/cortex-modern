@@ -176,13 +176,49 @@ namespace RTE {
 				}
 				peer.m_TimingNowMs = 1030;
 				if (peer.ProposePeerBridge(349, 1030)) { *error = "another sender's receipt formed an early hold"; return false; }
-				peer.m_TimingNowMs = 1041;
-				const bool held = peer.ProposePeerBridge(349, 1041);
+				// FLAGGED fixture correction: the 50ms deadline is 1050, without a nine-millisecond reservation.
+				peer.m_TimingNowMs = 1050;
+				const bool held = peer.ProposePeerBridge(349, 1050);
 				if (complete) {
 					if (held || NetPeerFrameDetail::HasHoldDecision(peer.m_PeerBridgeCertificates, 349)) { *error = "complete input acceptance held a healthy member"; return false; }
 				} else if (!held || peer.m_FrameGroupMembers != 3 || peer.IsSeatUnderAI(1, 349) ||
 				    !peer.IsSeatUnderAI(3, 349) || !peer.IsSeatUnderAI(4, 349)) {
 					*error = "the local input's complete receipts hid another required sender's missing quorum at the consumer bound"; return false;
+				}
+			}
+			return true;
+		}
+
+		static bool ConsumerInputGetsTheWholeBound(std::string* error) {
+			for (bool arrives: {false, true}) {
+				Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
+				peer.m_Config.peerFrameGroups = peer.m_Config.substituteSlowPeers = true;
+				peer.m_Config.slowPlayerBoundTicks = 3; peer.m_MigrationPhase = NetHostMigrationPhase::None;
+				peer.m_FrameGroupMembers = 7; peer.m_FrameGroupChanges = {{1, 7}};
+				peer.m_RemoteTransports = {{1, 42}, {3, 43}};
+				peer.m_Stats.nextFrame = 351; peer.m_LastCompletedSimulationTick = 350;
+				peer.m_MigrationHistory[350] = {1, 2, 3};
+				peer.m_PeerPaceStartFrame = 350; peer.m_PeerPaceStartMs = peer.m_PeerConsumerAtMs = 1000;
+				peer.m_FirstMissingFrame = peer.m_ConsumerWaitingFrame = 351;
+				peer.m_FirstMissingMs = 992; peer.m_ConsumerWaitStartMs = 1017;
+				for (uint8_t owner: {2, 3}) {
+					peer.m_PeerSourceInputs[351][owner] = {owner, 351};
+					peer.m_PeerInputReceipts[owner] = {{1, 352}, {2, 352}, {3, 352}};
+				}
+				const auto previous = peer.PeerFramePrefix(350);
+				for (uint64_t now: {1041, 1049}) {
+					peer.m_TimingNowMs = now;
+					if (peer.ProposePeerBridge(351, now) || NetPeerFrameDetail::HasHoldDecision(peer.m_PeerBridgeVotes, 351) || peer.IsSeatUnderAI(1, 351)) {
+						*error = "a local commit reservation spent the consumer's still-open 50ms input window"; return false;
+					}
+				}
+				if (arrives) {
+					peer.m_PeerSourceInputs[351][1] = {1, 351};
+					peer.m_PeerInputReceipts[1] = {{1, 352}, {2, 352}, {3, 352}};
+				}
+				peer.m_TimingNowMs = 1050;
+				if (peer.ProposePeerBridge(351, 1050) != !arrives || peer.IsSeatUnderAI(1, 351) != !arrives || peer.PeerFramePrefix(350) != previous) {
+					*error = "the exact consumer deadline did not distinguish an absent input from one accepted inside its window"; return false;
 				}
 			}
 			return true;
@@ -213,8 +249,9 @@ namespace RTE {
 				if (peer.ProposePeerBridge(351, 1030) || NetPeerFrameDetail::HasHoldDecision(peer.m_PeerBridgeVotes, 351)) {
 					*error = "a consumer hold spent a healthy displayed slot before its bounded deadline"; return false;
 				}
-				peer.m_TimingNowMs = 1041;
-				if (!peer.ProposePeerBridge(351, 1041) || !NetPeerFrameDetail::HasHoldDecision(peer.m_PeerBridgeCertificates, 351, 1) ||
+				// FLAGGED fixture correction: observe the actual 50ms deadline, retaining every hold and prefix assertion.
+				peer.m_TimingNowMs = 1050;
+				if (!peer.ProposePeerBridge(351, 1050) || !NetPeerFrameDetail::HasHoldDecision(peer.m_PeerBridgeCertificates, 351, 1) ||
 				    !peer.IsSeatUnderAI(1, 351) || peer.IsSeatUnderAI(3, 351)) {
 					*error = std::string(receiptOnly ? "receipt" : "input") +
 					    " hold adds a normal tick to the 50ms displayed bound, or its certificate uses another deadline"; return false;
@@ -263,8 +300,8 @@ namespace RTE {
 				}
 				peer.m_TimingNowMs = 1030;
 				if (peer.ProposePeerBridge(351, 1030)) { *error = "a neutral return held another peer before its displayed deadline"; return false; }
-				peer.m_TimingNowMs = 1041;
-				const bool held = peer.ProposePeerBridge(351, 1041);
+				peer.m_TimingNowMs = 1050;
+				const bool held = peer.ProposePeerBridge(351, 1050);
 				if (held != (role == 0 || role == 3) || (held && (!peer.IsSeatUnderAI(1, 351) || peer.IsSeatUnderAI(3, 351)))) {
 					*error = "a participating neutral return needs no own human input to hold another missing sender, while a private reader does"; return false;
 				}
@@ -299,8 +336,9 @@ namespace RTE {
 			peer.m_MigrationHistory[357] = {4, 5, 6};
 			const auto preceding = peer.PeerAppliedFramePrefix(357);
 			peer.m_PeerConsumerAtMs = 1000; peer.m_ConsumerWaitingFrame = 358; peer.m_ConsumerWaitStartMs = 1017;
-			peer.m_TimingNowMs = 1041;
-			for (const auto& [key, votes]: peer.m_PeerBridgeVotes) peer.TryCommitPeerBridge(key.first, 1041, key.second);
+			// FLAGGED fixture correction: both local holds compose at the actual 50ms deadline.
+			peer.m_TimingNowMs = 1050;
+			for (const auto& [key, votes]: peer.m_PeerBridgeVotes) peer.TryCommitPeerBridge(key.first, 1050, key.second);
 			if (peer.m_PeerBridgeCertificates.size() != 2 || peer.m_FrameGroupMembers != 1 ||
 			    !peer.IsSeatUnderAI(2, 358) || !peer.IsSeatUnderAI(3, 358) || peer.IsSeatUnderAI(1, 358) ||
 			    peer.IsSeatUnderAI(2, 357) || peer.IsSeatUnderAI(3, 357) || peer.PeerAppliedFramePrefix(357) != preceding) {
@@ -31524,6 +31562,12 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS consumer_hold_deadline_includes_the_displayed_slot\n[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "consumer-whole-window") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::ConsumerInputGetsTheWholeBound(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS consumer_input_gets_the_whole_bound\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "legacy-combat-deadline") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::LegacyCombatHoldUsesItsInputDeadline(&error)) return fail(error);
@@ -31863,6 +31907,7 @@ namespace {
 		row(&NetSessionPlaneSelfTest::CheckHeldHostControllers, "a_held_host_preserves_controller_disable_before_its_return_arrives");
 		row(&SessionPlaneRecoveryTest::LinkDelay, "input_delay_follows_the_measured_link");
 		row(&SessionPlaneRecoveryTest::ConsumerHoldDeadlineIncludesTheDisplayedSlot, "consumer_hold_deadline_includes_the_displayed_slot");
+		row(&SessionPlaneRecoveryTest::ConsumerInputGetsTheWholeBound, "consumer_input_gets_the_whole_bound");
 		row(&SessionPlaneRecoveryTest::ConcurrentVoluntaryHoldsKeepBothOwners, "concurrent_voluntary_holds_keep_both_owners");
 		row(&SessionPlaneRecoveryTest::HeldPeerFrameSeatsOweNoInput, "held_peer_frame_seats_owe_no_input");
 		row(&SessionPlaneRecoveryTest::LegacyCombatHoldUsesItsInputDeadline, "legacy_combat_hold_uses_its_input_deadline");
