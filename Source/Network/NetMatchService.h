@@ -1431,6 +1431,7 @@ namespace RTE {
 		friend bool TestWorldCaptureFollowsTheDeferredVerdict(std::string* error);
 		friend bool TestWorldCaptureKeepsOneImageInFlight(std::string* error);
 		friend bool TestALostCaptureIsNamedAgain(std::string* error);
+		friend bool TestAHeldHostKeepsTheAutosaveCadence(std::string* error);
 		friend bool TestAHostsLostOwnReportDoesNotStopTheSchedule(std::string* error);
 		friend bool TestAProvisionalHostWritesNothing(std::string* error);
 		friend bool TestNoCaptureIsNamedOverAPendingActivation(std::string* error);
