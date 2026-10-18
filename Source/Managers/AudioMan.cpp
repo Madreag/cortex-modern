@@ -2213,6 +2213,12 @@ void AudioMan::RetirePredictedVoice(int identity) {
 }
 
 bool AudioMan::IsPredictedVoice(int identity) const {
+	// A save's reader asks of the voices as its boundary left them; the live map changes under it on the game's thread.
+	if (CheckpointNativeStorage::Reading()) {
+		for (const auto& [voice, playing]: CheckpointValues(CheckpointNativeStorage::Source(this)->m_PlayingVoices))
+			if (voice == identity) return playing.predicted;
+		return false;
+	}
 	const auto found = m_PlayingVoices.find(identity);
 	return found != m_PlayingVoices.end() && found->second.predicted;
 }
