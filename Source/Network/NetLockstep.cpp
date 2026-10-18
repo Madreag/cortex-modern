@@ -5334,7 +5334,8 @@ namespace RTE {
 	// Everything one round owns. Start, StartReplay and a round we follow all pass through here, so a
 	// field a round carries cannot be reset in two of the three and forgotten in the last. What stays
 	// out: the local production a follower keeps, and the deferred-stop mode the launch path sets.
-	void NetLockstepCoordinator::ResetRoundState() {
+	void NetLockstepCoordinator::ResetRoundState(bool playback) {
+		m_Playback = playback;
 		m_ReplayAuthorities.clear();
 		m_ReplayAuthorityHistory.clear();
 		m_ReplayOpeningAuthority = GetHostPeerId();
@@ -5358,7 +5359,7 @@ namespace RTE {
 				first = std::max(reclaim->second.neutralThroughFrame, reclaim->second.activationFrame + reclaim->second.delayFrames) + 1;
 			SeedInputAcceptance(peer, first);
 		}
-		m_ResumeAdmissionPending = m_Config.resumeFromSnapshot;
+		m_ResumeAdmissionPending = !m_Playback && m_Config.resumeFromSnapshot;
 		m_SynchronizedCaptureStartFrame = UINT64_MAX;
 		m_SynchronizedCaptureEndFrame = 0;
 		m_SynchronizedCaptureBudgetMs = 250.0;
@@ -5408,7 +5409,6 @@ namespace RTE {
 		m_LocalSeatHeld = false;
 		m_SeatBridgeSinceMs = m_Config.initialSeatBridgeSinceMs;
 		m_LocalHoldFrame = 0;
-		m_Playback = false;
 		m_TimingNowMs = 0;
 		m_ProductionBaseFrame.reset();
 		m_ProductionBaseUs = m_ProductionWaitBaseUs = 0;
@@ -5595,7 +5595,7 @@ namespace RTE {
 			for (auto& [peer, bridge]: m_PeerBridges) bridge.members = m_FrameGroupMembers;
 		}
 		// A round joined from a replayed tail commits nothing until the seats that tail changed after its seat state was read are taken.
-		m_AwaitingReplayedSeatState = m_Config.joinsRunningRound && m_Config.seatStateThroughFrame != 0;
+		m_AwaitingReplayedSeatState = !m_Playback && m_Config.joinsRunningRound && m_Config.seatStateThroughFrame != 0;
 		// A seat taken back before our first frame is a member from it: the start the host hands out for it names that frame.
 		// Its delay is the one the round runs at that frame, delay changes included, which is what the seat's own start carries.
 		if (m_Config.peerFrameGroups && m_Config.joinsRunningRound)
@@ -5825,10 +5825,7 @@ namespace RTE {
 			m_Config.substituteSlowPeers = true;
 		m_DeferStops = false;
 		m_State = NetLockstepState::Running;
-		ResetRoundState();
-		m_Playback = true;
-		// A replay reads our own held seat as the round recorded it.
-		for (const auto& [peer, hold]: m_Config.initialSeatHolds) DropRecordedHeldSeat(peer);
+		ResetRoundState(true);
 		m_LocalFrames.clear();
 		m_LocalInputHistory.clear();
 		m_ResyncPrimed = true;

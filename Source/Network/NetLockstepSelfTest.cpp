@@ -3039,8 +3039,57 @@ namespace RTE {
 			return true;
 		}
 
-		// A seat back through its ticket replays only the round's committed record: no peer's own split of the inputs, no mark
-		// of its own held silence. The host's return certificate names its boundary by the prefix the host derived there.
+		static bool ReplayDoesNotAwaitLiveAdmission(std::string* error) {
+			bool passed = true;
+			const auto check = [&](bool ok, const std::string& why) {
+				if (!ok) { passed = false; *error += why + "; "; std::cout << "[replay-live-admission] FAIL " << why << std::endl; }
+			};
+			for (unsigned flags = 0; flags < 4; ++flags) {
+				Wire liveWire; NetLockstepCoordinator live; Configure(live, liveWire);
+				auto config = live.m_Config;
+				config.startFrame = 780; config.roundId = 77; config.authorityPeerId = 1;
+				config.substituteSlowPeers = true; config.matchConfig.slowPlayerPolicy = NetSlowPlayerPolicy::Substitute;
+				config.joinsRunningRound = (flags & 1) != 0; config.seatStateThroughFrame = 700;
+				config.resumeFromSnapshot = (flags & 2) != 0;
+				config.initialSeatHolds[2] = {2, 0, 1, 1, 700};
+				for (bool catchUp: {false, true}) {
+					LoopbackTransport wire; NetLockstepCoordinator replay;
+					const std::string role = std::to_string(flags) + (catchUp ? " catch-up" : " playback");
+					if (!(catchUp ? replay.StartCatchUpReplay(wire, config, live, error) : replay.StartReplay(wire, config, error))) return false;
+					for (uint64_t frame: {780, 781}) {
+						ControllerFrame input; input.actorUniqueID = 77; input.analogMoveX = frame - 779;
+						input.inputMode = static_cast<uint8_t>(Controller::CIM_PLAYER); input.playerRaw = Players::PlayerOne;
+						const std::vector<NetGameCommand> commands = frame == 780 ?
+						    std::vector<NetGameCommand>{{1, NetGameSeatHold{3, 0, 2, 1, frame}}} :
+						    std::vector<NetGameCommand>{{1, NetGameSeatReclaim{3, 0, 3, 1, frame, 4, frame + 1}}};
+						if (!replay.QueueReplayFrame(frame, {input}, commands, error, {}, {}, 1, 1)) return false;
+						replay.Tick(frame - 780);
+						NetLockstepReadyFrame ready;
+						const bool delivered = replay.PopReadyFrame(ready);
+						check(delivered, role + " did not deliver committed frame " + std::to_string(frame) + " block=" + replay.m_AdvanceBlock);
+						if (!delivered) break;
+						check(ready.frame == frame && ready.authorityPeerId == 1 && ready.remoteFrames.size() == 1 &&
+						      ready.remoteFrames.front().analogMoveX == input.analogMoveX && ready.remoteCommands == commands &&
+						      replay.IsSeatUnderAI(2, frame) && replay.IsSeatUnderAI(3, frame) == (frame == 780),
+						      role + " changed the recorded inputs, authority, hold or return");
+					}
+					check(!replay.m_AwaitingReplayedSeatState && !replay.m_ResumeAdmissionPending && replay.m_ResyncPrimed,
+					      role + " inherited a live admission gate");
+				}
+				if (flags == 0) continue;
+				live.m_Config = config; live.m_Playback = true; live.m_MigrationPhase = NetHostMigrationPhase::None;
+				live.m_ResyncPrimed = true; live.m_Stats.nextFrame = config.startFrame;
+				live.ResetRoundState();
+				live.m_LocalFrames[780] = {}; live.m_RemoteFrames[780][1] = {}; live.m_RemoteFrames[780][3] = {};
+				live.AdvanceReadyFrames(0);
+				check(!live.m_Playback && live.m_AwaitingReplayedSeatState == ((flags & 1) != 0) &&
+				      live.m_ResumeAdmissionPending == ((flags & 2) != 0) && live.m_ReadyFrames.empty() && live.m_Stats.nextFrame == 780,
+				      "live reset " + std::to_string(flags) + " bypassed its unfinished admission");
+			}
+			return passed;
+		}
+
+		// A returned seat derives its certificate prefix from the round's committed record.
 		static bool ReplayedRecordPrefix(std::string* error) {
 			Wire wire; NetLockstepCoordinator host; Configure(host, wire);
 			host.m_Config.peerFrameGroups = true; host.m_Config.localPeerId = 1;
@@ -32086,6 +32135,12 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS private_starts_wait_for_replayed_admission\n[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "replay-live-admission") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::ReplayDoesNotAwaitLiveAdmission(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS replay_does_not_await_live_admission\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "stopped-start-handshake") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::StoppedContinuationHasNoStartHandshake(&error)) return fail(error);
@@ -32548,6 +32603,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::NeutralReplayStopsAtThePlayingClock, "neutral_replay_stops_at_the_playing_clock");
 		row(&SessionPlaneRecoveryTest::StoppedContinuationHasNoStartHandshake, "stopped_continuation_has_no_start_handshake");
 		row(&SessionPlaneRecoveryTest::PrivateStartsWaitForReplay, "private_starts_wait_for_replayed_admission");
+		row(&SessionPlaneRecoveryTest::ReplayDoesNotAwaitLiveAdmission, "replay_does_not_await_live_admission");
 		row(&SessionPlaneRecoveryTest::RemovalNoticeRetries, "a_roster_removal_keeps_its_frame_after_a_cut");
 		row(&SessionPlaneRecoveryTest::FutureDepartureKeepsFramePrefix, "a_future_removal_does_not_rewrite_an_earlier_frame_prefix");
 		row(&SessionPlaneRecoveryTest::DeferredReturnKeepsItsFirstVote, "a_deferred_return_cannot_sign_a_second_activation");

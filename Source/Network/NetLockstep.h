@@ -1973,7 +1973,7 @@ namespace RTE {
 		/// Delivers the frames and checksums a peer sent before its start reached us.
 		void FlushPreStart(uint8_t peerId, uint64_t nowMs);
 		/// Clears everything one round owns, so leaving a round cannot carry a fact from it.
-		void ResetRoundState();
+		void ResetRoundState(bool playback = false);
 		/// Sends the production a followed round owes the host, in order, retrying a refused send.
 		void FlushResendFrames();
 		void HandleStop(const NetLockstepStop& stop, uint64_t nowMs, NetPeerId fromTransport);

@@ -2484,7 +2484,9 @@ namespace RTE {
 					                                      recorded.replayUpdateAuthorityPeerId)) co_return false;
 					replayCoordinator.Tick(fixture.hub.now);
 					NetLockstepReadyFrame ready;
-					if (!replayCoordinator.PopReadyFrame(ready)) co_return fail("the private coordinator did not consume the next committed frame");
+					if (!replayCoordinator.PopReadyFrame(ready)) co_return fail("the private coordinator did not consume committed frame " +
+					    std::to_string(recorded.targetFrame) + ": state=" + std::to_string(static_cast<int>(replayCoordinator.GetState())) +
+					    " next=" + std::to_string(replayCoordinator.GetStats().nextFrame) + " reason=" + replayCoordinator.GetStats().timeoutReason);
 					if (!replay.Apply(ready, error)) co_return false;
 					replayCoordinator.FinishSimulationTick(ready.frame);
 					if (liveStarted) fixture.peers[seat - 1]->AdoptReplayedFramePrefixes(replayCoordinator, replay.applied);
