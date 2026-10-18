@@ -389,17 +389,16 @@ namespace RTE {
 		if (!IsRunning() || !m_LastCompletedSimulationTick) return false;
 		if (const auto phase = InputDelayRetimingTarget(); phase && *m_LastCompletedSimulationTick < *phase) return true;
 		if (!UsesPeerFrameGroups()) return false;
-		const auto own = m_PeerBridges.find(m_Config.localPeerId);
-		if (own != m_PeerBridges.end() && own->second.committedHold && !own->second.returnFrame &&
-		    m_PeerTailThrough && *m_LastCompletedSimulationTick < *m_PeerTailThrough) return true;
+		const uint64_t next = *m_LastCompletedSimulationTick + 1;
+		// A future return certificate does not end private replay before its activation tick.
+		if (m_PeerTailThrough && *m_LastCompletedSimulationTick < *m_PeerTailThrough && IsLocalPrivateReaderAt(next)) return true;
 		// The certified neutral interval is the returner's remaining catch-up runway. Keep using its existing bounded replay
 		// budget through that interval; matching one survivor's display clock can still leave it behind a faster survivor's phase.
 		if (const auto back = m_ReclaimTransactions.find(m_Config.localPeerId); back != m_ReclaimTransactions.end() &&
-		    *m_LastCompletedSimulationTick >= back->second.activationFrame && *m_LastCompletedSimulationTick < back->second.neutralThroughFrame) return true;
+		    next >= back->second.activationFrame && next <= back->second.neutralThroughFrame) return true;
 		// An extrapolated display clock is a phase goal, not receipt credit. An extra tick must leave the first outstanding
 		// own target enough ordinary tick slots for its full trip to every playing reader. Otherwise catching up spends the
 		// delay queue faster than production/receipts can refill it and invents a missing peer on a healthy steady link.
-		const uint64_t next = *m_LastCompletedSimulationTick + 1;
 		const auto receipts = m_PeerInputReceipts.find(m_Config.localPeerId);
 		for (uint8_t reader = 1; reader <= m_Config.peerCount; ++reader) {
 			if (reader == m_Config.localPeerId || (PeerFrameMembersAt(next) & SeatBit(reader)) == 0) continue;

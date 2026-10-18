@@ -449,6 +449,23 @@ namespace RTE {
 			peer.m_PeerBridges[2] = {17, 17, true, {}, {}, 1};
 			peer.m_PeerTailThrough = 40;
 			if (!peer.PeerFrameCatchUpActive()) { *error = "receipt pacing blocked a private reader's certified tail"; return false; }
+			// Isolate private/neutral replay from the independent ordinary display-phase goal.
+			peer.m_PeerPaceReference = 2;
+			peer.m_PeerBridges[2].returnFrame = 38;
+			peer.m_ReclaimTransactions[2] = {2, 1, 123, 1, 38, 16, 54};
+			if (!peer.IsLocalPrivateReaderAt(29) || !peer.PeerFrameCatchUpActive()) {
+				*error = "a future return disabled certified private replay before its activation"; return false;
+			}
+			peer.m_LastCompletedSimulationTick = 37;
+			if (peer.IsLocalPrivateReaderAt(38) || !peer.PeerFrameCatchUpActive()) {
+				*error = "the first neutral activation tick lost its bounded replay budget"; return false;
+			}
+			peer.m_LastCompletedSimulationTick = 40;
+			if (peer.IsLocalPrivateReaderAt(41) || !peer.PeerFrameCatchUpActive()) {
+				*error = "the committed neutral interval lost its bounded replay budget"; return false;
+			}
+			peer.m_LastCompletedSimulationTick = 54;
+			if (peer.PeerFrameCatchUpActive()) { *error = "a completed return became a permanent faster clock"; return false; }
 			return true;
 		}
 
