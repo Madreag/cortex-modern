@@ -179,9 +179,16 @@ namespace RTE {
 			    progress.through < EffectiveStartOf(m_Config.localPeerId) || IsSeatReclaimGap(m_Config.localPeerId, progress.through)) continue;
 			uint32_t rtt = 0;
 			const auto [wire, route] = PeerFrameRoute(peer);
-			if (wire && wire->IsPeerPingMeasured(route)) rtt = wire->GetPeerPingMs(route);
-			// Start from the original send so the repair arrives inside the buffered runway.
-			const uint64_t retryMs = std::clamp<uint64_t>(rtt + static_cast<uint64_t>(std::ceil(m_Config.slowPlayerBoundTicks * m_Config.simTickMs)), 50, 1000);
+			const bool measured = wire && wire->IsPeerPingMeasured(route);
+			if (measured) rtt = wire->GetPeerPingMs(route);
+			uint64_t retryMs = std::clamp<uint64_t>(static_cast<uint64_t>(std::ceil(m_Config.slowPlayerBoundTicks * m_Config.simTickMs)), 50, 1000);
+			if (measured) {
+				// Repair replaces a receipt after its link trip, before the buffered target is due. Adding the gameplay hold
+				// budget here starts recovery after that runway has expired. Link p95 covers in-flight transport jitter.
+				retryMs = std::max<uint64_t>(static_cast<uint64_t>(std::max(1.0, std::ceil(m_Config.simTickMs))), rtt);
+				if (const auto link = m_DelayEstimators.find(peer); link != m_DelayEstimators.end() && link->second.HasMeasurement())
+					retryMs = std::max<uint64_t>(retryMs, link->second.P95Ms());
+			}
 			const auto sent = m_PeerInputSentAtMs.find(progress.through);
 			if (sent == m_PeerInputSentAtMs.end()) continue;
 			const uint64_t since = std::max(sent->second, progress.repairedAtMs);

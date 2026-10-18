@@ -1,0 +1,426 @@
+{
+  "topology": "single-box",
+  "proof": false,
+  "complete_gate": false,
+  "parent": "de83c12cd25c4051315122df0bed1c63805b67d2",
+  "launches": [
+    {
+      "collection": "repair-clock-hold-spec-red",
+      "case": "hold-unplayed-input",
+      "exe_sha256": "b477faca253fa5242a6163f00bd63b9731974bff9e3f494851f0733bd4e2d780",
+      "visible_window": true,
+      "exit_code": 1,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "repair-clock-hold-spec-red--hold-unplayed-input--stdout.log.gz",
+          "original_sha256": "70c8f9d112f2c97cc649207cf2c40666e24a7f5696bef68ed08162f1b9dce2d5",
+          "portable_sha256": "70c8f9d112f2c97cc649207cf2c40666e24a7f5696bef68ed08162f1b9dce2d5",
+          "compressed_sha256": "eca77131066405554f4b657a7b1e2fc6d29745a53096cc3069e88b07d86e0e17"
+        },
+        {
+          "path": "repair-clock-hold-spec-red--hold-unplayed-input--stderr.log.gz",
+          "original_sha256": "e4088fdfb3d680c9ff1165ef0ba1a4c34054eef8d26b2400691ccbfae2474a0a",
+          "portable_sha256": "e4088fdfb3d680c9ff1165ef0ba1a4c34054eef8d26b2400691ccbfae2474a0a",
+          "compressed_sha256": "aa52916ae95c9e803dceea39096a9ec8a7f0e2748bf4c3bc020b9e158108d3ee"
+        }
+      ]
+    },
+    {
+      "collection": "repair-clock-hold-spec-red",
+      "case": "receipt-link-clock",
+      "exe_sha256": "b477faca253fa5242a6163f00bd63b9731974bff9e3f494851f0733bd4e2d780",
+      "visible_window": true,
+      "exit_code": 1,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "repair-clock-hold-spec-red--receipt-link-clock--stdout.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        },
+        {
+          "path": "repair-clock-hold-spec-red--receipt-link-clock--stderr.log.gz",
+          "original_sha256": "a98f0097b460d9c3b9fab05a1d6dfc7b8bef508702b93c4f99ccc4fa798e374f",
+          "portable_sha256": "a98f0097b460d9c3b9fab05a1d6dfc7b8bef508702b93c4f99ccc4fa798e374f",
+          "compressed_sha256": "a1a0cba8ded1d8d598c61d3ea135669837e0f66ee673d1f9157bdbe2a8155277"
+        }
+      ]
+    },
+    {
+      "collection": "repair-clock-hold-verified-native",
+      "case": "active-pace-runway",
+      "exe_sha256": "0681797223fec609f5563c14c882fb901b57167c82a829a51e2588beebb5255b",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "repair-clock-hold-verified-native--active-pace-runway--stdout.log.gz",
+          "original_sha256": "fd2241676e275635c6c175dea160b670f4efef8aaf88b033254a979c27fc4690",
+          "portable_sha256": "fd2241676e275635c6c175dea160b670f4efef8aaf88b033254a979c27fc4690",
+          "compressed_sha256": "8fd0e5f1943aed15c30db8d518c20e572e5f54ca4dd672fb3dd801d3d01963b7"
+        },
+        {
+          "path": "repair-clock-hold-verified-native--active-pace-runway--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "repair-clock-hold-verified-native",
+      "case": "buffered-input-receipt",
+      "exe_sha256": "0681797223fec609f5563c14c882fb901b57167c82a829a51e2588beebb5255b",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "repair-clock-hold-verified-native--buffered-input-receipt--stdout.log.gz",
+          "original_sha256": "303c580f9363d19253e4b4cd09e84f04ae58886ac73a86106ac5ed0384d1f3f9",
+          "portable_sha256": "303c580f9363d19253e4b4cd09e84f04ae58886ac73a86106ac5ed0384d1f3f9",
+          "compressed_sha256": "ae4a1055327a29e1a4a2bbb3afda298c87758f4414adab7f7feccc27d85ec81b"
+        },
+        {
+          "path": "repair-clock-hold-verified-native--buffered-input-receipt--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "repair-clock-hold-verified-native",
+      "case": "direct-heal-history",
+      "exe_sha256": "0681797223fec609f5563c14c882fb901b57167c82a829a51e2588beebb5255b",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "repair-clock-hold-verified-native--direct-heal-history--stdout.log.gz",
+          "original_sha256": "9937c2dbfd27c3250f8aea85b6d55bcbdd1e44a9df747e15afdc805aa16cf523",
+          "portable_sha256": "9937c2dbfd27c3250f8aea85b6d55bcbdd1e44a9df747e15afdc805aa16cf523",
+          "compressed_sha256": "ccc0f4d9adc8108807388eb824e51a3de47341a99b63282d7c298de2d198fe04"
+        },
+        {
+          "path": "repair-clock-hold-verified-native--direct-heal-history--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "repair-clock-hold-verified-native",
+      "case": "direct-hold-scope",
+      "exe_sha256": "0681797223fec609f5563c14c882fb901b57167c82a829a51e2588beebb5255b",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "repair-clock-hold-verified-native--direct-hold-scope--stdout.log.gz",
+          "original_sha256": "1ebb57ed8c7dd1dc3bfcb6aa4ec4ccebaad89f57a279666356c951ecba5eef5c",
+          "portable_sha256": "1ebb57ed8c7dd1dc3bfcb6aa4ec4ccebaad89f57a279666356c951ecba5eef5c",
+          "compressed_sha256": "0a6e55f744d76628bdf149e59b892e7afe4ae0ad5515b545584b6389594952c3"
+        },
+        {
+          "path": "repair-clock-hold-verified-native--direct-hold-scope--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "repair-clock-hold-verified-native",
+      "case": "hold-unplayed-input",
+      "exe_sha256": "0681797223fec609f5563c14c882fb901b57167c82a829a51e2588beebb5255b",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "repair-clock-hold-verified-native--hold-unplayed-input--stdout.log.gz",
+          "original_sha256": "054c9935bfd3611147b4c6a0db8ca0b635b4187780bd21dc7b302d12c9c22034",
+          "portable_sha256": "054c9935bfd3611147b4c6a0db8ca0b635b4187780bd21dc7b302d12c9c22034",
+          "compressed_sha256": "769cbc573c5c32753fd394e1444b4c846c1f170d53260698b784822424d85f67"
+        },
+        {
+          "path": "repair-clock-hold-verified-native--hold-unplayed-input--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "repair-clock-hold-verified-native",
+      "case": "link-delay-transitions",
+      "exe_sha256": "0681797223fec609f5563c14c882fb901b57167c82a829a51e2588beebb5255b",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "repair-clock-hold-verified-native--link-delay-transitions--stdout.log.gz",
+          "original_sha256": "2f2a122fb7f9467b7cea226be44ecbb42a3651db4b5bd00ab48628c18e521df7",
+          "portable_sha256": "2f2a122fb7f9467b7cea226be44ecbb42a3651db4b5bd00ab48628c18e521df7",
+          "compressed_sha256": "fa3300be29ee25e54fe7e8fe763d76cd2a7338e914d5715245915962b7fa4f91"
+        },
+        {
+          "path": "repair-clock-hold-verified-native--link-delay-transitions--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "repair-clock-hold-verified-native",
+      "case": "owner-hitch-two-internet",
+      "exe_sha256": "0681797223fec609f5563c14c882fb901b57167c82a829a51e2588beebb5255b",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "repair-clock-hold-verified-native--owner-hitch-two-internet--stdout.log.gz",
+          "original_sha256": "348c066daba3383e7ed88628694b4951fcf2dd7e392009248925d1b8658e5b99",
+          "portable_sha256": "348c066daba3383e7ed88628694b4951fcf2dd7e392009248925d1b8658e5b99",
+          "compressed_sha256": "a74560c46897f2b10097bb66316b82ce489896271f4674432ca4b8d3ea083c32"
+        },
+        {
+          "path": "repair-clock-hold-verified-native--owner-hitch-two-internet--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "repair-clock-hold-verified-native",
+      "case": "receipt-link-clock",
+      "exe_sha256": "0681797223fec609f5563c14c882fb901b57167c82a829a51e2588beebb5255b",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "repair-clock-hold-verified-native--receipt-link-clock--stdout.log.gz",
+          "original_sha256": "341f2590f04575d07004c3a2dfe0860a77bfafabe21571014ff6a83f194bf7b0",
+          "portable_sha256": "341f2590f04575d07004c3a2dfe0860a77bfafabe21571014ff6a83f194bf7b0",
+          "compressed_sha256": "c5457b12a82fc5b155137cf3cd2505eb3d72fb8b637403376c789f6fcb020b97"
+        },
+        {
+          "path": "repair-clock-hold-verified-native--receipt-link-clock--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "repair-clock-hold-verified-fixture",
+      "case": "hung_host_18s_direct_survivor_holds_then_migrates_roster",
+      "exe_sha256": "0681797223fec609f5563c14c882fb901b57167c82a829a51e2588beebb5255b",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "repair-clock-hold-verified-fixture--hung_host_18s_direct_survivor_holds_then_migrates_roster--stdout.log.gz",
+          "original_sha256": "1cedf6a27bcebad0bb4e02d0d6c93c10347de3fb060cb23b62e6b23003259e43",
+          "portable_sha256": "1cedf6a27bcebad0bb4e02d0d6c93c10347de3fb060cb23b62e6b23003259e43",
+          "compressed_sha256": "a635e5d36d27ff5da14dabaaa47e0c7db441974d4be13fc3914161d09db70a36"
+        },
+        {
+          "path": "repair-clock-hold-verified-fixture--hung_host_18s_direct_survivor_holds_then_migrates_roster--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "repair-clock-hold-verified-fixture",
+      "case": "hung_host_3s_direct_survivor_holds_without_a_split",
+      "exe_sha256": "0681797223fec609f5563c14c882fb901b57167c82a829a51e2588beebb5255b",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "repair-clock-hold-verified-fixture--hung_host_3s_direct_survivor_holds_without_a_split--stdout.log.gz",
+          "original_sha256": "eb454eeea4312ded46310f5a1d77a0119ea19bdf7743c3cea79266069c26d014",
+          "portable_sha256": "eb454eeea4312ded46310f5a1d77a0119ea19bdf7743c3cea79266069c26d014",
+          "compressed_sha256": "735ccf222be76ab1ab94b0f1dd799556f18addcb31f62385d0e3e06d7ac8d945"
+        },
+        {
+          "path": "repair-clock-hold-verified-fixture--hung_host_3s_direct_survivor_holds_without_a_split--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "repair-clock-hold-verified-fixture",
+      "case": "steady_rtt_250ms_120s",
+      "exe_sha256": "0681797223fec609f5563c14c882fb901b57167c82a829a51e2588beebb5255b",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "repair-clock-hold-verified-fixture--steady_rtt_250ms_120s--stdout.log.gz",
+          "original_sha256": "134900cdb90c6eab7deeb35bb387f1b489b95e7b3b12ac03d39bd0333d667f82",
+          "portable_sha256": "134900cdb90c6eab7deeb35bb387f1b489b95e7b3b12ac03d39bd0333d667f82",
+          "compressed_sha256": "72f87a0fd3501810ff9aba9f6351fe50beccc2c6f7e6c2f64d424cb0ac180e0d"
+        },
+        {
+          "path": "repair-clock-hold-verified-fixture--steady_rtt_250ms_120s--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "repair-clock-hold-verified-fixture",
+      "case": "three_direct_seats_21ms_host_hung_472ms_back_at_120pc_loss_30pc_seat2_held_seat_returns_late_seed_2325",
+      "exe_sha256": "0681797223fec609f5563c14c882fb901b57167c82a829a51e2588beebb5255b",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "repair-clock-hold-verified-fixture--three_direct_seats_21ms_host_hung_472ms_back_at_120pc_loss_30pc_seat2_held_seat_returns_late_seed_2325--stdout.log.gz",
+          "original_sha256": "3396956ba8f1621ca8834a962ac3b9b753c390648406a6dd627b6bb9b7032e49",
+          "portable_sha256": "3396956ba8f1621ca8834a962ac3b9b753c390648406a6dd627b6bb9b7032e49",
+          "compressed_sha256": "8205cc0578ba5f0d72cc29c6cd4b28bf9791aa8f6c87fe451e4061f77db06645"
+        },
+        {
+          "path": "repair-clock-hold-verified-fixture--three_direct_seats_21ms_host_hung_472ms_back_at_120pc_loss_30pc_seat2_held_seat_returns_late_seed_2325--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "repair-clock-hold-direct-controls",
+      "case": "direct-split-human-majority",
+      "exe_sha256": "0681797223fec609f5563c14c882fb901b57167c82a829a51e2588beebb5255b",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "repair-clock-hold-direct-controls--direct-split-human-majority--stdout.log.gz",
+          "original_sha256": "433a2b3855df3f68be54b4d723206141e6568cdae70e6ad1f7c31ccb7fa16657",
+          "portable_sha256": "433a2b3855df3f68be54b4d723206141e6568cdae70e6ad1f7c31ccb7fa16657",
+          "compressed_sha256": "8abf1268ae60cf61b88e3eb60715cdc9af9e9528fecc4faca0e7f2b6ab326cab"
+        },
+        {
+          "path": "repair-clock-hold-direct-controls--direct-split-human-majority--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "repair-clock-hold-direct-controls",
+      "case": "direct-split-lone",
+      "exe_sha256": "0681797223fec609f5563c14c882fb901b57167c82a829a51e2588beebb5255b",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "repair-clock-hold-direct-controls--direct-split-lone--stdout.log.gz",
+          "original_sha256": "a6c97fee1fecac17c3d84a2e8bf83ea6874d5fdeb6964b86975a3eb28335e20b",
+          "portable_sha256": "a6c97fee1fecac17c3d84a2e8bf83ea6874d5fdeb6964b86975a3eb28335e20b",
+          "compressed_sha256": "13060c3bf4c9bcc801e8ca7e870abcb040901b6e0d8e295ede55c778598cc4d2"
+        },
+        {
+          "path": "repair-clock-hold-direct-controls--direct-split-lone--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "repair-clock-hold-direct-controls",
+      "case": "direct-split-one-way",
+      "exe_sha256": "0681797223fec609f5563c14c882fb901b57167c82a829a51e2588beebb5255b",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "repair-clock-hold-direct-controls--direct-split-one-way--stdout.log.gz",
+          "original_sha256": "f605a619cc620c5c9444160a6a3677ae49eb8f54d53ce824ab9bfb13679be797",
+          "portable_sha256": "f605a619cc620c5c9444160a6a3677ae49eb8f54d53ce824ab9bfb13679be797",
+          "compressed_sha256": "c518517f596aed1a10435218bd8e8fb001fa0618193edacde0e05c42032cb0c8"
+        },
+        {
+          "path": "repair-clock-hold-direct-controls--direct-split-one-way--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "repair-clock-hold-direct-controls",
+      "case": "direct-split-one-way-joiner",
+      "exe_sha256": "0681797223fec609f5563c14c882fb901b57167c82a829a51e2588beebb5255b",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "repair-clock-hold-direct-controls--direct-split-one-way-joiner--stdout.log.gz",
+          "original_sha256": "c19d8de128b7c79d422530a2d316446cfd0719bb1d49ec6e2708c31347ab7630",
+          "portable_sha256": "c19d8de128b7c79d422530a2d316446cfd0719bb1d49ec6e2708c31347ab7630",
+          "compressed_sha256": "95f10c1c4f38ff0e83c610baff263d3c622c35e5bcadeee3aaa8be8233fc2ff6"
+        },
+        {
+          "path": "repair-clock-hold-direct-controls--direct-split-one-way-joiner--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "repair-clock-hold-direct-controls",
+      "case": "direct-split-two-two",
+      "exe_sha256": "0681797223fec609f5563c14c882fb901b57167c82a829a51e2588beebb5255b",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "repair-clock-hold-direct-controls--direct-split-two-two--stdout.log.gz",
+          "original_sha256": "91a64f356e1c7c3ed0a271bf84cc6235faa8b9a24bd13c2e802a36111bb3d218",
+          "portable_sha256": "91a64f356e1c7c3ed0a271bf84cc6235faa8b9a24bd13c2e802a36111bb3d218",
+          "compressed_sha256": "ec8b172fba9c6815692ab6ec6b3304d3bb1b760483c981a13a02e5717b1e0986"
+        },
+        {
+          "path": "repair-clock-hold-direct-controls--direct-split-two-two--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    }
+  ]
+}

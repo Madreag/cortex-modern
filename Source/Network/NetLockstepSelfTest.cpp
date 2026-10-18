@@ -527,6 +527,71 @@ namespace RTE {
 			return true;
 		}
 
+		static bool ReceiptRepairUsesTheLinkClock(std::string* error) {
+			for (uint32_t envelope: {22U, 42U}) {
+				DelayWire wire; wire.rtt = 22;
+				NetLockstepCoordinator peer; ConfigureDelay(peer, wire, 0, 3);
+				peer.m_Stats.nextFrame = 100; peer.m_LastQueuedTargetFrame = 101;
+				peer.m_PeerOwnReceiptProgress[2] = {100, 1000, 0}; peer.m_PeerInputSentAtMs[100] = 1000;
+				NetLockstepFrame input; input.senderPeerId = 1; input.targetFrame = 100; input.roundId = 77;
+				peer.m_LocalInputHistory[100] = input;
+				peer.m_DelayEstimators[2].Observe(900, envelope, true);
+				peer.RepairPeerReceiptGaps(1000 + envelope - 1);
+				if (peer.m_PeerReceiptRepairs) { *error = "input repair ran before the measured link envelope"; return false; }
+				peer.RepairPeerReceiptGaps(1000 + envelope);
+				if (peer.m_PeerReceiptRepairs != 1) { *error = "input repair added the gameplay hold bound to its link clock"; return false; }
+				peer.RepairPeerReceiptGaps(1000 + 2 * envelope - 1);
+				if (peer.m_PeerReceiptRepairs != 1) { *error = "input repair repeated before another measured trip"; return false; }
+				peer.RepairPeerReceiptGaps(1000 + 2 * envelope);
+				if (peer.m_PeerReceiptRepairs != 2) { *error = "an outstanding receipt was not repaired after another measured trip"; return false; }
+			}
+			return true;
+		}
+
+		static bool AHoldInvalidatesOnlyUnplayedPreparation(std::string* error) {
+			for (bool grantedPrefix: {false, true}) {
+				Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
+				peer.m_Config.peerFrameGroups = true; peer.m_Config.authorityPeerId = 1;
+				peer.m_Config.peerCount = peer.m_Config.matchConfig.peerCount = 2;
+				peer.m_Config.matchConfig.players.resize(2); peer.m_Config.matchConfig.successorOrder = {2};
+				peer.m_RoundConfigHash = NetMatchConfigUtil::HashConfig(peer.m_Config.matchConfig);
+				peer.m_MigrationPhase = NetHostMigrationPhase::None;
+				peer.m_FrameGroupMembers = 3; peer.m_FrameGroupChanges = {{1, 3}};
+				peer.m_Stats.nextFrame = 102; peer.m_LastCompletedSimulationTick = 98;
+				peer.m_LastDeliveredFrame = grantedPrefix ? 99 : 98;
+				if (grantedPrefix) peer.m_GrantedSimulationTick = 99;
+				peer.m_LocalPreparedFrame = 101;
+				peer.m_MigrationHistory = {{99, {1, 2, 3}}, {100, {4}}, {101, {5}}}; peer.m_MigrationHistoryBytes = 5;
+				for (uint64_t frame = 99; frame < 102; ++frame) {
+					NetLockstepReadyFrame ready; ready.frame = frame; ready.localPeerId = 2;
+					ready.authorityPeerId = ready.updateAuthorityPeerId = 1; ready.hasLocalInput = true;
+					if (!grantedPrefix || frame > 99) peer.m_ReadyFrames.push_back(ready);
+					peer.m_ReadyHistory[frame] = ready;
+				}
+				auto vote = peer.PeerFrameMessage(NetHostMigrationMessageType::PeerBridge);
+				vote.senderPeerId = vote.successorPeerId = 1; vote.frame = vote.boundary = 100;
+				vote.preparedFrame = 0; vote.connectedMask = vote.voterMask = 1; vote.members = {2};
+				const auto prefix = peer.PeerFramePrefix(99); vote.bytes.assign(prefix.begin(), prefix.end()); vote.totalBytes = vote.bytes.size();
+				std::vector<uint8_t> signedVote;
+				if (!NetHostMigrationCodec::Encode(vote, peer.m_Config.migrationKey, signedVote)) { *error = "the unplayed hold detector did not encode"; return false; }
+				auto certificate = vote; certificate.type = NetHostMigrationMessageType::PeerBridgeCommit; certificate.bytes = {1};
+				for (unsigned shift = 0; shift < 32; shift += 8) certificate.bytes.push_back(static_cast<uint8_t>(signedVote.size() >> shift));
+				certificate.bytes.insert(certificate.bytes.end(), signedVote.begin(), signedVote.end()); certificate.totalBytes = certificate.bytes.size();
+				peer.InstallPeerBridge(certificate, 1000);
+				if (!peer.m_PeerBridges.contains(2)) { *error = "an unplayed reader did not take its authenticated hold"; return false; }
+				NetLockstepReadyFrame stale;
+				if (peer.PeekReadyFrame(100, stale) || peer.PeekReadyFrame(101, stale) || peer.GetStats().nextFrame != 100) {
+					*error = "a hold retained already-prepared human inputs in its unplayed suffix"; return false;
+				}
+				if (peer.GetResumeFrame() != 99 || peer.m_LastDeliveredFrame != (grantedPrefix ? 99 : 98) ||
+				    peer.m_GrantedSimulationTick != (grantedPrefix ? std::optional<uint64_t>(99) : std::nullopt) ||
+				    peer.PeerFramePrefix(99) != prefix || peer.ReadyFrameCount() != (grantedPrefix ? 0 : 1)) {
+					*error = "invalidating preparation altered completed, granted or preceding history"; return false;
+				}
+			}
+			return true;
+		}
+
 		static bool LinkDelay(std::string* error) {
 			for (const auto [rtt, minimum, maximum]: {std::array<uint32_t, 3>{30, 3, 6}, {58, 5, 6}, {200, 13, 14}}) {
 				NetInputDelayEstimator link;
@@ -31016,6 +31081,15 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "receipt-link-clock" || std::string_view(selectedCase) == "hold-unplayed-input") {
+				std::string error;
+				const bool link = std::string_view(selectedCase) == "receipt-link-clock";
+				if (!(link ? SessionPlaneRecoveryTest::ReceiptRepairUsesTheLinkClock(&error) :
+				    SessionPlaneRecoveryTest::AHoldInvalidatesOnlyUnplayedPreparation(&error))) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS " << selectedCase << std::endl;
+				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "owner-hitch-two-internet") {
 				std::string error;
 				if (!TestOwnerSilenceThreshold(4, &error)) return fail(error);
@@ -31083,6 +31157,8 @@ namespace {
 		row(&SessionPlaneRecoveryTest::ReturnDelayPadding, "a_return_delay_rise_pads_only_owed_live_inputs");
 		row(&SessionPlaneRecoveryTest::ReceiptPublicationSurvivesSilence, "a_receiver_republishes_only_its_own_cumulative_receipts");
 		row(&SessionPlaneRecoveryTest::BufferedInputRepairRepeatsItsReceipt, "a_buffered_input_repair_repeats_its_receipt");
+		row(&SessionPlaneRecoveryTest::ReceiptRepairUsesTheLinkClock, "receipt_repair_uses_the_measured_link_clock");
+		row(&SessionPlaneRecoveryTest::AHoldInvalidatesOnlyUnplayedPreparation, "a_hold_invalidates_only_unplayed_preparation");
 		row(&SessionPlaneRecoveryTest::NeutralSeatOnlyQueriesTheReferee, "a_neutral_seat_only_queries_the_assigned_referee_half");
 		row(&SessionPlaneRecoveryTest::SilenceDoesNotChangeTheSendingRate, "a_silent_interval_does_not_lower_the_measured_sending_rate");
 		row(&SessionPlaneRecoveryTest::HoldInvitation, "an_unsigned_hold_invitation_never_fences_an_input");

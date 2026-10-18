@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <limits>
 #include <map>
+#include <optional>
 #include <string_view>
 
 namespace RTE {
@@ -791,6 +792,25 @@ namespace RTE {
 				refused("foreign continuation");
 				return;
 			}
+		}
+		if (agreed.preparedFrame == 0 && (agreed.connectedMask & SeatBit(m_Config.localPeerId)) == 0 &&
+		    agreed.frame < m_Stats.nextFrame && GetResumeFrame() <= agreed.frame &&
+		    (!m_LastDeliveredFrame || *m_LastDeliveredFrame < agreed.frame) &&
+		    (!m_GrantedSimulationTick || *m_GrantedSimulationTick < agreed.frame)) {
+			// Preparation ahead of this held reader's world still contains its old human inputs. The accepted hold changes
+			// that unplayed suffix: discard its preparation and read the survivors' certified tail from the hold frame.
+			// Displayed history and an already delivered/granted tick are never replaced by this path.
+			std::erase_if(m_ReadyFrames, [&](const auto& ready) { return ready.frame >= agreed.frame; });
+			m_ReadyHistory.erase(m_ReadyHistory.lower_bound(agreed.frame), m_ReadyHistory.end());
+			for (auto kept = m_MigrationHistory.lower_bound(agreed.frame); kept != m_MigrationHistory.end();) {
+				m_MigrationHistoryBytes -= kept->second.size();
+				kept = m_MigrationHistory.erase(kept);
+			}
+			m_PeerPreparedPrefixes.erase(m_PeerPreparedPrefixes.lower_bound(agreed.frame), m_PeerPreparedPrefixes.end());
+			m_Stats.nextFrame = agreed.frame;
+			m_LocalPreparedFrame = agreed.frame > m_Config.startFrame ? std::optional(agreed.frame - 1) : std::nullopt;
+			m_LastPreparedSentFrame.reset();
+			m_FirstMissingFrame.reset();
 		}
 		m_PeerBridgeCertificates.emplace(PeerDecisionKey{certificate.frame, DecisionKind(certificate)}, certificate);
 		if (agreed.preparedFrame == 4) {
