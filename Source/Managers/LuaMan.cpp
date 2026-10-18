@@ -14180,6 +14180,12 @@ debug.setupvalue(next, 4, "150")
 	checkpointValues = Actor::RunBorrowedReferenceSelfTest() && checkpointValues;
 	checkpointValues = Actor::RunGoneItemInReachSelfTest() && checkpointValues;
 	checkpointValues = Actor::RunConsumedPayloadSelfTest() && checkpointValues;
+	{
+		const std::string mismatch = SaverThreads::PrioritySelfTestMismatch();
+		std::cout << "[script-graph-selftest] " << (mismatch.empty() ? "PASS" : "FAIL") << " saver_priority_follows_the_match "
+		          << (mismatch.empty() ? "single player keeps the saver lowest in a slice; an autosaving match gives it the game's priority" : mismatch) << std::endl;
+		checkpointValues = mismatch.empty() && checkpointValues;
+	}
 	checkpointValues = ACraft::RunGoneIncomingObjectSelfTest() && checkpointValues;
 	checkpointValues = Entity::ClassInfo::RunPoolExhaustionSelfTest() && checkpointValues;
 	checkpointValues = GameActivity::RunDeliveryReferenceSelfTest() && checkpointValues;

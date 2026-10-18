@@ -4,6 +4,8 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <format>
+#include <string>
 
 #ifdef _MSC_VER
 #include <intrin.h>
@@ -137,6 +139,30 @@ void SaverThreads::SetOverdue(bool overdue) {
 	if (s_Overdue.exchange(overdue, std::memory_order_acq_rel) == overdue || !overdue) return;
 	try { std::lock_guard lock(s_SliceMutex); } catch (...) {}
 	s_SliceOpened.notify_all();
+}
+
+std::string SaverThreads::PrioritySelfTestMismatch() {
+#ifdef _WIN32
+	const bool wasMatch = s_MatchPriority.load(std::memory_order_acquire);
+	const auto inSlice = [](bool inMatch) {
+		int priority = THREAD_PRIORITY_ERROR_RETURN;
+		std::thread saver([&] {
+			Enter();
+			SetMatchPriority(inMatch);
+			LendTickStart(5000000);
+			CheckSlice();
+			priority = GetThreadPriority(GetCurrentThread());
+			CloseSlice();
+		});
+		saver.join();
+		return priority;
+	};
+	const int single = inSlice(false), match = inSlice(true);
+	SetMatchPriority(wasMatch);
+	if (single != THREAD_PRIORITY_LOWEST) return std::format("a saver thread outside a match ran at priority {} inside a slice", single);
+	if (match != THREAD_PRIORITY_NORMAL) return std::format("a saver thread in an autosaving match ran at priority {} inside a slice", match);
+#endif
+	return {};
 }
 
 void SaverThreads::CheckSlice() {
