@@ -883,6 +883,72 @@ namespace RTE {
 					*error = "invalidating preparation altered completed, granted or preceding history"; return false;
 				}
 			}
+			for (bool grantedPrefix: {false, true}) {
+				Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
+				peer.m_Config.peerFrameGroups = true; peer.m_Config.authorityPeerId = 1;
+				peer.m_MigrationPhase = NetHostMigrationPhase::None;
+				peer.m_FrameGroupMembers = 7; peer.m_FrameGroupChanges = {{1, 7}};
+				peer.m_Stats.nextFrame = 99; peer.m_LastCompletedSimulationTick = peer.m_LastDeliveredFrame = 98;
+				peer.m_LastQueuedTargetFrame = 101;
+				for (uint64_t frame = 99; frame < 102; ++frame) for (uint8_t owner: {1, 2, 3}) {
+					NetLockstepFrame input; input.senderPeerId = owner; input.targetFrame = frame; input.roundId = 77;
+					ControllerFrame controls; controls.actorUniqueID = owner * 100 + frame; controls.analogMoveX = owner;
+					input.frames = {controls}; input.commands = {{owner, NetGameSetTeamFunds{owner - 1, static_cast<int32_t>(frame)}, frame}};
+					input.observations = {{owner, owner * 100ULL, frame, 1, 2, 3, float(owner)}};
+					input.valueObservations = {{owner, owner * 100ULL, frame, 1, 0, "unplayed", 0, double(frame), ""}};
+					peer.m_PeerSourceInputs[frame][owner] = input;
+					if (owner == 2) {
+						peer.m_LocalFrames[frame] = input.frames; peer.m_LocalCommands[frame] = input.commands;
+						peer.m_LocalObservations[frame] = input.observations; peer.m_LocalValueObservations[frame] = input.valueObservations;
+					} else {
+						peer.m_RemoteFrames[frame][owner] = input.frames; peer.m_RemoteCommands[frame][owner] = input.commands;
+						peer.m_RemoteObservations[frame][owner] = input.observations; peer.m_RemoteValueObservations[frame][owner] = input.valueObservations;
+					}
+					for (uint8_t receiver: {1, 2, 3}) peer.m_PeerInputReceipts[owner][receiver] = 102;
+				}
+				peer.AdvanceReadyFrames(1000);
+				if (peer.GetStats().nextFrame != 102 || peer.ReadyFrameCount() != 3) {
+					*error = "the continuing-member detector did not actually prepare its human-input suffix"; return false;
+				}
+				if (grantedPrefix) { peer.m_ReadyFrames.pop_front(); peer.m_LastDeliveredFrame = peer.m_GrantedSimulationTick = 99; }
+				const auto prefix = peer.PeerFramePrefix(99);
+				auto vote = peer.PeerFrameMessage(NetHostMigrationMessageType::PeerBridge);
+				vote.senderPeerId = vote.successorPeerId = 1; vote.frame = vote.boundary = 100;
+				vote.preparedFrame = 0; vote.connectedMask = 3; vote.voterMask = 1; vote.members = {3};
+				vote.bytes.assign(prefix.begin(), prefix.end()); vote.totalBytes = vote.bytes.size();
+				std::vector<uint8_t> signedVote;
+				if (!NetHostMigrationCodec::Encode(vote, peer.m_Config.migrationKey, signedVote)) { *error = "the continuing-member hold did not encode"; return false; }
+				auto certificate = vote; certificate.type = NetHostMigrationMessageType::PeerBridgeCommit; certificate.bytes = {1};
+				for (unsigned shift = 0; shift < 32; shift += 8) certificate.bytes.push_back(static_cast<uint8_t>(signedVote.size() >> shift));
+				certificate.bytes.insert(certificate.bytes.end(), signedVote.begin(), signedVote.end()); certificate.totalBytes = certificate.bytes.size();
+				peer.InstallPeerBridge(certificate, 1000);
+				NetLockstepReadyFrame stale;
+				if (!peer.m_PeerBridges.contains(3) || peer.GetStats().nextFrame != 100 || peer.PeekReadyFrame(100, stale) || peer.PeekReadyFrame(101, stale)) {
+					*error = "a continuing member retained the held sender's human inputs in its unplayed suffix"; return false;
+				}
+				peer.AdvanceReadyFrames(1001);
+				for (uint64_t frame: {100, 101}) {
+					NetLockstepReadyFrame ready;
+					const auto& local = peer.m_PeerSourceInputs.at(frame).at(2);
+					const auto& remote = peer.m_PeerSourceInputs.at(frame).at(1);
+					if (!peer.PeekReadyFrame(frame, ready) || !ready.hasLocalInput || ready.localFrames.size() != 1 || ready.remoteFrames.size() != 1 ||
+					    ControllerFrameCodec::Encode(ready.localFrames.front()) != ControllerFrameCodec::Encode(local.frames.front()) ||
+					    ControllerFrameCodec::Encode(ready.remoteFrames.front()) != ControllerFrameCodec::Encode(remote.frames.front()) ||
+					    ready.localCommands != local.commands || ready.remoteCommands.size() != (frame == 100 ? 2 : 1) ||
+					    ready.remoteCommands.front() != remote.commands.front() || ready.localObservations != local.observations ||
+					    ready.remoteObservations != remote.observations || ready.localValueObservations != local.valueObservations ||
+					    ready.remoteValueObservations != remote.valueObservations || ready.remoteFrameCounts.contains(3)) {
+						*error = "repreparing an adopted hold lost or changed a continuing owner's authentic input, command or observation"; return false;
+					}
+					if (frame == 100 && (!std::holds_alternative<NetGameSeatHold>(ready.remoteCommands.back().payload) || ready.aiHeldPeerIds != std::vector<uint8_t>{3})) {
+						*error = "repreparing the hold failed to stamp its AI boundary exactly once"; return false;
+					}
+				}
+				if (peer.PeerFramePrefix(99) != prefix || peer.GetResumeFrame() != 99 || peer.m_LastDeliveredFrame != (grantedPrefix ? 99 : 98) ||
+				    peer.m_GrantedSimulationTick != (grantedPrefix ? std::optional<uint64_t>(99) : std::nullopt)) {
+					*error = "repreparing a continuing member altered its completed, delivered, granted or preceding prefix"; return false;
+				}
+			}
 			return true;
 		}
 

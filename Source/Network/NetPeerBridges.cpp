@@ -796,12 +796,30 @@ namespace RTE {
 				return;
 			}
 		}
-		if (agreed.preparedFrame == 0 && (agreed.connectedMask & SeatBit(m_Config.localPeerId)) == 0 &&
-		    agreed.frame < m_Stats.nextFrame && GetResumeFrame() <= agreed.frame &&
+		if (agreed.preparedFrame == 0 && agreed.frame < m_Stats.nextFrame && GetResumeFrame() <= agreed.frame &&
 		    (!m_LastDeliveredFrame || *m_LastDeliveredFrame < agreed.frame) &&
 		    (!m_GrantedSimulationTick || *m_GrantedSimulationTick < agreed.frame)) {
-			// Preparation ahead of this held reader's world still contains its old human inputs. The accepted hold changes
-			// that unplayed suffix: discard its preparation and read the survivors' certified tail from the hold frame.
+			// Every member's unplayed preparation can still contain the held sender's human input. A continuing member
+			// rebuilds that suffix from its authenticated originals; a private reader reads the survivors' certified tail.
+			// Never recover source commands from the prepared record: it also contains generated authority events.
+			if ((agreed.connectedMask & SeatBit(m_Config.localPeerId)) != 0) {
+				for (auto sources = m_PeerSourceInputs.lower_bound(agreed.frame); sources != m_PeerSourceInputs.end() && sources->first < m_Stats.nextFrame; ++sources) {
+					for (const auto& [owner, input]: sources->second) {
+						if (owner == m_Config.localPeerId) {
+							m_LocalFrames[sources->first] = input.frames;
+							m_LocalCommands[sources->first] = input.commands;
+							m_LocalObservations[sources->first] = input.observations;
+							m_LocalValueObservations[sources->first] = input.valueObservations;
+						} else {
+							m_RemoteFrames[sources->first][owner] = input.frames;
+							m_RemoteCommands[sources->first][owner] = input.commands;
+							m_RemoteObservations[sources->first][owner] = input.observations;
+							m_RemoteValueObservations[sources->first][owner] = input.valueObservations;
+						}
+						m_PendingSourceCommandCounts[sources->first][owner] = input.commands.size();
+					}
+				}
+			}
 			// Displayed history and an already delivered/granted tick are never replaced by this path.
 			std::erase_if(m_ReadyFrames, [&](const auto& ready) { return ready.frame >= agreed.frame; });
 			m_ReadyHistory.erase(m_ReadyHistory.lower_bound(agreed.frame), m_ReadyHistory.end());
