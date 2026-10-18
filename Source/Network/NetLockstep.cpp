@@ -10612,6 +10612,7 @@ namespace RTE {
 						m_FrameGroupMembers = PeerFrameMembersAt(outFrame.frame);
 					}
 					m_AiHeldSeats.erase(reclaim->peerId); m_ReleasedAiSeats.erase(reclaim->peerId); m_HoldTransactions.erase(reclaim->peerId);
+					m_SeatBridgeSinceMs.erase(reclaim->peerId);
 					// The cause belongs to the hold that ended, not to a later hold of this seat.
 					m_SlowMachineHolds.erase(reclaim->peerId);
 					if (!m_EvictAfterReclaim.contains(reclaim->peerId)) m_RemovedPeers.erase(reclaim->peerId);

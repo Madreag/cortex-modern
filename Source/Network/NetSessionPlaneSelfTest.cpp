@@ -755,6 +755,7 @@ namespace RTE {
 			std::vector<Event> events;
 			bool keepReturnCertificates = false;
 			std::map<uint64_t, NetHostMigrationMessage> receivedReturnCertificates;
+			std::map<std::pair<uint64_t, uint8_t>, NetLockstepTiming> receivedTimingReturns;
 			bool keepImageTail = false;
 			struct ImageTailDelivery { uint8_t donor; NetTransportLane lane; NetLobbyStateChunk chunk; };
 			std::deque<ImageTailDelivery> receivedImageTail;
@@ -1054,6 +1055,16 @@ namespace RTE {
 							    certificate.type == NetHostMigrationMessageType::PeerBridgeCommit && certificate.preparedFrame == 1)
 								receivedReturnCertificates.try_emplace(certificate.frame, std::move(certificate));
 						}
+						// FLAGGED fixture departure: legacy image returns keep the timing certificate delivered on their own authenticated link.
+						if (keepReturnCertificates && event.value.type == NetTransportEventType::PacketReceived) {
+							const auto decoded = NetLockstepCodec::Decode(event.value.bytes);
+							const auto route = connections.find(event.value.peerId);
+							if (decoded.ok && route != connections.end())
+								if (const auto* timing = std::get_if<NetLockstepTiming>(&decoded.packet.payload);
+								    timing && timing->action == NetTimingAction::Reclaim && timing->phase == NetTimingPhase::ReclaimAtFrame &&
+								    timing->senderPeerId == route->second.first->owner)
+									receivedTimingReturns.try_emplace(std::pair{timing->applyFrame, timing->peerId}, *timing);
+						}
 						ready.push_back(std::move(event.value));
 					}
 				}
@@ -1200,11 +1211,17 @@ namespace RTE {
 		// The decisions a peer let go after keeping them past the silence the round allows (0 on an engine that does not count them).
 		template<class Stats> uint64_t DecisionsDropped(const Stats& stats) { if constexpr (requires { stats.decisionsDropped; }) return stats.decisionsDropped; else return 0; }
 		template<class Peer> bool CatchingUp(const Peer& peer, double ordinaryWaitMs = 0) {
+			// FLAGGED fixture departure: ScenarioRunner also grants legacy own-seat reclaim gaps their bounded extra work.
+			if (!peer.UsesPeerFrameGroups() && peer.IsRunning() && (peer.IsOwnHostSeatHeld() ||
+			    peer.IsSeatReclaimGap(peer.GetConfig().localPeerId, peer.GetResumeFrame()))) return true;
 			if constexpr (requires { peer.PeerFrameCatchUpActive(ordinaryWaitMs); }) return peer.PeerFrameCatchUpActive(ordinaryWaitMs);
 			else if constexpr (requires { peer.PeerFrameCatchUpActive(); }) return peer.PeerFrameCatchUpActive();
 			else return false;
 		}
-		template<class Peer> bool CatchUpNeeded(const Peer& peer) { if constexpr (requires { peer.PeerFrameCatchUpNeeded(); }) return peer.PeerFrameCatchUpNeeded(); else return CatchingUp(peer); }
+		template<class Peer> bool CatchUpNeeded(const Peer& peer) {
+			if (!peer.UsesPeerFrameGroups()) return CatchingUp(peer);
+			if constexpr (requires { peer.PeerFrameCatchUpNeeded(); }) return peer.PeerFrameCatchUpNeeded(); else return CatchingUp(peer);
+		}
 		template<class Peer> std::optional<uint64_t> AcceptedThrough(const Peer& peer) { if constexpr (requires { peer.GetLocalInputAcceptedThrough(); }) return peer.GetLocalInputAcceptedThrough(); else return std::nullopt; }
 		template<class Peer> uint32_t SenderResizes(const Peer& peer, uint8_t sender) {
 			if constexpr (requires { peer.GetStats().peers.at(sender).delayResizes; }) return peer.GetStats().peers.at(sender).delayResizes;
@@ -1360,6 +1377,13 @@ namespace RTE {
 				const uint32_t members = s_FrameMembers(*peers[donor - 1], peers[donor - 1]->GetStats().nextFrame);
 				return members ? static_cast<uint8_t>(std::countr_zero(members) + 1) : donor;
 			}
+			std::pair<INetTransport*, NetPeerId> ImageReturnRoute(uint8_t sender, uint8_t receiver) const {
+				if (peers[sender - 1]->GetConfig().peerFrameGroups) return s_ReturnRoute(*peers[sender - 1], receiver);
+				// FLAGGED fixture departure: the legacy image service retains its authenticated session route while the seat is held.
+				for (const auto& [route, connection]: wires[sender - 1]->connections)
+					if (connection.first->owner == receiver) return {wires[sender - 1].get(), route};
+				return {nullptr, c_InvalidNetPeerId};
+			}
 			std::vector<uint8_t> ImageReturnDonors() const {
 				// FLAGGED fixture departure: a case that requires another donor must actually request that donor first.
 				// Eligibility, ruling membership and the native tail-traffic assertion still decide whether it succeeds.
@@ -1484,7 +1508,8 @@ namespace RTE {
 				const bool maySplit = hub.schedule ? !hub.schedule->cuts.empty() || std::any_of(hub.schedule->spells.begin(), hub.schedule->spells.end(),
 				    [](const Spell& spell) { return spell.kind == Spell::Kind::Silent || spell.kind == Spell::Kind::Hung; }) :
 				    row.tieBeforeAdministration || (row.gapMs && !row.frozen && !row.slowPercent && !row.inputsLost && !row.keepInputEvery);
-				if (maySplit || row.imageReturn) { hub.row.captureFrames = true; hub.row.checkpointEveryFrames = 60; }
+				// FLAGGED fixture departure: a stopped machine can require the same automatic image return as a split link.
+				if (maySplit || row.imageReturn || row.gapMs) { hub.row.captureFrames = true; hub.row.checkpointEveryFrames = 60; }
 				worlds.resize(row.seats); for (auto& world: worlds) world.sharedDigests = &sharedDigests; committed.resize(row.seats); credits.resize(row.seats); queued.resize(row.seats); waitAt.resize(row.seats);
 				maxWait.resize(row.seats); caughtAt.resize(row.seats); settledDelay.resize(row.seats); settledChanges.resize(row.seats);
 				displayedAt.resize(row.seats); blackoutGap.resize(row.seats); returnedAt.resize(row.seats); postReturnWait.resize(row.seats); seenAI.resize(row.seats);
@@ -2056,8 +2081,17 @@ namespace RTE {
 			if (discardedBranch ? !replayCoordinator.StartReplay(replayWire, replayConfig, &error) :
 			    !replayCoordinator.StartCatchUpReplay(replayWire, replayConfig, *fixture.peers[seat - 1], &error)) return false;
 			NetWorldJoinHost join;
-			if (!join.ConfigureMatchRejoins(config.matchConfig, round, c_TestTickMs, &error) || !join.BeginRejoin(12, seat - 1, seat, incarnation, "Returner", fixture.hub.now, &error)) return false;
-			NetWorldCheckpointImage image; image.privateSessionId = config.sessionId; image.round = round; image.tick = replay.applied;
+			if (config.matchConfig.persistentWorld) {
+				// FLAGGED fixture departure: a persistent held seat uses the world's credentialed bootstrap, as the service does.
+				NetWorldIdentity identity{config.matchConfig.worldId, config.matchConfig.worldBoot, round};
+				if (!join.Configure(config.matchConfig, identity, &error) || !join.Membership().Hold(seat, seat - 1, "Returner", &error)) return false;
+				join.NoteReclaimHolds({seat});
+				if (!join.BeginJoin(12, seat - 1, "Returner", fixture.hub.now, &error, true, seat)) return false;
+			} else if (!join.ConfigureMatchRejoins(config.matchConfig, round, c_TestTickMs, &error) ||
+			           !join.BeginRejoin(12, seat - 1, seat, incarnation, "Returner", fixture.hub.now, &error)) return false;
+			NetWorldCheckpointImage image; image.round = round; image.tick = replay.applied;
+			if (config.matchConfig.persistentWorld) { image.worldId = config.matchConfig.worldId; image.boot = config.matchConfig.worldBoot; }
+			else image.privateSessionId = config.sessionId;
 			image.bytes = 8; image.checkpointConfig = "fixture world"; image.sideState = "fixture seats";
 			join.PublishImage(image);
 			if (!join.NoteTransferComplete(12, 8, &error)) return false;
@@ -2087,13 +2121,24 @@ namespace RTE {
 				config.initialSeatReclaims = replayCoordinator.ReclaimTransactions();
 				config.initialPeerLeaves = replayCoordinator.GetPeerLeaveFrames();
 				NetLockstepCoordinator::AdoptOpenReturns(config, fixture.peers[seat - 1]->ReclaimTransactions(), activation);
-				const NetHostMigrationMessage* proof = nullptr;
-				for (const auto* wire: fixture.hub.wires) if (wire->owner == seat) {
-					const auto found = wire->receivedReturnCertificates.find(activation);
-					if (found != wire->receivedReturnCertificates.end()) { proof = &found->second; break; }
+				if (config.peerFrameGroups) {
+					const NetHostMigrationMessage* proof = nullptr;
+					for (const auto* wire: fixture.hub.wires) if (wire->owner == seat) {
+						const auto found = wire->receivedReturnCertificates.find(activation);
+						if (found != wire->receivedReturnCertificates.end()) { proof = &found->second; break; }
+					}
+					if (!proof) return true;
+					if (!replayCoordinator.AdoptPeerReturn(config, replayCoordinator, *proof, activation, &lastRefusal)) return true;
+				} else {
+					const auto found = fixture.wires[seat - 1]->receivedTimingReturns.find({activation, seat});
+					if (found == fixture.wires[seat - 1]->receivedTimingReturns.end()) return true;
+					const auto& timing = found->second;
+					if (timing.senderPeerId != config.authorityPeerId || timing.sessionId != config.sessionId || timing.roundId != round ||
+					    timing.authorityGeneration != config.migrationGeneration || timing.seatIncarnations[seat - 1] != incarnation)
+						return fail("the received legacy return certificate does not describe this image and incarnation");
+					config.initialSeatReclaims[seat] = {seat, timing.authorityGeneration, timing.revision, incarnation,
+					    timing.applyFrame, timing.delayFrames, timing.neutralThroughFrame};
 				}
-				if (!proof) return true;
-				if (!replayCoordinator.AdoptPeerReturn(config, replayCoordinator, *proof, activation, &lastRefusal)) return true;
 				config.initialDelayChanges = replayCoordinator.GetDelayChanges();
 				for (const auto& [peer, changes]: fixture.peers[seat - 1]->GetDelayChanges())
 					for (const auto& [tick, delay]: changes) config.initialDelayChanges[peer].try_emplace(tick, delay);
@@ -2124,7 +2169,7 @@ namespace RTE {
 					if (!join.Tail().Append(record, &error)) return fail(error);
 					tailRecorded = next->first;
 				}
-				const auto [tailWire, tailRoute] = s_ReturnRoute(*fixture.peers[donor - 1], seat);
+				const auto [tailWire, tailRoute] = fixture.ImageReturnRoute(donor, seat);
 				if (!tailWire || tailRoute == c_InvalidNetPeerId) return fail("the image donor lost its authenticated return route");
 				for (unsigned datagram = 0; datagram < 32; ++datagram) {
 					std::vector<uint8_t> packed, bytes; bool large = false;
@@ -2208,7 +2253,7 @@ namespace RTE {
 					auto& coordinator = *fixture.peers[proposer - 1];
 					// FLAGGED fixture departure: a refused proposal remains private and retries, as the service does.
 					std::string refusal;
-					if (!coordinator.SchedulePeerReclaim(seat, s_ReturnTransport(coordinator, seat), incarnation, activation, &refusal, session->activationTrailFrames)) {
+					if (!coordinator.SchedulePeerReclaim(seat, fixture.ImageReturnRoute(proposer, seat).second, incarnation, activation, &refusal, session->activationTrailFrames)) {
 						if (lastRefusal != refusal) DiagnosticLine() << "[session-plane-image-proposal] waits=" << refusal << std::endl;
 						lastRefusal = refusal;
 						continue;
