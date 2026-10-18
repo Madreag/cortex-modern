@@ -15,6 +15,7 @@
 #include "Base64/base64.h"
 
 #include "AHuman.h"
+#include "MovableMan.h"
 #include "GameActivity.h"
 #include "ActivityMan.h"
 #include "ContentFile.h"
@@ -97,8 +98,10 @@ PieMenu::PieMenu(const PieMenu& source, CheckpointNativeSnapshot& snapshot) :
 	m_CheckpointInitialized(source.m_CheckpointInitialized) {
 	CheckpointVector<PieSlice*> savedSlices;
 	savedSlices.reserve(source.m_CurrentPieSlices.size());
-	for (PieSlice* slice: CheckpointValues(source.m_CurrentPieSlices)) if (static_cast<const PieSlice*>(snapshot.Source(slice))->GetOriginalSource() == source.m_Owner) savedSlices.push_back(slice);
+	for (PieSlice* slice: CheckpointValues(source.m_CurrentPieSlices)) savedSlices.push_back(slice);
 	m_CurrentPieSlices = snapshot.Freeze(savedSlices, &m_CurrentPieSlices);
+	m_FrozenSliceLayout = source.CheckpointSliceLayout();
+	m_FrozenTreeInteraction = source.PackCheckpointInteractionState();
 	for (size_t index = 0; index < m_PieQuadrants.size(); ++index) {
 		m_PieQuadrants[index].m_Enabled = source.m_PieQuadrants[index].m_Enabled;
 		m_PieQuadrants[index].m_Direction = source.m_PieQuadrants[index].m_Direction;
@@ -526,6 +529,148 @@ bool PieMenu::LoadRuntimeCheckpoint(std::string_view text, bool validateOnly) {
 		reader.Finish();
 		return true;
 	} catch (const std::exception&) { return false; }
+}
+
+// An actor's INI menu omits the clones supplied by its devices, which are attached again while loading. Preserve the
+// complete live tree separately and install it after those attachments and unique IDs, before any Lua handle is resolved.
+std::array<std::array<int, 10>, 4> PieMenu::CheckpointSliceLayout() const {
+	if (IsFrozenCheckpointNative()) return m_FrozenSliceLayout;
+	std::array<std::array<int, 10>, 4> layout{};
+	const auto slices = CheckpointValues(m_CurrentPieSlices);
+	const auto indexOf = [&slices](const PieSlice* slice) {
+		if (!slice) return -1;
+		for (size_t index = 0; index < slices.size(); ++index) if (slices[index] == slice) return static_cast<int>(index);
+		throw UnsupportedCheckpointNative("a pie quadrant names a slice outside its menu");
+	};
+	for (size_t q = 0; q < layout.size(); ++q) {
+		const auto& quadrant = m_PieQuadrants[q];
+		layout[q] = {indexOf(quadrant.m_MiddlePieSlice.get()), indexOf(quadrant.m_LeftPieSlices[0].get()),
+		             indexOf(quadrant.m_RightPieSlices[0].get()), indexOf(quadrant.m_LeftPieSlices[1].get()),
+		             indexOf(quadrant.m_RightPieSlices[1].get()), indexOf(quadrant.m_SlotsForPieSlices[0]),
+		             indexOf(quadrant.m_SlotsForPieSlices[1]), indexOf(quadrant.m_SlotsForPieSlices[2]),
+		             indexOf(quadrant.m_SlotsForPieSlices[3]), indexOf(quadrant.m_SlotsForPieSlices[4])};
+	}
+	return layout;
+}
+
+std::string PieMenu::SaveCompleteCheckpoint() const {
+	CheckpointWriter writer("PieMenuTree1");
+	const long owner = m_Owner ? m_Owner->GetUniqueID() : 0;
+	writer(owner, CheckpointWriter::Native([&] { return SaveRuntimeCheckpoint(); }),
+	       IsFrozenCheckpointNative() ? m_FrozenTreeInteraction : PackInteractionState(), CheckpointSliceLayout());
+	writer(m_CurrentPieSlices.size());
+	for (const PieSlice* slice: m_CurrentPieSlices) writer(CheckpointWriter::Native([&] {
+		CheckpointWriter value("PieSliceTree1");
+		int sourceKind = 0;
+		long sourceUID = 0;
+		std::string sourceClass, sourceName, sourceModule;
+		const Entity* source = slice->m_OriginalSource;
+		if (source == this) sourceKind = 1;
+		else if (source && source == m_Owner) sourceKind = 2;
+		else if (source) {
+			if (source->IsOriginalPreset()) {
+				sourceKind = 4; sourceClass = source->GetClassName(); sourceName = source->GetPresetName(); sourceModule = source->GetModuleName();
+			} else if (const auto* object = dynamic_cast<const MovableObject*>(source)) { sourceKind = 3; sourceUID = object->GetUniqueID(); } else throw UnsupportedCheckpointNative("a pie slice has an unknown original source");
+		}
+		const std::string script = slice->m_LuabindFunctionObject ? slice->m_LuabindFunctionObject->GetFilePath() : "";
+		value(static_cast<const Entity&>(*slice), slice->m_Type, slice->m_Direction, slice->m_CanBeMiddleSlice,
+		      slice->m_Enabled, slice->m_StartAngle, slice->m_SlotCount, slice->m_MidAngle, slice->m_DrawFlippedToMatchAbsoluteAngle,
+		      sourceKind, sourceUID, sourceClass, sourceName, sourceModule, script, slice->m_FunctionName,
+		      CheckpointWriter::Native([&] { return slice->m_Icon ? slice->m_Icon->SaveCheckpoint() : ""; }),
+		      CheckpointWriter::Native([&] { return slice->m_SubPieMenu ? slice->m_SubPieMenu->SaveCompleteCheckpoint() : ""; }));
+		return value.Text();
+	}));
+	return writer.Text();
+}
+
+bool PieMenu::LoadCompleteCheckpoint(std::string_view text) {
+	try {
+		CheckpointReader reader(text, "PieMenuTree1");
+		long ownerUID;
+		std::string runtime, interaction;
+		std::array<std::array<int, 10>, 4> layout;
+		size_t count;
+		reader.Value(ownerUID); reader.Value(runtime); reader.Value(interaction); reader.Value(layout); reader.Value(count);
+		if (count > 4 * PieQuadrant::c_PieQuadrantSlotCount) throw std::runtime_error("too many checkpoint pie slices");
+		std::vector<std::unique_ptr<PieSlice>> slices;
+		std::vector<PieSlice*> ordered;
+		slices.reserve(count); ordered.reserve(count);
+		for (size_t index = 0; index < count; ++index) {
+			std::string saved;
+			reader.Value(saved);
+			CheckpointReader value(saved, "PieSliceTree1");
+			auto slice = std::make_unique<PieSlice>();
+			int sourceKind;
+			long sourceUID;
+			std::string sourceClass, sourceName, sourceModule, script, function, icon, sub;
+			value(static_cast<Entity&>(*slice), slice->m_Type, slice->m_Direction, slice->m_CanBeMiddleSlice,
+			      slice->m_Enabled, slice->m_StartAngle, slice->m_SlotCount, slice->m_MidAngle, slice->m_DrawFlippedToMatchAbsoluteAngle);
+			value.Value(sourceKind); value.Value(sourceUID); value.Value(sourceClass); value.Value(sourceName); value.Value(sourceModule);
+			value.Value(script); value.Value(function); value.Value(icon); value.Value(sub);
+			value.Finish();
+			if (sourceKind == 0) slice->m_OriginalSource = nullptr;
+			else if (sourceKind == 1) slice->m_OriginalSource = this;
+			else if (sourceKind == 2) {
+				slice->m_OriginalSource = ownerUID > 0 ? g_MovableMan.FindObjectByUniqueID(ownerUID) : nullptr;
+				if (!slice->m_OriginalSource) throw std::runtime_error("missing checkpoint pie owner");
+			} else if (sourceKind == 3) {
+				slice->m_OriginalSource = sourceUID > 0 ? g_MovableMan.FindObjectByUniqueID(sourceUID) : nullptr;
+				if (!slice->m_OriginalSource) throw std::runtime_error("missing checkpoint pie device");
+			} else if (sourceKind == 4) {
+				slice->m_OriginalSource = g_PresetMan.GetEntityPreset(sourceClass, sourceName, sourceModule);
+				if (!slice->m_OriginalSource) throw std::runtime_error("missing checkpoint pie source preset");
+			} else throw std::runtime_error("invalid checkpoint pie source");
+			slice->m_FunctionName = function;
+			if (!script.empty()) {
+				slice->m_LuabindFunctionObject = std::make_unique<LuabindObjectWrapper>(nullptr, script);
+				if (slice->ReloadScripts() < 0) throw std::runtime_error("could not restore a pie slice function");
+			}
+			if (!icon.empty()) {
+				slice->m_Icon = std::make_unique<Icon>();
+				if (!slice->m_Icon->LoadCheckpoint(icon)) throw std::runtime_error("could not restore a pie slice icon");
+			}
+			if (!sub.empty()) {
+				auto menu = std::make_unique<PieMenu>();
+				if (menu->Create() < 0 || !menu->LoadCompleteCheckpoint(sub)) throw std::runtime_error("could not restore a pie submenu");
+				slice->m_SubPieMenu.reset(menu.release());
+				slice->m_SubPieMenu.get_deleter().owned = true;
+			}
+			ordered.push_back(slice.get());
+			slices.push_back(std::move(slice));
+		}
+		reader.Finish();
+		std::vector<unsigned> owners(count, 0);
+		for (const auto& quadrant: layout) for (size_t slot = 0; slot < quadrant.size(); ++slot) {
+			const int index = quadrant[slot];
+			if (index < -1 || index >= static_cast<int>(count)) throw std::runtime_error("invalid checkpoint pie slot");
+			if (slot < 5 && index >= 0 && ++owners[index] != 1) throw std::runtime_error("duplicate checkpoint pie slice ownership");
+			// A wide slice extends into the neighboring quadrant's slots. Ownership remains unique; slot references may cross it.
+		}
+		if (std::any_of(owners.begin(), owners.end(), [](unsigned owners) { return owners != 1; })) throw std::runtime_error("unowned checkpoint pie slice");
+		Actor* owner = ownerUID > 0 ? dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(ownerUID)) : nullptr;
+		if (ownerUID > 0 && !owner) throw std::runtime_error("missing checkpoint pie menu owner");
+		if (!LoadRuntimeCheckpoint(runtime, true)) throw std::runtime_error("invalid complete pie runtime");
+		// Every parse and ownership check precedes replacement. The menu object and its regenerated device listeners survive.
+		m_HoveredPieSlice = m_ActivatedPieSlice = m_AlreadyActivatedPieSlice = nullptr;
+		m_ActiveSubPieMenu = nullptr;
+		for (size_t q = 0; q < layout.size(); ++q) {
+			auto& quadrant = m_PieQuadrants[q];
+			const auto take = [&](int index) { return index < 0 ? std::unique_ptr<PieSlice>{} : std::move(slices[index]); };
+			quadrant.m_MiddlePieSlice = take(layout[q][0]);
+			quadrant.m_LeftPieSlices[0] = take(layout[q][1]); quadrant.m_RightPieSlices[0] = take(layout[q][2]);
+			quadrant.m_LeftPieSlices[1] = take(layout[q][3]); quadrant.m_RightPieSlices[1] = take(layout[q][4]);
+			for (size_t slot = 0; slot < quadrant.m_SlotsForPieSlices.size(); ++slot)
+				quadrant.m_SlotsForPieSlices[slot] = layout[q][5 + slot] < 0 ? nullptr : ordered[layout[q][5 + slot]];
+		}
+		m_CurrentPieSlices.assign(ordered.begin(), ordered.end());
+		if (!LoadRuntimeCheckpoint(runtime)) throw std::runtime_error("could not restore complete pie runtime");
+		if (m_Owner != owner) SetOwner(owner);
+		UnpackInteractionState(interaction);
+		return true;
+	} catch (const std::exception& error) {
+		System::PrintDiagnosticLine(std::string("[piemenu-checkpoint] complete tree restore failed: ") + error.what());
+		return false;
+	}
 }
 
 void PieMenu::CopyRuntimeForPreview(const PieMenu& reference) {

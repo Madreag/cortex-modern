@@ -934,7 +934,8 @@ class DirectoryTests(unittest.TestCase):
             self.server.store.stop()
             for worker in threads:
                 worker.join(3)
-        self.assertTrue(all(status == 200 for status, _ in completed), "R2: bounded waiters dropped an honest polling request")
+        self.assertTrue(all(status == 200 for status, _ in completed),
+                        f"R2: bounded waiters dropped an honest polling request: {[(status, body) for status, body in completed if status != 200]!r}")
 
     def test_R3_one_source_cannot_exhaust_retained_owners(self) -> None:
         store = session_directory.SessionDirectory(300, 5)

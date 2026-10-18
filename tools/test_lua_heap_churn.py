@@ -1,8 +1,8 @@
 """Detect unbounded Lua garbage in ordinary single player, without forced collections.
 
-One engine, four states, 1,800 ticks of discarded graphs. After 300 warmup ticks,
-every census must have allocated Lua <= 2x the collector's live estimate, and
-process private memory must stay within a 128 MiB range. The scenario never
+One engine, the production Lua state layout, 1,800 ticks of discarded graphs.
+After 300 warmup ticks, every census must have allocated Lua <= 2x the collector's
+live estimate, and process private memory must stay within a 128 MiB range. The scenario never
 calls collectgarbage and no deterministic/hash flag may select full collection.
 """
 import argparse

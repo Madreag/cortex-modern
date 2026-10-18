@@ -76,7 +76,7 @@ namespace RTE::CheckpointLua {
 			}
 			try { m_Native->Warm(); } catch (const std::logic_error&) {}
 		}
-		/// Gives every copy's memory back while no boundary has begun.
+		/// Gives cold copies back, retaining only native copy runs the last cooling pass left Hot.
 		void Cool() noexcept {
 			for (const Heap& heap: m_Heaps) heap.prepared->Cool();
 			m_Native->Cool();
@@ -95,6 +95,7 @@ namespace RTE::CheckpointLua {
 		void CollectionOrder(std::function<uint64_t(size_t heap)> ticksUntil) { m_TicksUntilCollection = std::move(ticksUntil); }
 		bool Arm(std::array<int64_t, 7>* parts = nullptr) {
 			const auto started = RTE::SteadyClock::now();
+			for (const Heap& heap: m_Heaps) heap.prepared->StopWarming();
 			if (!Current()) return false;
 			Status expected = Status::Prepared;
 			if (!m_Status.compare_exchange_strong(expected, Status::Arming, std::memory_order_acq_rel)) return false;

@@ -559,6 +559,7 @@ namespace RTE::CheckpointLua {
 		static bool RunPreparedSelfTest();
 		static bool RunPrivateNativeSelfTest();
 		static bool RunPreparationLifetimeSelfTest();
+		static bool RunPreparationHandoffSelfTest(std::string& detail);
 		static bool RunReusedOwnerSelfTest();
 		static bool RunTrimSelfTest(std::string& detail);
 		/// Large blocks of ever new sizes, made and dropped, keep the heap within a stated bound of what it held before.
@@ -1877,8 +1878,10 @@ namespace RTE::CheckpointLua {
 		bool Current(const HeapOwner& owner) const noexcept {
 			return m_Data->state == owner.m_State && m_Data->committed == owner.m_PublishedCommitted.load(std::memory_order_acquire);
 		}
-		/// Whether a boundary's writes into the buffer have begun, which ends warming.
+		/// Whether a boundary has claimed the buffer for writing, which ends warming.
 		bool WritesBegun() const noexcept { return m_WritesBegun.load(std::memory_order_seq_cst); }
+		/// Stop new warm commits before validating the boundary; the lifetime lock then waits only for the active commit.
+		void StopWarming() noexcept { m_WritesBegun.store(true, std::memory_order_seq_cst); }
 		/// One heap's boundary arm alone on this thread, through the plan, copies and fence a boundary takes; whole copies it all.
 		bool Arm(HeapOwner& owner, bool whole = false) noexcept {
 			try {
@@ -1994,7 +1997,7 @@ namespace RTE::CheckpointLua {
 		}
 		// A boundary's writes into the buffer begin here: warming and cooling stop, the run in progress ends, the buffer commits.
 		bool BeginWrites() noexcept {
-			m_WritesBegun.store(true, std::memory_order_seq_cst);
+			StopWarming();
 			while (m_Touching.load(std::memory_order_seq_cst)) std::this_thread::yield();
 			return m_Buffer->Commit();
 		}
@@ -2018,8 +2021,10 @@ namespace RTE::CheckpointLua {
 
 	inline bool HeapOwner::PreparationLease::Current(const Prepared& prepared) const noexcept {
 		if (!m_Life) return false;
-		std::unique_lock alive(m_Life->mutex, std::try_to_lock);
-		return alive && m_Life->owner && prepared.Current(*m_Life->owner);
+		// A warm commit holds this lock until its one run is resident, then releases it before yielding to the game.
+		// Finish that commit before validating; contention is not an invalid inventory and must not reject a named tick.
+		std::lock_guard alive(m_Life->mutex);
+		return m_Life->owner && prepared.Current(*m_Life->owner);
 	}
 
 	inline bool HeapOwner::PreparationLease::Arm(Prepared& prepared, bool whole) const noexcept {
@@ -2048,7 +2053,7 @@ namespace RTE::CheckpointLua {
 		if (!m_Life) return;
 		for (;;) {
 			{
-				// Each run holds the heap alive only as long as one commit takes, so a boundary arming meanwhile rarely meets it.
+				// Release the lifetime lock before yielding: a boundary may wait for this commit, never for the next slice.
 				std::unique_lock alive(m_Life->mutex, std::try_to_lock);
 				if (!alive || !m_Life->owner || prepared.WritesBegun()) return;
 				HeapOwner& owner = *m_Life->owner;
@@ -2061,8 +2066,10 @@ namespace RTE::CheckpointLua {
 
 	inline bool HeapOwner::PreparationLease::BeginArm(Prepared& prepared, bool whole, bool learn, ArmSession& session) const {
 		if (!m_Life) return false;
-		session.m_Alive = std::unique_lock(m_Life->mutex, std::try_to_lock);
-		return session.m_Alive && m_Life->owner && prepared.BeginArm(*m_Life->owner, whole, learn, session);
+		prepared.StopWarming();
+		// Keep the owner alive through the fence, after any active warm commit has released it.
+		session.m_Alive = std::unique_lock(m_Life->mutex);
+		return m_Life->owner && prepared.BeginArm(*m_Life->owner, whole, learn, session);
 	}
 
 	inline bool HeapOwner::Prepared::BeginArm(HeapOwner& owner, bool whole, bool learn, ArmSession& session) {
@@ -2389,6 +2396,75 @@ namespace RTE::CheckpointLua {
 		const auto replacement = LeasePreparation(owner->State());
 		auto next = replacement.Prepare();
 		return replacement.Current(*next) && !lease.Current(*next) && !lease.Arm(*next);
+	}
+
+	inline bool HeapOwner::RunPreparationHandoffSelfTest(std::string& detail) {
+		// Keep the warm commit's critical section held until both operations have reached it. The remainder of the
+		// warmer stays parked separately: validation and arming must finish without joining that remainder.
+		const auto check = [](bool arm, std::string& result) {
+			auto owner = Create();
+			lua_pushnumber(owner->State(), 41);
+			TValue* const value = owner->State()->top - 1;
+			if (!owner->Extend((size_t{12} << 20) / Snapshot::c_PageBytes)) throw std::bad_alloc();
+			const auto lease = LeasePreparation(owner->State());
+			auto prepared = lease.Prepare();
+			for (size_t slice = 0; slice < 64; ++slice) owner->Trim();
+			if (!owner->m_HoleBytes.load(std::memory_order_acquire)) { result = "no returned run to warm"; return false; }
+			std::promise<void> holding, attempted, releaseCommit, parked, releaseRemainder;
+			auto commitReleased = releaseCommit.get_future().share();
+			auto remainderReleased = releaseRemainder.get_future().share();
+			struct Release {
+				std::promise<void>& promise;
+				bool sent = false;
+				void Send() { if (!sent) { promise.set_value(); sent = true; } }
+				~Release() { Send(); }
+			};
+			auto warmer = std::async(std::launch::async, [&] {
+				SaverThreads::Mark();
+				bool committed = false;
+				{
+					// The same one-run commit and lock order as PreparationLease::FillHoles; the barrier extends only this
+					// critical section, making the overlap independent of VirtualAlloc/mprotect timing.
+					std::lock_guard alive(owner->m_PreparationLife->mutex);
+					std::lock_guard holes(owner->m_HoleMutex);
+					committed = owner->FillHoles(1);
+					holding.set_value();
+					commitReleased.wait();
+				}
+				parked.set_value();
+				remainderReleased.wait();
+				return committed;
+			});
+			Release releaseTail{releaseRemainder};
+			Release releaseActive{releaseCommit};
+			holding.get_future().wait();
+			auto capture = std::async(std::launch::async, [&] {
+				attempted.set_value();
+				return arm ? lease.Arm(*prepared) : lease.Current(*prepared);
+			});
+			attempted.get_future().wait();
+			const bool waited = capture.wait_for(std::chrono::milliseconds(50)) == std::future_status::timeout;
+			releaseActive.Send();
+			parked.get_future().wait();
+			const bool finishedBeforeRemainder = capture.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+			releaseTail.Send();
+			const bool accepted = capture.get(), committed = warmer.get();
+			const bool armed = accepted && (arm || lease.Arm(*prepared));
+			bool kept = false;
+			if (armed) {
+				const Snapshot frozen = prepared->Image();
+				setnumV(value, 59);
+				prepared->Drain();
+				kept = frozen.Read(value).n == 41 && value->n == 59;
+			}
+			result = "waited=" + std::to_string(waited) + " active_commit=" + std::to_string(committed) +
+			         " accepted=" + std::to_string(accepted) + " before_remainder=" + std::to_string(finishedBeforeRemainder) + " kept=" + std::to_string(kept);
+			return waited && committed && accepted && finishedBeforeRemainder && kept;
+		};
+		std::string current, arm;
+		const bool currentPassed = check(false, current), armPassed = check(true, arm);
+		detail = "current:{" + current + "} arm:{" + arm + "}";
+		return currentPassed && armPassed;
 	}
 
 	inline bool HeapOwner::RunPreparedSelfTest() {

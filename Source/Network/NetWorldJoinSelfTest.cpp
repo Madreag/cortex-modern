@@ -7788,8 +7788,15 @@ namespace RTE {
 		// A second prune has the same floor; a transient delete failure still needs a retry.
 		tail.PruneJournalBefore(NetWorldFrameLog::c_JournalSegmentFrames + 1);
 		const auto deadline = RTE::SteadyClock::now() + std::chrono::seconds(5);
-		while (std::filesystem::exists(path) && RTE::SteadyClock::now() < deadline) std::this_thread::sleep_for(std::chrono::milliseconds(20));
-		if (std::filesystem::exists(path) || settle().files != 1) return Fail("F8: the failed segment deletion was never retried after the disk allowed it");
+		std::error_code queryError;
+		const auto certainlyAbsent = [&] {
+			// Windows may deny a status query while the writer's successful delete is still pending.
+			// An error is not absence: keep polling, and require an error-free result within the same deadline.
+			const bool present = std::filesystem::exists(path, queryError);
+			return !queryError && !present;
+		};
+		while (!certainlyAbsent() && RTE::SteadyClock::now() < deadline) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+		if (!certainlyAbsent() || settle().files != 1) return Fail("F8: the failed segment deletion was never retried after the disk allowed it: " + queryError.message());
 		std::cout << "[net-world-join-selftest] PASS journal_delete_is_retried_and_counted" << std::endl;
 		return 0;
 	}
@@ -7892,6 +7899,70 @@ namespace RTE {
 			*error = "a-lost-capture-is-named-again: the schedule named " + std::to_string(named.size()) + " capture(s) in 400 ticks after its first never reached the stream; expected 3 or more";
 			return false;
 		}
+		return true;
+	}
+
+	// A held host's periodic capture goes through the playing seats' agreed-frame request. It neither waits on its
+	// own held input nor consumes a due interval before that request commits, and keeps at most one writer open.
+	bool TestAHeldHostKeepsTheAutosaveCadence(std::string* error) {
+		NetMatchService service;
+		service.m_IsHost = true;
+		service.m_MatchAutosaveSeconds = 1;
+		const int64_t tickLength = g_TimerMan.GetTicksPerSecond() / 60;
+		std::map<uint64_t, std::vector<NetMatchService::CheckpointNote>> stream;
+		std::map<uint64_t, uint64_t> writers;
+		std::vector<uint64_t> captures;
+		size_t requests = 0, mostWriters = 0;
+		bool requested = false, ownCaptureSent = false;
+		for (uint64_t tick = 1; tick <= 400; ++tick) {
+			NetMatchService::AutosaveTickInput input;
+			input.tick = tick; input.now = static_cast<int64_t>(tick) * tickLength;
+			input.localPeer = 1; input.writers = {1, 2}; input.lead = 5; input.ownSeatHeld = true;
+			if (const auto due = stream.find(tick); due != stream.end()) {
+				input.applied = due->second;
+				for (const auto& note: input.applied) if (note.kind == NetGameCheckpoint::Capture) requested = false;
+			}
+			for (auto writer = writers.begin(); writer != writers.end();) {
+				if (writer->second <= tick) { input.finished.push_back(writer->first); writer = writers.erase(writer); }
+				else ++writer;
+			}
+			input.unwritten = writers.size();
+			const auto output = service.StepAutosaveSchedule(input);
+			if (output.requestPrivateBase && !requested) {
+				requested = true; ++requests;
+				// The existing control plane agrees the command three frames on; its capture is two frames later.
+				stream[tick + 3].push_back({1, NetGameCheckpoint::Capture, tick + 5});
+			}
+			for (const auto& note: output.send) if (note.kind == NetGameCheckpoint::Capture) ownCaptureSent = true;
+			if (output.capture) {
+				captures.push_back(tick);
+				writers.emplace(tick, tick + 12);
+				mostWriters = std::max(mostWriters, writers.size());
+				stream[tick + 12].push_back({2, NetGameCheckpoint::Written, tick});
+			}
+		}
+		bool gaps = captures.size() != 6;
+		for (size_t index = 1; index < captures.size(); ++index) gaps = gaps || captures[index] - captures[index - 1] > 61;
+		if (gaps || requests != 6 || mostWriters != 1 || ownCaptureSent) {
+			*error = "a-held-host-keeps-the-autosave-cadence: captures=" + std::to_string(captures.size()) + " requests=" + std::to_string(requests) +
+			         " most_writers=" + std::to_string(mostWriters) + " own_capture_sent=" + std::to_string(ownCaptureSent);
+			return false;
+		}
+		NetMatchService busy;
+		busy.m_IsHost = true; busy.m_MatchAutosaveSeconds = 1;
+		NetMatchService::AutosaveTickInput input;
+		input.tick = 1; input.now = tickLength; input.lead = 5; input.localPeer = 1; input.writers = {1, 2}; input.ownSeatHeld = true;
+		(void)busy.StepAutosaveSchedule(input);
+		input.tick = 61; input.now = 61 * tickLength; input.unwritten = 1;
+		const auto waited = busy.StepAutosaveSchedule(input);
+		input.unwritten = 0;
+		const auto resumed = busy.StepAutosaveSchedule(input);
+		if (waited.requestPrivateBase || !waited.send.empty() || !resumed.requestPrivateBase) {
+			*error = "a-held-host-keeps-the-autosave-cadence: a published writer consumed the deadline before releasing its capture";
+			return false;
+		}
+		std::cout << "[net-world-join-selftest] PASS a_held_host_keeps_the_autosave_cadence captures=" << captures.size() << " requests=" << requests
+		          << " most_writers=" << mostWriters << " first=" << captures.front() << " last=" << captures.back() << " writer_release_wait=1" << std::endl;
 		return true;
 	}
 
@@ -10248,6 +10319,7 @@ namespace RTE {
 			if (!TestWorldCaptureFollowsTheDeferredVerdict(&error)) return Fail(error);
 			if (!TestWorldCaptureKeepsOneImageInFlight(&error)) return Fail(error);
 			if (!TestALostCaptureIsNamedAgain(&error)) return Fail(error);
+			if (!TestAHeldHostKeepsTheAutosaveCadence(&error)) return Fail(error);
 			if (!TestAHostsLostOwnReportDoesNotStopTheSchedule(&error)) return Fail(error);
 			if (!TestAProvisionalHostWritesNothing(&error)) return Fail(error);
 			if (!TestNoCaptureIsNamedOverAPendingActivation(&error)) return Fail(error);

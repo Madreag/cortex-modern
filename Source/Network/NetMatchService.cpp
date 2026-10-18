@@ -3960,6 +3960,15 @@ static std::string ResyncSaveName() {
 
 	NetMatchService::AutosaveTickOutput NetMatchService::StepAutosaveSchedule(const AutosaveTickInput& input) {
 		AutosaveTickOutput output;
+		const uint32_t seconds = m_MatchAutosaveSeconds;
+		const int64_t tickLength = g_TimerMan.GetDeltaTimeTicks();
+		const int64_t interval = static_cast<int64_t>(seconds) * g_TimerMan.GetTicksPerSecond();
+		// A held host still simulates the round. Its periodic deadline follows that clock, including while a writer or
+		// an activation is in flight; only a capture actually taken consumes the interval.
+		if (m_IsHost && !input.paused && interval > 0) {
+			if (m_NextAutosaveSimTime < 0 || input.now < m_LastAutosaveSimTime) m_NextAutosaveSimTime = input.now - tickLength + interval;
+			m_LastAutosaveSimTime = input.now;
+		}
 		for (const CheckpointNote& note: input.applied) {
 			if (note.kind == NetGameCheckpoint::Capture || note.kind == NetGameCheckpoint::ManualCapture) {
 				// A capture named for a tick already behind this frame is taken here, on every peer alike.
@@ -3967,11 +3976,12 @@ static std::string ResyncSaveName() {
 				m_ScheduledCaptures.insert(takenAt);
 				if (note.kind == NetGameCheckpoint::ManualCapture) m_ManualCaptures.insert(takenAt);
 				if (m_Coordinator) m_Coordinator->NoteAnnouncedCapture(takenAt);
-				// A held host's private-base request is carried by an agreed frame of the playing seats, not by its held input.
-				if (m_IsHost && note.kind == NetGameCheckpoint::Capture && note.sender == input.localPeer && m_PrivateBaseRequested &&
-				    m_WorldCapturePending && m_OpenCaptureTick == 0) {
+				// A held host's base or periodic request is carried by an agreed frame of the playing seats, not by its held
+				// input. Adopt that committed command before waiting on its writers, just as for a command we named ourselves.
+				if (m_IsHost && note.kind == NetGameCheckpoint::Capture && note.sender == input.localPeer && m_OpenCaptureTick == 0) {
 					m_OpenCaptureTick = note.tick;
-					m_OpenCaptureForJoin = true;
+					m_OpenCaptureApplied = false;
+					m_OpenCaptureForJoin = m_WorldCapturePending;
 					m_OpenCaptureManual = false;
 					m_CaptureWriters = input.writers;
 					if (m_Coordinator) m_Coordinator->ClearPrivateBaseCaptureRequest();
@@ -4012,6 +4022,9 @@ static std::string ResyncSaveName() {
 			output.manual = true;
 		}
 		if (!m_IsHost) return output;
+		if (output.capture && interval > 0 && m_NextAutosaveSimTime >= 0 && input.now >= m_NextAutosaveSimTime) {
+			m_NextAutosaveSimTime += ((input.now - m_NextAutosaveSimTime) / interval + 1) * interval;
+		}
 		bool ask = input.manualRequested;
 		if (ask && input.hostProvisional) {
 			output.manualRefused = true;
@@ -4039,11 +4052,12 @@ static std::string ResyncSaveName() {
 			m_OpenCaptureManual = false;
 		}
 		output.manualPending = ask;
-		if (m_OpenCaptureTick != 0 && (input.tick <= m_OpenCaptureTick || !m_CaptureWriters.empty())) return output;
+		// Publication can reach the network pump before the writer has finished releasing its capture. Its future is
+		// still the existing one-writer gate: wait before naming another command, including a requested fresher base.
+		if (input.unwritten != 0 || (m_OpenCaptureTick != 0 && (input.tick <= m_OpenCaptureTick || !m_CaptureWriters.empty()))) return output;
 		m_OpenCaptureTick = 0;
 		m_OpenCaptureForJoin = false;
 		// Every peer keeps the schedule the host announced in the agreed config, not its own setting.
-		const uint32_t seconds = m_MatchAutosaveSeconds;
 		// A join asks for one capture and waits for its verdict; only a refused one asks again.
 		const bool joinCapture = m_WorldCapturePending && m_WorldJoin.IsConfigured() &&
 		                         std::none_of(m_AwaitedAutosaves.begin(), m_AwaitedAutosaves.end(), [](const AwaitedAutosave& entry) { return entry.joinCapture; });
@@ -4053,25 +4067,16 @@ static std::string ResyncSaveName() {
 		// The startup frames before a round's agreed first frame carry no commands either, so a capture named in them never
 		// reaches a writer and the schedule would wait on it for the rest of the round.
 		if (input.activationPending || input.startupPending || input.hostProvisional) return output;
+		// A capture is named ahead by the input delay; the interval is consumed above only after that command lands.
+		const bool periodicDue = !input.paused && interval > 0 &&
+		                         input.now + static_cast<int64_t>(input.lead) * tickLength >= m_NextAutosaveSimTime;
 		if (input.ownSeatHeld) {
-			// This is a control-plane request, not a capture named on an input the held seat no longer supplies. Playing
-			// voters agree the eventual tick; the committed command below is the first thing that opens the capture.
-			output.requestPrivateBase = joinCapture && m_PrivateBaseRequested && m_WorldJoin.IsPrivateMatch();
+			// Playing voters agree a frame for the held host. Keep the same authorization and one-capture gate as a base
+			// request, and leave a manual ask pending until it can be carried by the host's own input.
+			output.requestPrivateBase = periodicDue || (joinCapture && m_PrivateBaseRequested && m_WorldJoin.IsPrivateMatch());
 			return output;
 		}
-		if (!input.paused) {
-			const int64_t tickLength = g_TimerMan.GetDeltaTimeTicks();
-			const int64_t interval = static_cast<int64_t>(seconds) * g_TimerMan.GetTicksPerSecond();
-			if (m_NextAutosaveSimTime < 0 || input.now < m_LastAutosaveSimTime) {
-				m_NextAutosaveSimTime = input.now - tickLength + interval;
-			}
-			m_LastAutosaveSimTime = input.now;
-			// The capture is named `lead` ticks ahead, so it reaches every peer's stream before its tick.
-			const int64_t takenAt = input.now + static_cast<int64_t>(input.lead) * tickLength;
-			// The host's ask never moves the interval: it is advanced only when its own capture is due.
-			if (!joinCapture && !ask && takenAt < m_NextAutosaveSimTime) return output;
-			if (interval > 0 && takenAt >= m_NextAutosaveSimTime) m_NextAutosaveSimTime += ((takenAt - m_NextAutosaveSimTime) / interval + 1) * interval;
-		}
+		if (!joinCapture && !ask && !periodicDue) return output;
 		m_OpenCaptureTick = input.tick + input.lead;
 		m_OpenCaptureApplied = false;
 		m_OpenCaptureForJoin = joinCapture;
@@ -4313,7 +4318,7 @@ static std::string ResyncSaveName() {
 		}
 		AutosaveTickOutput output = StepAutosaveSchedule(input);
 		if (output.requestPrivateBase) (void)m_Coordinator->RequestPrivateBaseCapture();
-		else if (m_IsHost && (!m_PrivateBaseRequested || !m_WorldCapturePending || !input.ownSeatHeld)) m_Coordinator->ClearPrivateBaseCaptureRequest();
+		else if (m_IsHost && (!input.ownSeatHeld || input.hostProvisional)) m_Coordinator->ClearPrivateBaseCaptureRequest();
 		// The prepared capture warms ahead of the next one: a named capture is near at once, an interval one counts from the
 		// host's schedule or, on a peer, from the last capture it took.
 		bool named = std::any_of(output.send.begin(), output.send.end(), [](const auto& note) { return note.kind == NetGameCheckpoint::Capture || note.kind == NetGameCheckpoint::ManualCapture; });

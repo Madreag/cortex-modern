@@ -41,7 +41,7 @@ namespace RTE {
 			void Drain() const;
 			/// Commits the prepared shadow and makes the pages its boundary copies resident, before any live page is fenced.
 			void WarmShadow() const;
-			/// Gives back a prepared shadow's commit while no boundary has begun on it; the first save commits it again.
+			/// Keeps only the last cooling pass's Hot copy runs resident while no boundary has begun.
 			void CoolShadow() const noexcept;
 			/// Fences prepared ranges without allocating; writers pause only until this returns.
 			void Arm() const;
