@@ -132,6 +132,7 @@ Actor::Actor(const Actor& source, CheckpointNativeSnapshot& snapshot) :
 	m_PersistedControllerCheckpoint(snapshot.Freeze(source.m_PersistedControllerCheckpoint, &m_PersistedControllerCheckpoint)),
 	m_PersistedControllerInputMode(snapshot.Freeze(source.m_PersistedControllerInputMode)),
 	m_PersistedControllerQuickDisabled(snapshot.Freeze(source.m_PersistedControllerQuickDisabled)),
+	m_PersistedCompletePieMenu(snapshot.Freeze(source.m_PersistedCompletePieMenu, &m_PersistedCompletePieMenu)),
 	m_PersistedPieMenuState(snapshot.Freeze(source.m_PersistedPieMenuState, &m_PersistedPieMenuState)),
 	m_PersistedViewPoint(snapshot.Freeze(source.m_PersistedViewPoint)),
 	m_HasPersistedViewPoint(snapshot.Freeze(source.m_HasPersistedViewPoint)),
@@ -234,7 +235,7 @@ Actor::Actor(const Actor& source, CheckpointNativeSnapshot& snapshot) :
 	m_FrozenPieMenu(snapshot.Freeze(source.m_FrozenPieMenu)),
 	m_FrozenPieMenuState(snapshot.Freeze(source.m_FrozenPieMenuState)),
 	m_CheckpointInitialized(snapshot.Freeze(source.m_CheckpointInitialized)) {
-	if (source.m_PieMenu) { m_FrozenPieMenu = snapshot.FreezeWriter(source.m_PieMenu.get()); m_FrozenPieMenuState = source.m_PieMenu->PackCheckpointInteractionState(); }
+	if (source.m_PieMenu) { m_FrozenCompletePieMenu = snapshot.Object(source.m_PieMenu.get()); m_FrozenPieMenu = snapshot.FreezeWriter(source.m_PieMenu.get()); m_FrozenPieMenuState = source.m_PieMenu->PackCheckpointInteractionState(); }
 	for (size_t index = 0; index < m_PersistedActorIconReferences.size(); ++index) if (m_PersistedActorIconReferences[index].empty()) m_PersistedActorIconReferences[index] = CaptureActorIconReference(index ? source.m_pControllerIcon : source.m_pTeamIcon);
 }
 
@@ -258,6 +259,8 @@ Actor::~Actor() {
 }
 
 void Actor::Clear() {
+	m_PersistedCompletePieMenu.clear();
+	m_FrozenCompletePieMenu = nullptr;
 	CheckpointChange changed(*this, [this] {
 		return CheckpointFields(
 			m_AIBaseDigStrength, m_AIMode, m_AimAngle, m_AimDistance, m_AimRange, m_AimState,
@@ -430,6 +433,7 @@ int Actor::Create(const Actor& reference) {
 	m_PersistedControllerInputMode = reference.m_PersistedControllerInputMode;
 	m_PersistedControllerQuickDisabled = reference.m_PersistedControllerQuickDisabled;
 	m_PersistedControllerPlayer = reference.m_PersistedControllerPlayer;
+	m_PersistedCompletePieMenu = reference.m_PersistedCompletePieMenu;
 	m_PersistedPieMenuState = reference.m_PersistedPieMenuState;
 	m_PersistedViewPoint = reference.m_PersistedViewPoint;
 	m_HasPersistedViewPoint = reference.m_HasPersistedViewPoint;
@@ -667,6 +671,7 @@ int Actor::ReadProperty(const std::string_view& propName, Reader& reader) {
 	MatchProperty("ControllerInputMode", { reader >> m_PersistedControllerInputMode; });
 	MatchProperty("ControllerQuickDisabled", { reader >> m_PersistedControllerQuickDisabled; });
 	MatchProperty("PieMenuState", { reader >> m_PersistedPieMenuState; });
+	MatchProperty("SpecialBehaviour_CompletePieMenu", { m_PersistedCompletePieMenu = base64_decode(reader.ReadPropValue()); });
 	MatchProperty("SpecialBehaviour_MovementState", {
 		int state = 0;
 		reader >> state;
@@ -850,6 +855,9 @@ void Actor::SaveSnapshotConfiguration(Writer& writer) const {
 	if (m_FrozenPieMenu) {
 		writer.NewProperty("PieMenu"); writer.Append(m_FrozenPieMenu->ReindentWriter(writer.GetIndent() - 1));
 	} else if (m_PieMenu) writer.NewPropertyWithValue("PieMenu", m_PieMenu.get());
+	if (const PieMenu* menu = m_FrozenCompletePieMenu ? m_FrozenCompletePieMenu : m_PieMenu.get()) {
+		writer.NewPropertyWithValue("SpecialBehaviour_CompletePieMenu", CheckpointWriter::Native([menu] { return menu->SaveCompleteCheckpoint(); }).Base64(true));
+	}
 	writer.NewPropertyWithValue("GoldCarried", m_GoldCarried);
 	writer.NewPropertyWithValue("AIMode", m_AIMode);
 	writer.NewPropertyWithValue("SpecialBehaviour_ClearAIOrders", true);
@@ -2524,6 +2532,14 @@ bool Actor::IsGoneItemInReach(const HeldDevice* item) {
 	return item && item == s_GoneItemInReach.load(std::memory_order_acquire);
 }
 
+void Actor::RestoreCompletePieMenuCheckpoint() {
+	if (m_PersistedCompletePieMenu.empty()) return;
+	if (!m_PieMenu || !m_PieMenu->LoadCompleteCheckpoint(m_PersistedCompletePieMenu)) {
+		throw std::runtime_error("could not restore complete pie menu for actor " + std::to_string(GetUniqueID()));
+	}
+	m_PersistedCompletePieMenu.clear();
+}
+
 void Actor::ResolveFaithfulLinks() {
 	MOSRotating::ResolveFaithfulLinks();
 	if (!m_PersistedActorIconReferences[0].empty()) {
@@ -2580,6 +2596,7 @@ void Actor::RemapExternalLinks(const std::function<MovableObject*(MovableObject*
 }
 
 void Actor::DiscardPersistedSnapshotState() {
+	m_PersistedCompletePieMenu.clear();
 	m_PersistedActorIconReferences = {};
 	m_PersistedControllerCheckpoint.clear();
 	MOSRotating::DiscardPersistedSnapshotState();

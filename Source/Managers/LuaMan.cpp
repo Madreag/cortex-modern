@@ -23,6 +23,8 @@
 #include <string_view>
 #include "LuaThreadCodec.h"
 #include "CheckpointImage.h"
+#include "AutosaveStore.h"
+#include "SaveGameArchive.h"
 #include "CheckpointCast.h"
 #include "ScenarioRunner.h"
 #include "SoundSimulation.h"
@@ -4566,7 +4568,12 @@ struct RTE::LuaScriptGraphNativeCaptureData {
 	}
 	/// Makes the known-objects copy and lookup on this thread, before any worker asks.
 	void PreTouch() const { Known(nullptr); }
-	void BuildOwners() const { Owners(); }
+	void BuildOwners() const {
+		Owners();
+		// Build this from the boundary's actor/menu trees before reading the saver's actor copies. Those copies
+		// carry their menus as serialized text, not m_PieMenu, but Lua still names the slices in the original menu tree.
+		PieSliceOwner(nullptr);
+	}
 	bool HasOwnerIndex() const { return m_OwnersReady.load(std::memory_order_acquire); }
 	std::pair<size_t, size_t> DirectOwnerCounts() const { return {m_DirectVectors.size(), m_DirectControllers.size()}; }
 	bool SpecialOwner(const void* address) const {
@@ -4646,18 +4653,24 @@ struct RTE::LuaScriptGraphNativeCaptureData {
 	void* UnreadSlice(const void* slice) const {
 		std::lock_guard lock(m_UnreadMutex);
 		// A binding can hand a stand-in back to the copy; it is already the slice's.
-		if (m_UnreadOriginals.contains(slice)) return const_cast<void*>(slice);
+		if (m_SliceSources.contains(slice)) return const_cast<void*>(slice);
 		if (const auto found = m_UnreadByOriginal.find(slice); found != m_UnreadByOriginal.end()) return found->second;
 		void* standIn = &m_UnreadStandIns.emplace_back();
 		m_UnreadByOriginal.emplace(slice, standIn);
-		m_UnreadOriginals.emplace(standIn, slice);
+		m_SliceSources.emplace(standIn, slice);
 		return standIn;
 	}
-	/// The slice a handle names: a stand-in's slice, else the handle's original address.
+	/// Remembers a slice copied after the read scope's reverse index was built, just as for Vector fields below.
+	void* NoteSliceCopy(void* copy, const void* source) const {
+		std::lock_guard lock(m_UnreadMutex);
+		m_SliceSources.emplace(copy, CheckpointNativeStorage::Original(source));
+		return copy;
+	}
+	/// The slice a handle names: a stand-in's or world copy's source, else the handle's original address.
 	const void* SliceSource(const void* address) const {
 		{
 			std::lock_guard lock(m_UnreadMutex);
-			if (const auto found = m_UnreadOriginals.find(address); found != m_UnreadOriginals.end()) return found->second;
+			if (const auto found = m_SliceSources.find(address); found != m_SliceSources.end()) return found->second;
 		}
 		return CheckpointNativeStorage::Original(address);
 	}
@@ -4880,7 +4893,7 @@ private:
 	mutable std::mutex m_UnreadMutex;
 	mutable std::deque<UnreadStandIn> m_UnreadStandIns;
 	mutable std::unordered_map<const void*, void*> m_UnreadByOriginal;
-	mutable std::unordered_map<const void*, const void*> m_UnreadOriginals;
+	mutable std::unordered_map<const void*, const void*> m_SliceSources;
 	mutable std::mutex m_VectorSourcesMutex;
 	mutable std::unordered_map<const void*, const void*> m_VectorSources;
 };
@@ -7009,10 +7022,57 @@ _CaptureWindow.menuHolderUID = holder.UniqueID
 	for (void* block: takenBlocks) CheckpointNativeStorage::Deallocate(block);
 	const bool deadMenuCopied = deadMenuCaptured && deadMenuProblems.empty();
 	if (!deadMenuCopied) for (const std::string& problem: deadMenuProblems) std::cout << "[capture-window-selftest] gone actor's pie menu: " << problem << std::endl;
-	lua.RunScriptString("if _CaptureWindow then MovableMan:RemoveActor(_CaptureWindow.dropper); if _CaptureWindow.taker then MovableMan:RemoveActor(_CaptureWindow.taker) end end; _CaptureWindow = nil; collectgarbage()");
-	const bool passed = recordAnswers && goneFreedAtFence && reusedInWindow && goneCarried && retainedAtFence && takenInWindow && vectorCarried && liveAtFence && freedInWindow &&
+	// The restore cases run last: restoring the master graph changes its owned native wrappers, whereas the earlier
+	// allocator cases deliberately collect and reuse their memory. Each assertion still runs against its own fixture.
+	const bool livePlanted = lua.RunScriptString(R"lua(
+_CaptureWindow.liveHolder, _CaptureWindow.liveSlice = _CaptureWindow.holding(980)
+_CaptureWindow.liveAlias = _CaptureWindow.liveSlice
+assert(_CaptureWindow.liveSlice ~= nil)
+)lua") == 0;
+	// Keep a device's cached slice alive through the actual world saver, including a second save. The actor's saver copy
+	// carries its menu as text, so a lazy owner walk through that copy cannot find this still-live actor-owned slice.
+	int liveCaptures = 0, liveRestores = 0;
+	if (livePlanted) for (int pass = 0; pass < 2; ++pass) {
+		std::vector<std::string> problems;
+		if (!capture([] {}, [] {}, problems)) {
+			for (const std::string& problem: problems) std::cout << "[capture-window-selftest] live device slice: " << problem << std::endl;
+			continue;
+		}
+		++liveCaptures;
+		try {
+			const auto saved = AutosaveStore::Find("aaaaaaaa-0000-0000-0000-000000000002", static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
+			if (!saved) throw std::runtime_error("the live-slice capture was not published");
+			SaveGameArchive archive(saved->path.string());
+			std::string ini, graph, line;
+			archive.ReadEntry("Save.ini", ini);
+			std::istringstream lines(ini);
+			constexpr std::string_view prefix = "LuaStateGraph = 0|";
+			while (std::getline(lines, line)) {
+				const auto start = line.find_first_not_of("\t ");
+				if (start == std::string::npos || line.compare(start, prefix.size(), prefix) != 0) continue;
+				if (!line.empty() && line.back() == '\r') line.pop_back();
+				graph = base64_decode(line.substr(start + prefix.size()));
+				break;
+			}
+			if (graph.empty() || !lua.RestoreScriptGraph(graph, problems) || !problems.empty()) throw std::runtime_error("the published graph could not be restored");
+			if (lua.RunScriptString(R"lua(
+local options = _CaptureWindow.liveHolder.PieMenu:GetFirstPieSliceByPresetName("Constructor Options")
+local slice = options.SubPieMenu:GetFirstPieSliceByPresetName("Constructor Order Construction")
+assert(_ScriptGraphNativeAddress(_CaptureWindow.liveSlice) == _ScriptGraphNativeAddress(slice), "the live device slice changed owner or identity")
+assert(rawequal(_CaptureWindow.liveSlice, _CaptureWindow.liveAlias), "the cached device slice alias split")
+local enabled = slice.Enabled
+_CaptureWindow.liveSlice.Enabled = not enabled
+assert(slice.Enabled == not enabled, "the cached device slice stopped aliasing its menu")
+_CaptureWindow.liveSlice.Enabled = enabled
+)lua") == 0) ++liveRestores;
+		} catch (const std::exception& error) {
+			std::cout << "[capture-window-selftest] live device restore: " << error.what() << std::endl;
+		}
+	}
+	lua.RunScriptString("if _CaptureWindow then MovableMan:RemoveActor(_CaptureWindow.dropper); if _CaptureWindow.taker then MovableMan:RemoveActor(_CaptureWindow.taker) end; if _CaptureWindow.liveHolder then MovableMan:RemoveActor(_CaptureWindow.liveHolder) end end; _CaptureWindow = nil; collectgarbage()");
+	const bool passed = liveCaptures == 2 && liveRestores == 2 && recordAnswers && goneFreedAtFence && reusedInWindow && goneCarried && retainedAtFence && takenInWindow && vectorCarried && liveAtFence && freedInWindow &&
 	                    unreachedRefused && menuAtFence && menuMemoryTaken && deadMenuCopied;
-	std::cout << "[capture-window-selftest] record_answers_as_of_fence=" << recordAnswers << " planted=" << planted << " freed_at_fence=" << goneFreedAtFence << " reused_in_window=" << reusedInWindow
+	std::cout << "[capture-window-selftest] live_device_captures=" << liveCaptures << " live_device_restores=" << liveRestores << " record_answers_as_of_fence=" << recordAnswers << " planted=" << planted << " freed_at_fence=" << goneFreedAtFence << " reused_in_window=" << reusedInWindow
 	          << " freed_slice_carried=" << goneCarried << " retained_at_fence=" << retainedAtFence << " retained_taken_in_window=" << takenInWindow << " gone_vector_carried=" << vectorCarried
 	          << " live_at_fence=" << liveAtFence << " freed_in_window=" << freedInWindow << " unreached_refused_by_name=" << unreachedRefused
 	          << " menu_at_fence=" << menuAtFence << " menu_memory_taken=" << menuMemoryTaken << " gone_actor_menu_copied=" << deadMenuCopied << std::endl;
@@ -8828,7 +8888,12 @@ bool LuaStateWrapper::CapturePreparedScriptGraphs(const CheckpointLua::Boundary&
 	const CheckpointHeldMemory::WalkScope held(boundary.HeldMemory());
 	LuaScriptGraphNativeCaptureScope lookups;
 	lookups.Current()->captureThread = captureThread;
-	LuaScriptGraphNativeCaptureScope::BuildOwners(lookups.Current());
+	{
+		// Manager reconstruction has already put actor copies in the caller's roots, with their menus held as writer
+		// fields. Resolve identities in the complete boundary trees before worker-created copies enter the graph.
+		CheckpointNativeStorage::ReadScope fence(boundary.NativeViews());
+		LuaScriptGraphNativeCaptureScope::BuildOwners(lookups.Current());
+	}
 	const auto known = g_MovableMan.SnapshotKnownObjects();
 	graphs.resize(states.size()); scopes.resize(states.size());
 	const auto origin = RTE::SteadyClock::now();
@@ -8887,7 +8952,9 @@ bool LuaStateWrapper::CapturePreparedScriptGraphs(const CheckpointLua::Boundary&
 					// which the copy carries and the serializer skips; it is never read.
 					if (!owned && bindings.DerivesFrom(type, "Activity") && !LuaScriptGraphNativeCaptureScope::Current()->LiveActivity(entity)) return nullptr;
 					try {
-						return reinterpret_cast<char*>(snapshot->Object(entity)) - *offset;
+						void* result = reinterpret_cast<char*>(snapshot->Object(entity)) - *offset;
+						if (bindings.DerivesFrom(type, "PieSlice")) return LuaScriptGraphNativeCaptureScope::Current()->NoteSliceCopy(result, pointer);
+						return result;
 					} catch (const UnsupportedCheckpointNative& error) {
 						throw UnsupportedCheckpointNative(std::string(error.what()) + ", held by Lua as " + bindings.Class(type)->name());
 					}

@@ -3474,6 +3474,16 @@ bool MovableMan::ValidateScriptGraphs(const std::vector<std::string>& graphs, st
 bool MovableMan::RestoreScriptGraphs(const std::vector<std::string>& graphs, std::string* error, bool reuseHeld) {
 	AudioMan::RestorePlayPhaseScope playPhase("RestoreScriptGraphs");
 	if (!ValidateScriptGraphs(graphs, error)) return false;
+	// Native attachment reconstruction has finished. Replace device-supplied menu clones before graph preparation
+	// resolves borrowed slice paths, including actors nested inside an inventory or a craft.
+	try {
+		for (MovableObject* object: SnapshotKnownObjects()) {
+			if (auto* actor = dynamic_cast<Actor*>(object)) actor->RestoreCompletePieMenuCheckpoint();
+		}
+	} catch (const std::exception& exception) {
+		if (error) *error = exception.what();
+		return false;
+	}
 	std::vector<std::string> errors;
 	if (!reuseHeld) g_LuaMan.ResetPathCallbacks();
 	struct AllocationState {
