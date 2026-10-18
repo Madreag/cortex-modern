@@ -739,14 +739,15 @@ namespace RTE {
 				if ((packet.type == NetHostMigrationMessageType::PeerInput || packet.type == NetHostMigrationMessageType::PeerForwardInput) &&
 				    packet.offset == 0 && packet.totalBytes == packet.bytes.size()) inputEvidence.emplace(packet.frame, InputWireObservation{now, receiver, impaired, packet});
 			}
-			bool InputPartition(uint8_t owner, uint8_t human, uint8_t held, uint64_t frame, uint64_t humanAt, uint64_t heldAt) const {
-				if (owner == held) return false;
-				bool impaired = false, humanHas = false, heldHas = false;
+			const InputWireObservation* InputPartition(uint8_t owner, uint8_t human, uint8_t held, uint64_t frame, uint64_t humanAt, uint64_t heldAt) const {
+				if (owner == held) return nullptr;
+				const InputWireObservation* impaired = nullptr;
+				bool humanHas = false, heldHas = false;
 				for (auto it = inputEvidence.lower_bound(frame); it != inputEvidence.end() && it->first - frame < NetLockstepCodec::c_PeerInputWindowTicks; ++it) {
 					const auto& observation = it->second;
 					if ((observation.receiver != human && observation.receiver != held) || !InputWindowContains(observation.packet, owner, frame)) continue;
 					if (observation.impaired && observation.receiver == held && observation.at <= heldAt) {
-						impaired = true;
+						if (!impaired || observation.at < impaired->at) impaired = &observation;
 						if (human == owner && observation.at <= humanAt) humanHas = true;
 					}
 					if (!observation.impaired) {
@@ -754,7 +755,7 @@ namespace RTE {
 						heldHas |= observation.receiver == held && observation.at <= heldAt;
 					}
 				}
-				return impaired && humanHas && !heldHas;
+				return impaired && humanHas && !heldHas ? impaired : nullptr;
 			}
 			std::string returnInsideInputs;
 			// The random driver's round: its schedule decides every link, rate and reachability below.
@@ -1446,6 +1447,8 @@ namespace RTE {
 			std::vector<std::vector<std::map<uint64_t, NetHash32>>> discardedHistories;
 			std::array<std::array<uint64_t, 5>, 5> compared{}, splitFrom{};
 			std::array<std::array<std::map<uint64_t, uint64_t>, 5>, 5> inputSplits;
+			struct InputSplitCause { uint8_t human, held, sender, receiver; uint64_t faultAt, observedAt; };
+			std::vector<InputSplitCause> inputSplitCauses;
 			std::vector<bool> waitPlaying, imageReading, imageNeeded, imageWithoutHeadroom;
 			std::vector<bool> splitParticipant;
 			std::vector<uint32_t> observedSplit;
@@ -1619,6 +1622,12 @@ namespace RTE {
 				// FLAGGED fixture departure: only the minimum displayed cursor is a prefix both peers committed before this cut.
 				if (!from) from = std::min(worlds[a - 1].applied, worlds[b - 1].applied) + 1;
 			}
+			bool InputSplitCausedHold(uint8_t seat, uint64_t since, uint64_t until, uint8_t troubled, uint64_t from, uint64_t to) const {
+				return std::any_of(inputSplitCauses.begin(), inputSplitCauses.end(), [&](const InputSplitCause& cause) {
+					return (seat == cause.human || seat == cause.held) && (troubled == cause.sender || troubled == cause.receiver) &&
+					    cause.faultAt >= from && cause.faultAt < to && cause.faultAt <= since && since <= cause.observedAt && cause.observedAt <= until;
+				});
+			}
 			bool CompareHistories(std::string& error) {
 				for (uint8_t a = 1; a <= hub.row.seats; ++a) for (uint8_t b = a + 1; b <= hub.row.seats; ++b) {
 					const auto& left = worlds[a - 1]; const auto& right = worlds[b - 1];
@@ -1651,9 +1660,12 @@ namespace RTE {
 								const bool humanLeft = (l & bit) != 0;
 								const auto& human = humanLeft ? left : right; const auto& held = humanLeft ? right : left;
 								const auto ai = held.aiAt.find(frame);
-								if (ai == held.aiAt.end() || ("," + ai->second + ",").find("," + std::to_string(owner) + ",") == std::string::npos ||
-								    !hub.InputPartition(owner, humanLeft ? a : b, humanLeft ? b : a, frame, human.shownAt.at(frame), held.shownAt.at(frame))) continue;
+								if (ai == held.aiAt.end() || ("," + ai->second + ",").find("," + std::to_string(owner) + ",") == std::string::npos) continue;
+								const auto* cause = hub.InputPartition(owner, humanLeft ? a : b, humanLeft ? b : a, frame, human.shownAt.at(frame), held.shownAt.at(frame));
+								if (!cause) continue;
 								inputSplits[a][b][frame] = 0; separated = frame; sawSplit = true;
+								inputSplitCauses.push_back({humanLeft ? a : b, humanLeft ? b : a, cause->packet.senderPeerId, cause->receiver,
+								    cause->at, std::max(human.shownAt.at(frame), held.shownAt.at(frame))});
 								DiagnosticLine() << "[session-plane-input-partition] frame=" << frame << " owner=" << unsigned(owner)
 								    << " human_author=" << unsigned(humanLeft ? a : b) << " held_author=" << unsigned(humanLeft ? b : a)
 								    << " exact_impaired_input=1 delivered_before_hold=0" << std::endl;
@@ -1846,7 +1858,7 @@ namespace RTE {
 						if (heldSince[id] != UINT64_MAX) { heldSpans[id].push_back({heldSince[id], hub.now}); heldSince[id] = UINT64_MAX; }
 					}
 					hashedThrough = 0; sharedDigests.clear(); roundStartMs = hub.now;
-					compared = {}; splitFrom = {}; inputSplits = {}; sawSplit = splitHistories = false;
+					compared = {}; splitFrom = {}; inputSplits = {}; inputSplitCauses.clear(); sawSplit = splitHistories = false;
 					directRuling = 0;
 					std::fill(lostAt.begin(), lostAt.end(), 0); std::fill(lostFrame.begin(), lostFrame.end(), 0);
 					std::fill(imageAt.begin(), imageAt.end(), 0); std::fill(imageReturns.begin(), imageReturns.end(), 0);
@@ -2706,6 +2718,13 @@ namespace RTE {
 					error = "causal wire-history oracle variant=" + std::to_string(variant) + " expected_split=" + std::to_string(expected) + ": " + why; return false;
 				}
 				if (variant == 0) {
+					if (!fixture.InputSplitCausedHold(1, 150, 180, 2, 40, 60) || !fixture.InputSplitCausedHold(2, 150, 180, 1, 40, 60) ||
+					    fixture.InputSplitCausedHold(1, 150, 180, 3, 40, 60) || fixture.InputSplitCausedHold(3, 150, 180, 2, 40, 60) ||
+					    fixture.InputSplitCausedHold(1, 151, 180, 2, 40, 60) || fixture.InputSplitCausedHold(1, 150, 149, 2, 40, 60) ||
+					    fixture.InputSplitCausedHold(1, 150, 180, 2, 51, 60) || fixture.InputSplitCausedHold(1, 150, 180, 2, 40, 50) ||
+					    fixture.InputSplitCausedHold(1, 49, 180, 2, 40, 60)) {
+						error = "a split hold cause escaped its exact impaired link, fault interval or observed hold span"; return false;
+					}
 					for (size_t peer = 0; peer < 2; ++peer) {
 						fixture.worlds[peer].applied = 2; fixture.worlds[peer].hashes[2] = {}; fixture.worlds[peer].shownAt[2] = 210;
 						fixture.frameMembers[peer].push_back(3); fixture.frameAuthors[peer].push_back(peer + 1);
@@ -3257,14 +3276,19 @@ namespace RTE {
 					uint64_t troubleEnd = 0, backlog = 0; bool caused = false;
 					const uint64_t lookFrom = since > 3000 ? since - 3000 : 0, lookTo = until == UINT64_MAX ? end : until;
 					for (const auto& spell: schedule.spells) {
-						if (!(spell.kind == Spell::Kind::Late ? linkShared(spell.seat, seat) : spell.seat == seat) || spell.atMs > lookTo) continue;
+						const bool linkCause = spell.kind == Spell::Kind::Late && (linkShared(spell.seat, seat) ||
+						    fixture.InputSplitCausedHold(seat, since, until, spell.seat, spell.atMs, spell.EndMs()));
+						if (!(spell.kind == Spell::Kind::Late ? linkCause : spell.seat == seat) || spell.atMs > lookTo) continue;
 						const uint64_t catchUp = CatchUpMs(BacklogMs(spell), schedule.recoverPercent[seat]);
 						const uint64_t windowEnd = spell.EndMs() + (catchUp == UINT64_MAX ? end : catchUp) + c_NetSeatCatchUpAllowanceMs;
 						if (windowEnd < lookFrom) continue;
 						caused |= spell.atMs <= since;
 						troubleEnd = std::max(troubleEnd, spell.EndMs()); backlog += BacklogMs(spell);
 					}
-					for (const auto& burst: schedule.bursts) if (linkShared(burst.seat, seat) && burst.atMs <= since && burst.atMs + burst.ms + 3000 >= lookFrom) {
+					// FLAGGED fixture departure: only the proven opposing input continuation shares this link-fault cause.
+					for (const auto& burst: schedule.bursts) if ((linkShared(burst.seat, seat) ||
+					    fixture.InputSplitCausedHold(seat, since, until, burst.seat, burst.atMs, burst.atMs + burst.ms)) &&
+					    burst.atMs <= since && burst.atMs + burst.ms + 3000 >= lookFrom) {
 						caused = true; troubleEnd = std::max(troubleEnd, burst.atMs + burst.ms);
 					}
 					// A live link split makes each half hold the other. A hung process is not a split and cannot justify holding a survivor.
