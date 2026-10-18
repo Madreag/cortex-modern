@@ -254,6 +254,53 @@ namespace RTE {
 			return true;
 		}
 
+		static bool MissingInputsExcludeIncompatibleWitnesses(std::string* error) {
+			for (bool directory: {false, true}) for (uint8_t local: {1, 2, 3}) {
+				Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
+				const uint8_t missing = local % 3 + 1, witness = (local + 1) % 3 + 1;
+				const uint32_t localBit = 1U << (local - 1), witnessBit = 1U << (witness - 1);
+				peer.m_Config.localPeerId = local;
+				peer.m_Config.peerFrameGroups = peer.m_Config.substituteSlowPeers = true;
+				peer.m_Config.slowPlayerBoundTicks = 3; peer.m_MigrationPhase = NetHostMigrationPhase::None;
+				if (directory) peer.m_Config.frameTieReferee = [](const NetFrameTieRequest&) { return NetFrameTieReply{NetFrameTieReply::State::Waiting}; };
+				peer.m_FrameGroupMembers = 7; peer.m_FrameGroupChanges = {{1, 7}};
+				peer.m_RemotePeerIds = {missing, witness}; peer.m_RemoteTransports = {{missing, 40 + missing}, {witness, 40 + witness}};
+				peer.m_Stats.nextFrame = 351; peer.m_LastCompletedSimulationTick = 350;
+				peer.m_MigrationHistory[350] = {1, 2, 3};
+				const auto prefix = peer.PeerAppliedFramePrefix(350);
+				peer.m_PeerPaceStartFrame = 350; peer.m_PeerPaceStartMs = peer.m_PeerConsumerAtMs = 1000;
+				peer.m_FirstMissingFrame = peer.m_ConsumerWaitingFrame = 351;
+				peer.m_FirstMissingMs = 992; peer.m_ConsumerWaitStartMs = 1017;
+				for (uint8_t owner: {local, witness}) {
+					ControllerFrame controls; controls.actorUniqueID = 1000 + owner;
+					NetLockstepFrame input; input.senderPeerId = owner; input.roundId = 77; input.targetFrame = 351; input.frames = {controls};
+					peer.m_PeerSourceInputs[351][owner] = input;
+					if (owner == local) peer.m_LocalFrames[351] = input.frames; else peer.m_RemoteFrames[351][owner] = input.frames;
+					for (uint8_t reader = 1; reader <= 3; ++reader) peer.m_PeerInputReceipts[owner][reader] = 352;
+				}
+				peer.m_PeerInputReceipts[missing] = {{missing, 352}, {witness, 352}, {local, 351}};
+				auto contradictory = peer.PeerFrameMessage(NetHostMigrationMessageType::PeerBridge);
+				contradictory.preparedFrame = 0; contradictory.frame = contradictory.boundary = 351;
+				contradictory.connectedMask = localBit | witnessBit; contradictory.members = {missing};
+				peer.m_TimingNowMs = 1030;
+				if (!peer.PeerInputAccepted(351, missing) || !peer.PeerBridgeHasInputConflict(contradictory) || peer.ProposePeerBridge(351, 1030)) {
+					*error = "a missing-source witness lost its input authority/conflict guard or formed an early hold"; return false;
+				}
+				peer.m_TimingNowMs = 1050;
+				if ((peer.PeerInputReceiptGroup(351) & ~(1U << (missing - 1))) != localBit || !peer.ProposePeerBridge(351, 1050) || peer.m_FrameGroupMembers != localBit ||
+				    !peer.IsSeatUnderAI(missing, 351) || !peer.IsSeatUnderAI(witness, 351) || peer.IsSeatUnderAI(local, 351) ||
+				    peer.PeerAppliedFramePrefix(350) != prefix) {
+					*error = "a remotely accepted but locally missing source prevented the compatible local hold at its bound"; return false;
+				}
+				peer.AdvanceReadyFrames(1050);
+				NetLockstepReadyFrame ready;
+				if (!peer.PopReadyFrame(ready) || ready.frame != 351 || ready.localFrames.size() != 1 || !ready.remoteFrames.empty() || peer.IsLocalSeatHeld()) {
+					*error = "the compatible survivor did not play its own input after the bounded hold"; return false;
+				}
+			}
+			return true;
+		}
+
 		static bool ConsumerInputGetsTheWholeBound(std::string* error) {
 			for (bool arrives: {false, true}) {
 				Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
@@ -31686,6 +31733,12 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS consumer_hold_deadline_includes_the_displayed_slot\n[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "missing-input-witness-group") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::MissingInputsExcludeIncompatibleWitnesses(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS missing_inputs_exclude_incompatible_witnesses\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "consumer-whole-window") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::ConsumerInputGetsTheWholeBound(&error)) return fail(error);
@@ -32037,6 +32090,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::LegacyCombatHoldUsesItsInputDeadline, "legacy_combat_hold_uses_its_input_deadline");
 		row(&SessionPlaneRecoveryTest::RemoteInputReceiptsFormTheLocalHoldGroup, "remote_input_receipts_form_the_local_hold_group");
 		row(&SessionPlaneRecoveryTest::AcceptedInputsKeepTheirPlayingReceiptGroup, "accepted_inputs_keep_their_playing_receipt_group");
+		row(&SessionPlaneRecoveryTest::MissingInputsExcludeIncompatibleWitnesses, "missing_inputs_exclude_incompatible_witnesses");
 		row(&SessionPlaneRecoveryTest::MissingOrZeroLinkNeverUsesReceipts, "missing_or_zero_rtt_never_uses_machine_receipts");
 		row(&SessionPlaneRecoveryTest::LinkSizingInEveryMode, "every_mode_sizes_live_and_return_from_the_link");
 		row(&SessionPlaneRecoveryTest::ReaderLinksContributeToInputRunway, "reader_links_contribute_to_input_runway");

@@ -173,7 +173,13 @@ namespace RTE {
 		// that group cannot veto its local hold by acknowledging a different input. The stable seat order resolves overlapping
 		// receipt sets locally; it selects no winning history. The heal or directory still arbitrates any continuations.
 		for (uint8_t owner = 1; owner <= m_Config.peerCount; ++owner) {
-			if ((group & SeatBit(owner)) == 0 || !sources->second.contains(owner) || PeerInputAccepted(frame, owner)) continue;
+			if ((voting & SeatBit(owner)) == 0 || frame < EffectiveStartOf(owner)) continue;
+			if (!sources->second.contains(owner)) {
+				// A witness that already accepted this missing input cannot share the local hold that replaces it.
+				group &= ~(PeerInputVoters(frame, owner) & ~SeatBit(owner) & ~local);
+				continue;
+			}
+			if ((group & SeatBit(owner)) == 0 || PeerInputAccepted(frame, owner)) continue;
 			// Possession of this authenticated source is our own receipt even while its cumulative publication catches up.
 			group &= PeerInputVoters(frame, owner) | local;
 		}
