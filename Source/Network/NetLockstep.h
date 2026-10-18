@@ -1184,7 +1184,10 @@ namespace RTE {
 		void SetPeerFrameBlackoutForTest(uint64_t frame, uint64_t durationMs, bool directoryDark = false) {
 			NET_PLANE_CHECK(); m_TestBlackoutFrame = frame; m_TestBlackoutDurationMs = durationMs; m_TestBlackoutDirectoryDark = directoryDark; m_TestBlackoutAtMs.reset();
 		}
-		bool PeerFrameCatchUpActive() const;
+		/// A pending display-phase goal keeps accruing bounded credit while an extra tick awaits input receipts.
+		bool PeerFrameCatchUpNeeded() const;
+		/// Whether the next extra tick fits that goal and its complete receipt runway, including time to the next ordinary slot.
+		bool PeerFrameCatchUpActive(double nextOrdinaryTickInMs = 0) const;
 		/// Consumes a committed delay fall's clock rebase; old consumer debt must not spend the producer's new phase.
 		bool TakeInputDelayClockRebase();
 		/// The latest local input accepted by the current peer authority, inclusive.
@@ -1658,6 +1661,7 @@ namespace RTE {
 		std::map<NetPeerId, uint8_t>& PeerPrimaryBindings() { return m_Config.peerSessionLinks ? m_Config.peerSessionLinks->primaryBindings : m_PeerPrimaryBindings; }
 		bool& PeerPrimaryListener() { return m_Config.peerSessionLinks ? m_Config.peerSessionLinks->primaryListener : m_PeerPrimaryListener; }
 		bool HasPeerFrameRoute(uint8_t peer) const;
+		bool PeerFrameCatchUp(bool requireReceiptRunway, double nextOrdinaryTickInMs = 0) const;
 		std::optional<double> PeerInputDeadlineMs(uint64_t frame) const;
 		bool PeerConsumerHoldDue(uint64_t frame, uint64_t nowMs) const;
 		bool PeerMissingInputReceipt(uint8_t peer, uint64_t frame) const;

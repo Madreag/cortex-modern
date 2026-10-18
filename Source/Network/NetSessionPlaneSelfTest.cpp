@@ -1089,7 +1089,12 @@ namespace RTE {
 		}
 		// The decisions a peer let go after keeping them past the silence the round allows (0 on an engine that does not count them).
 		template<class Stats> uint64_t DecisionsDropped(const Stats& stats) { if constexpr (requires { stats.decisionsDropped; }) return stats.decisionsDropped; else return 0; }
-		template<class Peer> bool CatchingUp(const Peer& peer) { if constexpr (requires { peer.PeerFrameCatchUpActive(); }) return peer.PeerFrameCatchUpActive(); else return false; }
+		template<class Peer> bool CatchingUp(const Peer& peer, double ordinaryWaitMs = 0) {
+			if constexpr (requires { peer.PeerFrameCatchUpActive(ordinaryWaitMs); }) return peer.PeerFrameCatchUpActive(ordinaryWaitMs);
+			else if constexpr (requires { peer.PeerFrameCatchUpActive(); }) return peer.PeerFrameCatchUpActive();
+			else return false;
+		}
+		template<class Peer> bool CatchUpNeeded(const Peer& peer) { if constexpr (requires { peer.PeerFrameCatchUpNeeded(); }) return peer.PeerFrameCatchUpNeeded(); else return CatchingUp(peer); }
 		template<class Peer> std::optional<uint64_t> AcceptedThrough(const Peer& peer) { if constexpr (requires { peer.GetLocalInputAcceptedThrough(); }) return peer.GetLocalInputAcceptedThrough(); else return std::nullopt; }
 		template<class Peer> uint32_t SenderResizes(const Peer& peer, uint8_t sender) {
 			if constexpr (requires { peer.GetStats().peers.at(sender).delayResizes; }) return peer.GetStats().peers.at(sender).delayResizes;
@@ -1124,14 +1129,22 @@ namespace RTE {
 		// A row on a pool worker runs beside others: no plane ticks its coordinators, so it takes no plane lock and none waits on it.
 		thread_local bool t_PoolWorker = false;
 		// FLAGGED fixture departure: Main/TimerMan retain ordinary elapsed time separately from the bounded extra grants.
-		// A neutral return or a filled receipt runway can end acceleration between any two ticks, including one burst.
+		// Every extra grant needs a phase goal and receipt runway; a receipt wait preserves the goal's bounded accrual.
 		struct FixtureTickCredit {
 			double ordinary = 0, accelerated = 0;
 			void Accrue(double elapsedMs, double ordinaryRate, double catchUpRate, bool catchingUp) {
 				ordinary = std::min(6.0, ordinary + elapsedMs * ordinaryRate / c_TestTickMs);
 				accelerated = catchingUp ? std::min(6.0, accelerated + elapsedMs * catchUpRate / c_TestTickMs) : 0;
 			}
-			bool MayGrant(bool catchingUp) const { return catchingUp ? accelerated >= 1 : ordinary >= 1; }
+			bool MayGrant(bool needed, bool canAccelerate) const {
+				if (needed && accelerated < 1) return false;
+				return ordinary >= 1 || (needed && canAccelerate && accelerated >= 1);
+			}
+			double NextOrdinaryTickInMs(double pollMs = 0) const {
+				// FLAGGED fixture departure: an ordinary tick cannot run between the fixture's discrete polls.
+				const double remaining = std::max(0.0, 1.0 - ordinary) * c_TestTickMs;
+				return pollMs > 0 ? std::ceil(remaining / pollMs) * pollMs : remaining;
+			}
 			void Consume(bool catchingUp) {
 				// GrantSimUpdates adds one whole tick only when ordinary time cannot fund it; its fractional remainder survives.
 				if (ordinary >= 1) ordinary -= 1;
@@ -1642,9 +1655,9 @@ namespace RTE {
 					const uint32_t capacity = scheduled ? scheduled->CapacityPercent(id, hub.now) : 0;
 					const bool atRoundRate = id == hub.row.subject && hub.row.roundRateAfterMs && hub.now >= hub.faultEnd + hub.row.roundRateAfterMs;
 					const double catchUpRate = scheduled ? capacity / 100.0 : atRoundRate ? 1.0 : hub.row.catchUpPercent && id == hub.row.subject ? hub.row.catchUpPercent / 100.0 : c_TestCatchUpRate;
-					credits[id - 1].Accrue(hub.row.stepMs, slowed ? ratePercent / 100.0 : 1, catchUpRate, !slowed && CatchingUp(peer));
-					while (credits[id - 1].MayGrant(!slowed && CatchingUp(peer))) {
-						const bool accelerated = !slowed && CatchingUp(peer);
+					credits[id - 1].Accrue(hub.row.stepMs, slowed ? ratePercent / 100.0 : 1, catchUpRate, !slowed && CatchUpNeeded(peer));
+					while (credits[id - 1].MayGrant(!slowed && CatchUpNeeded(peer), !slowed && CatchingUp(peer, credits[id - 1].NextOrdinaryTickInMs(hub.row.stepMs)))) {
+						const bool catchingUp = !slowed && CatchUpNeeded(peer);
 						const uint64_t next = world.applied + 1;
 						if (queued[id - 1] != next && !peer.TimingDecisionPendingAt(next)) {
 							ControllerFrame input; input.actorUniqueID = 1000 + id; input.analogMoveX = id * 100;
@@ -1675,7 +1688,7 @@ namespace RTE {
 						frameMembers[id - 1].push_back(s_FrameMembers(peer, ready.frame));
 						frameAuthors[id - 1].push_back(id);
 						if (hub.row.captureFrames) committed[id - 1][ready.frame] = ready;
-						peer.FinishSimulationTick(ready.frame); credits[id - 1].Consume(accelerated);
+						peer.FinishSimulationTick(ready.frame); credits[id - 1].Consume(catchingUp);
 						if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) {
 							const char* watched = std::getenv("CC_TEST_LOCKSTEP_OBSERVE_TARGET");
 							const uint64_t target = watched ? std::strtoull(watched, nullptr, 10) : UINT64_MAX;
@@ -2279,19 +2292,35 @@ namespace RTE {
 			// Main checks every extra grant again; ending catch-up cannot spend its leftover acceleration as ordinary time.
 			FixtureTickCredit credit;
 			credit.Accrue(2 * c_TestTickMs, 1, 3, true);
-			if (!credit.MayGrant(true)) { error = "fixture lost its bounded accelerated grant"; return false; }
+			if (!credit.MayGrant(true, true)) { error = "fixture lost its bounded accelerated grant"; return false; }
 			credit.Consume(true);
 			unsigned ordinary = 0;
-			while (credit.MayGrant(false)) { credit.Consume(false); ++ordinary; }
+			while (credit.MayGrant(false, false)) { credit.Consume(false); ++ordinary; }
 			if (ordinary != 1) {
 				error = "fixture spent accelerated credit after catch-up ended: ordinary_grants=" + std::to_string(ordinary) + " expected=1"; return false;
 			}
 			FixtureTickCredit fractional;
 			fractional.Accrue(c_TestTickMs / 2, 1, 3, true); fractional.Consume(true);
 			fractional.Accrue(c_TestTickMs / 2, 1, 3, false);
-			if (!fractional.MayGrant(false)) { error = "fixture extra grant discarded fractional ordinary time"; return false; }
+			if (!fractional.MayGrant(false, false)) { error = "fixture extra grant discarded fractional ordinary time"; return false; }
 			fractional.Consume(false);
-			if (fractional.MayGrant(false)) { error = "fixture counted its fractional ordinary time twice"; return false; }
+			if (fractional.MayGrant(false, false)) { error = "fixture counted its fractional ordinary time twice"; return false; }
+			FixtureTickCredit awaitingReceipts;
+			FixtureTickCredit polled;
+			polled.Accrue(1, 1, 3, true);
+			if (polled.NextOrdinaryTickInMs(1) != 16 || polled.NextOrdinaryTickInMs(0.25) != 15.75) {
+				error = "fixture forecast an ordinary slot before its next eligible poll"; return false;
+			}
+			awaitingReceipts.Accrue(c_TestTickMs / 2, 1, 3, true);
+			if (awaitingReceipts.MayGrant(true, false) || !awaitingReceipts.MayGrant(true, true)) {
+				error = "fixture granted an extra tick without its receipt runway or lost an eligible grant"; return false;
+			}
+			awaitingReceipts.Accrue(c_TestTickMs / 2, 1, 3, true);
+			if (!awaitingReceipts.MayGrant(true, false)) { error = "fixture receipt wait blocked an ordinary due tick"; return false; }
+			awaitingReceipts.Consume(true);
+			if (awaitingReceipts.MayGrant(true, false) || awaitingReceipts.accelerated != 2) {
+				error = "fixture ordinary tick escaped the phase budget or manufactured receipt credit"; return false;
+			}
 			Hub fault;
 			fault.row.subject = 1; fault.row.gapMs = 8000; fault.row.hung = true;
 			fault.now = 7000; fault.faultEnd = 14000;

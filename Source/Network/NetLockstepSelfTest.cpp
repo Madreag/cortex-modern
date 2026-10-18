@@ -714,6 +714,16 @@ namespace RTE {
 			peer.m_PeerInputReceipts[2][1] = 17; peer.m_PeerInputSentAtMs[17] = 643;
 			peer.m_TimingNowMs = 854;
 			if (peer.PeerFrameCatchUpActive()) { *error = "the extrapolated display clock spent frame 17's outstanding 250 ms receipt runway"; return false; }
+			// The phase still trails by several ticks. A receipt gate can withhold one extra grant, not erase its accrual goal.
+			if (!peer.PeerFrameCatchUpNeeded()) { *error = "a receipt-limited extra tick erased the pending display-phase budget"; return false; }
+			peer.m_PeerAppliedAtMs[1] = 0;
+			if (peer.PeerFrameCatchUpNeeded() || peer.PeerFrameCatchUpActive()) { *error = "a stale display report manufactured a phase budget"; return false; }
+			peer.m_PeerAppliedAtMs[1] = 851;
+			// The next ordinary slot is still ahead: receipt 18 arrives at 870, before that slot at 870.5, but after 869.5.
+			peer.m_PeerInputReceipts[2][1] = 18; peer.m_PeerInputSentAtMs[18] = 620;
+			if (peer.PeerFrameCatchUpActive() || !peer.PeerFrameCatchUpActive(16.5) || peer.PeerFrameCatchUpActive(15.5)) {
+				*error = "the extra grant ignored the caller's actual next ordinary slot or spent an incomplete receipt trip"; return false;
+			}
 			// A prepared queue with real receipt runway can still close a display phase difference.
 			peer.m_PeerInputReceipts[2][1] = 33; peer.m_PeerInputSentAtMs[33] = 700;
 			peer.m_LastQueuedTargetFrame = 40;

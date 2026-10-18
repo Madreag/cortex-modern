@@ -384,7 +384,15 @@ namespace RTE {
 		    (!own->second.returnFrame || frame < *own->second.returnFrame);
 	}
 
-	bool NetLockstepCoordinator::PeerFrameCatchUpActive() const {
+	bool NetLockstepCoordinator::PeerFrameCatchUpNeeded() const {
+		return PeerFrameCatchUp(false);
+	}
+
+	bool NetLockstepCoordinator::PeerFrameCatchUpActive(double nextOrdinaryTickInMs) const {
+		return PeerFrameCatchUp(true, nextOrdinaryTickInMs);
+	}
+
+	bool NetLockstepCoordinator::PeerFrameCatchUp(bool requireReceiptRunway, double nextOrdinaryTickInMs) const {
 		NET_PLANE_CHECK();
 		if (!IsRunning() || !m_LastCompletedSimulationTick) return false;
 		if (const auto phase = InputDelayRetimingTarget(); phase && *m_LastCompletedSimulationTick < *phase) return true;
@@ -414,22 +422,26 @@ namespace RTE {
 		// An extrapolated display clock is a phase goal, not receipt credit. An extra tick must leave the first outstanding
 		// own target enough ordinary tick slots for its full trip to every playing reader. Otherwise catching up spends the
 		// delay queue faster than production/receipts can refill it and invents a missing peer on a healthy steady link.
-		const auto receipts = m_PeerInputReceipts.find(m_Config.localPeerId);
-		for (uint8_t reader = 1; reader <= m_Config.peerCount; ++reader) {
-			if (reader == m_Config.localPeerId || (PeerFrameMembersAt(next) & SeatBit(reader)) == 0) continue;
-			uint64_t outstanding = EffectiveStartOf(m_Config.localPeerId);
-			if (receipts != m_PeerInputReceipts.end()) if (const auto through = receipts->second.find(reader); through != receipts->second.end())
-				outstanding = std::max(outstanding, through->second);
-			if (const auto back = m_ReclaimTransactions.find(m_Config.localPeerId); back != m_ReclaimTransactions.end())
-				outstanding = std::max(outstanding, back->second.neutralThroughFrame + 1);
-			if (outstanding <= next) return false;
-			const auto [wire, route] = PeerFrameRoute(reader);
-			if (!wire || !wire->IsPeerPingMeasured(route)) return false;
-			const auto sent = m_PeerInputSentAtMs.find(outstanding);
-			const uint64_t sentAt = sent == m_PeerInputSentAtMs.end() ? m_TimingNowMs : sent->second;
-			const double receiptAt = static_cast<double>(sentAt) + wire->GetPeerPingMs(route);
-			const double consumeAt = static_cast<double>(m_TimingNowMs) + (outstanding - next - 1) * m_Config.simTickMs;
-			if (consumeAt < receiptAt) return false;
+		if (requireReceiptRunway) {
+			// An extra grant preserves fractional ordinary time until the caller's next slot.
+			const double ordinaryWaitMs = std::isfinite(nextOrdinaryTickInMs) ? std::clamp(nextOrdinaryTickInMs, 0.0, m_Config.simTickMs) : 0;
+			const auto receipts = m_PeerInputReceipts.find(m_Config.localPeerId);
+			for (uint8_t reader = 1; reader <= m_Config.peerCount; ++reader) {
+				if (reader == m_Config.localPeerId || (PeerFrameMembersAt(next) & SeatBit(reader)) == 0) continue;
+				uint64_t outstanding = EffectiveStartOf(m_Config.localPeerId);
+				if (receipts != m_PeerInputReceipts.end()) if (const auto through = receipts->second.find(reader); through != receipts->second.end())
+					outstanding = std::max(outstanding, through->second);
+				if (const auto back = m_ReclaimTransactions.find(m_Config.localPeerId); back != m_ReclaimTransactions.end())
+					outstanding = std::max(outstanding, back->second.neutralThroughFrame + 1);
+				if (outstanding <= next) return false;
+				const auto [wire, route] = PeerFrameRoute(reader);
+				if (!wire || !wire->IsPeerPingMeasured(route)) return false;
+				const auto sent = m_PeerInputSentAtMs.find(outstanding);
+				const uint64_t sentAt = sent == m_PeerInputSentAtMs.end() ? m_TimingNowMs : sent->second;
+				const double receiptAt = static_cast<double>(sentAt) + wire->GetPeerPingMs(route);
+				const double consumeAt = static_cast<double>(m_TimingNowMs) + ordinaryWaitMs + (outstanding - next - 1) * m_Config.simTickMs;
+				if (consumeAt < receiptAt) return false;
+			}
 		}
 		// The initial handshake reaches seats at different times. Follow one
 		// stable member's displayed clock so that difference cannot become a

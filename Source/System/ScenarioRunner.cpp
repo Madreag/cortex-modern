@@ -1582,7 +1582,7 @@ namespace RTE {
 		NetLockstepPlaneGuard plane;
 		const uint64_t nowMs = NetLockstepNowMs();
 		(void)RebaseInputDelayClock(nowMs);
-		const bool catchingUp = s_LockstepCoordinator && s_LockstepCoordinator->PeerFrameCatchUpActive();
+		const bool catchingUp = s_LockstepCoordinator && s_LockstepCoordinator->PeerFrameCatchUpNeeded();
 		static uint64_t detailAtMs = 0, detailCalls = 0, detailActive = 0, detailElapsedMs = 0;
 		if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) {
 			++detailCalls;
@@ -1615,7 +1615,9 @@ namespace RTE {
 	bool ScenarioRunner::TakeOwnSeatCatchUpGrant(uint64_t nextSimTick) {
 		NetLockstepPlaneGuard plane;
 		if (s_OwnSeatCatchUpBudget <= 0 || !s_LockstepCoordinator || !s_LockstepCoordinator->HasReadyFrame(nextSimTick)) return false;
-		if (s_LockstepCoordinator->PeerFrameCatchUpActive()) return true;
+		const double ordinaryWaitMs = std::max(0.0, static_cast<double>(g_TimerMan.GetDeltaTimeTicks() - g_TimerMan.GetSimAccumulator()) *
+		    1000.0 / g_TimerMan.GetTicksPerSecond());
+		if (s_LockstepCoordinator->PeerFrameCatchUpActive(ordinaryWaitMs)) return true;
 		// A returned reader's neutral interval follows the surviving displayed clock.
 		if (s_LockstepCoordinator->UsesPeerFrameGroups()) return false;
 		// A seat that came back from the committed tail stands a trip behind the round's inputs: it closes that trip through its reclaim gap.
@@ -3449,7 +3451,7 @@ namespace RTE {
 	static bool RunPacedTick(uint64_t tick) {
 		std::string error;
 		if (!s_LockstepCoordinator->BeginSimulationTick(tick, &error)) { ScenarioRunner::SetControllerReplayError(error); return false; }
-		if (s_LockstepCoordinator->PeerFrameCatchUpActive()) {
+		if (s_LockstepCoordinator->PeerFrameCatchUpNeeded()) {
 			--s_OwnSeatCatchUpBudget;
 			s_PeerCatchUpCredit = std::max(0.0, s_PeerCatchUpCredit - 1.0);
 		}
@@ -3510,7 +3512,7 @@ namespace RTE {
 			return false;
 		}
 		if (RebaseInputDelayClock(NetLockstepNowMs())) return false;
-		if (s_LockstepCoordinator->PeerFrameCatchUpActive()) {
+		if (s_LockstepCoordinator->PeerFrameCatchUpNeeded()) {
 			if (s_OwnSeatCatchUpBudget <= 0) { s_PreSimWait = now; return false; }
 		}
 		// The time this peer waited for its round to start is not owed: a peer that waited longer would race through it and run
