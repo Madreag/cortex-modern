@@ -2316,6 +2316,34 @@ namespace RTE {
 			return true;
 		}
 
+		static bool HeldRecordPrefix(std::string* error) {
+			for (uint8_t held: {1, 3}) {
+				Wire wire; NetLockstepCoordinator live; Configure(live, wire);
+				live.m_Config.peerFrameGroups = true; live.m_Config.localPeerId = live.m_Config.authorityPeerId = 1;
+				LoopbackTransport transport; NetLockstepCoordinator replay;
+				auto config = live.m_Config;
+				config.localPeerId = 2; config.startFrame = 4422; config.peerFrameGroups = false;
+				if (!replay.StartReplay(transport, config, error)) return false;
+				for (uint64_t frame: {4422, 4423}) {
+					NetLockstepReadyFrame ready;
+					ready.frame = frame; ready.localPeerId = 1; ready.authorityPeerId = ready.updateAuthorityPeerId = 1;
+					ready.hasLocalInput = true; ready.remoteFrameCounts[3] = 0;
+					ready.committedPeerLeaves[held] = 4422; ready.departedPeerIds = {held};
+					if (frame == 4422) ready.localCommands.push_back({1, NetGameSeatHold{held, 0, 1, 1, frame}});
+					live.m_LastDeliveredFrame = frame; live.RememberAppliedFrameInputs(ready);
+					const auto record = PackWorldJoinReadyFrame(ready);
+					if (!replay.QueueReplayFrame(frame, record.frames, record.commands, error, record.observations, record.valueObservations, record.senderPeerId, record.replayUpdateAuthorityPeerId)) return false;
+					replay.Tick(frame - 4422);
+					NetLockstepReadyFrame replayed;
+					if (!replay.PopReadyFrame(replayed) || replayed.frame != frame || replayed.committedPeerLeaves != ready.committedPeerLeaves ||
+					    replayed.departedPeerIds != ready.departedPeerIds || replay.PeerAppliedFramePrefix(frame) != live.PeerAppliedFramePrefix(frame)) {
+						*error = "recorded held seat " + std::to_string(held) + " lost its committed leave boundary or exact applied prefix at " + std::to_string(frame); return false;
+					}
+				}
+			}
+			return true;
+		}
+
 		// The connection authority holds one referee request per seat and drops its answer when another replaces it. A seat cut off
 		// from its half checks in, hears the other half play on and asks what was decided; its still unconfirmed input must not
 		// check it in again, or each answer is lost to the next request until the request allowance runs out.
@@ -31284,6 +31312,12 @@ namespace {
 		};
 		static const char* selectedCase = std::getenv("CC_TEST_LOCKSTEP_SELFTEST_CASE");
 		if (selectedCase) {
+			if (std::string_view(selectedCase) == "held-record-prefix") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::HeldRecordPrefix(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS held_record_keeps_its_committed_prefix\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "neutral-replay-clock") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::NeutralReplayStopsAtThePlayingClock(&error)) return fail(error);
@@ -31696,6 +31730,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::LinkQuality, "measured_local_and_remote_link_quality_and_override");
 		row(&SessionPlaneRecoveryTest::AppliedInputPrefix, "applied_inputs_preserve_the_agreed_prefix_and_tail_witness");
 		row(&SessionPlaneRecoveryTest::ReplayedRecordPrefix, "ticket_return_replay_reads_the_host_boundary_prefix");
+		row(&SessionPlaneRecoveryTest::HeldRecordPrefix, "held_record_keeps_its_committed_prefix");
 		row(&SessionPlaneRecoveryTest::SplitAnswerIsNotDisplaced, "split_answer_survives_an_unconfirmed_input");
 		row([](std::string* why) { return TestOwnerSilenceThreshold(1, why); }, "client_6s_silence_silent_bridge_then_visible_held");
 		row([](std::string* why) { return TestOwnerSilenceThreshold(2, why); }, "client_loop_10s_keepalive_bridge_automatic_return");

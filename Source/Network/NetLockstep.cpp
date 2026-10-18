@@ -10560,7 +10560,7 @@ namespace RTE {
 						m_AiHeldSeats[hold->peerId] = outFrame.frame;
 						m_HoldTransactions[hold->peerId] = *hold;
 						NoteSeatTransition(hold->peerId, outFrame.frame, SeatTransition::Held);
-						if (UsesPeerFrameGroups() || hold->peerId != GetHostPeerId()) m_PeerLeaveFrames[hold->peerId] = outFrame.frame;
+						if (m_Playback || UsesPeerFrameGroups() || hold->peerId != GetHostPeerId()) m_PeerLeaveFrames[hold->peerId] = outFrame.frame;
 						m_DroppedSeatResolutions[hold->peerId] = NetLockstepHoldResolution::Substituted;
 						DropRecordedHeldSeat(hold->peerId);
 					}
