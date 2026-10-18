@@ -3905,6 +3905,7 @@ static std::string ResyncSaveName() {
 
 	void NetMatchService::ResetCheckpointSchedule() {
 		SaverThreads::SetOverdue(false);
+		SaverThreads::SetMatchPriority(false);
 		m_ScheduledCaptures.clear();
 		m_PeriodicWaitSince = 0;
 		m_OpenCaptureTick = 0;
@@ -4314,8 +4315,10 @@ static std::string ResyncSaveName() {
 		AppendCommittedJoinFrame(tick);
 		if (!ScenarioRunner::IsLockstepControllerSyncActive() || m_AutosaveMatchId.empty() || !m_Coordinator) {
 			SaverThreads::SetOverdue(false);
+			SaverThreads::SetMatchPriority(false);
 			return;
 		}
+		SaverThreads::SetMatchPriority(true);
 		AutosaveTickInput input;
 		input.tick = tick;
 		input.now = g_TimerMan.GetSimTimeTicks();

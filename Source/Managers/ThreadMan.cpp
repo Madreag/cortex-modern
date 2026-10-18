@@ -27,8 +27,8 @@
 using namespace RTE;
 
 namespace {
-	// A saver thread runs at the game's own priority while a slice is open and below it while parked: on a machine whose
-	// cores are all busy, a thread kept below everything else would get none of the time the game leaves it or lends it.
+	// In a lockstep match a saver thread runs at the game's own priority while a slice is open and below it while parked: on
+	// a machine whose cores are all busy, a thread kept below everything else would get none of the time the game leaves it.
 	thread_local int t_SaverRaised = -1;
 	void SetSaverRaised(bool raised) {
 		if (t_SaverRaised == static_cast<int>(raised)) return;
@@ -172,7 +172,7 @@ void SaverThreads::CheckSlice() {
 		return;
 	}
 	if (NowUs() < s_SliceEndUs.load(std::memory_order_acquire) && (s_SliceLent.load(std::memory_order_acquire) || s_GameWork.load(std::memory_order_acquire) == 0)) {
-		if (s_Lowered) SetSaverRaised(true);
+		if (s_Lowered) SetSaverRaised(s_MatchPriority.load(std::memory_order_acquire));
 		return;
 	}
 	WaitForSlice();
@@ -222,13 +222,13 @@ void SaverThreads::WaitForSlice() {
 	struct Unpark { ~Unpark() { s_Parked.fetch_sub(1, std::memory_order_relaxed); } } unpark;
 	for (;;) {
 		if (s_Gating.load(std::memory_order_acquire) == 0 || s_Lent.load(std::memory_order_acquire) > 0 || s_Overdue.load(std::memory_order_acquire)) {
-			if (s_Lowered) SetSaverRaised(true);
+			if (s_Lowered) SetSaverRaised(s_MatchPriority.load(std::memory_order_acquire) || s_Overdue.load(std::memory_order_acquire));
 			return;
 		}
 		const int64_t now = NowUs(), sliceEnd = s_SliceEndUs.load(std::memory_order_acquire);
 		if (now < sliceEnd) {
 			if (s_SliceLent.load(std::memory_order_acquire) || s_GameWork.load(std::memory_order_acquire) == 0) {
-				if (s_Lowered) SetSaverRaised(true);
+				if (s_Lowered) SetSaverRaised(s_MatchPriority.load(std::memory_order_acquire));
 				return;
 			}
 			// Game work that never ends may itself wait on something the saver holds.
