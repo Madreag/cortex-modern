@@ -2065,11 +2065,11 @@ namespace RTE {
 			uint64_t tailRecorded = base;
 			std::map<uint64_t, NetLockstepFrame> receivedTail;
 			std::vector<uint8_t> partialTail;
-			uint64_t activation = 0, reported = replay.applied, reportAt = fixture.hub.now, work = 0;
-			struct ReplayReport { uint64_t arrival, applied, ticks, elapsed, work; };
+			uint64_t activation = 0, reported = replay.applied, reportAt = fixture.hub.now, work = 0, workUs = 0;
+			struct ReplayReport { uint64_t arrival, applied, ticks, elapsed, work, workUs; };
 			std::deque<ReplayReport> reports;
 			unsigned reportsRead = 0;
-			double credit = 0;
+			double credit = 0, maximumReplayCapacity = 0;
 			bool proposed = false, agreed = false;
 			bool liveStarted = false;
 			std::string lastRefusal;
@@ -2151,11 +2151,13 @@ namespace RTE {
 				}
 				double capacity = fixture.hub.schedule ? fixture.hub.schedule->CapacityPercent(seat, fixture.hub.now) / 100.0 :
 				    fixture.hub.row.catchUpPercent ? fixture.hub.row.catchUpPercent / 100.0 : c_TestCatchUpRate;
+				if (seat == fixture.hub.row.subject && fixture.hub.row.roundRateAfterMs && fixture.hub.now >= fixture.hub.faultEnd + fixture.hub.row.roundRateAfterMs) capacity = 1;
 				if (fixture.hub.schedule) if (const auto* spell = fixture.hub.schedule->Active(seat, fixture.hub.now)) {
 					if (spell->kind == Spell::Kind::Slow) capacity = spell->percent / 100.0;
 					if (spell->kind == Spell::Kind::Stopped || spell->kind == Spell::Kind::Hung) capacity = 0;
 				}
-				credit = std::min(6.0, credit + fixture.hub.row.stepMs * capacity / c_TestTickMs);
+				maximumReplayCapacity = std::max(maximumReplayCapacity, capacity);
+				credit = capacity > 0 ? std::min(6.0, credit + fixture.hub.row.stepMs * capacity / c_TestTickMs) : 0;
 				while (credit >= 1 && (!activation || replay.applied + 1 < activation)) {
 					const auto next = receivedTail.find(replay.applied + 1);
 					if (next == receivedTail.end()) break;
@@ -2170,17 +2172,22 @@ namespace RTE {
 					replayCoordinator.FinishSimulationTick(ready.frame);
 					receivedTail.erase(next);
 					credit -= 1; ++work;
+					// FLAGGED fixture departure: a private replay reports the same work cost as its supplied machine capacity.
+					workUs += static_cast<uint64_t>(std::ceil(c_TestTickMs * 1000 / capacity));
 				}
 				if (fixture.hub.now >= reportAt + 100) {
 					// Flagged fixture correction: production receives this cursor after its link transit. Comparing
 					// an instantaneous callback to a transported report invents an extra half-trip of producer lag.
 					reports.push_back({fixture.hub.now + fixture.hub.Delay(seat, donor), replay.applied, replay.applied - reported,
-					                   fixture.hub.now - reportAt, work});
+					                   fixture.hub.now - reportAt, work, workUs});
 					reported = replay.applied; reportAt = fixture.hub.now;
 				}
 				while (!reports.empty() && reports.front().arrival <= fixture.hub.now) {
 					const auto report = reports.front(); reports.pop_front();
-					(void)join.NoteRejoinCapacity(12, report.work, report.work * 1000, 0);
+					if (!join.NoteRejoinCapacity(12, report.work, report.workUs, 0)) return fail("the private replay published invalid cumulative work");
+					if (join.FindSession(12)->headroom.Ratio() > maximumReplayCapacity + 1e-6)
+						return fail("the private replay claimed more capacity than its supplied tick budget: reported=" +
+						    std::to_string(join.FindSession(12)->headroom.Ratio()) + " supplied=" + std::to_string(maximumReplayCapacity));
 					uint64_t announced = 0;
 					if (!join.NoteCatchUpProgress(12, report.applied, report.ticks, report.elapsed,
 					                            fixture.worlds[donor - 1].applied, &announced, &error)) return false;
@@ -2189,7 +2196,8 @@ namespace RTE {
 					join.AcknowledgeTailDatagrams(12, fixture.hub.now);
 					if (reportsRead++ < 3) DiagnosticLine() << "[session-plane-image-report] returner=" << unsigned(seat)
 					    << " arrival_ms=" << fixture.hub.now << " transit_ms=" << fixture.hub.Delay(seat, donor)
-					    << " applied=" << report.applied << " horizon=" << fixture.worlds[donor - 1].applied << std::endl;
+					    << " applied=" << report.applied << " horizon=" << fixture.worlds[donor - 1].applied
+					    << " capacity_ratio=" << join.FindSession(12)->headroom.Ratio() << std::endl;
 				}
 				if (activation && !proposed) {
 					// Flagged fixture correction: the service carries the measured private-reader trail into the
