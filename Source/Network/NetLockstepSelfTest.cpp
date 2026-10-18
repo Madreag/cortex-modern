@@ -1637,6 +1637,41 @@ namespace RTE {
 			return true;
 		}
 
+		static bool ReturnPrefixUsesActivationVoters(std::string* error) {
+			for (bool neutral: {true, false}) for (bool progress: {true, false}) {
+				Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
+				peer.m_Config.peerFrameGroups = true; peer.m_Config.authorityPeerId = 2;
+				peer.m_Config.inputDelayFrames = 4; peer.m_Config.peerInputDelayFrames = {{1, 4}, {2, 4}, {3, 4}};
+				peer.m_MigrationPhase = NetHostMigrationPhase::None;
+				peer.m_LastCompletedSimulationTick = 400; peer.m_Stats.nextFrame = 401;
+				peer.m_FrameGroupMembers = 2; peer.m_FrameGroupChanges = {{1, 7}, {350, 2}, {450, 3}};
+				peer.m_PeerBridges[1] = {350, 350, true, 450, {}, 2};
+				peer.m_PeerBridges[3] = {350, 350, true, {}, {}, 2};
+				peer.m_PeerFrameHolds[1] = {{350, true}, {450, false}}; peer.m_PeerFrameHolds[3][350] = true;
+				peer.m_ReclaimTransactions[1] = {1, 0, 450 * 8 + 1, 2, 450, 4, neutral ? 510ULL : 490ULL};
+				peer.m_MigrationHistory[300] = {3, 0, 0}; peer.m_MigrationHistory[400] = {4, 0, 0};
+				if (progress) peer.m_PeerAppliedThrough[1] = 300;
+				std::string refusal;
+				const bool proposed = peer.ProposePeerReclaim(3, 43, 2, 500, 0, &refusal);
+				if (proposed != (neutral || progress)) {
+					*error = "a return's common-prefix electorate differs from its activation voters: neutral=" + std::to_string(neutral) +
+					    " progress=" + std::to_string(progress) + " refusal=" + refusal; return false;
+				}
+				if (!proposed) {
+					if (refusal != "the private return awaits a playing voter's common prefix") { *error = "a future human voter was refused for another reason"; return false; }
+					continue;
+				}
+				const auto& vote = peer.m_PeerBridgeVotes.at({500, 1}).at(2);
+				const uint64_t boundary = neutral ? 400 : 300;
+				const auto prefix = peer.PeerAppliedFramePrefix(boundary);
+				if (vote.boundary != boundary || vote.connectedMask != 7 || peer.PeerDecisionRequiredVoters(vote) != (neutral ? 2U : 3U) ||
+				    !std::equal(prefix.begin(), prefix.end(), vote.bytes.begin()) || peer.m_Stats.nextFrame != 401 || peer.m_LastCompletedSimulationTick != 400) {
+					*error = "a return used a neutral reader's stale prefix or omitted a future human voter's prefix"; return false;
+				}
+			}
+			return true;
+		}
+
 		static bool ReplayedPrefixesValidateConcurrentReturns(std::string* error) {
 			for (unsigned role = 0; role < 11; ++role) {
 				Wire wire, replayWire; NetLockstepCoordinator peer, replay; Configure(peer, wire); Configure(replay, replayWire);
@@ -31968,6 +32003,12 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "return-prefix-voters") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::ReturnPrefixUsesActivationVoters(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS a_return_prefix_uses_its_activation_voters\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "replay-prefix-handoff") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::ReplayedPrefixesValidateConcurrentReturns(&error)) return fail(error);
@@ -32221,6 +32262,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::FutureRemovalKeepsPastAuthority, "a_future_removal_keeps_the_past_directory_decision");
 		row(&SessionPlaneRecoveryTest::ReturnStartAdmission, "a_return_start_uses_its_certified_admission");
 		row(&SessionPlaneRecoveryTest::ReturnMemberStarts, "a_return_keeps_each_authenticated_members_start");
+		row(&SessionPlaneRecoveryTest::ReturnPrefixUsesActivationVoters, "a_return_prefix_uses_its_activation_voters");
 		row(&SessionPlaneRecoveryTest::ReplayedPrefixesValidateConcurrentReturns, "replayed_prefixes_validate_concurrent_returns");
 		row(&SessionPlaneRecoveryTest::ReplayedReturnRestoresFrameGroup, "replayed_return_restores_frame_group");
 		row(&SessionPlaneRecoveryTest::WaitingMeshPublishesOwnStart, "waiting_mesh_publishes_its_own_start");

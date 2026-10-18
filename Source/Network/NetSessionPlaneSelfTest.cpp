@@ -2359,7 +2359,7 @@ namespace RTE {
 			unsigned reportsRead = 0;
 			double credit = 0, maximumReplayCapacity = 0;
 			bool proposed = false, agreed = false;
-			bool liveStarted = false;
+			bool liveStarted = false, certificateReported = false;
 			std::string lastRefusal;
 			const auto startLive = [&] {
 				// The real service starts live play from the winning replay's configuration, including authority and every member's start terms.
@@ -2382,6 +2382,11 @@ namespace RTE {
 						if (found != wire->receivedReturnCertificates.end()) { proof = &found->second; break; }
 					}
 					if (!proof) return true;
+					if (!certificateReported && std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) {
+						DiagnosticLine() << "[session-plane-image-certificate] returner=" << unsigned(seat) << " activation=" << activation
+						    << " boundary=" << proof->boundary << " replay_start=" << replayCoordinator.GetConfig().startFrame << " replay_applied=" << replay.applied << std::endl;
+						certificateReported = true;
+					}
 					if (!replayCoordinator.AdoptPeerReturn(config, replayCoordinator, *proof, activation, &lastRefusal)) return true;
 				} else {
 					const auto found = fixture.wires[seat - 1]->receivedTimingReturns.find({activation, seat});

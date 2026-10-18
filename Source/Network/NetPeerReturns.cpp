@@ -479,8 +479,9 @@ namespace RTE {
 		proposal.members = {peer}; proposal.connectedMask = PeerFrameMembersAt(frame) | SeatBit(peer);
 		for (const auto& [returned, bridge]: m_PeerBridges)
 			if (bridge.returnFrame && *bridge.returnFrame <= frame && !m_RemovedPeers.contains(returned) && !IsSeatReleased(returned)) proposal.connectedMask |= SeatBit(returned);
+		const uint32_t required = PeerDecisionRequiredVoters(proposal);
 		for (uint8_t voter = 1; voter <= m_Config.peerCount; ++voter) {
-			if (voter == peer || voter == m_Config.localPeerId || (proposal.connectedMask & SeatBit(voter)) == 0) continue;
+			if (voter == m_Config.localPeerId || (required & SeatBit(voter)) == 0) continue;
 			const auto applied = m_PeerAppliedThrough.find(voter);
 			if (applied == m_PeerAppliedThrough.end() || applied->second < m_Config.startFrame) { if (error) *error = "the private return awaits a playing voter's common prefix"; return false; }
 			proposal.boundary = std::min(proposal.boundary, applied->second);
