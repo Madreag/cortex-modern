@@ -4674,18 +4674,18 @@ namespace RTE {
 			// 240 ticks in 7.2 s of work is a replay at 0.56 of the round's rate: 90 frames behind at the round's pace, activated, the survivors
 			// would wait on every frame it is required for.
 			{"too-slow-to-keep-the-round", 90, 30, false, 0, "slower than the round", 7200000},
-			// A temporary neutral trail does not change the live producer's phase. Its first human input
-			// and its receipts still need a full trip inside the link-derived delay and the existing hold bound.
-			// These are received report cursors: the reader has also advanced during the report's half-trip.
-			{"100ms-outside-first-input-runway", 9, 30, false, 0, "first input", 1000000, 100},
+			// FLAGGED fixture departure: no-headroom negatives report 1x work; the former 4x sample can align during neutral replay.
+			{"100ms-outside-first-input-runway", 9, 30, false, 0, "first input", 4000000, 100},
 			{"100ms-inside-first-input-runway", 6, 30, true, 6, nullptr, 1000000, 100},
-			{"200ms-outside-first-input-runway", 14, 30, false, 0, "first input", 1000000, 200},
+			{"200ms-outside-first-input-runway", 14, 30, false, 0, "first input", 4000000, 200},
 			{"200ms-inside-first-input-runway", 8, 30, true, 8, nullptr, 1000000, 200},
-			{"250ms-outside-first-input-runway", 18, 30, false, 0, "first input", 1000000, 250},
+			{"250ms-outside-first-input-runway", 18, 30, false, 0, "first input", 4000000, 250},
 			{"250ms-inside-first-input-runway", 10, 30, true, 10, nullptr, 1000000, 250},
+			{"100ms-spare-work-aligns-before-human-input", 9, 30, true, 9, nullptr, 1000000, 100},
+			{"250ms-spare-work-aligns-before-human-input", 18, 30, true, 18, nullptr, 1000000, 250},
 			// A real tail acknowledgement also waits for replay and report batching. It cannot replace a measured link RTT.
-			{"20ms-link-with-200ms-replay-ack", 6, 30, false, 0, "first input", 1000000, 20, 200},
-			{"100ms-link-with-300ms-replay-ack", 9, 30, false, 0, "first input", 1000000, 100, 300},
+			{"20ms-link-with-200ms-replay-ack", 6, 30, false, 0, "first input", 4000000, 20, 200},
+			{"100ms-link-with-300ms-replay-ack", 9, 30, false, 0, "first input", 4000000, 100, 300},
 		};
 		for (const Case& test: cases) {
 			NetWorldJoinHost host;

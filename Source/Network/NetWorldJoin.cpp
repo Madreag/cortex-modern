@@ -2376,12 +2376,28 @@ namespace RTE {
 			}
 			return true;
 		}
+		const uint64_t behind = nowFrame > appliedThrough ? nowFrame - appliedThrough : 0;
+		const double capacity = session->headroom.Ratio();
+		// A burst of delivered tail records cannot close faster than the reader can compute them.
+		const double closingRate = capacity > 0 ? std::min(session->closingRate, std::max(0.0, capacity - 1)) : session->closingRate;
+		const bool closing = session->closingMeasured && closingRate > 0.1;
+		const auto phaseWork = [&]() -> std::optional<uint64_t> {
+			if (!provesHeadroom || closing || !session->closingMeasured || session->tailLinkRttMs == 0 ||
+			    !session->headroom.AboveRateOver(static_cast<uint64_t>(std::ceil(1000.0 / m_SimTickMs)))) return std::nullopt;
+			const uint64_t transit = static_cast<uint64_t>(std::floor(session->tailLinkRttMs / (2 * m_SimTickMs)));
+			if (behind <= transit + m_Config.slowPlayerBoundTicks) return 0;
+			const double needed = std::ceil((behind - transit) * capacity / (capacity - 1));
+			const uint64_t flight = static_cast<uint64_t>(std::ceil(session->tailLinkRttMs / m_SimTickMs));
+			const uint16_t configured = session->assignedPeerId && session->assignedPeerId <= m_Config.peerInputDelayFrames.size()
+			    ? m_Config.peerInputDelayFrames[session->assignedPeerId - 1] : m_Config.inputDelayFrames;
+			const uint64_t pipeline = std::max<uint64_t>(configured, flight + 1) + flight + m_Config.slowPlayerBoundTicks;
+			if (!std::isfinite(needed) || pipeline >= NetLockstepCodec::c_MaxFutureFrameSkew || needed > NetLockstepCodec::c_MaxFutureFrameSkew - pipeline) return std::nullopt;
+			return static_cast<uint64_t>(needed);
+		}();
 		if (session->activationTick != 0) {
-			const uint64_t behind = nowFrame > appliedThrough ? nowFrame - appliedThrough : 0;
 			// A returner still closing at its measured rate keeps the activation that rate reaches; one that slowed is told the frame its rate
 			// reaches now, never a fixed lead that would undo it.
-			const bool closing = session->closingMeasured && session->closingRate > 0.1;
-			const uint64_t reaches = closing ? nowFrame + static_cast<uint64_t>(std::ceil(behind / session->closingRate)) : nowFrame;
+			const uint64_t reaches = closing ? nowFrame + static_cast<uint64_t>(std::ceil(behind / closingRate)) : nowFrame;
 			const bool late = closing ? reaches + c_NetWorldActivationLeadFrames > session->activationTick + m_Config.slowPlayerBoundTicks
 			                          : behind > session->activationTrailFrames + m_Config.slowPlayerBoundTicks;
 			if (IsPrivateMatch() && !session->activationProposed && (nowFrame >= session->activationTick || late)) {
@@ -2390,7 +2406,7 @@ namespace RTE {
 					if (closing) {
 						later = session->activationTick = std::max(later, reaches + c_NetWorldActivationLeadFrames);
 						session->activationTrailFrames = 0;
-					} else session->activationTrailFrames = std::min<uint64_t>(behind, 2 * c_NetWorldActivationLeadFrames);
+					} else session->activationTrailFrames = std::max(std::min<uint64_t>(behind, 2 * c_NetWorldActivationLeadFrames), phaseWork.value_or(0));
 					if (outActivationTick) *outActivationTick = later;
 					session->catchUpGate = "reannounced-trailing";
 					return true;
@@ -2399,7 +2415,6 @@ namespace RTE {
 			session->catchUpGate = "announced";
 			return true;
 		}
-		const uint64_t behind = nowFrame > appliedThrough ? nowFrame - appliedThrough : 0;
 		// A returner that cannot reach any frame the round has not passed keeps replaying with the AI in its seat, and says why once.
 		const auto wait = [&](const char* gate, const char* reason) {
 			session->catchUpGate = gate;
@@ -2426,25 +2441,20 @@ namespace RTE {
 		if (provesHeadroom && behind > c_NetWorldActivationLeadFrames / 4 && session->closingMeasured && session->closingRate < -0.1)
 			return wait("closing-losing", "its replay falls behind the round");
 		// At the round's pace a returner trails by its link, which can be longer than the lead: its return leaves it that trail.
-		const bool roundPace = provesHeadroom && session->closingMeasured && session->closingRate <= 0.1;
+		const bool roundPace = provesHeadroom && session->closingMeasured && closingRate <= 0.1;
 		// The world keeps producing while the joiner replays, so activation waits until the joiner is inside the lead, or at the round's
 		// pace no more than a lead past it, and can have its pipeline primed before its first required frame.
 		if (appliedThrough + c_NetWorldActivationLeadFrames < nowFrame && !(roundPace && behind <= 2 * c_NetWorldActivationLeadFrames)) {
 			session->catchUpGate = "outside-lead";
 			return true;
 		}
-		// A neutral activation gap primes the input pipeline but does not remove a persistent producer phase lag.
-		// The first live target and its receipts still take a full trip. With the link's RTT+one-tick delay
-		// and the next simulation slot, only the hold bound can be spent trailing the live clock. The
-		// received report's cursor also trails by its incoming half-trip, during which the reader kept playing.
-		// A genuinely closing reader instead keeps the future activation its measured rate reaches below.
+		// Without proven spare work, a neutral gap primes the pipeline but cannot remove persistent producer lag.
 		if (provesHeadroom && (session->tailLinkRttMs != 0 || session->tailAckRttMs > 0)) {
 			// A tail acknowledgement includes replay work and report batching. When the transport measured this link,
 			// only that round trip explains the report's incoming transit; machine time cannot excuse producer phase lag.
 			const double lagMs = session->tailLinkRttMs != 0 ? session->tailLinkRttMs : session->tailAckRttMs;
 			const uint64_t reportTransit = m_SimTickMs > 0 ? static_cast<uint64_t>(std::floor(lagMs / (2 * m_SimTickMs))) : 0;
-			const bool closing = session->closingMeasured && session->closingRate > 0.1;
-			if (behind > reportTransit + m_Config.slowPlayerBoundTicks && !closing) return wait("trail-open", "its first input would reach the round past its bound");
+			if (behind > reportTransit + m_Config.slowPlayerBoundTicks && !closing && !phaseWork) return wait("trail-open", "its first input would reach the round past its bound");
 		}
 		// A returner inside the lead has closed on the round by its own replay: the lead primes its pipeline. One still closing
 		// is given the frames its measured rate needs to reach the horizon too, so it is at its activation before the round is.
@@ -2455,13 +2465,15 @@ namespace RTE {
 				session->catchUpGate = "closing-unmeasured";
 				return true;
 			}
-			if (session->closingRate > 0.1)
-				activation = std::max(activation, nowFrame + static_cast<uint64_t>(std::ceil(behind / session->closingRate)) + c_NetWorldActivationLeadFrames);
+			if (closing)
+				activation = std::max(activation, nowFrame + static_cast<uint64_t>(std::ceil(behind / closingRate)) + c_NetWorldActivationLeadFrames);
 			else trail = behind;
 		}
 		// Even at the head of its tail a returner trails the round by its link and the tail's own delivery: its return leaves it the trail it last
 		// showed, up to a lead, so its first required input is one it can produce in time.
 		if (provesHeadroom && trail == 0) trail = std::min<uint64_t>(behind, c_NetWorldActivationLeadFrames);
+		// Neutral live frames spend proven spare work aligning the producer before its first human target.
+		trail = std::max(trail, phaseWork.value_or(0));
 		session->activationTrailFrames = trail;
 		session->activationTick = activation;
 		session->catchUpGate = trail != 0 ? "activated-trailing" : "activated";

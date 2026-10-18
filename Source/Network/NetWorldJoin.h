@@ -194,7 +194,7 @@ namespace RTE {
 		uint64_t closingAnchorApplied = 0, closingAnchorHorizon = 0; //!< The report its closing rate on the round is measured from.
 		double closingRate = 0.0; //!< Frames its replay gains on the round per frame the round commits, once measured.
 		bool closingMeasured = false;
-		uint64_t activationTrailFrames = 0; //!< How far it trailed the round when its activation was announced: its return leaves it that long.
+		uint64_t activationTrailFrames = 0; //!< Extra neutral frames for the replay's remaining trail and measured producer-alignment work.
 		uint32_t windowsWithoutProgress = 0; //!< Closing windows its replay stood still through, in a row.
 		struct TailDatagram { uint64_t first = 0, last = 0, firstSentMs = 0, sentMs = 0; bool repeated = false; };
 		std::deque<TailDatagram> tailInFlight; //!< Tail datagrams sent and not yet passed by its replay, lowest frames first.

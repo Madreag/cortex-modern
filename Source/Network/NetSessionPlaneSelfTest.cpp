@@ -3436,6 +3436,32 @@ namespace RTE {
 			}
 			if (!host.NoteTransferComplete(12, 8, &error)) return false;
 			host.NoteRejoinLinkFit(12, true); host.NoteTailLinkRtt(12, rttMs);
+			if (shape == "capacity-projection") {
+				if (!host.NoteRejoinCapacity(12, 120, 1904762, 0)) return fail("the 105-percent work sample was refused");
+				uint64_t activation = 0;
+				if (!host.NoteCatchUpProgress(12, 540, 0, 1, 600, &activation, &error) ||
+				    !host.NoteCatchUpProgress(12, 610, 70, 1000, 660, &activation, &error)) return false;
+				return activation ? fail("a bursty closing window projected beyond the measured machine capacity") : true;
+			}
+			if (shape == "phase-runway" || shape == "phase-over-cap") {
+				const uint64_t behind = shape == "phase-over-cap" ? 80 : rttMs == 200 ? 13 : 16;
+				if (!host.NoteRejoinCapacity(12, 120, 1904762, 0)) return fail("the 105-percent work sample was refused");
+				uint64_t activation = 0;
+				for (uint64_t horizon = 600; horizon <= 720 && !activation; horizon += 30)
+					if (!host.NoteCatchUpProgress(12, horizon - behind, 30, 500, horizon, &activation, &error)) return false;
+				if (shape == "phase-over-cap") return activation ? fail("the return exceeded the unchanged neutral interval cap") : true;
+				const auto* session = host.FindSession(12);
+				const uint64_t transit = static_cast<uint64_t>(std::floor(rttMs / (2 * c_TestTickMs)));
+				const double ratio = session->headroom.Ratio();
+				const uint64_t workNeeded = static_cast<uint64_t>(std::ceil((behind - transit) * ratio / (ratio - 1)));
+				if (!activation || session->activationTrailFrames < workNeeded)
+					return fail("a transit-limited 105-percent return has no interval to align its producer: activation=" + std::to_string(activation) +
+					    " trail=" + std::to_string(session->activationTrailFrames) + " work_needed=" + std::to_string(workNeeded));
+				const uint64_t flight = static_cast<uint64_t>(std::ceil(rttMs / c_TestTickMs));
+				if (2 * flight + 1 + config.slowPlayerBoundTicks + session->activationTrailFrames > NetLockstepCodec::c_MaxFutureFrameSkew)
+					return fail("the producer alignment exceeds the unchanged neutral interval cap");
+				return true;
+			}
 			if (shape == "edge") {
 				uint64_t work = 0, workUs = 0;
 				for (uint64_t horizon = 600; horizon <= 900; horizon += 20) {
@@ -5002,6 +5028,10 @@ namespace RTE {
 		    {"image_return_at_round_rate_80_frames_behind_over_200ms", "edge", 200},
 		    {"image_return_at_round_rate_80_frames_behind_over_250ms", "edge", 250},
 		    {"image_activation_reannouncement_preserves_closing_time", "closing", 250},
+		    {"image_return_105_percent_aligns_inside_200ms_neutral_runway", "phase-runway", 200},
+		    {"image_return_105_percent_aligns_inside_250ms_neutral_runway", "phase-runway", 250},
+		    {"image_return_105_percent_keeps_the_neutral_interval_cap", "phase-over-cap", 250},
+		    {"image_return_projection_never_exceeds_measured_capacity", "capacity-projection", 250},
 		    {"two_image_returners_share_a_base_and_keep_separate_outcomes", "paired", 100},
 		    {"benign_image_cancellations_do_not_exhaust_three_returns", "benign", 100}}) {
 			if (selected && std::string_view(selected) != name) continue;
