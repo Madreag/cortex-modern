@@ -130,7 +130,11 @@ namespace RTE {
 		auto [accepted, inserted] = m_PeerAcceptedThrough.try_emplace(frame.senderPeerId, EffectiveStartOf(frame.senderPeerId));
 		auto& ahead = m_PeerAcceptedAhead[frame.senderPeerId];
 		if (frame.targetFrame >= accepted->second) ahead.insert(frame.targetFrame);
-		while (accepted->second != UINT64_MAX && ahead.erase(accepted->second) != 0) ++accepted->second;
+		while (accepted->second != UINT64_MAX) {
+			const bool received = ahead.erase(accepted->second) != 0;
+			if (!received && !IsSeatReclaimGap(frame.senderPeerId, accepted->second)) break;
+			++accepted->second;
+		}
 		if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) if (const auto own = m_ReclaimTransactions.find(m_Config.localPeerId);
 		    ObservedReceiptFrame(frame.targetFrame) || (own != m_ReclaimTransactions.end() && frame.targetFrame >= own->second.activationFrame &&
 		    frame.targetFrame > own->second.neutralThroughFrame && frame.targetFrame - own->second.neutralThroughFrame <= 8))

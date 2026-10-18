@@ -1203,6 +1203,35 @@ namespace RTE {
 			return true;
 		}
 
+		static bool InputReceiptsCrossOnlyCertifiedNeutralGaps(std::string* error) {
+			for (unsigned role = 0; role < 6; ++role) {
+				Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
+				peer.m_Config.peerFrameGroups = true; peer.m_Config.authorityPeerId = 1;
+				peer.m_MigrationPhase = NetHostMigrationPhase::None;
+				peer.m_Stats.nextFrame = 504; peer.m_LastCompletedSimulationTick = 503;
+				peer.m_PeerEffectiveStart[1] = 504;
+				const uint64_t from = role == 1 ? 505 : 493;
+				if (role == 3) peer.m_RetiredReclaimGaps[1][from] = 517;
+				else if (role != 4) {
+					const uint8_t owner = role == 5 ? 3 : 1;
+					peer.m_ReclaimTransactions[owner] = {owner, 0, from * 8 + owner, 2, from, 4, 517};
+				}
+				NetLockstepFrame input; input.senderPeerId = 1; input.targetFrame = role == 2 ? 519 : 518; input.roundId = 77;
+				peer.NotePeerInputAccepted(input);
+				const uint64_t expected = role == 0 || role == 3 ? 519 : role == 2 ? 518 : 504;
+				if (peer.m_PeerAcceptedThrough.at(1) != expected || peer.m_PeerInputReceipts.at(1).at(2) != expected) {
+					*error = "a receipt stalled on certified neutral slots or claimed a missing human slot: role=" + std::to_string(role); return false;
+				}
+				input.targetFrame = role == 1 ? 504 : 518;
+				peer.NotePeerInputAccepted(input);
+				const uint64_t completed = role == 2 ? 520 : role <= 3 ? 519 : 504;
+				if (peer.m_PeerAcceptedThrough.at(1) != completed || peer.m_Stats.nextFrame != 504 || peer.m_LastCompletedSimulationTick != 503) {
+					*error = "gap accounting did not preserve real input ordering and the displayed cursor: role=" + std::to_string(role); return false;
+				}
+			}
+			return true;
+		}
+
 		static bool BufferedInputRepairRepeatsItsReceipt(std::string* error) {
 			Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
 			peer.m_Config.peerFrameGroups = true; peer.m_Config.authorityPeerId = 1;
@@ -32003,6 +32032,12 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "neutral-input-receipts") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::InputReceiptsCrossOnlyCertifiedNeutralGaps(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS input_receipts_cross_only_certified_neutral_gaps\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "return-prefix-voters") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::ReturnPrefixUsesActivationVoters(&error)) return fail(error);
@@ -32275,6 +32310,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::DeliveredReturnKeepsCertifiedHold, "an_old_return_delivery_preserves_a_newer_certified_hold");
 		row(&SessionPlaneRecoveryTest::ReturnDelayPadding, "a_return_delay_rise_pads_only_owed_live_inputs");
 		row(&SessionPlaneRecoveryTest::ReceiptPublicationSurvivesSilence, "a_receiver_republishes_only_its_own_cumulative_receipts");
+		row(&SessionPlaneRecoveryTest::InputReceiptsCrossOnlyCertifiedNeutralGaps, "input_receipts_cross_only_certified_neutral_gaps");
 		row(&SessionPlaneRecoveryTest::BufferedInputRepairRepeatsItsReceipt, "a_buffered_input_repair_repeats_its_receipt");
 		row(&SessionPlaneRecoveryTest::ReceiptRepairUsesTheLinkClock, "receipt_repair_uses_the_measured_link_clock");
 		row(&SessionPlaneRecoveryTest::AHoldInvalidatesOnlyUnplayedPreparation, "a_hold_invalidates_only_unplayed_preparation");
