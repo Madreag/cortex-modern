@@ -1547,6 +1547,14 @@ namespace RTE {
 					if (const auto why = check(installedBoundaries[observer]); !why.empty()) return why + " in peer " + std::to_string(observer + 1) + "'s installed history";
 				return {};
 			}
+			// Any spell of the seat's own or a loss burst on its own links: the schedule's cause rule charges each to the seat.
+			bool OwnTrouble(uint8_t seat) const {
+				if (OwnMachineTrouble(seat)) return true;
+				if (!hub.schedule) return false;
+				if (hub.schedule->Active(seat, hub.now)) return true;
+				for (const auto& burst: hub.schedule->bursts) if (burst.seat == seat && hub.now >= burst.atMs && hub.now < burst.atMs + burst.ms) return true;
+				return false;
+			}
 			bool OwnMachineTrouble(uint8_t seat) const {
 				if (hub.schedule) {
 					const auto* spell = hub.schedule->Active(seat, hub.now);
@@ -2583,12 +2591,13 @@ namespace RTE {
 			fixture.peers[donor - 1]->NoteReturnerCaughtUp(seat, fixture.hub.now);
 			(void)fixture.peers[donor - 1]->SendReturnerTheRoundFrom(seat, activation);
 			const uint64_t observationAt = fixture.hub.now;
-			// FLAGGED fixture departure: a newly injected own-machine fault belongs to the next hold, not this return's healthy observation.
+			// FLAGGED fixture departure: a newly injected fault of the returner's own - its machine, its links' spell or loss burst -
+			// belongs to the next hold, not this return's healthy observation.
 			// FLAGGED fixture departure: a survivor split off before the activation plays its own continuation, which never took this
 			// return; its view of the seat is that half's, ruled at its heal. A playing survivor that has not yet applied the activation
 			// still shows the hold the return ends. Every seat playing at the activation is checked from the activation on.
 			const uint32_t playingAtActivation = s_FrameMembers(*fixture.peers[donor - 1], activation);
-			for (const uint64_t until = observationAt + 1000; fixture.hub.now <= until && !fixture.OwnMachineTrouble(seat);) {
+			for (const uint64_t until = observationAt + 1000; fixture.hub.now <= until && !fixture.OwnTrouble(seat);) {
 				for (uint8_t peer: survivors)
 					if ((playingAtActivation & (1U << (peer - 1))) != 0 && fixture.worlds[peer - 1].applied >= activation &&
 					    (fixture.peers[peer - 1]->HasHeldAISeat(seat) || Bridges(*fixture.peers[peer - 1]).contains(seat)))
@@ -2599,9 +2608,11 @@ namespace RTE {
 				co_await std::suspend_always{};
 				if (!fixture.CheckBound(error)) co_return false;
 			}
+			// A hold the returner's own fault caused is judged with every other hold, by its cause and its return in time.
+			const bool ownTrouble = fixture.OwnTrouble(seat);
 			for (uint8_t peer: survivors) {
 				const bool playing = (s_FrameMembers(*fixture.peers[donor - 1], activation) & (1U << (peer - 1))) != 0;
-				if (playing && (!fixture.peers[peer - 1]->IsRunning() || fixture.peers[peer - 1]->HasHeldAISeat(seat) || Bridges(*fixture.peers[peer - 1]).contains(seat)))
+				if (playing && (!fixture.peers[peer - 1]->IsRunning() || (!ownTrouble && (fixture.peers[peer - 1]->HasHeldAISeat(seat) || Bridges(*fixture.peers[peer - 1]).contains(seat)))))
 					co_return fail("the image return was held again after its certified activation: observer=" + std::to_string(peer) +
 					            " returner_state=" + std::to_string(static_cast<int>(fixture.peers[seat - 1]->GetState())) +
 					            " starts_received=" + std::to_string(fixture.peers[seat - 1]->GetStats().startPacketsReceived));
