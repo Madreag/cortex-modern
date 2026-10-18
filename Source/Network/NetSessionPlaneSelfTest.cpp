@@ -1837,6 +1837,21 @@ namespace RTE {
 				}
 				return true;
 			}
+			bool HasSplitHistoryAt(uint8_t peer, uint64_t frame) const {
+				if (peer == 0 || peer > hub.row.seats) return false;
+				for (uint8_t other = 1; other <= hub.row.seats; ++other) {
+					const auto a = std::min(peer, other), b = std::max(peer, other);
+					if (splitFrom[a][b] && splitFrom[a][b] <= frame) return true;
+					// FLAGGED fixture departure: a proven input partition discards its losing history just as a total cut does.
+					const auto after = inputSplits[a][b].upper_bound(frame);
+					if (after != inputSplits[a][b].begin() && (!std::prev(after)->second || frame <= std::prev(after)->second)) return true;
+				}
+				return false;
+			}
+			bool IsLosingDecision(uint8_t seat, const NetFrameTieRequest& request, const NetFrameTieReply& reply) const {
+				if (seat == 0 || seat > worlds.size()) return false;
+				return IsLosingContinuationDecision(HasSplitHistoryAt(seat, worlds[seat - 1].applied), seat, request, reply);
+			}
 			bool IsAffected(uint8_t peer) const {
 				const bool second = (hub.row.secondSubject && peer == hub.row.secondSubject) || (hub.row.silentVoter && peer == hub.row.silentVoter);
 				return peer == hub.row.subject || second || peer == hub.row.lateReceiptsFrom;
@@ -1975,10 +1990,8 @@ namespace RTE {
 						const auto& decisions = client->second.consumed;
 						for (auto& read = decisionsRead[id - 1]; read < decisions.size(); ++read) {
 							const auto& decision = decisions[read];
-							bool wasSplit = false;
-							for (uint8_t other = 1; other <= hub.row.seats; ++other) wasSplit |= splitFrom[std::min(id, other)][std::max(id, other)] != 0;
 							const auto key = std::make_tuple(decision.request.generation, decision.request.roundId, decision.request.configHash, decision.request.frame);
-							if (IsLosingContinuationDecision(wasSplit, id, decision.request, decision.reply) &&
+							if (IsLosingDecision(id, decision.request, decision.reply) &&
 							    splitDecisions[id - 1].insert(key).second) {
 								if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) DiagnosticLine() << "[session-plane-decision-class] seat=" << unsigned(id)
 								    << " query_only=" << decision.request.queryOnly << " question=" << decision.request.frame << " now_ms=" << hub.now
@@ -2776,6 +2789,13 @@ namespace RTE {
 					error = "causal wire-history oracle variant=" + std::to_string(variant) + " expected_split=" + std::to_string(expected) + ": " + why; return false;
 				}
 				if (variant == 0) {
+					NetFrameTieRequest request; request.frame = 0; NetFrameTieReply reply; reply.members = {2};
+					if (!fixture.IsLosingDecision(1, request, reply) || fixture.IsLosingDecision(2, request, reply) || !fixture.HasSplitHistoryAt(2, 1) ||
+					    fixture.HasSplitHistoryAt(0, 1) || fixture.HasSplitHistoryAt(3, 1) || fixture.HasSplitHistoryAt(1, 0)) {
+						error = "a proven input-loss continuation did not select a discarded-branch image at its decision frame"; return false;
+					}
+					request.queryOnly = true;
+					if (fixture.IsLosingDecision(1, request, reply)) { error = "a private query discarded live history"; return false; }
 					if (!fixture.InputSplitCausedHold(1, 150, 180, 2, 40, 60) || !fixture.InputSplitCausedHold(2, 150, 180, 1, 40, 60) ||
 					    fixture.InputSplitCausedHold(1, 150, 180, 3, 40, 60) || fixture.InputSplitCausedHold(3, 150, 180, 2, 40, 60) ||
 					    fixture.InputSplitCausedHold(1, 151, 180, 2, 40, 60) || fixture.InputSplitCausedHold(1, 150, 149, 2, 40, 60) ||
@@ -2791,6 +2811,7 @@ namespace RTE {
 					if (!fixture.CompareHistories(why)) { error = "a healed input partition rejected its common history"; return false; }
 					fixture.compared = {};
 					if (!fixture.CompareHistories(why)) { error = "a healed input partition lost its earlier causal history"; return false; }
+					if (!fixture.HasSplitHistoryAt(1, 1) || fixture.HasSplitHistoryAt(1, 2)) { error = "a decision used causal history outside its split interval"; return false; }
 					for (size_t peer = 0; peer < 2; ++peer) {
 						fixture.worlds[peer].applied = 3; fixture.worlds[peer].hashes[3] = {}; fixture.worlds[peer].shownAt[3] = 220;
 						fixture.frameMembers[peer].push_back(peer == 0 ? 3 : 2); fixture.frameAuthors[peer].push_back(peer + 1);
