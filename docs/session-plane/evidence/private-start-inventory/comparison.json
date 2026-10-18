@@ -1,0 +1,15 @@
+{
+  "previous_binary": "2f5761641d9ae2522a8037de745fd76b5dbd253127c5d8fcf260e918d33ba733",
+  "binary": "2d023ac4b670d063fe72e4a5a573796cb7b545ecadad7a5e1bcc04a4a926cb97",
+  "fixed_green": 183,
+  "fixed_total": 240,
+  "new_green": [
+    "four_direct_seats_host_and_joiner_silent_keeps_survivors_bound",
+    "a_healed_tie_keeps_one_history_across_a_host_change",
+    "four_internet_seats_split_while_a_seat_returns",
+    "host_slows_while_a_third_seat_is_already_held"
+  ],
+  "new_red": [],
+  "random_green": 93,
+  "random_total": 200
+}
