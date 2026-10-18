@@ -410,6 +410,37 @@ namespace RTE {
 			return true;
 		}
 
+		static bool LoneMigrationFollowsItsAuthority(std::string* error) {
+			for (unsigned arm = 0; arm < 3; ++arm) {
+				Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
+				peer.m_Config.peerFrameGroups = true; peer.m_Config.peerCount = peer.m_Config.matchConfig.peerCount = 2;
+				peer.m_Config.matchConfig.players.resize(2); peer.m_Config.matchConfig.successorOrder = {2};
+				peer.m_MigrationPhase = NetHostMigrationPhase::None; peer.m_Config.authorityPeerId = 1;
+				peer.m_TimingNowMs = 16000; peer.m_AuthorityLastHeardMs = 0;
+				peer.m_FrameGroupMembers = 2; peer.m_FrameGroupChanges = {{1, 3}, {100, 2}};
+				peer.m_MigrationHistory[4422] = {1, 2, 3};
+				if (arm) {
+					peer.m_Config.frameTieReferee = [](const NetFrameTieRequest&) { return NetFrameTieReply{NetFrameTieReply::State::Waiting}; };
+					peer.m_Config.hostChangeReferee = [arm](const NetHostChangeRequest&) {
+						NetHostChangeReply reply;
+						if (arm == 2) { reply.state = NetHostChangeReply::State::Decided; reply.generation = 1; reply.host = reply.donor = 2; reply.boundary = 4422; reply.members = {2}; }
+						return reply;
+					};
+				}
+				peer.TickPeerAdmin(16000);
+				if (!peer.IsRunning() || peer.m_PeerAdminOwnVote.has_value() != (arm != 1)) {
+					*error = "lone migration confused direct authority, Internet fallback and a directory decision: arm=" + std::to_string(arm); return false;
+				}
+				auto proposal = peer.PeerFrameMessage(NetHostMigrationMessageType::PeerBridge);
+				proposal.preparedFrame = 3; proposal.completeFrom = 1; proposal.successorPeerId = 2;
+				proposal.members = {2}; proposal.connectedMask = proposal.voterMask = 2; proposal.boundary = 4422;
+				if (peer.PeerAdminCertificateValid(proposal, 2) != (arm != 1)) {
+					*error = "a lone Internet fallback bypassed the administrator certificate's quorum"; return false;
+				}
+			}
+			return true;
+		}
+
 		static bool ForeignHistoryKeepsAnActiveContinuation(std::string* error) {
 			bool passed = true;
 			const auto check = [&](bool ok, const std::string& why) {
@@ -31301,6 +31332,12 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS a_foreign_local_hold_requires_the_readers_healed_history\n[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "lone-migration-authority") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::LoneMigrationFollowsItsAuthority(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS lone_migration_follows_its_authority\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "direct-wire-contract") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::DirectWireContract(&error)) return fail(error);
@@ -31618,6 +31655,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::DirectHistoriesChooseAtHeal, "direct_heal_uses_committed_histories_and_human_seats");
 		row(&SessionPlaneRecoveryTest::DirectHistoryQuestionsRemainReachable, "direct_history_questions_remain_reachable");
 		row(&SessionPlaneRecoveryTest::DirectHoldScope, "a_foreign_local_hold_requires_the_readers_healed_history");
+		row(&SessionPlaneRecoveryTest::LoneMigrationFollowsItsAuthority, "lone_migration_follows_its_authority");
 		row(&SessionPlaneRecoveryTest::ForeignHistoryKeepsAnActiveContinuation, "foreign_history_keeps_an_active_continuation");
 		row(&SessionPlaneRecoveryTest::TailHoldSignersAreNotAnotherPlayingHalf, "tail_hold_signers_are_not_another_playing_half");
 

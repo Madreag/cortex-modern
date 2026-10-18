@@ -150,23 +150,69 @@ namespace RTE {
 			std::map<std::tuple<uint64_t, uint64_t, NetHash32, uint64_t>, Tie> ties;
 			std::vector<uint16_t> retained;
 			std::set<uint16_t> leases, removed;
+			std::map<uint16_t, uint64_t> lastCheckInMs;
+			using HostReport = std::pair<NetHostChangeRequest, uint64_t>;
+			std::map<uint16_t, HostReport> hostReports, agreementReports;
+			struct HostDecision { NetHostChangeRequest request; NetHostChangeReply reply; uint16_t oldHost; };
+			std::map<uint64_t, HostDecision> hostHistory;
 			NetHash32 configHash{};
 			long tieStatus = 200, checkInStatus = 200;
 			uint64_t retryAfterSeconds = 0;
 			uint16_t host = 1;
 			uint64_t generation = 0;
+			bool persistentWorld = false;
 			std::vector<std::string> refusals;
 			// A lever: the directory refuses every check-in, as it refused the earlier ties of the matches a row stands for.
 			bool refusing = false;
 			struct Answer { long status = 0; bool decided = false; std::vector<uint16_t> members; uint64_t retryAfterSeconds = 0; };
-			Answer CheckIn(uint16_t seat) {
+			Answer CheckIn(uint16_t seat, uint64_t nowMs = 0) {
 				if (checkInStatus != 200) return {checkInStatus, false, {}, retryAfterSeconds};
 				if (leases.empty()) leases.insert(retained.begin(), retained.end());
 				if (!leases.contains(seat) || removed.contains(seat)) return {403};
+				lastCheckInMs[seat] = nowMs;
 				return {200};
 			}
-			Answer FrameTie(uint16_t seat, const NetFrameTieRequest& request) {
-				if (const auto auth = CheckIn(seat); auth.status != 200) return auth;
+			struct HostAnswer { long status = 0; NetHostChangeReply reply; uint64_t retryAfterSeconds = 0; };
+			HostAnswer HostChange(uint16_t seat, const NetHostChangeRequest& request, uint64_t nowMs) {
+				if (const auto auth = CheckIn(seat, nowMs); auth.status != 200) return {auth.status, {}, auth.retryAfterSeconds};
+				if (persistentWorld || request.configHash != configHash || !request.roundId || request.preparedFrame < request.appliedFrame) return {409};
+				const auto prior = hostHistory.find(request.generation);
+				const auto sameRound = [&](const NetHostChangeRequest& report) {
+					return report.generation == request.generation && report.roundId == request.roundId && report.configHash == request.configHash;
+				};
+				if (prior != hostHistory.end() && request.agreedHost == UINT16_MAX)
+					return sameRound(prior->second.request) ? HostAnswer{200, prior->second.reply} : HostAnswer{409};
+				if (generation != request.generation && !(request.agreedHost != UINT16_MAX && generation == request.generation + 1)) return {409};
+				const uint16_t oldHost = prior == hostHistory.end() ? host : prior->second.oldHost;
+				const uint64_t heard = lastCheckInMs[oldHost];
+				NetHostChangeReply reply; reply.state = NetHostChangeReply::State::Waiting;
+				if (generation == request.generation && (nowMs < heard || nowMs - heard < c_NetHostLossSilenceMs)) return {200, reply};
+				std::vector<uint16_t> live;
+				for (uint16_t peer: retained) if (peer != oldHost && !removed.contains(peer) && nowMs >= lastCheckInMs[peer] && nowMs - lastCheckInMs[peer] < c_NetHostLossSilenceMs) live.push_back(peer);
+				if (live.empty() || !std::binary_search(live.begin(), live.end(), seat)) return {200, reply};
+				if (request.agreedHost != UINT16_MAX) {
+					if (request.agreedMembers != live || !std::binary_search(live.begin(), live.end(), request.agreedHost)) return {409};
+					const auto sameAgreement = [&](const NetHostChangeRequest& report) {
+						return sameRound(report) && report.agreedHost == request.agreedHost && report.agreedBoundary == request.agreedBoundary && report.agreedMembers == request.agreedMembers;
+					};
+					if (const auto earlier = agreementReports.find(seat); earlier != agreementReports.end() && earlier->second.first.generation == request.generation && !sameAgreement(earlier->second.first)) return {409};
+					agreementReports[seat] = {request, nowMs};
+					for (uint16_t peer: live) if (!agreementReports.contains(peer) || !sameAgreement(agreementReports.at(peer).first)) return {200, reply};
+					reply.host = reply.donor = request.agreedHost; reply.boundary = request.agreedBoundary;
+				} else {
+					hostReports[seat] = {request, nowMs};
+					for (uint16_t peer: live) if (!hostReports.contains(peer) || !sameRound(hostReports.at(peer).first) || nowMs - hostReports.at(peer).second >= c_NetHostLossSilenceMs) return {200, reply};
+					reply.host = reply.donor = live.front();
+					for (uint16_t peer: live) if (hostReports.at(peer).first.preparedFrame > hostReports.at(reply.donor).first.preparedFrame) reply.donor = peer;
+					reply.boundary = hostReports.at(reply.donor).first.preparedFrame;
+				}
+				reply.state = NetHostChangeReply::State::Decided; reply.generation = request.generation + 1; reply.members = live;
+				hostHistory[request.generation] = {request, reply, oldHost};
+				host = reply.host; generation = reply.generation; lastCheckInMs[host] = nowMs; hostReports.clear();
+				return {200, reply};
+			}
+			Answer FrameTie(uint16_t seat, const NetFrameTieRequest& request, uint64_t nowMs = 0) {
+				if (const auto auth = CheckIn(seat, nowMs); auth.status != 200) return auth;
 				const auto refuse = [&](long status, const char* code) {
 					refusals.push_back("seat " + std::to_string(seat) + " frame " + std::to_string(request.frame) + ": " + code);
 					return Answer{status};
@@ -200,6 +246,12 @@ namespace RTE {
 			struct Exchange { NetFrameTieRequest sent; uint64_t arriveMs = 0, doneMs = 0; bool arrived = false, delivered = false; Directory::Answer answer; };
 			std::optional<NetFrameTieRequest> request;
 			std::optional<Exchange> tie, checkIn;
+			struct HostExchange { NetHostChangeRequest sent; uint64_t arriveMs, doneMs; bool arrived, delivered; Directory::HostAnswer answer; };
+			std::optional<HostExchange> hostChange;
+			std::optional<NetHostChangeRequest> hostRequest;
+			NetHostChangeReply hostReply;
+			uint64_t nextHostMs = 0;
+			NetDirectoryRetry hostRetry;
 			std::vector<Exchange> retiredTies;
 			NetFrameTieReply reply;
 			struct Decision { NetFrameTieRequest request; NetFrameTieReply reply; uint64_t atMs = 0; };
@@ -259,10 +311,36 @@ namespace RTE {
 				else if (reply.state == NetFrameTieReply::State::Waiting) ++waitingAnswers;
 				return reply;
 			}
+			NetHostChangeReply QueryHost(const NetHostChangeRequest& asked) {
+				if (!hostRequest || *hostRequest != asked) {
+					if (hostChange) return {NetHostChangeReply::State::Waiting};
+					hostRequest = asked; nextHostMs = std::max(nextHostMs, hostRetry.nextMs);
+					hostReply = {}; hostReply.state = NetHostChangeReply::State::Waiting;
+				}
+				return hostReply;
+			}
 			// `exchangeMs` is this seat's HTTP exchange now, `reachable` whether its request reaches the directory at all.
 			void Poll(uint64_t nowMs, uint32_t exchangeMs, bool reachable, uint8_t seat, Directory& directory) {
+				if (hostChange && !hostChange->arrived && nowMs >= hostChange->arriveMs) {
+					hostChange->arrived = true;
+					if (reachable) hostChange->answer = directory.HostChange(seat, hostChange->sent, nowMs);
+					else hostChange->delivered = false;
+				}
+				if (hostChange && nowMs >= hostChange->doneMs) {
+					const auto answer = hostChange->delivered ? hostChange->answer : Directory::HostAnswer{};
+					hostChange.reset(); nextHostMs = nowMs + 1000; hostReply = {};
+					if (answer.status == 200) { hostReply = answer.reply; hostRetry.Succeeded(); }
+					else {
+						nextHostMs = hostRetry.Failed(nowMs, answer.status, "", std::to_string(answer.retryAfterSeconds), "host-change");
+						if (answer.status == 429) generalUntilMs = std::max(generalUntilMs, nextHostMs);
+					}
+				}
+				if (hostRequest && !hostChange && hostReply.state != NetHostChangeReply::State::Decided && nowMs >= nextHostMs && nowMs >= hostRetry.nextMs && CanSeatRequest(nowMs, true)) {
+					hostChange = HostExchange{*hostRequest, nowMs + exchangeMs / 2, nowMs + (reachable ? exchangeMs : 5000), false, reachable, {}};
+					seatRequests.push_back(nowMs); nextSeatRequestMs = nowMs + 5100;
+				}
 				const auto frameTie = [&](const NetFrameTieRequest& sent) {
-					const auto answer = directory.FrameTie(seat, sent);
+					const auto answer = directory.FrameTie(seat, sent, nowMs);
 					if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS") && answer.status != 200) {
 						uint32_t members = 0; for (uint16_t member: sent.members) if (member > 0 && member <= 4) members |= 1U << (member - 1);
 						DiagnosticLine() << "[session-plane-directory-refusal] seat=" << unsigned(seat) << " frame=" << sent.frame
@@ -280,7 +358,7 @@ namespace RTE {
 				for (auto* exchange: {&tie, &checkIn}) if (*exchange && !(*exchange)->arrived && nowMs >= (*exchange)->arriveMs) {
 					(*exchange)->arrived = true;
 					// The directory acts on a request that reaches it even when the asker has stopped waiting for the answer.
-					if (reachable) { (*exchange)->answer = exchange == &tie ? frameTie((*exchange)->sent) : directory.CheckIn(seat); }
+					if (reachable) { (*exchange)->answer = exchange == &tie ? frameTie((*exchange)->sent) : directory.CheckIn(seat, nowMs); }
 					else (*exchange)->delivered = false;
 				}
 				if (request && reply.state != NetFrameTieReply::State::Decided) {
@@ -378,6 +456,32 @@ namespace RTE {
 			DirectoryClient refused; refused.StartRound(60000, 1000); refused.Query(wrong, 60000);
 			refused.Poll(60000, 100, true, 1, directory); refused.Poll(60050, 100, true, 1, directory); refused.Poll(60100, 100, true, 1, directory);
 			if (refused.reply.state == NetFrameTieReply::State::Decided || refused.tieRetry.nextMs != 61100) return fail("refused check-in supplied authority or skipped backoff");
+			Directory administration; administration.retained = {1, 2, 3};
+			administration.CheckIn(1, 20000); administration.CheckIn(3, 20000);
+			NetHostChangeRequest hostRequest; hostRequest.roundId = 1; hostRequest.appliedFrame = 100; hostRequest.preparedFrame = 102;
+			DirectoryClient admin; admin.nextCheckInMs = UINT64_MAX;
+			if (admin.QueryHost(hostRequest).state != NetHostChangeReply::State::Waiting) return fail("host change skipped its asynchronous exchange");
+			admin.Poll(21000, 100, true, 2, administration); admin.Poll(21050, 100, true, 2, administration);
+			if (admin.QueryHost(hostRequest).state != NetHostChangeReply::State::Waiting || admin.seatRequests.size() != 1) return fail("host exchange answered early or bypassed the seat allowance");
+			admin.Poll(21100, 100, true, 2, administration);
+			if (admin.QueryHost(hostRequest).state != NetHostChangeReply::State::Waiting || administration.host != 1) return fail("peer silence overrode the directory's live host lease");
+			administration.CheckIn(3, 35000);
+			if (administration.HostChange(2, hostRequest, 35001).reply.state != NetHostChangeReply::State::Waiting) return fail("host expiry omitted a live survivor's prefix");
+			auto advanced = hostRequest; advanced.preparedFrame = 104;
+			const auto decision = administration.HostChange(3, advanced, 35002);
+			if (decision.status != 200 || decision.reply.state != NetHostChangeReply::State::Decided || decision.reply.members != std::vector<uint16_t>{2, 3} ||
+			    decision.reply.host != 2 || decision.reply.donor != 3 || decision.reply.boundary != 104 || decision.reply.generation != 1)
+				return fail("host expiry lost a survivor, successor or greatest prepared prefix");
+			if (administration.HostChange(2, hostRequest, 35003).reply.boundary != 104) return fail("later host report rewrote the decided boundary");
+			DirectoryClient dark; dark.nextCheckInMs = UINT64_MAX; dark.QueryHost(hostRequest);
+			dark.Poll(60000, 100, false, 2, administration); dark.Poll(64999, 100, false, 2, administration);
+			if (dark.QueryHost(hostRequest).state != NetHostChangeReply::State::Waiting) return fail("unreachable host exchange failed before its timeout");
+			dark.Poll(65000, 100, false, 2, administration);
+			if (dark.QueryHost(hostRequest).state != NetHostChangeReply::State::Unavailable || dark.seatRequests.size() != 1 || dark.hostRetry.nextMs <= 65000)
+				return fail("unreachable directory supplied a host decision or skipped retry policy");
+			DirectoryClient exhausted; exhausted.StartRound(60000, 1000); exhausted.QueryHost(hostRequest);
+			exhausted.Poll(60000, 100, true, 2, administration);
+			if (exhausted.hostChange || exhausted.seatRequests.size() != 12) return fail("host change bypassed the shared twelve-request allowance");
 			return true;
 		}
 		bool CheckDirectoryDelayedReply(std::string_view shape, std::string& error) {
@@ -1079,11 +1183,17 @@ namespace RTE {
 					hub.adminDecision = reply; return reply;
 				};
 				if (hub.row.internet) {
+					hub.directory.persistentWorld = config.matchConfig.persistentWorld;
 					hub.directory.leases.insert(hub.directory.retained.begin(), hub.directory.retained.end());
 					// The round's referee is its seat's directory client: the answer it holds, Waiting until its exchange completes.
 					if (hub.directory.retained.empty()) for (uint16_t seat = 1; seat <= hub.row.seats; ++seat) hub.directory.retained.push_back(seat);
 					hub.directoryClients[peer].StartRound(hub.now, hub.schedule ? hub.schedule->allowancePhaseMs[peer] : (peer * 1700ULL) % 5100);
 					config.frameTieReferee = [&hub, peer](const NetFrameTieRequest& request) { return hub.directoryClients[peer].Query(request, hub.now); };
+					// Both directory services belong to an Internet session; silence alone cannot override a live host lease.
+					if (!config.hostChangeReferee) config.hostChangeReferee = [&hub, peer](const NetHostChangeRequest& request) {
+						hub.firstAdminRequestMs = std::min(hub.firstAdminRequestMs, hub.now);
+						return hub.directoryClients[peer].QueryHost(request);
+					};
 				}
 			}
 		}
@@ -1580,8 +1690,10 @@ namespace RTE {
 					if (between) { waitAt[id - 1] = 0; continue; }
 					if (peer.IsFailed()) { error = "peer " + std::to_string(id) + " failed: " + peer.GetStats().timeoutReason; return false; }
 					const bool directHostlessGroup = !hub.row.internet && sawSplit && (s_HeldSeats(peer, world.applied + 1) & 1U);
+					const bool keptDirectMigration = !hub.row.internet && sawSplit && peer.GetConfig().migrationGeneration &&
+					    std::any_of(firstAdminChangeMs.begin(), firstAdminChangeMs.end(), [](uint64_t at) { return at != UINT64_MAX; });
 					// The revised direct contract also migrates a hostless minority and a lone peer, on their own continuation.
-					if (!hub.row.repeatedAdministration && !directHostlessGroup && peer.GetHostPeerId() != 1 && (!hub.row.gapMs || hub.row.subject != 1 || hub.row.gapMs < 15000)) { error = "lag changed the lobby host"; return false; }
+					if (!hub.row.repeatedAdministration && !directHostlessGroup && !keptDirectMigration && peer.GetHostPeerId() != 1 && (!hub.row.gapMs || hub.row.subject != 1 || hub.row.gapMs < 15000)) { error = "lag changed the lobby host"; return false; }
 					if (!hub.row.repeatedAdministration && peer.GetHostPeerId() != 1 && firstAdminChangeMs[id - 1] == UINT64_MAX) {
 						firstAdminChangeMs[id - 1] = hub.now;
 						if (hub.now + hub.Delay(1, id) < hub.faultAt + 15000) { error = "admin host changed before fifteen seconds of authenticated silence"; return false; }
@@ -2289,6 +2401,12 @@ namespace RTE {
 			return passed;
 		}
 		bool CheckAuthorityOracle(std::string& error) {
+			Case authorityRow{"oracle_directory_services"}; authorityRow.seats = 2; authorityRow.internet = true;
+			Fixture authority;
+			if (!authority.Start(authorityRow, error)) return false;
+			for (const auto& peer: authority.peers) if (!peer->GetConfig().hostChangeReferee || !peer->GetConfig().frameTieReferee) {
+				error = "fixture internet session omitted one of the production directory referees"; return false;
+			}
 			// Main checks every extra grant again; ending catch-up cannot spend its leftover acceleration as ordinary time.
 			FixtureTickCredit credit;
 			credit.Accrue(2 * c_TestTickMs, 1, 3, true);

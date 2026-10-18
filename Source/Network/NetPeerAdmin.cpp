@@ -39,7 +39,7 @@ namespace RTE {
 		uint32_t owners = 0;
 		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer)
 			if (!m_RemovedPeers.contains(peer) && !IsSeatReleased(peer)) owners |= AdminBit(peer);
-		return voters != 0 && (voters & ~owners) == 0;
+		return voters != 0 && (voters & ~owners) == 0 && (!m_Config.frameTieReferee || std::popcount(voters) >= 2);
 	}
 
 	bool NetLockstepCoordinator::ValidatePeerAdmin(const NetHostMigrationMessage& proposal) const {
@@ -84,7 +84,8 @@ namespace RTE {
 				if (choice.generation != m_Config.migrationGeneration + 1 || choice.host == 0 || choice.host > m_Config.peerCount || choice.boundary == UINT64_MAX || choice.members.empty()) return;
 			} else {
 				const uint32_t survivors = PeerAdminSurvivors(nowMs);
-				if (survivors == 0) return;
+				// Only direct play grants a lone peer authority without a directory decision.
+				if (survivors == 0 || (m_Config.frameTieReferee && std::popcount(survivors) < 2)) return;
 				choice.generation = m_Config.migrationGeneration + 1; choice.boundary = *m_LastCompletedSimulationTick;
 				for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) if ((survivors & AdminBit(peer)) != 0) {
 					choice.members.push_back(peer);
