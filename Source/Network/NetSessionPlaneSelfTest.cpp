@@ -751,6 +751,25 @@ namespace RTE {
 			uint32_t next = 1, sends = 0;
 			std::map<NetPeerId, std::pair<Wire*, NetPeerId>> connections;
 			std::map<std::pair<NetPeerId, NetTransportLane>, uint64_t> lastDelivery; //!< A reliable lane delivers in order, however its packets were delayed.
+			struct LinkPing {
+				std::multimap<uint64_t, uint32_t> pending;
+				std::array<uint32_t, 3> recent{};
+				uint32_t count = 0, smoothed = 0;
+				uint64_t nextSampleAt = 0, random = 0;
+				uint32_t Read(uint64_t now, uint32_t initial) {
+					while (!pending.empty() && pending.begin()->first <= now) {
+						const auto [at, sample] = *pending.begin(); pending.erase(pending.begin());
+						// FLAGGED fixture departure: match the pinned GNS PingTracker's 100 ms buckets and two-lowest-of-three smoothing.
+						if (count == 3 && at < nextSampleAt) { if (sample >= recent[0]) continue; }
+						else { recent[2] = recent[1]; recent[1] = recent[0]; nextSampleAt = at + 100; }
+						recent[0] = sample; count = std::min<uint32_t>(3, count + 1);
+						if (count < 3) { nextSampleAt = 0; smoothed = count == 1 ? sample : std::min(recent[0], recent[1]); }
+						else smoothed = (recent[0] + recent[1] + recent[2] - *std::max_element(recent.begin(), recent.end())) / 2;
+					}
+					return count ? smoothed : initial;
+				}
+			};
+			mutable std::map<NetPeerId, LinkPing> linkPings;
 			struct Event { uint64_t at; NetTransportEvent value; bool crossesFault = false; };
 			std::vector<Event> events;
 			bool keepReturnCertificates = false;
@@ -998,10 +1017,22 @@ namespace RTE {
 					// Jitter delays each packet on its own; a lossy link drops an unreliable packet and resends a reliable one a round trip late.
 					const uint32_t rtt = hub.schedule->Rtt(owner, other->owner), jitter = hub.schedule->jitterMs[owner][other->owner], loss = hub.schedule->LossPercent(owner, other->owner, hub.now);
 					const bool reliable = lane == NetTransportLane::ControlReliable || lane == NetTransportLane::DiagnosticsReliable;
-					uint64_t at = hub.now + hub.Delay(owner, other->owner) + hub.schedule->LateMs(owner, other->owner, hub.now, reliable) + sessionDelay + (jitter ? hub.Next() % (jitter + 1) : 0);
+					const uint32_t outboundJitter = jitter ? hub.Next() % (jitter + 1) : 0;
+					uint64_t at = hub.now + hub.Delay(owner, other->owner) + hub.schedule->LateMs(owner, other->owner, hub.now, reliable) + sessionDelay + outboundJitter;
+					bool retransmitted = false;
 					for (unsigned resend = 0; loss && resend < 4 && hub.Next() % 100 < loss; ++resend) {
 						if (!reliable) return true;
+						retransmitted = true;
 						at += std::max<uint32_t>(200, rtt + rtt / 2);
+					}
+					if (jitter && !retransmitted) {
+						auto& ping = linkPings[id];
+						(void)ping.Read(hub.now, static_cast<uint32_t>(2 * hub.Delay(owner, other->owner)));
+						// Reverse transport ACK jitter has its own stream; application delivery and fault draws stay byte-for-byte identical.
+						if (!ping.random) ping.random = 0xD1B54A32D192ED03ULL ^ hub.schedule->seed ^ (uint64_t(owner) << 32) ^ (uint64_t(other->owner) << 16) ^ id;
+						ping.random ^= ping.random << 13; ping.random ^= ping.random >> 7; ping.random ^= ping.random << 17;
+						const uint32_t trip = static_cast<uint32_t>(2 * hub.Delay(owner, other->owner)) + outboundJitter + ping.random % (jitter + 1);
+						ping.pending.emplace(hub.now + trip, trip);
 					}
 					if (reliable) { auto& last = lastDelivery[{id, lane}]; at = std::max(at, last); last = at; }
 					other->events.push_back({at, {NetTransportEventType::PacketReceived, remote, lane, std::move(delivered), {}}, false}); return true;
@@ -1079,6 +1110,7 @@ namespace RTE {
 			uint32_t GetPeerPingMs(NetPeerId id) const override {
 				const uint32_t rtt = connections.contains(id) ? static_cast<uint32_t>(2 * hub.Delay(owner, connections.at(id).first->owner)) : 0;
 				if (TraceFaultObservation()) DiagnosticLine() << "[direct-fault-observation] now=" << hub.now << " op=rtt route=" << id << " value=" << rtt;
+				if (const auto ping = linkPings.find(id); rtt && ping != linkPings.end()) return ping->second.Read(hub.now, rtt);
 				return rtt;
 			}
 			bool IsPeerPingMeasured(NetPeerId id) const override {
@@ -2459,6 +2491,27 @@ namespace RTE {
 			if (passed && !checkedPace) { error = "the placement-to-combat progress check was not exercised"; return false; }
 			if (passed) DiagnosticLine() << "[net-lockstep-selftest] PASS placement_barrier_releases_three_peer_host_blackout_hold_and_return no_placement_ai=1 combat_progress=440 bound_ms=50 actual_image=1" << std::endl;
 			return passed;
+		}
+		bool CheckTransportRttOracle(std::string& error) {
+			Hub hub; Schedule schedule; schedule.seats = 2;
+			schedule.rttMs[1][2] = schedule.rttMs[2][1] = 100;
+			schedule.jitterMs[1][2] = schedule.jitterMs[2][1] = 40;
+			hub.schedule = &schedule;
+			Wire sender(hub, 1), receiver(hub, 2);
+			sender.connections[42] = {&receiver, 43}; receiver.connections[43] = {&sender, 42};
+			uint32_t low = UINT32_MAX, high = 0;
+			for (hub.now = 0; hub.now < 4000; hub.now += 10) {
+				if (!sender.Send(42, NetTransportLane::InputUnreliable, {0x71, 0x39})) { error = "the transport oracle could not send"; return false; }
+				const uint32_t rtt = sender.GetPeerPingMs(42);
+				if (rtt < 100 || rtt > 180) { error = "the measured RTT escaped the physical two-way link"; return false; }
+				low = std::min(low, rtt); high = std::max(high, rtt);
+			}
+			uint64_t digest = 14695981039346656037ULL;
+			for (const auto& event: receiver.events) { digest ^= event.at; digest *= 1099511628211ULL; }
+			DiagnosticLine() << "[session-plane-transport-rtt] low_ms=" << low << " high_ms=" << high
+			    << " delivery_events=" << receiver.events.size() << " delivery_digest=" << digest << " application_polls=0";
+			if (high <= 100 || high == low) { error = "injected physical jitter was hidden behind a constant measured RTT"; return false; }
+			return true;
 		}
 		bool CheckAuthorityOracle(std::string& error) {
 			Case authorityRow{"oracle_directory_services"}; authorityRow.seats = 2; authorityRow.internet = true;
@@ -4897,6 +4950,8 @@ namespace RTE {
 		std::vector<RowRun> named;
 		if (!selected || std::string_view(selected) == "authority_fixture_checks_each_half_and_never_waives_the_bound")
 			named.push_back({"authority_fixture_checks_each_half_and_never_waives_the_bound", CheckAuthorityOracle});
+		if (!selected || std::string_view(selected) == "transport_rtt_observes_the_injected_physical_jitter")
+			named.push_back({"transport_rtt_observes_the_injected_physical_jitter", CheckTransportRttOracle});
 		if (!selected || std::string_view(selected) == "host_hold_ai_authority_is_the_certified_frames")
 			named.push_back({"host_hold_ai_authority_is_the_certified_frames", CheckHostHoldAuthority});
 		if (!selected || std::string_view(selected) == "input_delay_uses_link_jitter_without_machine_receipt_cost") {

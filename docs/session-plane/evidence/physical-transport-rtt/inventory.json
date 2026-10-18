@@ -1,0 +1,214 @@
+{
+  "exe_sha256": "bd62c2420f5f208008d87852b5c20cc5a27045bd9c1c31c02511e042bd7fbb2e",
+  "repo": "<REPO>",
+  "passed": 8,
+  "total": 10,
+  "quiet_rows": [],
+  "sanitizer": null,
+  "complete": true,
+  "running": null,
+  "results": {
+    "net-lockstep": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 3,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "bd62c2420f5f208008d87852b5c20cc5a27045bd9c1c31c02511e042bd7fbb2e",
+      "row_elapsed_s": 45.34494275000179,
+      "start_load": [
+        1.302734375,
+        0.85302734375,
+        0.86669921875
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-session-plane": {
+      "pass": false,
+      "exit_code": 1,
+      "timed_out": false,
+      "pass_lines": 0,
+      "fail_lines": [
+        "[net-session-plane-selftest] FAIL",
+        "[net-session-plane-selftest] FAIL",
+        "[net-session-plane-selftest] FAIL"
+      ],
+      "fatal": [
+        "[net-session-plane-selftest] FAIL relay_link_blackout_return: seed=0 phased relay return failed: peer=2 blackout_gap_ms=37 pre_fault_pace_lead_ms=33 return_ms=4079 post_return_wait_ms=0 returns=1",
+        "[net-session-plane-selftest] FAIL four_seats_held_joiner_at_round_rate_uses_a_different_donor_over_200ms: seed=0 histories differ at displayed frame 1694: peer 1 members=15 peer 3 members=6; authority ruling requires equal history within a half and after image return; now_ms=28681 live_split=0 separated_frame=0 authors=1/3 ai=none/1,4",
+        "[net-session-plane-selftest] FAIL held_seat_and_a_member_slow_to_hear_hold_nobody_else: seed=0 histories differ at displayed frame 362: peer 1 members=9 peer 3 members=13; authority ruling requires equal history within a half and after image return; now_ms=6064 live_split=0 separated_frame=0 authors=1/3 ai=2,3/2"
+      ],
+      "reason": "exit_code=1",
+      "binary": "bd62c2420f5f208008d87852b5c20cc5a27045bd9c1c31c02511e042bd7fbb2e",
+      "fixed_failure_report": {
+        "path": "<REPO>/reviews/mac/transport-rtt-inventory/net-session-plane-selftest/fixed-failure-groups.txt",
+        "binary": "bd62c2420f5f208008d87852b5c20cc5a27045bd9c1c31c02511e042bd7fbb2e",
+        "digest": "50c27fe73d4b01cad976f0cdf8af02439ac556c9bf1158d7152aa11d28e8ccf9",
+        "suite_root": "<REPO>/reviews/mac/transport-rtt-inventory",
+        "saved_cases_ran": 108
+      },
+      "row_elapsed_s": 205.63822345799417,
+      "start_load": [
+        1.6865234375,
+        0.98681640625,
+        0.912109375
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-session-plane-hold-schedules": {
+      "pass": false,
+      "exit_code": 1,
+      "timed_out": false,
+      "pass_lines": 0,
+      "fail_lines": [
+        "[net-session-plane-selftest] FAIL",
+        "[net-session-plane-selftest] FAIL",
+        "[net-session-plane-selftest] FAIL"
+      ],
+      "fatal": [
+        "[net-session-plane-selftest] FAIL random_hold_schedules shape=three_direct_seats_282ms_jitter_40ms_seat3_slow_75pc_200ms_back_at_100pc_host_late_400ms_more_200ms_back_at_105pc_survivor_waits_seed_114 group=bound:survivor_waits:3:direct seeds=114,197 property=bound kind=survivor_waits minimize_runs=60 repeats=1: authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory; now_ms=6173 applied=330 next=331 blocked=own-input-acceptance consumer=331 wait_since=6122 members=3 local_held=0 granted=none hold_certificate=1 start=1:1/required=0/held=0 start=3:1/required=0/held=0 at 6173 ms",
+        "[net-session-plane-selftest] FAIL random_hold_schedules group=bound:survivor_waits:3:internet seeds=54,80: reproduced by fixed row three_seats_returned_joiner_meets_a_host_autosave_every_10s",
+        "[net-session-plane-selftest] FAIL random_hold_schedules shape=four_direct_seats_300ms_jitter_20ms_seat2_silent_1335ms_survivor_waits_seed_46 group=bound:survivor_waits:4:direct seeds=46,65,96 property=bound kind=survivor_waits minimize_runs=50 repeats=1: authority ruling: playing peer 1 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory; now_ms=13243 applied=743 next=744 blocked=decision-pending consumer=744 wait_since=13192 members=15 local_held=0 granted=none hold_certificate=0 start=2:1/required=0/held=0 start=3:1/required=0/held=0 start=4:1/required=0/held=0 at 13243 ms"
+      ],
+      "reason": "exit_code=1",
+      "binary": "bd62c2420f5f208008d87852b5c20cc5a27045bd9c1c31c02511e042bd7fbb2e",
+      "schedule_summary": "[net-session-plane-selftest] random_hold_schedules schedules=200 ran=200 seeds=1..200",
+      "fixed_failure_report": {
+        "path": "<REPO>/reviews/mac/transport-rtt-inventory/net-session-plane-selftest/fixed-failure-groups.txt",
+        "binary": "bd62c2420f5f208008d87852b5c20cc5a27045bd9c1c31c02511e042bd7fbb2e",
+        "digest": "50c27fe73d4b01cad976f0cdf8af02439ac556c9bf1158d7152aa11d28e8ccf9",
+        "suite_root": "<REPO>/reviews/mac/transport-rtt-inventory",
+        "saved_cases_ran": 108
+      },
+      "row_elapsed_s": 202.09513387500192,
+      "start_load": [
+        1.810546875,
+        1.34375,
+        1.07373046875
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-input-acceptance": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "bd62c2420f5f208008d87852b5c20cc5a27045bd9c1c31c02511e042bd7fbb2e",
+      "row_elapsed_s": 1.7488967499957653,
+      "start_load": [
+        1.427734375,
+        1.37451171875,
+        1.13720703125
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-lockstep-released-claims": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "bd62c2420f5f208008d87852b5c20cc5a27045bd9c1c31c02511e042bd7fbb2e",
+      "row_elapsed_s": 1.7638712909974856,
+      "start_load": [
+        1.39306640625,
+        1.3681640625,
+        1.13623046875
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-lockstep-release-paths": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "bd62c2420f5f208008d87852b5c20cc5a27045bd9c1c31c02511e042bd7fbb2e",
+      "row_elapsed_s": 3.1839797079956043,
+      "start_load": [
+        1.39306640625,
+        1.3681640625,
+        1.13623046875
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-lockstep-seat-succession": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "bd62c2420f5f208008d87852b5c20cc5a27045bd9c1c31c02511e042bd7fbb2e",
+      "row_elapsed_s": 18.09261908299959,
+      "start_load": [
+        1.361328125,
+        1.36181640625,
+        1.13525390625
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-lockstep-seat-admission": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "bd62c2420f5f208008d87852b5c20cc5a27045bd9c1c31c02511e042bd7fbb2e",
+      "row_elapsed_s": 11.988292333000572,
+      "start_load": [
+        1.63720703125,
+        1.42431640625,
+        1.16162109375
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-world-join": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "bd62c2420f5f208008d87852b5c20cc5a27045bd9c1c31c02511e042bd7fbb2e",
+      "row_elapsed_s": 11.535349249999854,
+      "start_load": [
+        1.64892578125,
+        1.435546875,
+        1.17041015625
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-rejoin-matrix": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "bd62c2420f5f208008d87852b5c20cc5a27045bd9c1c31c02511e042bd7fbb2e",
+      "row_elapsed_s": 23.81340787500085,
+      "start_load": [
+        1.39501953125,
+        1.38818359375,
+        1.15625
+      ],
+      "topology": "single-box: not proof"
+    }
+  },
+  "topology": "single-box: not proof"
+}
