@@ -1,0 +1,16 @@
+{
+ "pass": false,
+ "failure": "RuntimeError('timeout waiting for the returner completing its catch-up')",
+ "checks": {
+  "all_normal_exits": true,
+  "no_delay_refusal": true,
+  "return_complete": false,
+  "no_delay_change": true
+ },
+ "refusals": [],
+ "exe_sha256": "e8dc12336690d63151e8d054902654a697ef7af4674f6379b34eaa608bf538b7",
+ "delay_policy": "Auto",
+ "input_delay_frames": 1,
+ "topology": "single-box",
+ "proof": false
+}

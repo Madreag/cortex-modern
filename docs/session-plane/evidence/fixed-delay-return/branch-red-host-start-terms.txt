@@ -1,0 +1,2 @@
+[net-start-read] local=2 peer=1 agreed=0 frame=1 round=3306933079513430103/3306933079513430103 state=1 playback=0 received=1 require_published=0 from=0 authenticated=1 delay=1 admission=6528/1 terms=none joins=1 config_start=6528 matches=0 known=1 received_set=0 remotes=1 stale=0
+[net-start-read] local=2 peer=1 agreed=1 frame=1 round=3306933079513430103/3306933079513430103 state=1 playback=0 received=2 require_published=0 from=0 authenticated=1 delay=1 admission=6528/1 terms=none joins=1 config_start=6528 matches=0 known=1 received_set=0 remotes=1 stale=1

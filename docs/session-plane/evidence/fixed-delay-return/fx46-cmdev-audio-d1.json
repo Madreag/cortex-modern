@@ -1,0 +1,18 @@
+{
+ "pass": false,
+ "failure": "RuntimeError('return ended before the returner completing its catch-up')",
+ "checks": {
+  "all_normal_exits": true,
+  "no_delay_refusal": false,
+  "return_complete": false,
+  "no_delay_change": true
+ },
+ "refusals": [
+  "[net-match] held seat peer=2 waits to rejoin: Your connection needs 19 delay frames; the match currently allows 1. Your seat remains under AI control."
+ ],
+ "exe_sha256": "0859a416072489ea899af04f98780d68224988f0c2806459115f34a7aa462790",
+ "delay_policy": "Fixed",
+ "input_delay_frames": 1,
+ "topology": "single-box",
+ "proof": false
+}

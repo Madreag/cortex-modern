@@ -1,0 +1,16 @@
+{
+ "pass": true,
+ "failure": null,
+ "checks": {
+  "all_normal_exits": true,
+  "no_delay_refusal": true,
+  "return_complete": true,
+  "no_delay_change": true
+ },
+ "refusals": [],
+ "exe_sha256": "09e327e7425de0ff43c384a746f820c56dc431f151a721e6c89f8e62c4d1a320",
+ "delay_policy": "Fixed",
+ "input_delay_frames": 1,
+ "topology": "single-box",
+ "proof": false
+}
