@@ -24,10 +24,27 @@
 
 using namespace RTE;
 
+namespace {
+	// A saver thread runs at the game's own priority while a slice is open and below it while parked: on a machine whose
+	// cores are all busy, a thread kept below everything else would get none of the time the game leaves it or lends it.
+	thread_local int t_SaverRaised = -1;
+	void SetSaverRaised(bool raised) {
+		if (t_SaverRaised == static_cast<int>(raised)) return;
+		t_SaverRaised = raised;
+#ifdef _WIN32
+		SetThreadPriority(GetCurrentThread(), raised ? THREAD_PRIORITY_NORMAL : THREAD_PRIORITY_LOWEST);
+#elif defined(__APPLE__)
+		pthread_set_qos_class_self_np(raised ? QOS_CLASS_DEFAULT : QOS_CLASS_UTILITY, 0);
+#endif
+		// Linux keeps its lowered nice value: an unprivileged thread cannot raise it again, and the scheduler's fair share keeps it running.
+	}
+}
+
 void SaverThreads::Enter() {
 	if (s_Lowered) return;
 	SaverThreadMark::Set();
 	s_Lowered = true;
+	t_SaverRaised = 0;
 	// Save work has a lower base priority than gameplay's workers.
 #ifdef _WIN32
 	SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_LOWEST);
@@ -116,9 +133,22 @@ namespace {
 	}
 }
 
+void SaverThreads::SetOverdue(bool overdue) {
+	if (s_Overdue.exchange(overdue, std::memory_order_acq_rel) == overdue || !overdue) return;
+	try { std::lock_guard lock(s_SliceMutex); } catch (...) {}
+	s_SliceOpened.notify_all();
+}
+
 void SaverThreads::CheckSlice() {
 	if (ReportingStretches()) NoteStretch(SAVER_CALLER);
-	if (NowUs() < s_SliceEndUs.load(std::memory_order_acquire) && (s_SliceLent.load(std::memory_order_acquire) || s_GameWork.load(std::memory_order_acquire) == 0)) return;
+	if (s_Overdue.load(std::memory_order_acquire)) {
+		if (s_Lowered) SetSaverRaised(true);
+		return;
+	}
+	if (NowUs() < s_SliceEndUs.load(std::memory_order_acquire) && (s_SliceLent.load(std::memory_order_acquire) || s_GameWork.load(std::memory_order_acquire) == 0)) {
+		if (s_Lowered) SetSaverRaised(true);
+		return;
+	}
 	WaitForSlice();
 }
 
@@ -159,15 +189,22 @@ void SaverThreads::LendTickStart(int64_t microseconds) {
 }
 
 void SaverThreads::WaitForSlice() {
+	if (s_Lowered) SetSaverRaised(false);
 	std::unique_lock lock(s_SliceMutex);
 	const int64_t began = NowUs();
 	s_Parked.fetch_add(1, std::memory_order_relaxed);
 	struct Unpark { ~Unpark() { s_Parked.fetch_sub(1, std::memory_order_relaxed); } } unpark;
 	for (;;) {
-		if (s_Gating.load(std::memory_order_acquire) == 0 || s_Lent.load(std::memory_order_acquire) > 0) return;
+		if (s_Gating.load(std::memory_order_acquire) == 0 || s_Lent.load(std::memory_order_acquire) > 0 || s_Overdue.load(std::memory_order_acquire)) {
+			if (s_Lowered) SetSaverRaised(true);
+			return;
+		}
 		const int64_t now = NowUs(), sliceEnd = s_SliceEndUs.load(std::memory_order_acquire);
 		if (now < sliceEnd) {
-			if (s_SliceLent.load(std::memory_order_acquire) || s_GameWork.load(std::memory_order_acquire) == 0) return;
+			if (s_SliceLent.load(std::memory_order_acquire) || s_GameWork.load(std::memory_order_acquire) == 0) {
+				if (s_Lowered) SetSaverRaised(true);
+				return;
+			}
 			// Game work that never ends may itself wait on something the saver holds.
 			if (now - began > c_StuckTickUs) {
 				if (s_ReportedStuckAtUs.exchange(began) != began) {

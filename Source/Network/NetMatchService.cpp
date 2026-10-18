@@ -8,6 +8,7 @@
 
 #include "ActivityMan.h"
 #include "MetricsCollector.h"
+#include "ThreadMan.h"
 #include "Constants.h"
 #include "GameActivity.h"
 #include "Scene.h"
@@ -3903,7 +3904,9 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::ResetCheckpointSchedule() {
+		SaverThreads::SetOverdue(false);
 		m_ScheduledCaptures.clear();
+		m_PeriodicWaitSince = 0;
 		m_OpenCaptureTick = 0;
 		m_CaptureWriters.clear();
 		m_CheckpointHolders.clear();
@@ -4055,7 +4058,11 @@ static std::string ResyncSaveName() {
 		// Publication can reach the network pump before the writer has finished releasing its capture, and its future is ready
 		// before the writer has prepared the next plan: wait for both before naming another command, including a requested
 		// fresher base. The ask and the deadline stay pending, and the command is named at the first tick the writer is ready.
-		if (input.unwritten != 0 || !input.writerReady || (m_OpenCaptureTick != 0 && (input.tick <= m_OpenCaptureTick || !m_CaptureWriters.empty()))) return output;
+		const bool writersBusy = input.unwritten != 0 || !input.writerReady || (m_OpenCaptureTick != 0 && (input.tick <= m_OpenCaptureTick || !m_CaptureWriters.empty()));
+		if (writersBusy) {
+			if (!input.paused && interval > 0 && m_NextAutosaveSimTime >= 0 && input.now + static_cast<int64_t>(input.lead) * tickLength >= m_NextAutosaveSimTime && m_PeriodicWaitSince == 0) m_PeriodicWaitSince = input.tick;
+			return output;
+		}
 		m_OpenCaptureTick = 0;
 		m_OpenCaptureForJoin = false;
 		// Every peer keeps the schedule the host announced in the agreed config, not its own setting.
@@ -4071,16 +4078,24 @@ static std::string ResyncSaveName() {
 		// A capture is named ahead by the input delay; the interval is consumed above only after that command lands.
 		const bool periodicDue = !input.paused && interval > 0 &&
 		                         input.now + static_cast<int64_t>(input.lead) * tickLength >= m_NextAutosaveSimTime;
+		const auto notePeriodic = [&] {
+			if (!periodicDue) return;
+			output.periodicLateTicks = std::max<int64_t>(0, static_cast<int64_t>(input.lead) - (m_NextAutosaveSimTime - input.now) / tickLength);
+			output.periodicWaitedTicks = m_PeriodicWaitSince ? static_cast<int64_t>(input.tick - m_PeriodicWaitSince) : 0;
+			m_PeriodicWaitSince = 0;
+		};
 		if (input.ownSeatHeld) {
 			// Playing voters agree a frame for the held host. Keep the same authorization and one-capture gate as a base
 			// request, and leave a manual ask pending until it can be carried by the host's own input.
 			output.requestPrivateBase = periodicDue || (joinCapture && m_PrivateBaseRequested && m_WorldJoin.IsPrivateMatch());
+			if (output.requestPrivateBase) notePeriodic();
 			return output;
 		}
 		if (!joinCapture && !ask && !periodicDue) return output;
 		m_OpenCaptureTick = input.tick + input.lead;
 		m_OpenCaptureApplied = false;
 		m_OpenCaptureForJoin = joinCapture;
+		notePeriodic();
 		// Test lever CC_FAULT_INJECT=join_capture_refused: the writer refuses the host's first base as it starts, where a frozen-inventory refusal comes.
 		if (joinCapture && m_IsHost && m_WorldJoin.IsPrivateMatch() && !m_InjectedJoinRefusal && FaultInjected("join_capture_refused")) {
 			m_InjectedJoinRefusal = true;
@@ -4296,7 +4311,10 @@ static std::string ResyncSaveName() {
 		const std::vector<uint64_t> finished = g_ActivityMan.AutosaveWriterBusy() ? std::vector<uint64_t>{} : TakeAutosaveVerdicts(&refused);
 		if (ScenarioRunner::HasPendingLockstepWorldSegment()) SealWorldReplaySegment();
 		AppendCommittedJoinFrame(tick);
-		if (!ScenarioRunner::IsLockstepControllerSyncActive() || m_AutosaveMatchId.empty() || !m_Coordinator) return;
+		if (!ScenarioRunner::IsLockstepControllerSyncActive() || m_AutosaveMatchId.empty() || !m_Coordinator) {
+			SaverThreads::SetOverdue(false);
+			return;
+		}
 		AutosaveTickInput input;
 		input.tick = tick;
 		input.now = g_TimerMan.GetSimTimeTicks();
@@ -4321,6 +4339,19 @@ static std::string ResyncSaveName() {
 			input.hostProvisional = m_Coordinator->IsHostProvisional();
 		}
 		AutosaveTickOutput output = StepAutosaveSchedule(input);
+		{
+			// A capture this peer's busy writer keeps from being named or taken: the next periodic one once its deadline
+			// passed, the host's manual ask, or a joiner's base.
+			const int64_t interval = static_cast<int64_t>(m_MatchAutosaveSeconds) * g_TimerMan.GetTicksPerSecond();
+			const int64_t dueAt = m_IsHost && m_NextAutosaveSimTime >= 0 ? m_NextAutosaveSimTime : m_CaptureAnchorSimTime + interval;
+			const bool periodicDue = interval > 0 && !paused && m_CaptureAnchorSimTime >= 0 && input.now >= dueAt;
+			const bool asked = m_IsHost && (output.manualPending || m_WorldCapturePending || m_PrivateBaseRequested);
+			SaverThreads::SetOverdue((periodicDue || asked) && g_ActivityMan.AutosaveWriterBusy());
+		}
+		if (output.periodicLateTicks >= 0) {
+			System::PrintDiagnosticLine(std::format("[autosave] periodic due named at={} late_ticks={} waited_ticks={} held={}", tick, output.periodicLateTicks,
+			                                        output.periodicWaitedTicks, input.ownSeatHeld ? 1 : 0));
+		}
 		if (output.requestPrivateBase) (void)m_Coordinator->RequestPrivateBaseCapture();
 		else if (m_IsHost && (!input.ownSeatHeld || input.hostProvisional)) m_Coordinator->ClearPrivateBaseCaptureRequest();
 		// The prepared capture warms ahead of the next one: a named capture is near at once, an interval one counts from the

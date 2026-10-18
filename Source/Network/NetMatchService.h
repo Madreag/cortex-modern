@@ -458,6 +458,8 @@ namespace RTE {
 			size_t manualReported = 0; //!< Host: how many writers reported that capture.
 			size_t manualWriters = 0; //!< Host: how many writers it named for it.
 			bool manualRefused = false; //!< Host: the ask came while its play was provisional; nothing is saved.
+			int64_t periodicLateTicks = -1; //!< Host: how far past its deadline a periodic capture is taken, -1 when none is named.
+			int64_t periodicWaitedTicks = 0; //!< Host: of that, the ticks the due capture waited for its writers.
 		};
 		/// The checkpoint schedule at one tick boundary, with the capture and the stream left to the caller.
 		/// Every peer captures at each tick the host names; the host names the next one only once every
@@ -1542,6 +1544,7 @@ namespace RTE {
 		std::string m_AutosaveMatchId;
 		uint32_t m_MatchAutosaveSeconds = 0; //!< The cadence the round agreed on, read once so the tick path never chases the runner.
 		int64_t m_NextAutosaveSimTime = -1;
+		uint64_t m_PeriodicWaitSince = 0; //!< Host: the first tick a due periodic capture found its writers busy, 0 when none waits.
 		int64_t m_LastAutosaveSimTime = -1;
 		int64_t m_CaptureAnchorSimTime = -1; //!< When this peer last took a capture, or first counted toward one.
 		AutosaveIdentity m_AutosaveIdentity; //!< What every checkpoint of this match is stamped with.
