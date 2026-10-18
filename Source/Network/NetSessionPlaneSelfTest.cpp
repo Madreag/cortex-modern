@@ -2382,7 +2382,14 @@ namespace RTE {
 			if (!fixture.hub.schedule && fixture.hub.row.frozen) fixture.hub.faultEnd = fixture.hub.now;
 			fixture.peers[donor - 1]->NoteReturnerCaughtUp(seat, fixture.hub.now);
 			(void)fixture.peers[donor - 1]->SendReturnerTheRoundFrom(seat, activation);
-			for (const uint64_t until = fixture.hub.now + 1000; fixture.hub.now <= until;) if (!fixture.Step(error) || !fixture.CheckBound(error)) return false;
+			const uint64_t observationAt = fixture.hub.now;
+			// FLAGGED fixture departure: a newly injected own-machine fault belongs to the next hold, not this return's healthy observation.
+			for (const uint64_t until = observationAt + 1000; fixture.hub.now <= until && !fixture.OwnMachineTrouble(seat);) {
+				for (uint8_t peer: survivors)
+					if (fixture.peers[peer - 1]->HasHeldAISeat(seat) || Bridges(*fixture.peers[peer - 1]).contains(seat))
+						return fail("the image return was held again during its healthy observation");
+				if (!fixture.Step(error) || !fixture.CheckBound(error)) return false;
+			}
 			for (uint8_t peer: survivors) {
 				const bool playing = (s_FrameMembers(*fixture.peers[donor - 1], activation) & (1U << (peer - 1))) != 0;
 				if (playing && (!fixture.peers[peer - 1]->IsRunning() || fixture.peers[peer - 1]->HasHeldAISeat(seat) || Bridges(*fixture.peers[peer - 1]).contains(seat)))
@@ -2394,7 +2401,8 @@ namespace RTE {
 			}
 			if (!fixture.CompareHistories(error) || !fixture.CheckBound(error)) return false;
 			DiagnosticLine() << "[session-plane-image] authority_contract=local_hold_async_split returner=" << unsigned(seat)
-			                 << " donor=" << unsigned(donor) << " activation=" << activation << " winner_history_untouched=1" << std::endl;
+			                 << " donor=" << unsigned(donor) << " activation=" << activation << " winner_history_untouched=1"
+			                 << " healthy_observation_ms=" << fixture.hub.now - observationAt << " new_own_fault=" << fixture.OwnMachineTrouble(seat) << std::endl;
 			return true;
 		}
 		bool CheckImageActivation(uint8_t seats, uint32_t rttMs, std::string& error) {
