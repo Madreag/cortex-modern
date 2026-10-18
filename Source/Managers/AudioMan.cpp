@@ -2213,11 +2213,13 @@ void AudioMan::RetirePredictedVoice(int identity) {
 }
 
 bool AudioMan::IsPredictedVoice(int identity) const {
-	// A save's reader asks of the voices as its boundary left them; the live map changes under it on the game's thread.
 	if (CheckpointNativeStorage::Reading()) {
-		for (const auto& [voice, playing]: CheckpointValues(CheckpointNativeStorage::Source(this)->m_PlayingVoices))
-			if (voice == identity) return playing.predicted;
-		return false;
+		// A save reads the voices its boundary froze; the game starts and stops voices meanwhile.
+		if (const auto* frozen = static_cast<const AudioMan*>(CheckpointNativeStorage::RootView(this, sizeof(AudioMan)))) {
+			const auto* voice = CheckpointFind(frozen->m_PlayingVoices, identity);
+			return voice && voice->second.predicted;
+		}
+		if (SaverThreadMark::current) throw std::logic_error("a save read the playing voices without its boundary's audio manager");
 	}
 	const auto found = m_PlayingVoices.find(identity);
 	return found != m_PlayingVoices.end() && found->second.predicted;
