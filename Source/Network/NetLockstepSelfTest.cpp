@@ -417,6 +417,48 @@ namespace RTE {
 			return true;
 		}
 
+		static bool CapacityCostsOnlyCombatInputWaits(std::string* error) {
+			bool passed = true;
+			for (unsigned domain = 0; domain != 5; ++domain) {
+				DelayWire wire; NetLockstepCoordinator peer; Configure(peer, wire);
+				peer.m_Config.peerFrameGroups = true; peer.m_Config.substituteSlowPeers = true; peer.m_Config.slowPlayerBoundTicks = 3;
+				peer.m_MigrationPhase = NetHostMigrationPhase::None;
+				peer.m_FrameGroupMembers = 7; peer.m_FrameGroupChanges = {{1, 7}};
+				peer.m_RemoteFrames[4423][3] = {};
+				peer.m_Stats.peers.try_emplace(1); peer.m_Stats.peers.try_emplace(3);
+				for (unsigned i = 0; i != 300; ++i) peer.m_TickCosts.push_back(1.0);
+				NetSeatRoster roster; roster.stage = NetRosterStage::Placement;
+				for (uint8_t id = 1; id <= 3; ++id) { NetRosterSeat seat; seat.seatId = id; roster.seats.push_back(seat); }
+				if (domain == 1 || domain == 4) peer.SetRosterReader([&] { return &roster; });
+				if (domain == 2) {
+					peer.m_PeerBridges[2] = {4300, 4300, true, {}, {}, 5};
+					peer.m_FrameGroupMembers = 5; peer.m_FrameGroupChanges[4300] = 5;
+				}
+				const bool decision = domain == 3;
+				(void)peer.NoteFrameWait(4423, 1000, decision);
+				(void)peer.NoteFrameWait(4423, 1010, decision);
+				double missingCost = -1, presentCost = -1;
+				(void)peer.CostsPastTolerance(1, 4423, 1015, &missingCost);
+				(void)peer.CostsPastTolerance(3, 4423, 1015, &presentCost);
+				if (domain == 4) {
+					roster.stage = NetRosterStage::Running; roster.stageFrame = 4422;
+					(void)peer.NoteFrameWait(4423, 1020);
+				}
+				peer.FinishFrameWait(domain == 4 ? 1030 : 1020);
+				const auto sum = [&](uint8_t id) { uint64_t total = 0; for (const auto& [end, cost]: peer.m_Stats.peers.at(id).waitCosts) total += cost; return total; };
+				const uint64_t expected = domain == 0 ? 20 : domain == 4 ? 10 : 0;
+				const double expectedOngoing = domain == 0 ? peer.OwnCapacityTps() * 15.0 / NetLockstepCoordinator::c_CapacityWindowMs : 0.0;
+				const bool okay = sum(1) == expected && sum(3) == 0 && std::abs(missingCost - expectedOngoing) < 1e-9 && std::abs(presentCost) < 1e-9 &&
+				    peer.GetStats().longestStallMs == (domain == 4 ? 30 : 20);
+				std::cout << "[capacity-wait-domain] domain=" << domain << " missing_ms=" << sum(1) << " expected_ms=" << expected
+				          << " present_ms=" << sum(3) << " ongoing_missing_tps=" << missingCost << " ongoing_present_tps=" << presentCost
+				          << " raw_wait_ms=" << peer.GetStats().longestStallMs << " result=" << (okay ? "PASS" : "FAIL") << std::endl;
+				passed &= okay;
+			}
+			if (!passed) *error = "capacity debt includes placement/private/decision time or charges a peer whose input is present";
+			return passed;
+		}
+
 		static bool ActivePacePreservesReceiptRunway(std::string* error) {
 			DelayWire wire; wire.rtt = 250;
 			NetLockstepCoordinator peer; ConfigureDelay(peer, wire, 0, 16);
@@ -30960,6 +31002,13 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "capacity-wait-domain") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::CapacityCostsOnlyCombatInputWaits(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS capacity_waits_are_only_actual_combat_input_costs" << std::endl;
+				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "active-pace-runway") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::ActivePacePreservesReceiptRunway(&error)) return fail(error);
@@ -31083,6 +31132,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::PendingDecisionsSurviveLocalTime, "pending_decisions_wait_for_authority_across_local_timeouts");
 		row(&SessionPlaneRecoveryTest::DelayFallRetimesTheProducer, "a_delay_fall_retimes_its_producer_with_the_bounded_budget");
 		row(&SessionPlaneRecoveryTest::ActivePacePreservesReceiptRunway, "active_pace_preserves_receipt_runway");
+		row(&SessionPlaneRecoveryTest::CapacityCostsOnlyCombatInputWaits, "capacity_waits_are_only_actual_combat_input_costs");
 		row(&SessionPlaneRecoveryTest::ExplicitTailRepairIsNotAnUnsolicitedRepeat, "explicit_tail_repair_is_not_an_unsolicited_repeat");
 		row(&SessionPlaneRecoveryTest::InputGapRepairSurvivesAnOrderedLanePause, "input_gap_repair_survives_an_ordered_lane_pause");
 		row(&SessionPlaneRecoveryTest::Boundary, "successor_refuses_unvalidated_boundary_before_publish");

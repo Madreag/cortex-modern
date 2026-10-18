@@ -5381,6 +5381,8 @@ namespace RTE {
 		m_FirstMissingFrame.reset();
 		m_LastDeliveredFrame.reset();
 		m_ConsumerWaitStartMs = 0;
+		m_ConsumerCostObservedAtMs.reset();
+		m_ConsumerCostPeers.clear();
 		m_ConsumerWaitCounted = false;
 		m_LocalSeatHeld = false;
 		m_SeatBridgeSinceMs = m_Config.initialSeatBridgeSinceMs;
@@ -7232,6 +7234,7 @@ namespace RTE {
 		NET_PLANE_CHECK();
 		if (!UsesBoundedWait()) return false;
 		if (frame < m_Stats.nextFrame) return true;
+		AccrueConsumerWaitCost(nowMs);
 		if (m_ConsumerWaitingFrame != frame) {
 			m_ConsumerWaitingFrame = frame;
 			m_ConsumerWaitStartMs = nowMs;
@@ -7261,7 +7264,14 @@ namespace RTE {
 			stats.longestWaitMsSinceReclaim = std::max(stats.longestWaitMsSinceReclaim, elapsed);
 		}
 		if (!missing.empty()) m_Stats.lastMissingPeers = DescribeMissingPeers();
-		m_ConsumerWaitMissing = missing;
+		// Placement barriers, private recovery and decision acknowledgements do not measure another machine's combat pace.
+		m_ConsumerCostPeers.clear();
+		if (UsesPeerFrameGroups() && IsRunning() && !waitingForDecision && !WaitsForPlacement() &&
+		    !IsLocalPrivateReaderAt(frame) && !IsSeatUnderAI(m_Config.localPeerId, frame) &&
+		    !IsSeatReclaimGap(m_Config.localPeerId, frame) && !IsSynchronizedCapturePark(frame)) {
+			for (uint8_t peer: missing)
+				if (!IsSeatUnderAI(peer, frame) && !IsPeerGoneAtFrame(peer, frame)) m_ConsumerCostPeers.push_back(peer);
+		}
 		// Name the blocking evidence at the actual match bound; a detector may stop before a later diagnostic threshold.
 		const uint64_t boundMs = static_cast<uint64_t>(std::ceil(m_Config.slowPlayerBoundTicks * m_Config.simTickMs));
 		if (elapsed >= boundMs && m_DescribedWaitFrame != frame) {
@@ -7300,6 +7310,7 @@ namespace RTE {
 
 	void NetLockstepCoordinator::FinishFrameWait(uint64_t nowMs) {
 		NET_PLANE_CHECK();
+		AccrueConsumerWaitCost(nowMs);
 		if (m_ConsumerWaitingFrame && nowMs >= m_ConsumerWaitStartMs) {
 			m_Stats.longestStallMs = std::max(m_Stats.longestStallMs, nowMs - m_ConsumerWaitStartMs);
 			if (nowMs > m_ConsumerWaitStartMs) {
@@ -7307,17 +7318,28 @@ namespace RTE {
 				DiagnosticLine waited;
 				waited << "[net-frame-wait] frame=" << *m_ConsumerWaitingFrame << " wait_ms=" << nowMs - m_ConsumerWaitStartMs << " on=" << m_Stats.lastMissingPeers << " local=" << static_cast<int>(m_Config.localPeerId);
 				if (nowMs - m_ConsumerWaitStartMs >= 100) waited << " blocked=" << m_AdvanceBlock << " duplicates=" << m_WaitDuplicates;
-				// What each seat it waited on cost this machine, for the capacity rule.
-				for (uint8_t peer: m_ConsumerWaitMissing) {
-					auto& costs = m_Stats.peers[peer].waitCosts;
-					costs.emplace_back(nowMs, nowMs - m_ConsumerWaitStartMs);
-					while (!costs.empty() && costs.front().first + c_CapacityWindowMs < nowMs) costs.pop_front();
-				}
 			}
 		}
 		m_ConsumerWaitingFrame.reset();
-		m_ConsumerWaitMissing.clear();
+		m_ConsumerCostObservedAtMs.reset();
+		m_ConsumerCostPeers.clear();
 		m_WaitDuplicates = 0;
+	}
+
+	void NetLockstepCoordinator::AccrueConsumerWaitCost(uint64_t nowMs) {
+		const uint64_t observed = m_ConsumerCostObservedAtMs.value_or(nowMs);
+		if (nowMs < observed) return;
+		const uint64_t windowStart = nowMs > c_CapacityWindowMs ? nowMs - c_CapacityWindowMs : 0;
+		const uint64_t begin = std::max(observed, windowStart);
+		if (nowMs > begin) for (uint8_t peer: m_ConsumerCostPeers) {
+			auto& costs = m_Stats.peers[peer].waitCosts;
+			while (!costs.empty() && costs.front().first <= windowStart) costs.pop_front();
+			if (!costs.empty() && costs.back().first == observed) {
+				const uint64_t priorBegin = costs.back().first - costs.back().second;
+				costs.back() = {nowMs, nowMs - std::max(priorBegin, windowStart)};
+			} else costs.emplace_back(nowMs, nowMs - begin);
+		}
+		m_ConsumerCostObservedAtMs = nowMs;
 	}
 
 	std::optional<std::pair<double, double>> NetLockstepCoordinator::PeerAppliedRate(uint8_t peerId) const {
@@ -7355,12 +7377,16 @@ namespace RTE {
 		const auto found = m_Stats.peers.find(peerId);
 		if (found == m_Stats.peers.end()) return false;
 		auto& stats = found->second;
-		while (!stats.waitCosts.empty() && stats.waitCosts.front().first + c_CapacityWindowMs < nowMs) stats.waitCosts.pop_front();
+		const uint64_t windowStart = nowMs > c_CapacityWindowMs ? nowMs - c_CapacityWindowMs : 0;
+		while (!stats.waitCosts.empty() && stats.waitCosts.front().first <= windowStart) stats.waitCosts.pop_front();
 		// A seat starting or back from a hold catches up first; the round judges its pace after.
 		const uint64_t back = std::max(stats.reclaimAdmittedMs, stats.returnerCaughtUpMs);
 		const bool grace = early || (back != 0 && nowMs < back + 2000);
-		uint64_t waited = m_ConsumerWaitingFrame && *m_ConsumerWaitingFrame == frame && nowMs >= m_ConsumerWaitStartMs ? nowMs - m_ConsumerWaitStartMs : 0;
-		for (const auto& [endMs, ms]: stats.waitCosts) waited += ms;
+		uint64_t waited = 0;
+		if (m_ConsumerWaitingFrame == frame && m_ConsumerCostObservedAtMs && nowMs >= *m_ConsumerCostObservedAtMs &&
+		    std::find(m_ConsumerCostPeers.begin(), m_ConsumerCostPeers.end(), peerId) != m_ConsumerCostPeers.end())
+			waited = nowMs - std::max(*m_ConsumerCostObservedAtMs, windowStart);
+		for (const auto& [endMs, ms]: stats.waitCosts) waited += endMs - std::max(endMs - ms, windowStart);
 		// Judged against this machine's own pace: a scene heavy for every machine slows the round for all of them together.
 		const double own = OwnCapacityTps();
 		if (own <= 0) return false;
@@ -9385,6 +9411,7 @@ namespace RTE {
 		const auto shift = [&](uint64_t& stamp) { if (stamp != 0) stamp = std::min(nowMs, stamp + gap); };
 		shift(m_FirstMissingMs);
 		shift(m_ConsumerWaitStartMs);
+		if (m_ConsumerCostObservedAtMs) *m_ConsumerCostObservedAtMs = std::min(nowMs, *m_ConsumerCostObservedAtMs + gap);
 		shift(m_WaitStartMs);
 		shift(m_AuthorityLastHeardMs);
 		for (auto& [peer, heard]: m_PeerLastHeardMs) shift(heard);

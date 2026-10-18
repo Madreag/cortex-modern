@@ -623,7 +623,7 @@ namespace RTE {
 		uint64_t lastProgressMs = 0; //!< When this peer last raised the newest tick it has sent us.
 		std::deque<std::pair<uint64_t, uint64_t>> arrivals; //!< When this peer's newest tick rose, and to which, over the last seconds.
 		std::deque<uint64_t> waitedFrames; //!< The frames of the last second this machine waited on this peer's input.
-		std::deque<std::pair<uint64_t, uint64_t>> waitCosts; //!< When each wait this machine spent on this peer's input ended and how long it lasted, over the capacity window.
+		std::deque<std::pair<uint64_t, uint64_t>> waitCosts; //!< End and duration of actual combat-input wait intervals, over the capacity window.
 		uint64_t slowSinceMs = 0; //!< Since when this peer has fed below the round's rate without a break; 0 while it has not.
 		uint64_t reclaimAdmittedMs = 0; //!< When this seat's reclaim was admitted; its allowance runs from here.
 		uint64_t returnerCaughtUpMs = 0; //!< When this returning seat's catch-up reached its reclaim frame; 0 while it has not.
@@ -2085,6 +2085,8 @@ namespace RTE {
 		/// Whether a seat this machine waits on at the frame has cost it more than the round allows a slower machine: at 59.5 ticks a
 		/// second or more half a tick a second, below that a tenth of its own rate, over the last capacity window.
 		bool CostsPastTolerance(uint8_t peerId, uint64_t frame, uint64_t nowMs, double* cost = nullptr);
+		/// Attribute the observed combat wait interval to its missing human inputs, independently of the raw wait clock.
+		void AccrueConsumerWaitCost(uint64_t nowMs);
 		static constexpr uint64_t c_CapacityWindowMs = 10000;
 		/// The ticks a second a seat applied over the second of its reports before the last one this machine's display covers, and the
 		/// ticks a second this machine displayed over the same window; nothing while the reports span less than half a second.
@@ -2209,7 +2211,8 @@ namespace RTE {
 		uint64_t m_FirstMissingMs = 0;
 		std::optional<uint64_t> m_LastDeliveredFrame;
 		uint64_t m_ConsumerWaitStartMs = 0;
-		std::vector<uint8_t> m_ConsumerWaitMissing; //!< The seats whose input the current wait is for.
+		std::optional<uint64_t> m_ConsumerCostObservedAtMs;
+		std::vector<uint8_t> m_ConsumerCostPeers; //!< Missing human inputs during the last observed combat wait interval.
 		uint64_t m_LastTickMs = 0; //!< Our own last Tick; a gap in it is our park, not a peer's silence.
 		std::atomic<uint64_t> m_SimTickedMs{0}; //!< The simulation thread's last Tick; the plane stands in once it is a tick old.
 		bool m_PlaneTicking = false; //!< Inside PlaneTick: events that call out of the coordinator are deferred.
