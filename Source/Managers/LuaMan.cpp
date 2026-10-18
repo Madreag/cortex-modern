@@ -14074,6 +14074,7 @@ debug.setupvalue(next, 4, "150")
 	checkpointValues = PieMenu::RunCheckpointSelfTest() && checkpointValues;
 	checkpointValues = Actor::RunBorrowedReferenceSelfTest() && checkpointValues;
 	checkpointValues = Actor::RunGoneItemInReachSelfTest() && checkpointValues;
+	checkpointValues = Actor::RunConsumedPayloadSelfTest() && checkpointValues;
 	checkpointValues = ACraft::RunGoneIncomingObjectSelfTest() && checkpointValues;
 	checkpointValues = Entity::ClassInfo::RunPoolExhaustionSelfTest() && checkpointValues;
 	checkpointValues = GameActivity::RunDeliveryReferenceSelfTest() && checkpointValues;

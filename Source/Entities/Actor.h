@@ -678,6 +678,8 @@ namespace RTE {
 		/// An item in reach deleted before a capture's boundary is saved as gone and restores as a gone device.
 		static bool RunGoneItemInReachSelfTest();
 		static bool RunCheckpointPathRequestSelfTest();
+		/// A restored or discarded saved payload and an expired legacy menu baseline give their storage back.
+		static bool RunConsumedPayloadSelfTest();
 		std::vector<long> GetCheckpointBorrowedReferences() const override;
 		std::vector<bool> GetCheckpointPerPeerReferences() const override;
 		bool RebindCheckpointBorrowedReferences(const std::vector<long>& identities, bool validateOnly = false) override;
@@ -1139,6 +1141,8 @@ namespace RTE {
 		CheckpointString m_PersistedCompletePieMenu;
 		CheckpointString m_LegacyCompletePieMenu; //!< Exact reconstructed values until the first update of an older image.
 		bool m_NeedsLegacyPieMenuBaseline = false;
+		/// Drops the legacy menu baseline at the first update, with its storage.
+		void ExpireLegacyPieMenuBaseline();
 		CheckpointString m_PersistedPieMenuState; //!< Saved pie menu interaction state, applied on snapshot adopt.
 		Vector m_PersistedViewPoint; //!< Saved view point, applied on snapshot adopt (Create re-derives the live one).
 		bool m_HasPersistedViewPoint = false;
