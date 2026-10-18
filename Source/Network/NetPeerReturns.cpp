@@ -120,9 +120,18 @@ namespace RTE {
 			const uint32_t members = PeerFrameMembersAt(kept->first);
 			// The frame goes as soon as this donor displays it, with the witnesses it holds: the reader confirms the frame's group with
 			// the witnesses every member sends it too, so its trail is the transit alone.
-			const auto witnesses = m_PeerFrameWitnesses.find(kept->first);
 			const auto prefix = kept->first == m_Config.startFrame ? NetHash32{} : PeerFramePrefix(kept->first - 1);
 			const auto prepared = PeerFramePrefix(kept->first);
+			std::vector<const NetHostMigrationMessage*> witnesses;
+			if (const auto heard = m_PeerFrameWitnesses.find(kept->first); heard != m_PeerFrameWitnesses.end()) {
+				const auto digest = PeerAppliedFramePrefix(kept->first);
+				// A different continuation's witness cannot certify this record, even at the same frame number.
+				for (const auto& [sender, witness]: heard->second)
+					if (sender > 0 && sender <= m_Config.peerCount && (members & SeatBit(sender)) != 0 && witness.voterMask == members &&
+					    witness.frame == kept->first && witness.appliedFrame == kept->first && witness.senderPeerId == sender &&
+					    witness.bytes.size() == digest.size() + prepared.size() && std::equal(digest.begin(), digest.end(), witness.bytes.begin()) &&
+					    std::equal(prepared.begin(), prepared.end(), witness.bytes.begin() + digest.size())) witnesses.push_back(&witness);
+			}
 			std::vector<uint8_t> body(prefix.begin(), prefix.end()); body.insert(body.end(), prepared.begin(), prepared.end());
 			PutSize(body, static_cast<uint32_t>(kept->second.size()));
 			body.insert(body.end(), kept->second.begin(), kept->second.end());
@@ -144,10 +153,10 @@ namespace RTE {
 			if (certificates.size() > 32) { unavailable(kept->first); return; }
 			body.push_back(static_cast<uint8_t>(certificates.size()));
 			for (const auto& bytes: certificates) { PutSize(body, static_cast<uint32_t>(bytes.size())); body.insert(body.end(), bytes.begin(), bytes.end()); }
-			body.push_back(witnesses == m_PeerFrameWitnesses.end() ? 0 : static_cast<uint8_t>(witnesses->second.size()));
-			if (witnesses != m_PeerFrameWitnesses.end()) for (const auto& [sender, witness]: witnesses->second) {
+			body.push_back(static_cast<uint8_t>(witnesses.size()));
+			for (const auto* witness: witnesses) {
 				std::vector<uint8_t> bytes;
-				if (!NetHostMigrationCodec::Encode(witness, m_Config.migrationKey, bytes)) { unavailable(kept->first); return; }
+				if (!NetHostMigrationCodec::Encode(*witness, m_Config.migrationKey, bytes)) { unavailable(kept->first); return; }
 				PutSize(body, static_cast<uint32_t>(bytes.size())); body.insert(body.end(), bytes.begin(), bytes.end());
 			}
 			if (body.size() > NetHostMigrationCodec::c_MaxPeerTailBytes) { unavailable(kept->first); return; }

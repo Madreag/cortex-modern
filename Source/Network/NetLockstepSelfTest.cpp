@@ -2269,7 +2269,7 @@ namespace RTE {
 		}
 
 		static bool CertifiedTailKeepsItsWitnesses(std::string* error) {
-			for (unsigned role = 0; role < 6; ++role) {
+			for (unsigned role = 0; role < 9; ++role) {
 				const auto configure = [&](NetLockstepCoordinator& peer, Wire& wire, uint8_t local) {
 					Configure(peer, wire);
 					peer.m_Config.localPeerId = local; peer.m_Config.authorityPeerId = 1;
@@ -2319,11 +2319,23 @@ namespace RTE {
 				if (role == 5) tail.bytes.push_back(0);
 				tail.totalBytes = tail.bytes.size();
 				std::vector<uint8_t> encoded; NetHostMigrationMessage authenticated;
+				if (role >= 6) {
+					auto other = peer.PeerFrameMessage(NetHostMigrationMessageType::PeerReceipt);
+					other.senderPeerId = other.successorPeerId = 3; other.preparedFrame = UINT64_MAX;
+					other.frame = other.appliedFrame = 355; other.voterMask = role == 6 ? 6 : 7;
+					other.bytes.assign(digest.begin(), digest.end()); other.bytes.insert(other.bytes.end(), prepared.begin(), prepared.end());
+					if (role == 7) other.bytes[0] ^= 1;
+					if (role == 8) other.bytes[32] ^= 1;
+					if (!NetHostMigrationCodec::Encode(other, peer.m_Config.migrationKey, encoded) ||
+					    !NetHostMigrationCodec::Decode(encoded, peer.m_Config.migrationKey, authenticated) || !peer.HandlePeerFrameMessage(authenticated, 999)) {
+						*error = "the relay detector could not receive its authentic other-continuation witness"; return false;
+					}
+				}
 				if (!NetHostMigrationCodec::Encode(tail, peer.m_Config.migrationKey, encoded) ||
 				    !NetHostMigrationCodec::Decode(encoded, peer.m_Config.migrationKey, authenticated) || !peer.HandlePeerFrameMessage(authenticated, 1000)) {
 					*error = "the tail retention detector could not deliver its authenticated packet"; return false;
 				}
-				if (role != 0) {
+				if (role > 0 && role < 6) {
 					if (!peer.m_PeerFrameWitnesses.empty() || peer.m_PeerCommittedTail.contains(355)) {
 						*error = "an invalid tail retained partial witness evidence: role=" + std::to_string(role); return false;
 					}
@@ -2346,7 +2358,7 @@ namespace RTE {
 					}
 				}
 				if (!delivered || !reader.m_PeerCommittedTail.contains(355)) {
-					*error = "a held reader could not confirm the neutral member's relayed certified history"; return false;
+					*error = "a held reader could not confirm the neutral member's relayed certified history: role=" + std::to_string(role); return false;
 				}
 			}
 			return true;
