@@ -230,6 +230,35 @@ namespace RTE {
 			if (!deadline || std::abs(*deadline - 2050) > 1e-6 || parked.m_Stats.ownParksExcluded != 1) {
 				*error = "an actual own pause did not shift the displayed and pacing clocks together"; return false;
 			}
+			for (unsigned role = 0; role < 3; ++role) {
+				Wire neutralWire; NetLockstepCoordinator peer; Configure(peer, neutralWire);
+				peer.m_Config.peerFrameGroups = peer.m_Config.substituteSlowPeers = true;
+				peer.m_Config.slowPlayerBoundTicks = 3; peer.m_MigrationPhase = NetHostMigrationPhase::None;
+				peer.m_FrameGroupMembers = 7; peer.m_FrameGroupChanges = {{1, 7}};
+				peer.m_RemoteTransports = {{1, 42}, {3, 43}};
+				peer.m_Stats.nextFrame = 351; peer.m_LastCompletedSimulationTick = 350;
+				peer.m_MigrationHistory[350] = {1, 2, 3};
+				peer.m_PeerPaceStartFrame = 350; peer.m_PeerPaceStartMs = peer.m_PeerConsumerAtMs = 1000;
+				peer.m_FirstMissingFrame = peer.m_ConsumerWaitingFrame = 351;
+				peer.m_FirstMissingMs = 992; peer.m_ConsumerWaitStartMs = 1017;
+				peer.m_PeerSourceInputs[351][3] = {3, 351};
+				peer.m_PeerInputReceipts[3] = {{1, 352}, {2, 352}, {3, 352}};
+				if (role != 1) {
+					const uint64_t activation = role == 0 ? 340 : 370;
+					peer.m_PeerBridges[2] = {320, 320, true, activation, {}, 7};
+					peer.m_ReclaimTransactions[2] = {2, 1, 802, 2, activation, 7, 420};
+					peer.m_PeerFrameHolds[2] = {{320, true}, {activation, false}};
+					peer.m_FrameGroupChanges = {{1, 7}, {320, 5}, {activation, 7}};
+					if (role == 2) peer.m_FrameGroupMembers = 5;
+				}
+				peer.m_TimingNowMs = 1030;
+				if (peer.ProposePeerBridge(351, 1030)) { *error = "a neutral return held another peer before its displayed deadline"; return false; }
+				peer.m_TimingNowMs = 1041;
+				const bool held = peer.ProposePeerBridge(351, 1041);
+				if (held != (role == 0) || (held && (!peer.IsSeatUnderAI(1, 351) || peer.IsSeatUnderAI(3, 351)))) {
+					*error = "a participating neutral return needs no own human input to hold another missing sender, while a private reader does"; return false;
+				}
+			}
 			return true;
 		}
 

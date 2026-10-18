@@ -276,8 +276,14 @@ namespace RTE {
 				return false;
 			}
 		}
-		const auto sources = m_PeerSourceInputs.find(frame);
-		if (sources == m_PeerSourceInputs.end() || !sources->second.contains(m_Config.localPeerId)) return false;
+		const bool neutralParticipant = !IsLocalPrivateReaderAt(frame) && IsSeatReclaimGap(m_Config.localPeerId, frame);
+		auto sources = m_PeerSourceInputs.find(frame);
+		// Activation restores participation before the certified neutral input interval ends. That participant still holds a
+		// missing sender at its displayed bound; requiring its own human sample makes the correctly empty interval a deadlock.
+		if (sources == m_PeerSourceInputs.end()) {
+			if (!neutralParticipant) return false;
+			sources = m_PeerSourceInputs.try_emplace(frame).first;
+		} else if (!sources->second.contains(m_Config.localPeerId) && !neutralParticipant) return false;
 		auto proposal = PeerFrameMessage(NetHostMigrationMessageType::PeerBridge);
 		std::map<uint8_t, uint64_t> returnCatchUpTicks;
 		const auto returnLinkDelay = [&](uint8_t peer, uint64_t at) {
