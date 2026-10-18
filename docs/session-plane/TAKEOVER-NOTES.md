@@ -275,3 +275,42 @@ B1 transport hook/parser regression PASS uplink_stall_sends_only on2c224533, inc
 
 Copied only the seven named Mac evidence files, read-only, with per-file hashes in evidence/field-85f88885bf/match-evidence.json. Its shared-checksum report reaches77230 with76595 running ticks and first_difference=null; the report excludes controller_route. All eight returns precede their121-tick AI handoff runway, so this is stability evidence for short holds, not exercise of A's longer disabled-controller interval. The twelve-tick delay begins at61175/61246 after the Mac's61074 hold/61095 return, not at the first host slowdown36256 (which raises only to6). Five-second path snapshots miss the exact receipt sample that caused each proposal. The old own-hold probe has zero active frames and is not coverage; the duplicate check records the full own-held sentence simultaneously in LabelNetMatchStatus and LabelNetMatchToast0 at36310/40222. No native prediction counters/depth are present in these logs. A/B/C gates remain open; no final report.
 
+## Current Mac findings
+
+The current measured engine source is `3e35b69c437a6f34d7673c820c04db38f4ccc5c3`,
+executable `9cd877ab2482d62db341c646b45ded0e4a6b2d589b8ef5272426bc0bccda44a1`,
+with fixture `c05a4ea84` fully merged and the supplied v6 native archive verified.
+The complete Mac suite is 50/55 GREEN: the four network rows named in the
+[Mac gate index](evidence/mac-gate/README.md) and the known headed-Mac
+`module-version` timeout remain RED. Both default headless-policy rows pass.
+All 233 fixed cases, 108 saved schedules and 200 random seeds ran; fixed 86/233
+and random 48/200 are GREEN. Every RED retains its exact assertion and classification.
+
+The takeover fixed the stale polled arbitration request, the placement-stage
+direct stop, GNU header encoding, POSIX measurement inventory/PID handling and
+relative repository paths at the suite CLI boundary. The corrected native SP
+reference matches all 320 tick hashes, complete portable state and compared trace.
+The temporary pacing candidate regressed one GREEN return and was rejected; the
+original pacing is restored. The steady 51 ms bound failure and split/return
+engine rules remain open. Section 11 withdraws the old directory wait-floor
+objection; the separate indistinguishable direct-host fault remains unresolved.
+
+Fresh D1–D5 detecting rows and D6's combined thirteen Python tests pass. All twelve
+steady native observations pass delay, full preview and live overlay checks,
+peaking at 4/15 ticks for 30/200 ms. Live resize and cap-one reports pass their
+scoped checks while their waits and censored inputs remain RED. The own-host pause
+has 101 active sentence frames, 1200 equal hashes and byte-identical dumps at
+710–790; the survivor's longest wait is 44 ms.
+
+B3 remains RED after 24 SP controls and six network pairs: SP/30 ms/200 ms medians
+are 28.624/28.395/28.075 ms. Eight of twelve aggregates and 46/60 action comparisons
+fall outside the frozen actor-matched bands. Measured phase before the first
+draw and the permissive movement marker limit causal interpretation; neither is
+presented as a completed fix. The complete stage records and all actual launch
+receipts are retained. D7 has zero lane machine references, with 59 generic whole-
+tree candidates explicitly enumerated; literal zero matches is not claimed.
+
+The [current evidence index](EVIDENCE.md) supersedes the historical counts above.
+[NEEDS TESTING](NEEDS-TESTING.md) preserves the multi-machine relay commands and
+missing platform, TURN, physical-display and exact field-A evidence. No off-box
+engine, live service change, subagent, protected-branch push or force push was used.

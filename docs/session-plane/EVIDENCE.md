@@ -1,24 +1,47 @@
 # Session-plane evidence
 
-The [final native measurements](evidence/final-linux-20261017/native-input-delay.json)
-use engine source `99dd25fe7`, with `d1cbc8e09a` merged. Delay, full preview depth,
-retained native counters and live overlay checks pass; B3 remains RED on ten of
-twelve peer observations. The [own-hold run](evidence/final-linux-20261017/own-hold.json)
-keeps all 1,200 full hash rows and handoff object dumps equal. The [complete final
-suite](evidence/final-linux-20261017/suite.json) is **49/55**: the four network rows
-and two headless-policy probes remain RED under the mandatory headed policy. The
-[reviewer audit](evidence/final-linux-20261017/reviewer-shapes.json) covers all 121
-shapes: 64 GREEN / 57 RED. The [final evidence index](evidence/final-linux-20261017/README.md)
-names the remaining failures and the proven pending-directory limit.
+The current [Mac gate index](evidence/mac-gate/README.md) uses engine source
+`3e35b69c437a6f34d7673c820c04db38f4ccc5c3`, fixture `c05a4ea84` and executable
+`9cd877ab2482d62db341c646b45ded0e4a6b2d589b8ef5272426bc0bccda44a1`.
+The nine network suite rows are five GREEN / four RED. Every fixed and random
+case ran: [86/233 fixed](evidence/mac-gate/catalogue.json), all 108 saved schedules,
+and [48/200 random](evidence/mac-gate/random.json) GREEN. Every RED retains its
+exact assertion and classification; no property was loosened. The complete
+[55-row suite](evidence/mac-gate/suite.json) is **50/55 GREEN**: the four network
+rows and the known headed-Mac `module-version` timeout remain RED. The actual
+[launch modes](evidence/mac-gate/launches.json) are retained on that same executable.
+Both default headless-policy rows pass. The corrected single-player reference
+matches all 320 tick hashes, the complete portable state and the compared trace.
+
+The [matched native measurements](evidence/mac-gate/matched-result.json) include
+24 SP controls and six network pairs. All steady delay, full-depth preview, native
+counter, live overlay and duplicate checks pass, with peaks 4/15 ticks at 30/200 ms.
+B3 stays RED: SP/30 ms/200 ms medians are 28.624/28.395/28.075 ms; eight of twelve
+aggregates and 46/60 action comparisons fall outside the frozen matched SP bands.
+The [stage records](evidence/mac-gate/matched-stages.json) locate a measured timing
+contribution before the first draw; they do not establish a noise-only cause or a
+fix. The [own-hold control](evidence/mac-gate/own-hold.json) has 1200 equal full hash
+rows and [byte-identical complete handoff dumps](evidence/mac-gate/own-handoff.json).
+Abrupt link/hold controls still retain their waits, depth-zero rows and undrawn inputs.
+
+The current section 11 ruling withdraws the old pending-directory wait-floor
+objection: survivors install the bounded local hold and continue, with asynchronous
+split arbitration. Current failures are engine progress/history/return rules,
+named fixture disagreements and the separate direct-host liveness distinction.
+The two headless-policy rows now use their explicitly authorized default mode.
+[NEEDS TESTING](NEEDS-TESTING.md) lists actual multi-machine and field evidence gaps.
 
 The historical records below preserve individual failing and passing observations.
+Their source-specific formulas, platform counts and older contract objections
+describe those historical builds. Current design is in ROLLBACK section 3.1,
+SEAT-ROSTER section 11 and MENU-UX; the current Mac receipts above take precedence.
 A green coordinator detector does not make its complete match green. The earlier
 [completed validation](evidence/kept-b41-20261016/gate.json) of engine source `51b578e56`
 is RED: suite 48/54, 3218 failures in 5000 schedules, and 63 GREEN / 58 RED of
 121 listed shapes. Every schedule ran, seeds 1 through 5000, on the same frozen
 executable. The earlier complete gate under `evidence/20261016` used `ec5d90c835`.
-All engine observations in this lane are headed Linux runs through the official
-runners. No spread match has run in this lane.
+Those earlier engine observations were headed Linux runs through the official
+runners. The takeover uses the Mac. No spread match has run in this lane.
 
 ## Field A
 
@@ -49,7 +72,7 @@ preflight is [GREEN on the kept executable](evidence/C-final-preflight/A-authori
 The exact missing field data and the lead's runnable relay commands are in
 [NEEDS TESTING](NEEDS-TESTING.md).
 
-## Link delay and presentation
+## Historical link delay and presentation
 
 Commit `8238e31c7` corrects the sizing path through
 `NetLobbySession::SampleInputDelays`, `NetInputDelayEstimator::SenderRequiredFrames`,
@@ -65,7 +88,7 @@ already includes receipt-pump scheduling and jitter. A returning reader's privat
 trail belongs in its temporary signed neutral interval, not permanent delay.
 The owner-approved design embedded in the supplied rulebook states
 `delay = ceil(RTT / tick) + 1 + margin(p95 jitter over ~5 s)`.
-There is no separate `docs/ROLLBACK.md` in this tree. The original detecting row
+That historical snapshot had no separate `docs/ROLLBACK.md`. The original detecting row
 and its RED/GREEN records are included in [detectors.json](evidence/20261016/detectors.json).
 
 Commits `6fd44a821`, `a391ace03` and `51b578e56` keep the overlay, hold notification,

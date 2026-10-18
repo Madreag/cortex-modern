@@ -1,0 +1,74 @@
+{
+  "engine_source": "3e35b69c437a6f34d7673c820c04db38f4ccc5c3",
+  "source_tree": "5c454b09f651b33bba353ee2d335fd4de9f0196b",
+  "binary_sha256": "9cd877ab2482d62db341c646b45ded0e4a6b2d589b8ef5272426bc0bccda44a1",
+  "inherited_branch_tip": "99d81d3b51a982deb620e63f38e9e4e6bf47d0f2",
+  "cmdev": "d1cbc8e09a79e82212b29b37e072a2984c57816b",
+  "fixture": "c05a4ea84a2d11e6f11876ce472195ba5229cef3",
+  "native": {
+    "upstream": "2cb93a06350bb065db53abdb0d87cf297e0bfd34",
+    "patch_sha256": "453f18420ce6bed9d55beecd732a0615400b043fc9777e3c2f4ef7dc71ceafc9",
+    "transport_diagnostics_patch_sha256": "64e5fcd5c0f936a75c8b373052125a95e4259383f7b7ac98915930535ae53dfd",
+    "library": "<DEPENDENCIES>/gns-turnfix-v6/lib/libGameNetworkingSockets_s.a",
+    "library_sha256": "4f358a5d55bd28948b13a9e67f2ddb9f1d2494f53f26a3624f9ccb6716cbe4f3",
+    "lifetime_version": 5,
+    "transport_diagnostics_version": 1
+  },
+  "build_options": {
+    "buildtype": "release",
+    "b_lto": false,
+    "b_pch": true,
+    "with_gns": "enabled",
+    "gns_root": "<DEPENDENCIES>/gns-turnfix-v6",
+    "gns_dep_root": "<DEPENDENCIES>/protobuf"
+  },
+  "compilers": {
+    "c": {
+      "id": "gcc",
+      "version": "13.4.0",
+      "linker_id": "ld64"
+    },
+    "cpp": {
+      "id": "gcc",
+      "version": "13.4.0",
+      "linker_id": "ld64"
+    },
+    "objcpp": {
+      "id": "clang",
+      "version": "17.0.0",
+      "linker_id": "ld64"
+    }
+  },
+  "meson": "1.11.1",
+  "ninja": "1.13.2",
+  "single_player_presentation_sources_unchanged_since_takeover": {
+    "Source/Main.cpp": {
+      "initial_blob": "a16323c1ae6f639cf0bf68d974b9d02eec444e03",
+      "current_blob": "a16323c1ae6f639cf0bf68d974b9d02eec444e03",
+      "equal": true
+    },
+    "Source/Managers/LocalPrediction.cpp": {
+      "initial_blob": "6676c0c47ac41c9ba50f14453df507c756581eb9",
+      "current_blob": "6676c0c47ac41c9ba50f14453df507c756581eb9",
+      "equal": true
+    }
+  },
+  "build_logs": [
+    {
+      "path": "gnu-pch-compile.txt.gz",
+      "completed_steps": 312,
+      "original_sha256": "171129bfb8e97826799b806b0fdf619f1f729b2634f5265735ad6a58149a8c45",
+      "portable_sha256": "1826d926260736f88c6fd4d2876eb927003924fbc1ec628ae8b1e01734c4a4f3",
+      "compressed_sha256": "a048bd8f0289aca00d9ced43f11ef8e02da05b75e49a0a3247636d54798634fe"
+    },
+    {
+      "path": "restored-pacing-compile.txt.gz",
+      "completed_steps": 78,
+      "original_sha256": "867b265bc5147dec8179e81c937d813a1edc8fdca6f421127c9048eefa4064cf",
+      "portable_sha256": "0d9c386e25903e763019b66174aacbbf504d73d930c007e03dbae6c0eb4fbe1d",
+      "compressed_sha256": "738dc4ef8bcdef137175b2203f1eb6f18aa8f0db202162ee7d39c81e8cdb6571"
+    }
+  ],
+  "warnings": "GNU C++ ABI notes and duplicate standard-library/zlib linker warnings retained in the complete logs; builds exit successfully.",
+  "source_scope": "Only the engine Source tree is frozen at this commit; subsequent measurement tools and documentation are recorded in branch history."
+}

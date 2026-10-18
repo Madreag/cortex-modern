@@ -1,9 +1,12 @@
 # NEEDS TESTING
 
-These runs belong to the lead. This lane has used only the assigned Linux box.
-The engine source under test is `99dd25fe7`, including `origin/cm-dev`
-`d1cbc8e09a` through merge `667b621c0`; the Linux executable SHA-256 is
-`6cfe0e58f73e0c03ea5ca7bcabd717eeb9ccaac513449452427e4070e990f5fa`.
+These multi-machine runs belong to the lead. The current lane measurements use
+the assigned Mac only, engine source `3e35b69c437a6f34d7673c820c04db38f4ccc5c3`,
+including `origin/cm-dev` `d1cbc8e09a` and fixture `c05a4ea84`. The executable
+SHA-256 is `9cd877ab2482d62db341c646b45ded0e4a6b2d589b8ef5272426bc0bccda44a1`.
+The [Mac gate index](evidence/mac-gate/README.md) records the complete local
+detectors and their failures. A local native pair has topology single-box and
+proof=false for a real relay game. Earlier Linux receipts remain historical.
 Each peer must build the same source and the private patched native dependency.
 The lead supplies the box facts, assigns free boxes and records their build receipts.
 Every run below needs a quiet interval without another engine or build on its peers.
@@ -58,50 +61,62 @@ timestamps, route, native refresh result and close reason. The local native test
 uses DIRECT and cannot prove TURN behavior. Build the pinned native dependency in
 a fresh private checkout with `external/patches/build_gns_turn.py`; its build record
 must contain `transport_diagnostics_version=1`. The patches are not idempotent.
-Windows/MSVC and Mac/GCC builds of that dependency remain unmeasured in this lane.
+The complete Mac/GCC engine build against the supplied v6 prefix is now measured.
+Its native archive and supplied build record were verified; archive SHA-256 is
+`4f358a5d55bd28948b13a9e67f2ddb9f1d2494f53f26a3624f9ccb6716cbe4f3`,
+with lifetime version 5 and transport diagnostics version 1. Windows/MSVC remains
+NEEDS TESTING; a successful Mac build does not prove that platform or real TURN.
 
 The signed directory capacity row is now GREEN locally in `ea64acb81`, retaining
 all decisions and the original 2 MiB record/entry bound. The new authenticated
 history storage is not deployed; rollout and rollback need matching directory
-code and state. See [the storage proof](evidence/directory-history/README.md).
+code and state. The current Mac suite's isolated service checks pass 144/144, and
+the unchanged separate signed-capacity fixture passes freshly too;
+the live public service was not touched. See
+[the storage proof](evidence/directory-history/README.md).
 
-The unchanged pending-directory survivor bound is still RED. A healthy seat waits
-101 ms with a 100 ms directory exchange and 632 ms with a 300 ms exchange. Even
-an immediate request cannot fit the latter inside the brief's maximum six-tick
-30 ms-link reserve plus the 50 ms survivor bound. The lead needs to resolve this
-authority/availability conflict; no property has been waived. See
-[the authority proof](evidence/authority-wait-floor/README.md) and
-[the final-binary repeats](evidence/final-linux-20261017/authority-floor.json).
+The old pending-directory wait-floor objection is withdrawn by the current
+section 11 ruling. Survivors must install their local hold within 50 ms and continue;
+the directory arbitrates a split asynchronously. Historical wait-floor receipts
+are not a current contract blocker. Current bound, history and automatic-return
+failures are individually retained in the [complete Mac catalogue](evidence/mac-gate/catalogue.json)
+and [all 200 random schedules](evidence/mac-gate/random.json).
 
-The final local B3 measurement remains RED against its unchanged repeat-noise
-oracle. SP/30 ms/200 ms aggregate medians are 31.263/30.811/30.802 ms, but ten of
-twelve network peer observations lie outside the SP range 30.459–31.602 ms.
-The [final quiet matrix](evidence/final-linux-20261017/native-input-delay.json)
-contains every peer and repeat; all 32 responses per peer are measured. No loaded
-arm was substituted in this final matrix. The earlier measurements remain retained.
+One direct-play contract issue remains: a client observes the same transport
+history through its bound when the host loop is fully hung and when the live host
+is cut off. The former must hold/migrate; the latter must stop and image-return to
+the host side. The [939 equal wire observations](evidence/authority-local-20261017/direct-fault-observations.json)
+identify the missing independent liveness distinction. No timeout or property is
+waived, and this does not excuse the other engine failures.
 
-The final steady-link observations pass the delay caps (maximum 5/16 ticks at
-30/200 ms), complete preview depth, native report counters and visible delay line.
-The [live resize](evidence/final-linux-20261017/live-resize.json) applies the same
-changes on both peers at frames 675/722/870 and covers the full 14/15-tick delay
-with configured cap 1. Its stalls and two undrawn client responses remain RED.
-The [own-hold control](evidence/final-linux-20261017/own-hold.json) has 1,200 equal
-full hash rows, identical handoff object dumps and 54 actively checked held frames
-with no sentence or duplicate-line violations. It also records a 42 ms survivor
-wait at frame 606, intentional missing host inputs, and 33 RED generic preview
-obligations on AI-held frames 730–817. That generic check incorrectly requires a
-human preview while the AI owns the seat; the property was not relaxed.
+The current [matched B3 measurements](evidence/mac-gate/matched-result.json) use
+24 single-player controls, 12 per actor team, frozen before six network pairs.
+SP/30 ms/200 ms medians are 28.624/28.395/28.075 ms. The measured SP bands are
+28.479–30.573 ms for team 0 and 26.168–28.812 ms for team 1. Eight of twelve network
+aggregates and 46/60 action comparisons remain outside; all twelve strict B3 rows
+are RED. All 32 response edges per steady observation are retained. The
+[stage decomposition](evidence/mac-gate/matched-stages.json) localizes a contribution
+before the first draw: median press-to-first-draw is 8.53/8.67 ms in SP, 9.92/12.85 ms
+at 30 ms and 9.73/8.85 ms at 200 ms (host/client). Draw work adds about 0.35 ms; the
+first-to-response draw interval remains about 16.67 ms. The sample phase and movement
+response differences still need a causal resolution; larger SP sampling alone
+has not made B3 GREEN. Measurement ends at completed UploadFrame, not scanout.
 
-Five of the six original slow-host schedules pass. Four seats at 200 ms still
-hold the healthy host at 1,016 ms, before the fault at 6,000 ms. That startup and
-return failure is separate from the proven pending-directory floor.
+All twelve steady native observations pass B1 delay caps (peaks 4/15 ticks), B2 full
+preview depth and B4 live text, with equal 1200-tick paired histories. The
+[cap-one live resize](evidence/mac-gate/live-resize.json) applies the same four
+owner/frame/delay changes on both peers and finishes with depth 15/effective cap 15.
+Its 1400/372 ms maximum waits and six/three missing responses remain RED. The
+[own-hang control](evidence/mac-gate/own-hold.json) has 101 active sentence frames,
+zero sentence violations, 1200 equal hashes and 44 ms maximum survivor wait. Its
+[complete object dumps](evidence/mac-gate/own-handoff.json) agree byte for byte at
+710–790. Its held host has 63 generic depth-zero frames and six missing responses;
+no whole-control or B3 success is claimed. Independent non-substitute cap 1/cap 20
+preview controls each pass 8/8, including successful-depth retention without an actor.
 
-The direct-host partition rows `two_direct_host_3s` and
-`two_host_3s_no_directory_configured` remain RED (2,972 ms survivor waits): their symmetric partition
-holds the joiner while the documented no-referee host half continues. The lead must
-resolve that row's expected survivor against the existing host-half rule; this lane
-does not waive either check. The complete final suite is 49/55, with the four network rows and
-`headless-assert-continues` / `headless-render-cap` RED. Rulebook A25 requires every
-Linux engine to be visible, so this lane did not use `--headless-policy-rows`.
-The lead must route those policy probes to an authorized mode or box; neither
-headed refusal was counted as a pass. The other 53 rows were run, with 49 passing.
+The two headless-policy rows now use CCCP_HEADLESS=1 by default under the explicit
+brief authorization. The remaining suite runs visibly through the official runner.
+Current counts, exact failures and actual launch modes are in the
+[suite receipt](evidence/mac-gate/suite.json) and [launch receipts](evidence/mac-gate/launches.json).
+Multi-machine relay play, physical display response, the exact field-A object and
+real TURN behavior remain NEEDS TESTING; no off-box run or service rollout is claimed.
