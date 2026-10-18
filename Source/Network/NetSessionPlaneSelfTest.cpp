@@ -687,6 +687,35 @@ namespace RTE {
 				return 300;
 			}
 		};
+		bool InputWindowContains(const NetHostMigrationMessage& packet, uint8_t owner, uint64_t frame) {
+			if ((packet.type != NetHostMigrationMessageType::PeerInput && packet.type != NetHostMigrationMessageType::PeerForwardInput) ||
+			    owner != (packet.type == NetHostMigrationMessageType::PeerInput ? packet.senderPeerId : packet.successorPeerId) ||
+			    packet.offset != 0 || packet.totalBytes != packet.bytes.size() || packet.bytes.empty() || frame > packet.frame ||
+			    packet.frame - frame >= NetLockstepCodec::c_PeerInputWindowTicks) return false;
+			const auto take = [](const std::vector<uint8_t>& data, size_t& at, uint32_t& value) {
+				if (at + 4 > data.size()) return false;
+				value = 0; for (unsigned i = 0; i < 4; ++i) value |= uint32_t(data[at++]) << (8 * i); return true;
+			};
+			std::vector<uint8_t> body = packet.bytes;
+			if (body[0] == 0) {
+				size_t at = 1; uint32_t size = 0;
+				if (!take(body, at, size) || size == 0 || size > NetLockstepCodec::c_InputWindowByteCap) return false;
+				std::vector<uint8_t> expanded(size);
+				if (LZ4_decompress_safe(reinterpret_cast<const char*>(body.data() + at), reinterpret_cast<char*>(expanded.data()), static_cast<int>(body.size() - at), static_cast<int>(size)) != static_cast<int>(size)) return false;
+				body = std::move(expanded);
+			}
+			if (body[0] == 0 || body[0] > NetLockstepCodec::c_PeerInputWindowTicks) return false;
+			size_t at = 1; uint64_t previous = 0; bool found = false;
+			for (unsigned i = 0; i < body[0]; ++i) {
+				uint32_t size = 0;
+				if (!take(body, at, size) || size > body.size() - at) return false;
+				NetLockstepFrame input;
+				if (!NetLockstepCodec::DecodeRecoveryInput({body.begin() + at, body.begin() + at + size}, input) ||
+				    input.senderPeerId != owner || input.roundId != packet.roundId || input.targetFrame > packet.frame || (i && input.targetFrame <= previous)) return false;
+				at += size; previous = input.targetFrame; found |= input.targetFrame == frame;
+			}
+			return found && at == body.size() && previous == packet.frame;
+		}
 		struct Wire;
 		struct Hub {
 			std::recursive_mutex mutex;
@@ -704,6 +733,29 @@ namespace RTE {
 			std::set<std::pair<uint8_t, uint64_t>> returnsProposed;
 			std::map<uint8_t, uint64_t> tailsSentBy;
 			std::map<std::pair<uint8_t, uint8_t>, uint64_t> inputSends;
+			struct InputWireObservation { uint64_t at; uint8_t receiver; bool impaired; NetHostMigrationMessage packet; };
+			std::multimap<uint64_t, InputWireObservation> inputEvidence;
+			void ObserveInput(const NetHostMigrationMessage& packet, uint8_t receiver, bool impaired) {
+				if ((packet.type == NetHostMigrationMessageType::PeerInput || packet.type == NetHostMigrationMessageType::PeerForwardInput) &&
+				    packet.offset == 0 && packet.totalBytes == packet.bytes.size()) inputEvidence.emplace(packet.frame, InputWireObservation{now, receiver, impaired, packet});
+			}
+			bool InputPartition(uint8_t owner, uint8_t human, uint8_t held, uint64_t frame, uint64_t humanAt, uint64_t heldAt) const {
+				if (owner == held) return false;
+				bool impaired = false, humanHas = false, heldHas = false;
+				for (auto it = inputEvidence.lower_bound(frame); it != inputEvidence.end() && it->first - frame < NetLockstepCodec::c_PeerInputWindowTicks; ++it) {
+					const auto& observation = it->second;
+					if ((observation.receiver != human && observation.receiver != held) || !InputWindowContains(observation.packet, owner, frame)) continue;
+					if (observation.impaired && observation.receiver == held && observation.at <= heldAt) {
+						impaired = true;
+						if (human == owner && observation.at <= humanAt) humanHas = true;
+					}
+					if (!observation.impaired) {
+						humanHas |= observation.receiver == human && observation.at <= humanAt;
+						heldHas |= observation.receiver == held && observation.at <= heldAt;
+					}
+				}
+				return impaired && humanHas && !heldHas;
+			}
 			std::string returnInsideInputs;
 			// The random driver's round: its schedule decides every link, rate and reachability below.
 			const Schedule* schedule = nullptr;
@@ -923,6 +975,22 @@ namespace RTE {
 				return false;
 #endif
 			}
+			void TraceInputWindow(const std::vector<uint8_t>& bytes, const char* stage, uint8_t receiver) const {
+				const char* watched = std::getenv("CC_TEST_LOCKSTEP_OBSERVE_TARGET");
+				if (!watched || !std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) return;
+				const uint64_t target = std::strtoull(watched, nullptr, 10);
+				NetHostMigrationMessage packet; NetHash32 key; key.fill(0x39);
+				if (!NetHostMigrationCodec::Decode(bytes, key, packet)) return;
+				const uint8_t source = packet.type == NetHostMigrationMessageType::PeerForwardInput ? packet.successorPeerId : packet.senderPeerId;
+				if (InputWindowContains(packet, source, target)) DiagnosticLine() << "[session-plane-input-wire] stage=" << stage
+				    << " sender=" << unsigned(packet.senderPeerId) << " owner=" << unsigned(source) << " receiver=" << unsigned(receiver)
+				    << " frame=" << target << " through=" << packet.frame << " now_ms=" << hub.now << std::endl;
+			}
+			void ObserveInputWire(const std::vector<uint8_t>& bytes, uint8_t receiver, bool impaired) {
+				if (!NetHostMigrationCodec::LooksLikePacket(bytes)) return;
+				NetHostMigrationMessage packet; NetHash32 key; key.fill(0x39);
+				if (NetHostMigrationCodec::Decode(bytes, key, packet)) hub.ObserveInput(packet, receiver, impaired);
+			}
 			void CountInputTicks(const std::vector<uint8_t>& bytes, NetTransportLane lane) {
 				NetHostMigrationMessage packet; NetHash32 key; key.fill(0x39);
 				if (!NetHostMigrationCodec::Decode(bytes, key, packet) || packet.type != NetHostMigrationMessageType::PeerInput || packet.senderPeerId != 1) return;
@@ -1050,22 +1118,25 @@ namespace RTE {
 					NetHostMigrationMessage packet; NetHash32 key; key.fill(0x39);
 					if (NetHostMigrationCodec::Decode(bytes, key, packet)) asymmetric = DelayAsymmetricInput(packet, *other, remote, lane, bytes);
 				}
-				if (asymmetric == 1 || (asymmetric != 2 && hub.Split(owner, other->owner))) return true;
+				TraceInputWindow(delivered, "send", other->owner);
+				if (asymmetric == 1 || (asymmetric != 2 && hub.Split(owner, other->owner))) { ObserveInputWire(delivered, other->owner, true); return true; }
 				const uint32_t ordinal = ++sends;
 				if (lane == NetTransportLane::InputUnreliable && hub.DuringFault() && hub.row.lossPercent &&
-				    (owner == hub.row.subject || other->owner == hub.row.subject) && ordinal % 100 < hub.row.lossPercent) return true;
+				    (owner == hub.row.subject || other->owner == hub.row.subject) && ordinal % 100 < hub.row.lossPercent) { ObserveInputWire(delivered, other->owner, true); return true; }
 				if (hub.schedule) {
 					// Jitter delays each packet on its own; a lossy link drops an unreliable packet and resends a reliable one a round trip late.
 					const uint32_t rtt = hub.schedule->Rtt(owner, other->owner), jitter = hub.schedule->jitterMs[owner][other->owner], loss = hub.schedule->LossPercent(owner, other->owner, hub.now);
 					const bool reliable = lane == NetTransportLane::ControlReliable || lane == NetTransportLane::DiagnosticsReliable;
 					const uint32_t outboundJitter = jitter ? hub.Next() % (jitter + 1) : 0;
-					uint64_t at = hub.now + hub.Delay(owner, other->owner) + hub.schedule->LateMs(owner, other->owner, hub.now, reliable) + sessionDelay + outboundJitter;
+					const uint32_t lateMs = hub.schedule->LateMs(owner, other->owner, hub.now, reliable);
+					uint64_t at = hub.now + hub.Delay(owner, other->owner) + lateMs + sessionDelay + outboundJitter;
 					bool retransmitted = false;
 					for (unsigned resend = 0; loss && resend < 4 && hub.Next() % 100 < loss; ++resend) {
-						if (!reliable) return true;
+						if (!reliable) { ObserveInputWire(delivered, other->owner, true); return true; }
 						retransmitted = true;
 						at += std::max<uint32_t>(200, rtt + rtt / 2);
 					}
+					if (retransmitted || lateMs) ObserveInputWire(delivered, other->owner, true);
 					if (jitter && !retransmitted) {
 						auto& ping = linkPings[id];
 						(void)ping.Read(hub.now, static_cast<uint32_t>(2 * hub.Delay(owner, other->owner)));
@@ -1113,6 +1184,8 @@ namespace RTE {
 						++pending; continue;
 					}
 					if (event.crossesFault || !hub.Split(connections.contains(event.value.peerId) ? connections.at(event.value.peerId).first->owner : owner, owner)) {
+						if (event.value.type == NetTransportEventType::PacketReceived) TraceInputWindow(event.value.bytes, "deliver", owner);
+						if (event.value.type == NetTransportEventType::PacketReceived) ObserveInputWire(event.value.bytes, owner, false);
 						// FLAGGED fixture departure: the private image service consumes its transported world-tail chunks before
 						// the live coordinator polls this link. A donor's in-memory record is never a received replay frame.
 						if (keepImageTail && event.value.type == NetTransportEventType::PacketReceived) {
@@ -1213,12 +1286,14 @@ namespace RTE {
 			std::set<uint8_t> aiSeats;
 			std::map<uint64_t, std::string> aiAt; //!< The AI-held seats at each displayed frame, named when two worlds differ.
 			std::map<uint64_t, NetHash32> hashes;
-			bool Apply(const NetLockstepReadyFrame& ready, std::string& error) {
+			std::map<uint64_t, uint64_t> shownAt;
+			bool Apply(const NetLockstepReadyFrame& ready, std::string& error, uint64_t nowMs = 0) {
 				if (ready.frame != applied + 1) { error = "a displayed frame was skipped or undone: expected=" + std::to_string(applied + 1) + " actual=" + std::to_string(ready.frame); return false; }
 				for (const auto* inputs: {&ready.localFrames, &ready.remoteFrames}) for (const auto& input: *inputs) positions[input.actorUniqueID] += input.analogMoveX;
 				for (uint8_t peer: ready.reclaimedPeerIds) aiSeats.erase(peer);
 				for (uint8_t peer: ready.aiHeldPeerIds) aiSeats.insert(peer);
 				applied = ready.frame;
+				shownAt[applied] = nowMs;
 				std::string state = std::to_string(applied);
 				for (const auto& [actor, position]: positions) state += ":" + std::to_string(actor) + ":" + std::to_string(position);
 				std::string ai;
@@ -1370,6 +1445,7 @@ namespace RTE {
 			std::vector<HoldBoundaries> installedBoundaries;
 			std::vector<std::vector<std::map<uint64_t, NetHash32>>> discardedHistories;
 			std::array<std::array<uint64_t, 5>, 5> compared{}, splitFrom{};
+			std::array<std::array<std::map<uint64_t, uint64_t>, 5>, 5> inputSplits;
 			std::vector<bool> waitPlaying, imageReading, imageNeeded, imageWithoutHeadroom;
 			std::vector<bool> splitParticipant;
 			std::vector<uint32_t> observedSplit;
@@ -1548,17 +1624,42 @@ namespace RTE {
 					const auto& left = worlds[a - 1]; const auto& right = worlds[b - 1];
 					const uint64_t common = std::min(left.applied, right.applied);
 					for (uint64_t frame = compared[a][b] + 1; frame <= common; ++frame) {
-						if (left.hashes.at(frame) == right.hashes.at(frame)) continue;
 						const uint32_t l = frameMembers[a - 1].at(frame), r = frameMembers[b - 1].at(frame);
 						const uint8_t authorA = frameAuthors[a - 1].at(frame), authorB = frameAuthors[b - 1].at(frame);
+						if (left.hashes.at(frame) == right.hashes.at(frame)) {
+							if (l == r && (l & (1U << (a - 1))) && (l & (1U << (b - 1))))
+								for (auto& [from, through]: inputSplits[a][b]) if (!through && frame >= from) through = frame - 1;
+							continue;
+						}
 						const bool authors = authorA && authorA <= hub.row.seats && authorB && authorB <= hub.row.seats && authorA != authorB;
-						const uint64_t separated = authors ? splitFrom[std::min(authorA, authorB)][std::max(authorA, authorB)] : 0;
+						uint64_t separated = authors ? splitFrom[std::min(authorA, authorB)][std::max(authorA, authorB)] : 0;
+						if (authors && !separated) {
+							const auto& intervals = inputSplits[std::min(authorA, authorB)][std::max(authorA, authorB)];
+							const auto after = intervals.upper_bound(frame);
+							if (after != intervals.begin()) {
+								const auto& [from, through] = *std::prev(after);
+								if (!through || frame <= through) separated = from;
+							}
+						}
 						const uint32_t first = authors ? 1U << (authorA - 1) : 0, second = authors ? 1U << (authorB - 1) : 0;
-						// FLAGGED fixture departure: bounded local holds are asynchronous. A cut peer can still consume human inputs
-						// sent before the other side's hold, so its installed sender mask can temporarily overlap that continuation.
-						// A third sender's hold can differ while the two authors still include each other. Require physical separation
-						// and distinct installed groups. Connected authors, the shared
-						// pre-cut prefix and an adopted image's same-author history never get this exception; no fixture supplies a group.
+						// FLAGGED fixture departure: exact wire loss can separate inputs at the local bound without a total transport cut.
+						if (!separated && authorA == a && authorB == b && authors && l != r && (l & first) && (r & second) &&
+						    left.shownAt.contains(frame) && right.shownAt.contains(frame)) {
+							for (uint8_t owner = 1; owner <= hub.row.seats; ++owner) {
+								const uint32_t bit = 1U << (owner - 1);
+								if (((l ^ r) & bit) == 0) continue;
+								const bool humanLeft = (l & bit) != 0;
+								const auto& human = humanLeft ? left : right; const auto& held = humanLeft ? right : left;
+								const auto ai = held.aiAt.find(frame);
+								if (ai == held.aiAt.end() || ("," + ai->second + ",").find("," + std::to_string(owner) + ",") == std::string::npos ||
+								    !hub.InputPartition(owner, humanLeft ? a : b, humanLeft ? b : a, frame, human.shownAt.at(frame), held.shownAt.at(frame))) continue;
+								inputSplits[a][b][frame] = 0; separated = frame; sawSplit = true;
+								DiagnosticLine() << "[session-plane-input-partition] frame=" << frame << " owner=" << unsigned(owner)
+								    << " human_author=" << unsigned(humanLeft ? a : b) << " held_author=" << unsigned(humanLeft ? b : a)
+								    << " exact_impaired_input=1 delivered_before_hold=0" << std::endl;
+								break;
+							}
+						}
 						if (separated && frame >= separated && (l & first) && (r & second) && l != r) {
 							splitHistories = true; continue;
 						}
@@ -1570,6 +1671,9 @@ namespace RTE {
 					}
 					compared[a][b] = common;
 				}
+				uint64_t floor = UINT64_MAX;
+				for (uint8_t a = 1; a <= hub.row.seats; ++a) for (uint8_t b = a + 1; b <= hub.row.seats; ++b) floor = std::min(floor, compared[a][b]);
+				if (floor != UINT64_MAX) hub.inputEvidence.erase(hub.inputEvidence.begin(), hub.inputEvidence.upper_bound(floor));
 				return true;
 			}
 			bool keepFrames = false; //!< A scheduled round alone keeps every committed frame, to name the inputs where histories part.
@@ -1742,7 +1846,7 @@ namespace RTE {
 						if (heldSince[id] != UINT64_MAX) { heldSpans[id].push_back({heldSince[id], hub.now}); heldSince[id] = UINT64_MAX; }
 					}
 					hashedThrough = 0; sharedDigests.clear(); roundStartMs = hub.now;
-					compared = {}; splitFrom = {}; sawSplit = splitHistories = false;
+					compared = {}; splitFrom = {}; inputSplits = {}; sawSplit = splitHistories = false;
 					directRuling = 0;
 					std::fill(lostAt.begin(), lostAt.end(), 0); std::fill(lostFrame.begin(), lostFrame.end(), 0);
 					std::fill(imageAt.begin(), imageAt.end(), 0); std::fill(imageReturns.begin(), imageReturns.end(), 0);
@@ -1750,7 +1854,7 @@ namespace RTE {
 					std::fill(imageReading.begin(), imageReading.end(), false); std::fill(imageWithoutHeadroom.begin(), imageWithoutHeadroom.end(), false);
 					frameMembers.assign(hub.row.seats, {0}); frameAuthors.assign(hub.row.seats, {0}); installedBoundaries.assign(hub.row.seats, {});
 					// The wire's records count frames, which start again: the round that ended is judged on them first.
-					hub.bridgeBoundaries.clear(); hub.inputSentThrough.clear(); hub.returnsProposed.clear();
+					hub.bridgeBoundaries.clear(); hub.inputSentThrough.clear(); hub.returnsProposed.clear(); hub.inputEvidence.clear();
 					if (!StartPeers(78, error)) return false;
 				}
 				const auto gone = [&](uint8_t id) { return scheduled && scheduled->Left(id, hub.now); };
@@ -1894,7 +1998,7 @@ namespace RTE {
 						}
 						FinishWait(id, next);
 						peer.FinishFrameWait(hub.now);
-						if (!CheckCommittedInputs(ready, id, error) || !world.Apply(ready, error)) return false;
+						if (!CheckCommittedInputs(ready, id, error) || !world.Apply(ready, error, hub.now)) return false;
 						frameMembers[id - 1].push_back(s_FrameMembers(peer, ready.frame));
 						frameAuthors[id - 1].push_back(id);
 						if (hub.row.captureFrames) committed[id - 1][ready.frame] = ready;
@@ -2565,6 +2669,59 @@ namespace RTE {
 			DiagnosticLine() << "[session-plane-transport-rtt] low_ms=" << low << " high_ms=" << high
 			    << " delivery_events=" << receiver.events.size() << " delivery_digest=" << digest << " application_polls=0";
 			if (high <= 100 || high == low) { error = "injected physical jitter was hidden behind a constant measured RTT"; return false; }
+			return true;
+		}
+		bool CheckInputHistoryOracle(std::string& error) {
+			for (unsigned variant = 0; variant < 11; ++variant) {
+				const bool thirdSource = variant == 8 || variant == 9;
+				const uint8_t owner = thirdSource ? 3 : 1;
+				Fixture fixture; fixture.hub.row.seats = thirdSource ? 3 : 2;
+				fixture.worlds.resize(fixture.hub.row.seats);
+				fixture.frameMembers = thirdSource ? std::vector<std::vector<uint32_t>>{{0, 7}, {0, 2}, {0, 7}} : std::vector<std::vector<uint32_t>>{{0, 3}, {0, 2}};
+				fixture.frameAuthors = thirdSource ? std::vector<std::vector<uint8_t>>{{0, 1}, {0, 2}, {0, 3}} : std::vector<std::vector<uint8_t>>{{0, 1}, {0, 2}};
+				for (uint8_t peer = 1; peer <= fixture.hub.row.seats; ++peer) {
+					auto& world = fixture.worlds[peer - 1]; world.applied = 1; world.hashes[1] = {}; world.shownAt[1] = peer == 2 ? 150 : 100;
+					if (peer == 2) world.hashes[1][0] = 1;
+				}
+				if (variant != 10) fixture.worlds[1].aiAt[1] = std::to_string(owner);
+				if (variant == 5) fixture.frameAuthors[1][1] = 1;
+				if (variant == 6) fixture.frameMembers[1][1] = 3;
+				NetLockstepFrame input; input.senderPeerId = owner; input.roundId = 77; input.targetFrame = variant == 7 ? 2 : 1;
+				ControllerFrame controls; controls.actorUniqueID = 1000 + owner; input.frames = {controls};
+				std::vector<uint8_t> encoded;
+				if (!NetLockstepCodec::EncodeRecoveryInput(input, encoded)) { error = "input-history oracle could not encode its exact source"; return false; }
+				NetHostMigrationMessage packet; packet.type = NetHostMigrationMessageType::PeerInput;
+				packet.senderPeerId = packet.successorPeerId = owner; packet.roundId = 77; packet.frame = input.targetFrame; packet.bytes = {1};
+				for (unsigned shift = 0; shift < 32; shift += 8) packet.bytes.push_back(static_cast<uint8_t>(encoded.size() >> shift));
+				packet.bytes.insert(packet.bytes.end(), encoded.begin(), encoded.end()); packet.totalBytes = packet.bytes.size();
+				if (variant == 4) packet.bytes.pop_back();
+				fixture.hub.now = variant == 3 ? 151 : 50;
+				if (variant != 1) fixture.hub.ObserveInput(packet, 2, true);
+				if (variant == 2) { fixture.hub.now = 100; fixture.hub.ObserveInput(packet, 2, false); }
+				if (variant == 8) { fixture.hub.now = 75; fixture.hub.ObserveInput(packet, 1, false); }
+				fixture.hub.now = 200;
+				std::string why;
+				const bool accepted = fixture.CompareHistories(why), expected = variant == 0 || variant == 8;
+				if (accepted != expected) {
+					error = "causal wire-history oracle variant=" + std::to_string(variant) + " expected_split=" + std::to_string(expected) + ": " + why; return false;
+				}
+				if (variant == 0) {
+					for (size_t peer = 0; peer < 2; ++peer) {
+						fixture.worlds[peer].applied = 2; fixture.worlds[peer].hashes[2] = {}; fixture.worlds[peer].shownAt[2] = 210;
+						fixture.frameMembers[peer].push_back(3); fixture.frameAuthors[peer].push_back(peer + 1);
+					}
+					fixture.hub.now = 210;
+					if (!fixture.CompareHistories(why)) { error = "a healed input partition rejected its common history"; return false; }
+					fixture.compared = {};
+					if (!fixture.CompareHistories(why)) { error = "a healed input partition lost its earlier causal history"; return false; }
+					for (size_t peer = 0; peer < 2; ++peer) {
+						fixture.worlds[peer].applied = 3; fixture.worlds[peer].hashes[3] = {}; fixture.worlds[peer].shownAt[3] = 220;
+						fixture.frameMembers[peer].push_back(peer == 0 ? 3 : 2); fixture.frameAuthors[peer].push_back(peer + 1);
+					}
+					fixture.worlds[1].hashes[3][0] = 1; fixture.worlds[1].aiAt[3] = "1"; fixture.hub.now = 220;
+					if (fixture.CompareHistories(why)) { error = "a healed input partition excused a later fork with no wire fault"; return false; }
+				}
+			}
 			return true;
 		}
 		bool CheckAuthorityOracle(std::string& error) {
@@ -5004,6 +5161,9 @@ namespace RTE {
 		std::vector<RowRun> named;
 		if (!selected || std::string_view(selected) == "authority_fixture_checks_each_half_and_never_waives_the_bound")
 			named.push_back({"authority_fixture_checks_each_half_and_never_waives_the_bound", CheckAuthorityOracle});
+		// FLAGGED fixture departure: an exact input lost on one wire can create two continuations without a total transport cut.
+		if (!selected || std::string_view(selected) == "history_fixture_requires_causal_input_wire_evidence")
+			named.push_back({"history_fixture_requires_causal_input_wire_evidence", CheckInputHistoryOracle});
 		if (!selected || std::string_view(selected) == "transport_rtt_observes_the_injected_physical_jitter")
 			named.push_back({"transport_rtt_observes_the_injected_physical_jitter", CheckTransportRttOracle});
 		if (!selected || std::string_view(selected) == "host_hold_ai_authority_is_the_certified_frames")
