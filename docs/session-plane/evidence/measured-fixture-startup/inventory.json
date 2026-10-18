@@ -1,0 +1,47 @@
+{
+  "exe_sha256": "cdf443f333b3db5bf7cfaa1231775c80f0a3f5a355372d9e05ad5f06b176a137",
+  "repo": "<REPO>",
+  "passed": 2,
+  "total": 2,
+  "quiet_rows": [],
+  "sanitizer": null,
+  "complete": true,
+  "running": null,
+  "results": {
+    "net-lockstep": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 3,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "cdf443f333b3db5bf7cfaa1231775c80f0a3f5a355372d9e05ad5f06b176a137",
+      "row_elapsed_s": 45.50450191600248,
+      "start_load": [
+        0.95751953125,
+        1.01904296875,
+        1.2705078125
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-world-join": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "cdf443f333b3db5bf7cfaa1231775c80f0a3f5a355372d9e05ad5f06b176a137",
+      "row_elapsed_s": 11.598047625004256,
+      "start_load": [
+        1.08349609375,
+        1.0322265625,
+        1.25927734375
+      ],
+      "topology": "single-box: not proof"
+    }
+  },
+  "topology": "single-box: not proof"
+}

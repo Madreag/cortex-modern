@@ -1181,7 +1181,7 @@ namespace RTE {
 			std::vector<uint64_t> queued, waitAt, maxWait, caughtAt;
 			std::vector<uint64_t> displayedAt, blackoutGap, returnedAt, postReturnWait, imageAt;
 			std::vector<uint64_t> firstDisplayedAt;
-			std::vector<uint64_t> startupResumeAt;
+			std::vector<uint64_t> startupFinishAt;
 			std::vector<int64_t> preFaultPaceLeadMs;
 			std::vector<bool> seenAI;
 			std::vector<uint16_t> settledDelay;
@@ -1390,7 +1390,7 @@ namespace RTE {
 				imageWithoutHeadroom.resize(row.seats); splitDecisions.resize(row.seats);
 				splitParticipant.resize(row.seats); observedSplit.resize(row.seats);
 				lostAt.resize(row.seats); lostFrame.resize(row.seats); imageReturns.resize(row.seats); decisionsRead.resize(row.seats);
-				firstDisplayedAt.resize(row.seats); startupResumeAt.resize(row.seats); preFaultPaceLeadMs.resize(row.seats);
+				firstDisplayedAt.resize(row.seats); startupFinishAt.resize(row.seats); preFaultPaceLeadMs.resize(row.seats);
 				settledHostWaits.resize(row.seats); paceBegin.resize(row.seats); paceEnd.resize(row.seats);
 				firstAdminChangeMs.assign(row.seats, UINT64_MAX);
 				heldSpans.assign(row.seats + 1, {}); heldSince.assign(row.seats + 1, UINT64_MAX);
@@ -1461,7 +1461,10 @@ namespace RTE {
 					if (row.rosterStage) peers[peer - 1]->SetRosterReader([this] { return &agreedRoster; });
 					if (!peers[peer - 1]->Start(*wires[peer - 1], config, &error)) return false;
 					peers[peer - 1]->DeferStopsToTickBoundary();
-					peers[peer - 1]->NoteLocalStartPark(0); // This simulated activity has no loading work to measure.
+					// FLAGGED fixture departure: measured loading finishes before its startup publication, as in Main.
+					const uint32_t loadingMs = row.delayStartup ? (peer - 1) * 70 : 0;
+					startupFinishAt[peer - 1] = loadingMs ? hub.now + loadingMs : 0;
+					if (!loadingMs) peers[peer - 1]->NoteLocalStartPark(0);
 				}
 				return true;
 			}
@@ -1560,6 +1563,10 @@ namespace RTE {
 				if (!hub.row.internet && !scheduled && sawSplit && !hub.DuringFault() && !directRuling) directRuling = RankDirectHistories();
 				for (uint8_t id = 1; id <= hub.row.seats; ++id) if (!hung(id) && !gone(id)) hub.PollDirectory(id);
 				for (uint8_t id = 1; id <= hub.row.seats; ++id) {
+					if (startupFinishAt[id - 1] && hub.now >= startupFinishAt[id - 1]) {
+						peers[id - 1]->NoteLocalStartPark((id - 1) * 70);
+						startupFinishAt[id - 1] = 0;
+					}
 					if ((hub.now + id * 3) % hub.row.planeIntervalMs != 0) continue;
 					if (hub.row.realFrozen && id == hub.row.subject && hub.DuringFault()) continue;
 					if (hung(id) || gone(id)) continue;
@@ -1639,13 +1646,6 @@ namespace RTE {
 					if (splitParticipant[id - 1] && observedSplit[id - 1] && !imageNeeded[id - 1] &&
 					    (!(s_FrameMembers(peer, world.applied + 1) & (1U << (id - 1))) || peer.IsLocalPrivateReaderAt(world.applied + 1))) {
 						error = "authority ruling: playing split peer " + std::to_string(id) + " became a private reader before a losing decision; a pending referee never suspends its half"; return false;
-					}
-					// A joiner reaches its first displayed tick later, then the
-					// normal 3x consumer catches it up to the host. This reproduces
-					// the stale first-tick anchor without forcing it ahead of play.
-					if (hub.row.delayStartup && id > 1 && !world.applied) {
-						if (!startupResumeAt[id - 1]) startupResumeAt[id - 1] = hub.now + (id - 1) * 70;
-						if (hub.now < startupResumeAt[id - 1]) continue;
 					}
 					if ((hub.row.frozen && id == hub.row.subject && hub.DuringFault()) || hung(id) || stopped(id)) { credits[id - 1].Reset(); continue; }
 					const Spell* const spell = scheduled ? scheduled->Active(id, hub.now) : nullptr;
@@ -2346,6 +2346,24 @@ namespace RTE {
 				error = "fixture discarded an incoming packet instead of leaving it in the hung process's socket"; return false;
 			}
 			Case donorRow{"oracle_donor_availability"}; donorRow.seats = 3; donorRow.subject = 1; donorRow.gapMs = 8000; donorRow.hung = true;
+			Case startupRow{"oracle_measured_startup"}; startupRow.seats = 3; startupRow.delayStartup = true;
+			Fixture loading;
+			if (!loading.Start(startupRow, error)) return false;
+			while (loading.hub.now < 140) {
+				if (!loading.Step(error)) return false;
+				for (const auto& peer: loading.peers) if (peer->GetAgreedStartRecord()) {
+					error = "fixture published a completed startup while its measured loading work was still pending"; return false;
+				}
+			}
+			while (loading.hub.now < 1000) if (!loading.Step(error)) return false;
+			for (uint8_t seat = 1; seat <= startupRow.seats; ++seat) {
+				const auto start = loading.peers[seat - 1]->GetAgreedStartRecord();
+				if (!start || start->peerStartupParks[1] != 70 || start->peerStartupParks[2] != 140 || start->heldPeerMask ||
+				    start->agreedFirstFrame < 1 + static_cast<uint64_t>(std::ceil(140 / c_TestTickMs)) ||
+				    !loading.firstDisplayedAt[seat - 1] || loading.firstDisplayedAt[seat - 1] < 140 || !Bridges(*loading.peers[seat - 1]).empty()) {
+					error = "fixture startup lost its actual loading durations, common boundary or human seats"; return false;
+				}
+			}
 			Fixture donors;
 			if (!donors.Start(donorRow, error)) return false;
 			while (donors.hub.now < 500) if (!donors.Step(error)) return false;
