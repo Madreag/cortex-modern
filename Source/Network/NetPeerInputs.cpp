@@ -168,7 +168,7 @@ namespace RTE {
 		    (!neutralParticipant && ((voting & local) == 0 || !sources->second.contains(m_Config.localPeerId)))) return members;
 		// A participating neutral returner owes no own sample, but still observes every supplied sender's acceptance.
 		// Its absent own receipt must neither remove the continuing owners nor skip their missing reciprocal receipts.
-		uint32_t group = neutralParticipant ? voting : voting & PeerInputVoters(frame, m_Config.localPeerId);
+		uint32_t group = neutralParticipant || PeerInputAccepted(frame, m_Config.localPeerId) ? voting : voting & PeerInputVoters(frame, m_Config.localPeerId);
 		// Keep the supplied sender whose acceptance blocks this frame, and the readers that accepted it. An observer outside
 		// that group cannot veto its local hold by acknowledging a different input. The stable seat order resolves overlapping
 		// receipt sets locally; it selects no winning history. The heal or directory still arbitrates any continuations.

@@ -189,6 +189,71 @@ namespace RTE {
 			return true;
 		}
 
+		static bool AcceptedInputsKeepTheirPlayingReceiptGroup(std::string* error) {
+			for (bool directory: {false, true}) for (uint8_t local: {1, 3, 4}) {
+				Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
+				peer.m_Config.localPeerId = local;
+				peer.m_Config.peerCount = peer.m_Config.matchConfig.peerCount = 4;
+				peer.m_Config.matchConfig.players.push_back({4, 3, false, "Fourth"});
+				peer.m_Config.matchConfig.successorOrder = {2, 3, 4};
+				peer.m_Config.peerFrameGroups = peer.m_Config.substituteSlowPeers = true;
+				peer.m_Config.slowPlayerBoundTicks = 3;
+				if (directory) peer.m_Config.frameTieReferee = [](const NetFrameTieRequest&) { return NetFrameTieReply{NetFrameTieReply::State::Waiting}; };
+				peer.m_RoundConfigHash = NetMatchConfigUtil::HashConfig(peer.m_Config.matchConfig);
+				peer.m_MigrationPhase = NetHostMigrationPhase::None;
+				peer.m_FrameGroupMembers = 15; peer.m_FrameGroupChanges = {{1, 15}};
+				peer.m_RemotePeerIds.clear(); peer.m_RemoteTransports.clear();
+				for (uint8_t owner = 1; owner <= 4; ++owner) if (owner != local) {
+					peer.m_RemotePeerIds.push_back(owner); peer.m_RemoteTransports[owner] = 40 + owner;
+				}
+				peer.m_Stats.nextFrame = 349; peer.m_LastCompletedSimulationTick = 348;
+				peer.m_MigrationHistory[348] = {1, 2, 3};
+				const auto prefix = peer.PeerAppliedFramePrefix(348);
+				peer.m_PeerPaceStartFrame = 348; peer.m_PeerPaceStartMs = peer.m_PeerConsumerAtMs = 1000;
+				peer.m_FirstMissingFrame = peer.m_ConsumerWaitingFrame = 349;
+				peer.m_FirstMissingMs = 984; peer.m_ConsumerWaitStartMs = 1015;
+				for (uint8_t owner: {1, 3, 4}) {
+					ControllerFrame controls; controls.actorUniqueID = 1000 + owner;
+					NetLockstepFrame input; input.senderPeerId = owner; input.roundId = 77; input.targetFrame = 349; input.frames = {controls};
+					peer.m_PeerSourceInputs[349][owner] = input;
+					if (owner == local) peer.m_LocalFrames[349] = input.frames; else peer.m_RemoteFrames[349][owner] = input.frames;
+					for (uint8_t reader = 1; reader <= 4; ++reader)
+						peer.m_PeerInputReceipts[owner][reader] = reader == 3 || (!directory && reader == 2) ? 349 : 350;
+					if (!peer.PeerInputAccepted(349, owner)) { *error = "the receipt detector lacks its supplied source's authority"; return false; }
+				}
+				peer.m_TimingNowMs = 1050;
+				if (peer.PeerInputReceiptGroup(349) != 15) {
+					*error = "an already accepted source excluded a playing member for a redundant late receipt"; return false;
+				}
+				if (!peer.ProposePeerBridge(349, 1050) || peer.m_FrameGroupMembers != 13 || !peer.IsSeatUnderAI(2, 349) ||
+				    peer.IsSeatUnderAI(1, 349) || peer.IsSeatUnderAI(3, 349) || peer.IsSeatUnderAI(4, 349) || peer.PeerAppliedFramePrefix(348) != prefix) {
+					*error = "a missing sender's local hold changed a healthy accepted sender or the preceding prefix"; return false;
+				}
+			}
+			Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
+			peer.m_Config.peerFrameGroups = peer.m_Config.substituteSlowPeers = true;
+			peer.m_Config.slowPlayerBoundTicks = 3; peer.m_MigrationPhase = NetHostMigrationPhase::None;
+			peer.m_FrameGroupMembers = 7; peer.m_FrameGroupChanges = {{1, 7}};
+			peer.m_RemoteTransports = {{1, 42}, {3, 43}};
+			peer.m_Stats.nextFrame = 351; peer.m_LastCompletedSimulationTick = 350;
+			peer.m_MigrationHistory[350] = {1, 2, 3};
+			peer.m_PeerPaceStartFrame = 350; peer.m_PeerPaceStartMs = peer.m_PeerConsumerAtMs = 1000;
+			peer.m_FirstMissingFrame = peer.m_ConsumerWaitingFrame = 351;
+			peer.m_FirstMissingMs = 992; peer.m_ConsumerWaitStartMs = 1017;
+			for (uint8_t owner: {2, 3}) {
+				peer.m_PeerSourceInputs[351][owner] = {owner, 351};
+				peer.m_PeerInputReceipts[owner] = {{2, 352}, {3, 352}};
+			}
+			peer.m_PeerSourceInputs[351][1] = {1, 351};
+			peer.m_PeerInputReceipts[1] = {{1, 352}, {2, 352}, {3, 352}};
+			peer.m_TimingNowMs = 1050;
+			if (peer.PeerInputReceiptGroup(351) != 7 || peer.ProposePeerBridge(351, 1050) ||
+			    NetPeerFrameDetail::HasHoldDecision(peer.m_PeerBridgeVotes, 351) || peer.m_FrameGroupMembers != 7) {
+				*error = "three already quorate sources required a healthy hold for a redundant receipt"; return false;
+			}
+			return true;
+		}
+
 		static bool ConsumerInputGetsTheWholeBound(std::string* error) {
 			for (bool arrives: {false, true}) {
 				Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
@@ -242,8 +307,17 @@ namespace RTE {
 					peer.m_PeerInputReceipts[owner] = {{2, 352}, {3, 352}};
 				}
 				if (receiptOnly) {
+					// FLAGGED departure: the receipt deadline arm needs a missing quorum, rather than three already quorate sources.
+					peer.m_Config.peerCount = peer.m_Config.matchConfig.peerCount = 4;
+					peer.m_Config.matchConfig.players.push_back({4, 3, false, "Fourth"});
+					peer.m_Config.matchConfig.successorOrder = {2, 3, 4};
+					peer.m_RoundConfigHash = NetMatchConfigUtil::HashConfig(peer.m_Config.matchConfig);
+					peer.m_FrameGroupMembers = 15; peer.m_FrameGroupChanges = {{1, 15}};
+					peer.m_RemotePeerIds = {1, 3, 4}; peer.m_RemoteTransports[4] = 44;
 					peer.m_PeerSourceInputs[351][1] = {1, 351};
-					peer.m_PeerInputReceipts[1] = {{1, 352}, {2, 352}, {3, 352}};
+					peer.m_PeerSourceInputs[351][4] = {4, 351};
+					for (uint8_t owner: {1, 4}) peer.m_PeerInputReceipts[owner] = {{1, 352}, {2, 352}, {3, 352}, {4, 352}};
+					if (peer.PeerInputAccepted(351, 2)) { *error = "the receipt deadline arm has no missing quorum"; return false; }
 				}
 				peer.m_TimingNowMs = 1030;
 				if (peer.ProposePeerBridge(351, 1030) || NetPeerFrameDetail::HasHoldDecision(peer.m_PeerBridgeVotes, 351)) {
@@ -252,7 +326,7 @@ namespace RTE {
 				// FLAGGED fixture correction: observe the actual 50ms deadline, retaining every hold and prefix assertion.
 				peer.m_TimingNowMs = 1050;
 				if (!peer.ProposePeerBridge(351, 1050) || !NetPeerFrameDetail::HasHoldDecision(peer.m_PeerBridgeCertificates, 351, 1) ||
-				    !peer.IsSeatUnderAI(1, 351) || peer.IsSeatUnderAI(3, 351)) {
+				    !peer.IsSeatUnderAI(1, 351) || peer.IsSeatUnderAI(3, 351) || (receiptOnly && (!peer.IsSeatUnderAI(4, 351) || peer.m_FrameGroupMembers != 6))) {
 					*error = std::string(receiptOnly ? "receipt" : "input") +
 					    " hold adds a normal tick to the 50ms displayed bound, or its certificate uses another deadline"; return false;
 				}
@@ -31556,6 +31630,12 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS remote_input_receipts_form_the_local_hold_group\n[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "accepted-input-receipt-group") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::AcceptedInputsKeepTheirPlayingReceiptGroup(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS accepted_inputs_keep_their_playing_receipt_group\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "consumer-hold-deadline") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::ConsumerHoldDeadlineIncludesTheDisplayedSlot(&error)) return fail(error);
@@ -31912,6 +31992,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::HeldPeerFrameSeatsOweNoInput, "held_peer_frame_seats_owe_no_input");
 		row(&SessionPlaneRecoveryTest::LegacyCombatHoldUsesItsInputDeadline, "legacy_combat_hold_uses_its_input_deadline");
 		row(&SessionPlaneRecoveryTest::RemoteInputReceiptsFormTheLocalHoldGroup, "remote_input_receipts_form_the_local_hold_group");
+		row(&SessionPlaneRecoveryTest::AcceptedInputsKeepTheirPlayingReceiptGroup, "accepted_inputs_keep_their_playing_receipt_group");
 		row(&SessionPlaneRecoveryTest::MissingOrZeroLinkNeverUsesReceipts, "missing_or_zero_rtt_never_uses_machine_receipts");
 		row(&SessionPlaneRecoveryTest::LinkSizingInEveryMode, "every_mode_sizes_live_and_return_from_the_link");
 		row(&SessionPlaneRecoveryTest::ReaderLinksContributeToInputRunway, "reader_links_contribute_to_input_runway");
