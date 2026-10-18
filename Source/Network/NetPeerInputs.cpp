@@ -478,10 +478,11 @@ namespace RTE {
 		}
 		if (message.type == NetHostMigrationMessageType::PeerTailMissing) {
 			const bool longHitch = m_ConsumerWaitingFrame && nowMs >= m_ConsumerWaitStartMs && nowMs - m_ConsumerWaitStartMs >= c_NetSeatDisconnectSilenceMs;
+			const bool authority = PeerGroupHasAuthority(message.connectedMask, m_Stats.nextFrame, PeerVotingScope::History);
 			// History older than the donor keeps cannot carry the split's certificate, so the split's name asks the referee instead.
 			if (message.frame == m_Stats.nextFrame && (message.connectedMask & SeatBit(m_Config.localPeerId)) == 0 && PeerGroupNeedsArbitration(message.connectedMask) &&
-			    !PeerGroupHasAuthority(message.connectedMask)) CheckPeerFrameTie(message.frame, message.connectedMask, nowMs);
-			if (message.frame == m_Stats.nextFrame && PeerGroupHasAuthority(message.connectedMask) && longHitch) {
+			    !authority) CheckPeerFrameTie(message.frame, message.connectedMask, nowMs);
+			if (message.frame == m_Stats.nextFrame && authority && longHitch) {
 				m_LocalSeatHeld = true; m_LocalHoldFrame = m_Stats.nextFrame;
 				m_State = NetLockstepState::Stopped; m_Stats.timeoutReason = "PeerHeld:the committed tail is unavailable; returning through a private image";
 			}
@@ -510,8 +511,9 @@ namespace RTE {
 				m_Stats.peers[message.senderPeerId].reportedNextFrame = std::max(m_Stats.peers[message.senderPeerId].reportedNextFrame, message.preparedFrame + 1);
 			// The other half of a refereed split holds history only on the referee's word: ask it what it decided for this split.
 			const bool otherHalf = (message.connectedMask & SeatBit(m_Config.localPeerId)) == 0 && PeerGroupNeedsArbitration(message.connectedMask);
-			if (otherHalf && !PeerGroupHasAuthority(message.connectedMask)) CheckPeerFrameTie(m_Stats.nextFrame, message.connectedMask, nowMs);
-			if ((otherHalf || PeerGroupHasAuthority(message.connectedMask)) && message.appliedFrame >= m_Stats.nextFrame)
+			const bool authority = PeerGroupHasAuthority(message.connectedMask, m_Stats.nextFrame, PeerVotingScope::History);
+			if (otherHalf && !authority) CheckPeerFrameTie(m_Stats.nextFrame, message.connectedMask, nowMs);
+			if ((otherHalf || authority) && message.appliedFrame >= m_Stats.nextFrame)
 				RequestPeerCommittedTail(nowMs);
 			return true;
 		}
@@ -600,7 +602,7 @@ namespace RTE {
 					// A local hold can be signed before its other survivors answer. Its signers are evidence for the hold,
 					// not a different playing half: only the certificate's actual continuing group can name that split.
 					const uint32_t playing = agreed.preparedFrame == 0 ? agreed.connectedMask : voters;
-					if (!PeerGroupHasAuthority(playing, agreed.frame)) CheckPeerFrameTie(agreed.frame, playing, nowMs);
+					if (!PeerGroupHasAuthority(playing, agreed.frame, PeerVotingScope::History)) CheckPeerFrameTie(agreed.frame, playing, nowMs);
 				}
 				if (agreed.preparedFrame == 1) {
 					size_t offset = NetHash32{}.size();
@@ -631,7 +633,7 @@ namespace RTE {
 			}
 			if (at != body.size()) return true;
 			heard();
-			if (!PeerGroupHasAuthority(message.voterMask, message.frame)) return true;
+			if (!PeerGroupHasAuthority(message.voterMask, message.frame, PeerVotingScope::History)) return true;
 			uint32_t agreeing = witnessed;
 			if ((message.voterMask & SeatBit(m_Config.localPeerId)) != 0) {
 				const auto own = m_PeerSourceInputs.find(message.frame);

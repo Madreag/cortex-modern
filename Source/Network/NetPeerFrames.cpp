@@ -141,14 +141,14 @@ namespace RTE {
 		}
 	}
 
-	uint32_t NetLockstepCoordinator::PeerVotingOwners(uint32_t& voters, uint64_t frame) const {
+	uint32_t NetLockstepCoordinator::PeerVotingOwners(uint32_t& voters, uint64_t frame, PeerVotingScope scope) const {
 		const uint64_t at = frame == UINT64_MAX ? m_Stats.nextFrame : frame;
 		uint32_t owners = PeerRetainedSeatsAt(at);
 		if (voters == 0 || (voters & ~owners) != 0) return 0;
 		// A declared Leave keeps its AI seat but answers nothing more from the moment it is declared, its last inputs ahead included.
 		for (const auto& [peer, ended]: m_PeerRoundEnds) if (!ended.closedLink) owners &= ~SeatBit(peer);
-		// A returning seat answers nothing until it plays, so it votes only after its agreed neutral interval.
-		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer)
+		// A participating neutral seat owes no input receipt, but can witness its continuation's history.
+		if (scope == PeerVotingScope::Input) for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer)
 			if (IsSeatReclaimGap(peer, at)) owners &= ~SeatBit(peer);
 		// A seat the round holds answers nothing until it returns: the seats that play decide without it, so a second seat lost while
 		// the first is held is held too instead of leaving the rest without a majority.
@@ -176,10 +176,10 @@ namespace RTE {
 		return owners != 0 && voters != owners;
 	}
 
-	bool NetLockstepCoordinator::PeerGroupHasAuthority(uint32_t voters, uint64_t frame) const {
+	bool NetLockstepCoordinator::PeerGroupHasAuthority(uint32_t voters, uint64_t frame, PeerVotingScope scope) const {
 		// A decision is judged at its own frame: a peer still behind the split it names would otherwise look up another split's answer.
 		const uint64_t at = frame == UINT64_MAX ? m_Stats.nextFrame : frame;
-		const uint32_t owners = PeerVotingOwners(voters, at);
+		const uint32_t owners = PeerVotingOwners(voters, at, scope);
 		if (owners == 0) return false;
 		if (m_PeerAdminFrameMembers != 0 && voters == m_PeerAdminFrameMembers) return true;
 		const auto decision = m_PeerFrameTieWinners.find(PeerSplitEpoch(at));
@@ -200,9 +200,7 @@ namespace RTE {
 	}
 
 	bool NetLockstepCoordinator::PeerGroupMayHold(uint32_t voters, uint64_t frame) const {
-		const uint32_t owners = PeerVotingOwners(voters, frame);
-		// Every playing group holds locally; only a healed split chooses which continuation survives.
-		return owners != 0;
+		return PeerVotingOwners(voters, frame, PeerVotingScope::History) != 0;
 	}
 
 	uint64_t NetLockstepCoordinator::PeerSplitEpoch(uint64_t frame) const {

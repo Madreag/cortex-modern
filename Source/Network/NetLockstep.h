@@ -1688,13 +1688,14 @@ namespace RTE {
 		bool PeerInputAccepted(uint64_t frame, uint8_t owner = 0) const;
 		uint32_t PeerInputVoters(uint64_t frame, uint8_t owner) const;
 		uint32_t PeerInputReceiptGroup(uint64_t frame) const;
+		enum class PeerVotingScope { Input, History };
 		/// Whether voters decide for the group at a frame (the next one to prepare by default): a majority of the seats that vote there,
 		/// or on a tie the half the round's tie rule names.
-		bool PeerGroupHasAuthority(uint32_t voters, uint64_t frame = UINT64_MAX) const;
+		bool PeerGroupHasAuthority(uint32_t voters, uint64_t frame = UINT64_MAX, PeerVotingScope scope = PeerVotingScope::Input) const;
 		/// A bounded local hold can precede split arbitration. This permission never certifies unrelated inputs or roster changes.
 		bool PeerGroupMayHold(uint32_t voters, uint64_t frame) const;
 		/// The seats that vote at a frame (the next one to prepare by default), with voters narrowed to them; zero when no voter is a retained seat.
-		uint32_t PeerVotingOwners(uint32_t& voters, uint64_t frame = UINT64_MAX) const;
+		uint32_t PeerVotingOwners(uint32_t& voters, uint64_t frame = UINT64_MAX, PeerVotingScope scope = PeerVotingScope::Input) const;
 		uint32_t PeerHeldSeatsAt(uint64_t frame) const;
 		uint32_t PeerRetainedSeatsAt(uint64_t frame) const;
 		uint32_t PeerFrameMembersAt(uint64_t frame) const;

@@ -342,7 +342,7 @@ namespace RTE {
 			if (!deadline || std::abs(*deadline - 2050) > 1e-6 || parked.m_Stats.ownParksExcluded != 1) {
 				*error = "an actual own pause did not shift the displayed and pacing clocks together"; return false;
 			}
-			for (unsigned role = 0; role < 4; ++role) {
+			for (unsigned role = 0; role < 5; ++role) {
 				Wire neutralWire; NetLockstepCoordinator peer; Configure(peer, neutralWire);
 				peer.m_Config.peerFrameGroups = peer.m_Config.substituteSlowPeers = true;
 				peer.m_Config.slowPlayerBoundTicks = 3; peer.m_MigrationPhase = NetHostMigrationPhase::None;
@@ -372,12 +372,56 @@ namespace RTE {
 						*error = "a neutral participant skipped the supplied sender's missing host receipt"; return false;
 					}
 				}
+				if (role == 4) {
+					peer.m_Config.peerCount = peer.m_Config.matchConfig.peerCount = 2;
+					peer.m_Config.matchConfig.players.erase(peer.m_Config.matchConfig.players.begin() + 2);
+					peer.m_Config.matchConfig.successorOrder = {2};
+					peer.m_RoundConfigHash = NetMatchConfigUtil::HashConfig(peer.m_Config.matchConfig);
+					peer.m_FrameGroupMembers = 3; peer.m_FrameGroupChanges = {{1, 3}, {320, 1}, {340, 3}};
+					peer.m_RemotePeerIds = {1}; peer.m_RemoteTransports = {{1, 42}};
+					peer.m_PeerSourceInputs.clear(); peer.m_PeerInputReceipts.clear();
+					if (peer.PeerGroupHasAuthority(2, 351) || peer.PeerGroupMayHold(0, 351) || peer.PeerGroupMayHold(4, 351)) {
+						*error = "a neutral local hold changed input authority or admitted an invalid participant"; return false;
+					}
+				}
 				peer.m_TimingNowMs = 1030;
 				if (peer.ProposePeerBridge(351, 1030)) { *error = "a neutral return held another peer before its displayed deadline"; return false; }
 				peer.m_TimingNowMs = 1050;
 				const bool held = peer.ProposePeerBridge(351, 1050);
-				if (held != (role == 0 || role == 3) || (held && (!peer.IsSeatUnderAI(1, 351) || peer.IsSeatUnderAI(3, 351)))) {
+				if (held != (role == 0 || role == 3 || role == 4) || (held && (!peer.IsSeatUnderAI(1, 351) || peer.IsSeatUnderAI(3, 351)))) {
 					*error = "a participating neutral return needs no own human input to hold another missing sender, while a private reader does"; return false;
+				}
+				if (role == 4) {
+					peer.AdvanceReadyFrames(1050);
+					NetLockstepReadyFrame ready;
+					if (!peer.PopReadyFrame(ready) || ready.frame != 351 || !ready.localFrames.empty() || !ready.remoteFrames.empty() ||
+					    peer.IsLocalSeatHeld() || peer.m_FrameGroupMembers != 2 || peer.m_MigrationHistory.at(350) != std::vector<uint8_t>{1, 2, 3}) {
+						*error = "the sole neutral survivor did not play the bounded empty-input hold with its prefix intact"; return false;
+					}
+					Wire readerWire; NetLockstepCoordinator reader; Configure(reader, readerWire);
+					reader.m_Config = peer.m_Config; reader.m_Config.localPeerId = 1;
+					reader.m_RoundConfigHash = peer.m_RoundConfigHash; reader.m_MigrationPhase = NetHostMigrationPhase::None;
+					reader.m_RemotePeerIds = {2}; reader.m_RemoteTransports = {{2, 42}};
+					reader.m_Stats.nextFrame = 351; reader.m_LastCompletedSimulationTick = 350;
+					reader.m_MigrationHistory[350] = peer.m_MigrationHistory.at(350);
+					reader.m_PeerBridges = peer.m_PeerBridges; reader.m_PeerFrameHolds = peer.m_PeerFrameHolds;
+					reader.m_ReclaimTransactions = peer.m_ReclaimTransactions;
+					reader.m_FrameGroupChanges = peer.m_FrameGroupChanges; reader.m_FrameGroupMembers = 2;
+					std::vector<uint8_t> record;
+					if (!peer.EncodeMigrationFrame(ready, record)) { *error = "the neutral survivor's committed record did not encode"; return false; }
+					auto tail = peer.PeerFrameMessage(NetHostMigrationMessageType::PeerTail);
+					tail.frame = tail.appliedFrame = 351; tail.voterMask = 2; tail.completeFrom = 0;
+					const auto prefix = peer.PeerFramePrefix(350), prepared = peer.PeerFramePrefix(351);
+					tail.bytes.assign(prefix.begin(), prefix.end()); tail.bytes.insert(tail.bytes.end(), prepared.begin(), prepared.end());
+					for (unsigned shift = 0; shift < 32; shift += 8) tail.bytes.push_back(static_cast<uint8_t>(record.size() >> shift));
+					tail.bytes.insert(tail.bytes.end(), record.begin(), record.end()); tail.bytes.push_back(0); tail.bytes.push_back(0);
+					tail.totalBytes = tail.bytes.size();
+					reader.HandlePeerFrameMessage(tail, 1060);
+					if (!reader.m_PeerCommittedTail.contains(351)) {
+						*error = "the held host rejected its neutral survivor's authenticated committed tail"; return false;
+					}
+					peer.m_PeerRoundEnds[2] = {351, 1050, false, false};
+					if (peer.PeerGroupMayHold(2, 351)) { *error = "a declared departure retained local hold eligibility"; return false; }
 				}
 			}
 			return true;
