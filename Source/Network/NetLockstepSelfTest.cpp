@@ -1301,7 +1301,15 @@ namespace RTE {
 				auto& owner = peers[0]; auto& survivor = peers[1];
 				survivor.m_PeerSourceInputs[4423][2] = {2, 4423};
 				survivor.m_ConsumerWaitingFrame = 4423; survivor.m_ConsumerWaitStartMs = 900;
-				(void)survivor.ProposePeerBridge(4423, 1000);
+				// FLAGGED fixture departure: a bounded local proposal now signs its hold under the revised direct ruling.
+				// Construct the unsigned invitation explicitly so this negative still proves that only its owner's consent fences input.
+				auto invitation = survivor.PeerFrameMessage(NetHostMigrationMessageType::PeerBridge);
+				invitation.senderPeerId = invitation.successorPeerId = 2;
+				invitation.frame = invitation.boundary = 4423;
+				invitation.preparedFrame = 0; invitation.connectedMask = 2; invitation.voterMask = 0; invitation.members = {1};
+				const auto invitationPrefix = survivor.PeerFramePrefix(4422);
+				invitation.bytes.assign(invitationPrefix.begin(), invitationPrefix.end()); invitation.totalBytes = invitation.bytes.size();
+				survivor.m_PeerBridgeVotes[{4423, 0}][2] = invitation;
 				const auto pending = survivor.m_PeerBridgeVotes.find({4423, 0});
 				if (pending == survivor.m_PeerBridgeVotes.end() || !pending->second.contains(2) || pending->second.at(2).voterMask != 0 ||
 				    (survivor.m_PeerRejectedInputs[4423] & 1) != 0 || survivor.m_PeerBridgeCertificates.contains({4423, 0})) {
@@ -6189,106 +6197,28 @@ namespace RTE {
 			return true;
 		}
 
-		// A direct frame tie belongs to the host's pair. The other pair retains
-		// its displayed prefix and returns automatically without an admin change.
-		bool TestATwoTwoSplitMigratesNobody(std::string* error) {
-			QuorumRig r;
-			if (!StartQuorumRig(r, 4, 47120, error, true) || !PumpQuorumRig(r, 4000, [&] {
-				return std::all_of(r.simulated.begin(), r.simulated.end(), [](uint64_t tick) { return tick >= 20; });
-			})) return false;
-			const uint64_t committedLimit = *std::max_element(r.queued.begin(), r.queued.end()) + 1;
-			r.partition->Split({1, 2}, {3, 4});
-			(void)PumpQuorumRig(r, 23000, [] { return false; });
-			for (uint8_t peer = 1; peer <= 4; ++peer) if (!r.Peer(peer).IsRunning() || r.Peer(peer).GetHostPeerId() != 1 || r.Peer(peer).GetMigrationResult().generation != 0 || r.rewinds[peer - 1]) {
-				*error = "the direct frame tie changed the host, ended a seat or undid a frame" + r.Report(); return false;
-			}
-			if (r.simulated[2] > committedLimit || r.simulated[3] > committedLimit || r.simulated[0] <= committedLimit || r.simulated[1] <= committedLimit ||
-			    !r.Peer(1).IsSeatUnderAI(3, r.simulated[0]) || !r.Peer(1).IsSeatUnderAI(4, r.simulated[0])) {
-				*error = "the direct tie did not leave only the host's group displaying new history" + r.Report(); return false;
-			}
-			if (!QuorumFoldsAgree(r, {1, 2, 3, 4}, error)) return false;
-			r.partition->cut.clear();
-			if (!PumpQuorumRig(r, 20000, [&] {
-				for (uint8_t peer = 1; peer <= 4; ++peer)
-					if (!r.Peer(peer).IsRunning() || r.Peer(peer).GetHostPeerId() != 1 || r.simulated[peer - 1] + 1 < r.simulated[0] ||
-					    !r.Peer(peer).HasAgreedSeatReclaim(3) || r.Peer(peer).ReclaimTransactions().at(3).activationFrame > r.simulated[peer - 1] ||
-					    !r.Peer(peer).HasAgreedSeatReclaim(4) || r.Peer(peer).ReclaimTransactions().at(4).activationFrame > r.simulated[peer - 1] ||
-					    r.Peer(peer).HasHeldAISeat(3) || r.Peer(peer).HasHeldAISeat(4)) return false;
-				return true;
-			}) || !QuorumFoldsAgree(r, {1, 2, 3, 4}, error) || std::any_of(r.rewinds.begin(), r.rewinds.end(), [](uint64_t count) { return count != 0; })) {
-				if (error->empty()) *error = "the losing pair did not return automatically through the same history" + r.Report(); return false;
-			}
-			std::cout << "[net-lockstep-selftest] PASS a_two_two_split_migrates_nobody host_tie=1 silence_ms=23000 automatic_returns=2 undone=0" << std::endl;
-			return true;
+		// FLAGGED fixture departure: the revised direct ruling permits both halves to continue and a hostless half to migrate.
+		// The complete fixture retains the 50 ms hold bound, tie arbitration, decision-frame stop and actual image-return checks.
+		bool TestATwoTwoSplitMigratesThenHeals(std::string* error) {
+			return NetSessionPlaneSelfTest::CheckHostAdministration(5, error);
 		}
 
 		bool TestATwoPlayerSplitSurvivorHostsAlone(std::string* error) {
 			QuorumRig r;
-			if (!StartQuorumRig(r, 2, 47130, error)) return false;
-			if (!PumpQuorumRig(r, 4000, [&r] { return r.simulated[0] >= 20 && r.simulated[1] >= 20; })) {
-				*error = "the two-player round never ran twenty frames:" + r.Report();
-				return false;
-			}
-			const uint64_t committedLimit = *std::max_element(r.queued.begin(), r.queued.end());
-			r.partition->Split({1}, {2});
-			const auto settled = [&r] {
-				return r.Peer(2).IsStopped();
-			};
-			(void)PumpQuorumRig(r, 23000, [] { return false; });
-			if (!r.Peer(2).IsMigrating() || r.Peer(2).IsStopped() || r.Peer(2).GetHostPeerId() != 1 || r.Peer(1).GetHostPeerId() != 1 ||
-			    r.simulated[1] > committedLimit) {
-				*error = "a two-player partition manufactured a second committed history: provisional=" + std::to_string(r.Peer(1).IsHostProvisional()) + r.Report();
-				return false;
-			}
-			// An unverified directory generation cannot remove the host either.
+			if (!StartQuorumRig(r, 2, 47130, error, true) || !PumpQuorumRig(r, 4000, [&] {
+				return r.simulated[0] >= 20 && r.simulated[1] >= 20;
+			})) { if (error->empty()) *error = "the two-player round never ran twenty frames:" + r.Report(); return false; }
+			// An unverified directory generation cannot remove the host.
 			r.Peer(1).NoteSuperseded(99);
 			if (r.Peer(1).IsSuperseded() || r.Peer(1).GetHostPeerId() != 1) { *error = "a directory generation removed an uncertified host"; return false; }
-			std::string why;
-			if (!QuorumFoldsAgree(r, {1, 2}, &why)) { *error = why; return false; }
-			std::cout << "[net-lockstep-selftest] PASS a_two_player_split_cannot_elect_a_second_host generation=" << r.Peer(2).GetMigrationResult().generation << " survivor_played_to=" << r.simulated[1]
-			          << " superseded_by=" << static_cast<int>(r.Peer(1).SupersedingPeer()) << std::endl;
-			return true;
+			// FLAGGED fixture departure: a lone survivor now continues, migrates at the hold window, and image-returns if its host wins the heal.
+			return NetSessionPlaneSelfTest::CheckHostAdministration(6, error);
 		}
 
-		// An isolated host pauses at its certified prefix. Admin agreement after
-		// fifteen seconds never permits speculative display or a manual rejoin.
-		bool TestAnIsolatedHostIsProvisionalWhileTheMajorityMigrates(std::string* error) {
-			for (bool oneWay: {false, true}) {
-				QuorumRig r;
-				if (!StartQuorumRig(r, 4, oneWay ? 47160 : 47150, error, true) || !PumpQuorumRig(r, 4000, [&] {
-					return std::all_of(r.simulated.begin(), r.simulated.end(), [](uint64_t tick) { return tick >= 20; });
-				})) return false;
-				const uint64_t limit = *std::max_element(r.queued.begin(), r.queued.end()) + 1, began = r.now;
-				if (oneWay) for (uint8_t peer = 2; peer <= 4; ++peer) r.partition->deaf.insert({1, peer});
-				else r.partition->Split({1}, {2, 3, 4});
-				(void)PumpQuorumRig(r, 14900, [] { return false; });
-				for (uint8_t peer = 1; peer <= 4; ++peer) if (r.Peer(peer).GetHostPeerId() != 1 || r.Peer(peer).GetMigrationResult().generation != 0) {
-					*error = "the partition changed the administrator before fifteen seconds of silence" + r.Report(); return false;
-				}
-				if (!PumpQuorumRig(r, 8100, [&] {
-					for (uint8_t peer = 2; peer <= 4; ++peer)
-						if (!r.Peer(peer).IsRunning() || r.Peer(peer).IsMigrating() || r.Peer(peer).GetHostPeerId() != 2 || r.simulated[peer - 1] <= limit + 60) return false;
-					return true;
-				}) || !r.Peer(1).IsRunning() || r.simulated[0] > limit || r.now - began < 15000) {
-					*error = "the isolated host did not pause while every survivor certified the administrator" + r.Report(); return false;
-				}
-				for (uint8_t peer = 2; peer <= 4; ++peer) if (r.Peer(peer).GetMigrationResult().members != std::vector<uint8_t>{2, 3, 4}) {
-					*error = "the admin certificate omitted a survivor"; return false;
-				}
-				if (!QuorumFoldsAgree(r, {1, 2, 3, 4}, error)) return false;
-				r.partition->cut.clear(); r.partition->deaf.clear();
-				if (!PumpQuorumRig(r, 12000, [&] {
-					for (uint8_t peer = 1; peer <= 4; ++peer)
-						if (!r.Peer(peer).IsRunning() || r.Peer(peer).IsMigrating() || r.Peer(peer).GetHostPeerId() != 2 || r.simulated[peer - 1] + 1 < r.simulated[1] ||
-						    !r.Peer(peer).HasAgreedSeatReclaim(1) || r.Peer(peer).ReclaimTransactions().at(1).activationFrame > r.simulated[peer - 1] ||
-						    r.Peer(peer).HasHeldAISeat(1)) return false;
-					return true;
-				}) || !QuorumFoldsAgree(r, {1, 2, 3, 4}, error) || std::any_of(r.rewinds.begin(), r.rewinds.end(), [](uint64_t count) { return count != 0; })) {
-					if (error->empty()) *error = "the old host did not return through committed history" + r.Report(); return false;
-				}
-				std::cout << "[net-lockstep-selftest] PASS isolated_host_hitches_and_returns one_way=" << oneWay << " silence_ms=15000 all_survivors=1 undone=0 images=0" << std::endl;
-			}
-			return true;
+		// FLAGGED fixture departure: an isolated host also plays until history exchange, then yields to the human-seat majority.
+		// Exercise the real image return in both the two-way and one-way cuts, preserving the winner's displayed prefix.
+		bool TestAnIsolatedHostContinuesUntilTheHeal(std::string* error) {
+			return NetSessionPlaneSelfTest::CheckHostAdministration(7, error) && NetSessionPlaneSelfTest::CheckHostAdministration(8, error);
 		}
 
 		bool TestAHostIsProvisionalUntilItHearsAMajority(std::string* error) {
@@ -6395,8 +6325,8 @@ namespace RTE {
 			return true;
 		}
 
-		// The direct minority cannot discard a late survivor. Its restored vote
-		// preserves the round identity and committed delay; old links carry return.
+		// FLAGGED fixture departure: the reachable pair migrates without a hung fourth peer's vote under the revised direct ruling.
+		// Both absent peers have no continuation; their automatic tail returns must retain identity, delay and every displayed tick.
 		bool TestALateVoterResyncsAfterTheMajorityCloses(std::string* error) {
 			QuorumRig r;
 			if (!StartQuorumRig(r, 4, 47140, error, true) || !PumpQuorumRig(r, 4000, [&] {
@@ -6412,19 +6342,22 @@ namespace RTE {
 			}
 			KillQuorumPeer(r, 1); r.live[3] = false;
 			(void)PumpQuorumRig(r, 23000, [] { return false; });
-			for (uint8_t peer: {2, 3}) if (r.Peer(peer).GetHostPeerId() != 1 || r.Peer(peer).IsStopped() || r.Peer(peer).GetMigrationResult().generation != 0) {
-				*error = "a host change excluded the unavailable survivor" + r.Report(); return false;
+			for (uint8_t peer: {2, 3}) if (r.Peer(peer).GetHostPeerId() != 2 || !r.Peer(peer).IsRunning() || r.Peer(peer).IsMigrating() ||
+			    r.Peer(peer).GetMigrationResult().generation != 1 || r.Peer(peer).GetMigrationResult().members != std::vector<uint8_t>{2, 3} ||
+			    !r.Peer(peer).IsSeatUnderAI(4, r.simulated[peer - 1])) {
+				*error = "the reachable pair did not migrate while holding the unavailable survivor" + r.Report(); return false;
 			}
 			r.live[3] = true;
 			if (!PumpQuorumRig(r, 23000, [&] {
 				for (uint8_t peer = 2; peer <= 4; ++peer)
-					if (r.Peer(peer).GetHostPeerId() != 2 || r.Peer(peer).IsMigrating() || !r.Peer(peer).IsRunning() || r.simulated[peer - 1] <= delayAt + 30) return false;
+					if (r.Peer(peer).GetHostPeerId() != 2 || r.Peer(peer).IsMigrating() || !r.Peer(peer).IsRunning() || r.simulated[peer - 1] <= delayAt + 30 ||
+					    !r.Peer(peer).HasAgreedSeatReclaim(4) || r.Peer(peer).ReclaimTransactions().at(4).activationFrame > r.simulated[peer - 1] || r.Peer(peer).HasHeldAISeat(4)) return false;
 				return true;
-			})) { *error = "host change did not include the restored survivor" + r.Report(); return false; }
-			for (uint8_t peer = 2; peer <= 4; ++peer) if (r.Peer(peer).GetMigrationResult().members != std::vector<uint8_t>{2, 3, 4} ||
+			})) { *error = "the late survivor did not automatically rejoin the migrated pair" + r.Report(); return false; }
+			for (uint8_t peer = 2; peer <= 4; ++peer) if (r.Peer(peer).GetMigrationResult().members != std::vector<uint8_t>{2, 3} ||
 			    r.Peer(peer).InputDelayAt(3, delayAt + 1) != 2 || r.rewinds[peer - 1] != 0 || r.Peer(peer).GetRoundConfigHash() != roundHash ||
 			    r.Peer(peer).GetMigrationResult().generation != 1) {
-				*error = "unanimous host change lost membership, timing, immutable identity or a committed tick"; return false;
+				*error = "the certified host change or late return lost membership, timing, immutable identity or a committed tick"; return false;
 			}
 			if (!QuorumFoldsAgree(r, {2, 3, 4}, error)) return false;
 			// The old process retains the same session and reads its missing tail.
@@ -6439,7 +6372,7 @@ namespace RTE {
 			for (uint8_t peer = 1; peer <= 4; ++peer) if (r.rewinds[peer - 1] || r.Peer(peer).InputDelayAt(3, delayAt + 1) != 2 || r.Peer(peer).GetRoundConfigHash() != roundHash) {
 				*error = "the late automatic return changed committed timing, identity or displayed history"; return false;
 			}
-			std::cout << "[net-lockstep-selftest] PASS late_survivor_votes_before_admin_commit late_voter=4 all_survivors=1 retained_delay=2 automatic_return=1 undone=0" << std::endl;
+			std::cout << "[net-lockstep-selftest] PASS late_survivor_returns_after_admin_commit late_voter=4 certificate_members=2,3 retained_delay=2 automatic_returns=2 undone=0" << std::endl;
 			return true;
 		}
 
@@ -31097,9 +31030,10 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
-			if (std::string_view(selectedCase) == "seat-return-pacing") {
+			if (std::string_view(selectedCase) == "seat-return-pacing" || std::string_view(selectedCase) == "late-voter") {
 				std::string error;
-				const bool passed = TestALateVoterResyncsAfterTheMajorityCloses(&error) && TestPlacementBarrierReleasesPeerBridging(&error);
+				const bool passed = TestALateVoterResyncsAfterTheMajorityCloses(&error) &&
+				    (std::string_view(selectedCase) == "late-voter" || TestPlacementBarrierReleasesPeerBridging(&error));
 				if (!passed) return fail(error);
 				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
@@ -31276,10 +31210,10 @@ namespace {
 		row(&TestARemovedSeatEndsOnItsRemoval, "a_removed_seat_ends_on_its_removal");
 		row(&TestAHostKilledWithFourPlayersHandsOverOnAMajority, "a_host_killed_with_four_players_hands_over_on_a_majority");
 		row(&TestTheMostAdvancedSurvivorServesTheGather, "the_most_advanced_survivor_serves_the_gather");
-		row(&TestATwoTwoSplitMigratesNobody, "a_two_two_split_migrates_nobody");
+		row(&TestATwoTwoSplitMigratesThenHeals, "a_two_two_split_migrates_then_heals");
 		row(&TestATwoPlayerSplitSurvivorHostsAlone, "a_two_player_split_survivor_hosts_alone");
 		row(&TestALateVoterResyncsAfterTheMajorityCloses, "a_late_voter_resyncs_after_the_majority_closes");
-		row(&TestAnIsolatedHostIsProvisionalWhileTheMajorityMigrates, "an_isolated_host_is_provisional_while_the_majority_migrates");
+		row(&TestAnIsolatedHostContinuesUntilTheHeal, "an_isolated_host_continues_until_the_heal");
 		row(&TestAHostIsProvisionalUntilItHearsAMajority, "a_host_is_provisional_until_it_hears_a_majority");
 		row(&TestAHostReachesAPlayerBackOnANewLink, "a_host_reaches_a_player_back_on_a_new_link");
 		row(&TestAHostStallInsideTheLossBoundMigratesNobody, "a_host_stall_inside_the_loss_bound_migrates_nobody");
