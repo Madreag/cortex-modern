@@ -28917,6 +28917,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			uint64_t now = 0;
 			bool recording = false;
 			bool hostPlaneOnly = false;
+			uint8_t vacantSeats = 0; //!< The last seats of a world the round starts without, as a world's empty places.
 			uint64_t drainThrough = UINT64_MAX;
 			std::string failure;
 			bool refereeEnabled = false;
@@ -28959,12 +28960,12 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 				}
 				if (!hostWire.StartHost(port, &failure)) return false;
 				std::map<uint8_t, NetPeerId> remotes;
-				for (size_t index = 1; index < count; ++index) {
+				for (size_t index = 1; index + vacantSeats < count; ++index) {
 					if (!wires[index]->Connect("loopback", port, &failure)) return false;
 					remotes[static_cast<uint8_t>(index + 1)] = index;
 				}
 				for (size_t index = 0; index < peers.size(); ++index) {
-					if (index >= count) { alive[index] = false; continue; }
+					if (index + vacantSeats >= count) { alive[index] = false; continue; }
 					auto config = ReleasedClaimsConfig(match, static_cast<uint8_t>(index + 1), index == 0 ? remotes : std::map<uint8_t, NetPeerId>{{1, 1}}, bounded);
 					config.inputDelayFrames = delay;
 					if (delay) for (uint8_t peer = 1; peer <= count; ++peer) config.peerInputDelayFrames[peer] = delay;
@@ -30027,6 +30028,34 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			if (blocked || !round.hostWire.Last(NetTimingAction::WorldAdmission, NetTimingPhase::Commit) || round.peers[0].GetResumeFrame() <= proposed->applyFrame || round.peers[2].GetResumeFrame() <= proposed->applyFrame)
 				return fail("WorldAdmission waits for removed peer 2 at " + std::to_string(proposed->applyFrame) + " blocked=" + std::to_string(blocked));
 			std::cout << "[net-lockstep-selftest] removed_peer_decision_blocked_frames=0 kinds=WorldAdmission" << std::endl;
+			return fail("");
+		}
+
+		bool TestWorldAdmissionAheadOwesNoInput(std::string* error) {
+			const auto fail = [&](const std::string& why) { return ReportReleasedClaimsRow("world_admission_ahead_owes_no_input", why, error); };
+			// A world plays on with an empty fourth place long past the silence allowance; a joiner never heard on the round is then admitted.
+			ReleasePathRound round;
+			round.vacantSeats = 1;
+			if (!round.Start(47436, true, true)) return fail("the world admission fixture did not start: " + round.failure);
+			while (round.now < c_NetSeatDisconnectSilenceMs + 1000) round.Pump();
+			if (!round.fourthWire.Connect("loopback", 47436, &round.failure)) return fail(round.failure);
+			for (int turn = 0; turn < 4; ++turn) round.Pump();
+			NetGameWorldTransition admission;
+			admission.kind = NetGameWorldTransition::Activate; admission.peerId = 4; admission.holderGeneration = 1;
+			admission.membershipRevision = 2; admission.activationFrame = round.peers[0].GetStats().nextFrame + 40;
+			admission.team = 3; admission.player = 3;
+			if (!round.peers[0].ProposeWorldAdmission(3, 1, admission, &round.failure)) return fail(round.failure);
+			while (round.peers[0].GetStats().nextFrame + 2 < admission.activationFrame) round.Pump();
+			const auto bindings = round.peers[0].RemoteTransports();
+			const auto binding = bindings.find(4);
+			bool held = round.peers[0].HasHeldAISeat(4);
+			for (const auto& timing: round.hostWire.decisions)
+				if (timing.action == NetTimingAction::Hold && (timing.peerId == 4 || (timing.heldPeers & 8) != 0)) held = true;
+			if (held || binding == bindings.end() || binding->second != 3)
+				return fail("the admitted seat was held before its admission frame " + std::to_string(admission.activationFrame) + " held=" + std::to_string(held) +
+				    " bound=" + (binding == bindings.end() ? std::string("none") : std::to_string(binding->second)) + " next=" + std::to_string(round.peers[0].GetStats().nextFrame));
+			std::cout << "[net-lockstep-selftest] world_admission_ahead activation=" << admission.activationFrame << " next=" << round.peers[0].GetStats().nextFrame
+			          << " silence_before_admission_ms=" << round.now << " bound=" << binding->second << std::endl;
 			return fail("");
 		}
 
@@ -31539,7 +31568,7 @@ namespace {
 	int NetLockstepSelfTest::RunSeatSuccession() {
 		EnsureSwitchTestManagers();
 		bool passed = true;
-		for (const auto& [name, test]: std::array<std::pair<const char*, bool (*)(std::string*)>, 23>{{
+		for (const auto& [name, test]: std::array<std::pair<const char*, bool (*)(std::string*)>, 24>{{
 		    {"TestTwoSuccessionsKeepBothFormerHosts", TestTwoSuccessionsKeepBothFormerHosts},
 		    {"TestZeroDelayCannotRunAnUncommittedClientTick", TestZeroDelayCannotRunAnUncommittedClientTick},
 		    {"TestPositiveDelayHostWaitsForCommittedTick", TestPositiveDelayHostWaitsForCommittedTick},
@@ -31561,6 +31590,7 @@ namespace {
 		    {"TestReplayMatchesSuccessionDuringActivityTick", TestReplayMatchesSuccessionDuringActivityTick},
 		    {"TestPreviousClaimRulesAreRefused", TestPreviousClaimRulesAreRefused},
 		    {"TestWorldAdmissionExcusesRemovedAcknowledger", TestWorldAdmissionExcusesRemovedAcknowledger},
+		    {"TestWorldAdmissionAheadOwesNoInput", TestWorldAdmissionAheadOwesNoInput},
 		    {"TestHeldFormerHostKeepsReclaimableClaims", TestHeldFormerHostKeepsReclaimableClaims},
 		    {"TestMultipartObservationSendersReplay", TestMultipartObservationSendersReplay},
 		}}) {

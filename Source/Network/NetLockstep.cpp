@@ -6754,6 +6754,11 @@ namespace RTE {
 		const bool escalates = boundary != m_PeerLeaveFrames.end() && !returned && boundary->second > m_Stats.nextFrame &&
 		                       FirstFrameWithout(peerId) < boundary->second;
 		const bool own = peerId == GetHostPeerId();
+		// A seat admitted at a frame the round has yet to reach owes nothing before it; its allowance runs from its admission.
+		if (back != m_ReclaimTransactions.end() && m_Stats.nextFrame < back->second.activationFrame && !m_AiHeldSeats.contains(peerId) && !m_PeerLeaveFrames.contains(peerId)) {
+			if (error) *error = "the seat's admission frame is still ahead";
+			return false;
+		}
 		if (!IsRunning() || m_Config.localPeerId != GetHostPeerId() || (own && !bridge) ||
 		    (!own && !IsKnownRemotePeer(peerId)) || (m_AiHeldSeats.contains(peerId) && !returned && !escalates) ||
 		    (m_PeerLeaveFrames.contains(peerId) && !returned && !escalates) || m_NextTimingRevision == UINT64_MAX) {
