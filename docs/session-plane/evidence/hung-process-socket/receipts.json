@@ -1,0 +1,162 @@
+{
+  "topology": "single-box",
+  "proof": false,
+  "complete_gate": false,
+  "parent": "ee7d84a68a7583c1680443f047e8ecaf47549ed6",
+  "launches": [
+    {
+      "collection": "hung-socket-red",
+      "case": "authority_fixture_checks_each_half_and_never_waives_the_bound",
+      "exe_sha256": "e6f6eabe146b122041f8e89a1d73d918ecda0bbd86ac121f5ebe1075dcfb9f0e",
+      "visible_window": true,
+      "exit_code": 1,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "hung-socket-red--authority_fixture_checks_each_half_and_never_waives_the_bound--stdout.log.gz",
+          "original_sha256": "aa2406212f2b7ad7105ae66a691de79462e11f498dbe4067a02c68f2cde9b2fc",
+          "portable_sha256": "aa2406212f2b7ad7105ae66a691de79462e11f498dbe4067a02c68f2cde9b2fc",
+          "compressed_sha256": "521f8dcfb9f6e82491e0a2a807c0420292e8c53038045b66e7289e519fa13eaa"
+        },
+        {
+          "path": "hung-socket-red--authority_fixture_checks_each_half_and_never_waives_the_bound--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "hung-socket-green",
+      "case": "authority_fixture_checks_each_half_and_never_waives_the_bound",
+      "exe_sha256": "858d1f0795dd9140ac92e0cbdb9263572f3a496136f8298e65c2ba093f3d351c",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "hung-socket-green--authority_fixture_checks_each_half_and_never_waives_the_bound--stdout.log.gz",
+          "original_sha256": "458dc359e2b6bbc7e183759c9b6f16df7b9d0927ecb7adfd2665ab99afcae014",
+          "portable_sha256": "458dc359e2b6bbc7e183759c9b6f16df7b9d0927ecb7adfd2665ab99afcae014",
+          "compressed_sha256": "a1fc42dbabb1536b13d65301df9041601d812bea87ba4cc3f231ad7a1cb190e5"
+        },
+        {
+          "path": "hung-socket-green--authority_fixture_checks_each_half_and_never_waives_the_bound--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "hung-socket-green",
+      "case": "hung_host_18s_direct_survivor_holds_then_migrates_roster",
+      "exe_sha256": "858d1f0795dd9140ac92e0cbdb9263572f3a496136f8298e65c2ba093f3d351c",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "hung-socket-green--hung_host_18s_direct_survivor_holds_then_migrates_roster--stdout.log.gz",
+          "original_sha256": "5514dff8543adcc7a1d7dfd812bd6088911b6222db7e3e3eb6da7455c85c5906",
+          "portable_sha256": "5514dff8543adcc7a1d7dfd812bd6088911b6222db7e3e3eb6da7455c85c5906",
+          "compressed_sha256": "3729fbc6dc9ba5e1450b4551cb7e836ae60ab3cfb1cf0f2e2d0cad8d4da496bb"
+        },
+        {
+          "path": "hung-socket-green--hung_host_18s_direct_survivor_holds_then_migrates_roster--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "hung-socket-green",
+      "case": "hung_host_3s_and_directory_dark_survivor_holds_locally",
+      "exe_sha256": "858d1f0795dd9140ac92e0cbdb9263572f3a496136f8298e65c2ba093f3d351c",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "hung-socket-green--hung_host_3s_and_directory_dark_survivor_holds_locally--stdout.log.gz",
+          "original_sha256": "5dd804701d921d65a8f74dc383de84687fcbd7b4e758cdd5149061ce716315d1",
+          "portable_sha256": "5dd804701d921d65a8f74dc383de84687fcbd7b4e758cdd5149061ce716315d1",
+          "compressed_sha256": "2b68e01605173e9418ea582aca3e56d8c9eed13508c916a67d62f4ac3481a732"
+        },
+        {
+          "path": "hung-socket-green--hung_host_3s_and_directory_dark_survivor_holds_locally--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "hung-socket-green",
+      "case": "hung_host_3s_direct_survivor_holds_without_a_split",
+      "exe_sha256": "858d1f0795dd9140ac92e0cbdb9263572f3a496136f8298e65c2ba093f3d351c",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "hung-socket-green--hung_host_3s_direct_survivor_holds_without_a_split--stdout.log.gz",
+          "original_sha256": "380d55712b488c613a548c1e31963502eff714aff3c9ca1e5451561ffe92eeec",
+          "portable_sha256": "380d55712b488c613a548c1e31963502eff714aff3c9ca1e5451561ffe92eeec",
+          "compressed_sha256": "c2085ebf2da0390a0467fb0d2ed5b46f3d6b3c921d822869c4eed3810ada4d0f"
+        },
+        {
+          "path": "hung-socket-green--hung_host_3s_direct_survivor_holds_without_a_split--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "hung-socket-green",
+      "case": "relay_link_blackout_return",
+      "exe_sha256": "858d1f0795dd9140ac92e0cbdb9263572f3a496136f8298e65c2ba093f3d351c",
+      "visible_window": true,
+      "exit_code": 1,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "hung-socket-green--relay_link_blackout_return--stdout.log.gz",
+          "original_sha256": "12bece5e29070083e146cf928207dd55bcc81d314baf3115a18fe048b755156a",
+          "portable_sha256": "12bece5e29070083e146cf928207dd55bcc81d314baf3115a18fe048b755156a",
+          "compressed_sha256": "ce297544b975c4be6fdd2348fcde9eae7b78730d243ec723b2a46199cff8f9df"
+        },
+        {
+          "path": "hung-socket-green--relay_link_blackout_return--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "hung-socket-admin",
+      "case": "repeated_host_changes_bound_the_tail_or_answer_missing",
+      "exe_sha256": "858d1f0795dd9140ac92e0cbdb9263572f3a496136f8298e65c2ba093f3d351c",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "hung-socket-admin--repeated_host_changes_bound_the_tail_or_answer_missing--stdout.log.gz",
+          "original_sha256": "9d538761f1e7312dca331415bf4bc426f1c19a7bdca617812939447a4d8997c1",
+          "portable_sha256": "9d538761f1e7312dca331415bf4bc426f1c19a7bdca617812939447a4d8997c1",
+          "compressed_sha256": "1dfaf3dd9cc7d64c9a1b9989cdcede22ffdc9a6a96964a56406b16d712bdac65"
+        },
+        {
+          "path": "hung-socket-admin--repeated_host_changes_bound_the_tail_or_answer_missing--stderr.log.gz",
+          "original_sha256": "e297e3bbe435723304639d20623a81dd7a93a3e092edee35061d9c4c9800e00c",
+          "portable_sha256": "e297e3bbe435723304639d20623a81dd7a93a3e092edee35061d9c4c9800e00c",
+          "compressed_sha256": "79798acc13dd7e0c97d3ca3c84168ac85fae44f89abae45f86f9e3d94b5e1610"
+        }
+      ]
+    }
+  ]
+}

@@ -566,7 +566,9 @@ namespace RTE {
 				if (schedule) return schedule->Cut(a, b, now);
 				if (row.tieBeforeAdministration && now >= 4000 && now < 4150) return (a <= 2) != (b <= 2);
 				if (row.silentVoter && a != b && (a == row.silentVoter || b == row.silentVoter) && now >= silentAt && now < silentAt + row.silentVoterMs) return true;
-				if (!DuringFault() || row.frozen || row.blackout || row.slowPercent || row.inputsLost || row.inputHalvesLost || row.keepInputEvery || !row.gapMs) return false;
+				// Flagged fixture correction: Hung stops the process; incoming packets wait in its socket,
+				// as Schedule::Cut already models. A network cut is a separate Silent/blackout fault.
+				if (!DuringFault() || row.hung || row.frozen || row.blackout || row.slowPercent || row.inputsLost || row.inputHalvesLost || row.keepInputEvery || !row.gapMs) return false;
 				if (row.secondSubject && now >= faultAt + row.secondAfterMs && (a == row.secondSubject || b == row.secondSubject)) return true;
 				if (row.tie) return (a <= 2) != (b <= 2);
 				if (row.oneWaySubject) return a == row.subject;
@@ -2121,6 +2123,30 @@ namespace RTE {
 			return passed;
 		}
 		bool CheckAuthorityOracle(std::string& error) {
+			Hub fault;
+			fault.row.subject = 1; fault.row.gapMs = 8000; fault.row.hung = true;
+			fault.now = 7000; fault.faultEnd = 14000;
+			const bool namedHungQueues = fault.ProcessHung(1) && !fault.Split(1, 2) && !fault.LiveSplit(1, 2);
+			Schedule scheduledFault; scheduledFault.spells.push_back({1, Spell::Kind::Hung, 6000, 8000});
+			fault.schedule = &scheduledFault;
+			const bool scheduledHungQueues = fault.ProcessHung(1) && !fault.Split(1, 2) && !fault.LiveSplit(1, 2);
+			scheduledFault.spells[0].kind = Spell::Kind::Silent;
+			const bool actualCutRemains = !fault.ProcessHung(1) && fault.Split(1, 2) && fault.LiveSplit(1, 2);
+			if (!namedHungQueues || !scheduledHungQueues || !actualCutRemains) {
+				error = "fixture fault domains: named_hung_queues=" + std::to_string(namedHungQueues) +
+				    " scheduled_hung_queues=" + std::to_string(scheduledHungQueues) + " actual_cut_remains=" + std::to_string(actualCutRemains);
+				return false;
+			}
+			fault.schedule = nullptr;
+			Wire sender(fault, 2), socket(fault, 1);
+			sender.connections[42] = {&socket, 43}; socket.connections[43] = {&sender, 42};
+			const std::vector<uint8_t> queuedPacket{0x71, 0x39};
+			if (!sender.Send(42, NetTransportLane::ControlReliable, queuedPacket)) { error = "fixture could not send to the hung socket"; return false; }
+			fault.now = fault.faultEnd;
+			const auto queuedEvents = socket.PollEvents();
+			if (queuedEvents.size() != 1 || queuedEvents.front().type != NetTransportEventType::PacketReceived || queuedEvents.front().bytes != queuedPacket) {
+				error = "fixture discarded an incoming packet instead of leaving it in the hung process's socket"; return false;
+			}
 			Fixture fixture; fixture.hub.row.seats = 2; fixture.hub.row.internet = true;
 			fixture.worlds.resize(2); fixture.frameMembers = {{0, 1}, {0, 2}}; fixture.frameAuthors = {{0, 1}, {0, 2}};
 			for (auto& world: fixture.worlds) { world.applied = 1; world.hashes[1] = {}; }
