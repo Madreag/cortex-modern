@@ -1,0 +1,624 @@
+{
+  "topology": "single-box",
+  "proof": false,
+  "complete_gate": false,
+  "parent": "43cfbab8f8a4c176d3bbb35e3b13c48884fd558d",
+  "launches": [
+    {
+      "collection": "surviving-pace-red",
+      "case": "surviving-pace-clock",
+      "exe_sha256": "0cc8ff1c3d37e7bc2988898870f5707fb6e1f218bdc89de785ea00267ce0ff63",
+      "visible_window": true,
+      "exit_code": 1,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "surviving-pace-red--surviving-pace-clock--stdout.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        },
+        {
+          "path": "surviving-pace-red--surviving-pace-clock--stderr.log.gz",
+          "original_sha256": "38ba05c09bac5154b6ff68c5824b17d09e1d61eed37acce60e17a94fbd2bda31",
+          "portable_sha256": "38ba05c09bac5154b6ff68c5824b17d09e1d61eed37acce60e17a94fbd2bda31",
+          "compressed_sha256": "eb998b92750e1e4692639bbde167af4a8615e2b4ff1a85666c03147d952c7398"
+        }
+      ]
+    },
+    {
+      "collection": "surviving-pace-candidate",
+      "case": "active-pace-runway",
+      "exe_sha256": "036c9a48348fd1cabaf8e18678f78d7ef11015ba23d14ca5d07fa978b737e040",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "surviving-pace-candidate--active-pace-runway--stdout.log.gz",
+          "original_sha256": "fd2241676e275635c6c175dea160b670f4efef8aaf88b033254a979c27fc4690",
+          "portable_sha256": "fd2241676e275635c6c175dea160b670f4efef8aaf88b033254a979c27fc4690",
+          "compressed_sha256": "8fd0e5f1943aed15c30db8d518c20e572e5f54ca4dd672fb3dd801d3d01963b7"
+        },
+        {
+          "path": "surviving-pace-candidate--active-pace-runway--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "surviving-pace-candidate",
+      "case": "neutral-replay-clock",
+      "exe_sha256": "036c9a48348fd1cabaf8e18678f78d7ef11015ba23d14ca5d07fa978b737e040",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "surviving-pace-candidate--neutral-replay-clock--stdout.log.gz",
+          "original_sha256": "88943e8efabeea9ab2062c604e14e8e63affe0ddce4de1482869ca12bfecad57",
+          "portable_sha256": "88943e8efabeea9ab2062c604e14e8e63affe0ddce4de1482869ca12bfecad57",
+          "compressed_sha256": "be93db9e8e9c53dc83e8443f73828b9cc13f977fb6da4fd94716e8da0c55746d"
+        },
+        {
+          "path": "surviving-pace-candidate--neutral-replay-clock--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "surviving-pace-candidate",
+      "case": "surviving-pace-clock",
+      "exe_sha256": "036c9a48348fd1cabaf8e18678f78d7ef11015ba23d14ca5d07fa978b737e040",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "surviving-pace-candidate--surviving-pace-clock--stdout.log.gz",
+          "original_sha256": "cd9f6a4238c590ca448675e79b7d21d6ebdd6130e8e91884c692848752dc9583",
+          "portable_sha256": "cd9f6a4238c590ca448675e79b7d21d6ebdd6130e8e91884c692848752dc9583",
+          "compressed_sha256": "cdbec7628353d06fed3904635a691ed2dcdf0afc3b25be1cf07f94134d09a76d"
+        },
+        {
+          "path": "surviving-pace-candidate--surviving-pace-clock--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "surviving-pace-returns",
+      "case": "a_healed_tie_keeps_one_history_across_a_host_change",
+      "exe_sha256": "036c9a48348fd1cabaf8e18678f78d7ef11015ba23d14ca5d07fa978b737e040",
+      "visible_window": true,
+      "exit_code": 1,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "surviving-pace-returns--a_healed_tie_keeps_one_history_across_a_host_change--stdout.log.gz",
+          "original_sha256": "edc6dc3e01601ff083991c0e77d0c59db92b45f5c54fc1d8a4d49879a69150d2",
+          "portable_sha256": "edc6dc3e01601ff083991c0e77d0c59db92b45f5c54fc1d8a4d49879a69150d2",
+          "compressed_sha256": "cce3af344b1298d4917effe251f7432df5dc4718e42daca03c96bd177eaa41eb"
+        },
+        {
+          "path": "surviving-pace-returns--a_healed_tie_keeps_one_history_across_a_host_change--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "surviving-pace-returns",
+      "case": "joiner_catching_up_at_102_percent_returns_four_seats_over_100ms",
+      "exe_sha256": "036c9a48348fd1cabaf8e18678f78d7ef11015ba23d14ca5d07fa978b737e040",
+      "visible_window": true,
+      "exit_code": 1,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "surviving-pace-returns--joiner_catching_up_at_102_percent_returns_four_seats_over_100ms--stdout.log.gz",
+          "original_sha256": "733b28ee116be9e7ebeaf4423146b171697426a82c0c16abfaf5cd2e1ec84a73",
+          "portable_sha256": "733b28ee116be9e7ebeaf4423146b171697426a82c0c16abfaf5cd2e1ec84a73",
+          "compressed_sha256": "497dc09f77c50db6800b1774585c2640473a973dcb59e28910f3beecb83fc6a5"
+        },
+        {
+          "path": "surviving-pace-returns--joiner_catching_up_at_102_percent_returns_four_seats_over_100ms--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "fixture-credit-red",
+      "case": "authority_fixture_checks_each_half_and_never_waives_the_bound",
+      "exe_sha256": "b5cc4bbf3b97dd039629752e86eb57ed34e267d875dc5f14aef1fceafec9d63d",
+      "visible_window": true,
+      "exit_code": 1,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "fixture-credit-red--authority_fixture_checks_each_half_and_never_waives_the_bound--stdout.log.gz",
+          "original_sha256": "2cdf96f55f8600f857a348ab3c9972cb4b81ed538dea0d4ec7fd3b467bb1817f",
+          "portable_sha256": "2cdf96f55f8600f857a348ab3c9972cb4b81ed538dea0d4ec7fd3b467bb1817f",
+          "compressed_sha256": "b4b34e58d425ad98d10cc13fdd65864fe7ff32620b5ea41d4f28ba673247b2ab"
+        },
+        {
+          "path": "fixture-credit-red--authority_fixture_checks_each_half_and_never_waives_the_bound--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "fixture-credit-green",
+      "case": "a_healed_tie_keeps_one_history_across_a_host_change",
+      "exe_sha256": "24ac3869cc71665f16efb346b68cf397e5074280a273792ae5555df348d97b47",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "fixture-credit-green--a_healed_tie_keeps_one_history_across_a_host_change--stdout.log.gz",
+          "original_sha256": "e8d02a7af28abed9285e76bbc0b955c85aa9d022186039f7f8bf01abaec61713",
+          "portable_sha256": "e8d02a7af28abed9285e76bbc0b955c85aa9d022186039f7f8bf01abaec61713",
+          "compressed_sha256": "d866afd798656b9e0a0219cf505d2ccc31547905194a4c636ada2678cd0841b6"
+        },
+        {
+          "path": "fixture-credit-green--a_healed_tie_keeps_one_history_across_a_host_change--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "fixture-credit-green",
+      "case": "authority_fixture_checks_each_half_and_never_waives_the_bound",
+      "exe_sha256": "24ac3869cc71665f16efb346b68cf397e5074280a273792ae5555df348d97b47",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "fixture-credit-green--authority_fixture_checks_each_half_and_never_waives_the_bound--stdout.log.gz",
+          "original_sha256": "d79ef37cfbafeb993fd58cb1a61cbf396e65470641da69582c2920950efaf76a",
+          "portable_sha256": "d79ef37cfbafeb993fd58cb1a61cbf396e65470641da69582c2920950efaf76a",
+          "compressed_sha256": "7a4c17bd82f58d03eb213c0495be0ff384898a16fba8babd5c61341b7c67d724"
+        },
+        {
+          "path": "fixture-credit-green--authority_fixture_checks_each_half_and_never_waives_the_bound--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "fixture-credit-green",
+      "case": "four_seats_held_joiner_at_round_rate_uses_a_different_donor_over_200ms",
+      "exe_sha256": "24ac3869cc71665f16efb346b68cf397e5074280a273792ae5555df348d97b47",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "fixture-credit-green--four_seats_held_joiner_at_round_rate_uses_a_different_donor_over_200ms--stdout.log.gz",
+          "original_sha256": "328a8a642c0fab76574d592e1f0b0f3517648706e099bcc4af052c6aa144ab1d",
+          "portable_sha256": "328a8a642c0fab76574d592e1f0b0f3517648706e099bcc4af052c6aa144ab1d",
+          "compressed_sha256": "74f4868731cc6489762c818926dcbe7ab6bc20277cffb9864962da3f0c81af6c"
+        },
+        {
+          "path": "fixture-credit-green--four_seats_held_joiner_at_round_rate_uses_a_different_donor_over_200ms--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "fixture-credit-green",
+      "case": "joiner_catching_up_at_102_percent_returns_four_seats_over_100ms",
+      "exe_sha256": "24ac3869cc71665f16efb346b68cf397e5074280a273792ae5555df348d97b47",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "fixture-credit-green--joiner_catching_up_at_102_percent_returns_four_seats_over_100ms--stdout.log.gz",
+          "original_sha256": "e225627455674b5c1c6b19cc9c01e897f6cee131dfea7aa85f097c69d2be966a",
+          "portable_sha256": "e225627455674b5c1c6b19cc9c01e897f6cee131dfea7aa85f097c69d2be966a",
+          "compressed_sha256": "efbf46da28bd27e1db6873c57f62206875edf1a200946024f143053ae0c5d578"
+        },
+        {
+          "path": "fixture-credit-green--joiner_catching_up_at_102_percent_returns_four_seats_over_100ms--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "fixture-credit-green",
+      "case": "refereed_2_2_split_then_a_second_drop_in_the_same_hold_over_100ms",
+      "exe_sha256": "24ac3869cc71665f16efb346b68cf397e5074280a273792ae5555df348d97b47",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "fixture-credit-green--refereed_2_2_split_then_a_second_drop_in_the_same_hold_over_100ms--stdout.log.gz",
+          "original_sha256": "ab1cdce9a72dec0208bdd9bac5063ef2e4490a28eb837ef80a8b3682719b01cb",
+          "portable_sha256": "ab1cdce9a72dec0208bdd9bac5063ef2e4490a28eb837ef80a8b3682719b01cb",
+          "compressed_sha256": "8db837f001f838bd1e4898d894a1b6856a53968862cdb6c15a710db41ef4f403"
+        },
+        {
+          "path": "fixture-credit-green--refereed_2_2_split_then_a_second_drop_in_the_same_hold_over_100ms--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "fixture-credit-green",
+      "case": "steady_rtt_250ms_120s",
+      "exe_sha256": "24ac3869cc71665f16efb346b68cf397e5074280a273792ae5555df348d97b47",
+      "visible_window": true,
+      "exit_code": 1,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "fixture-credit-green--steady_rtt_250ms_120s--stdout.log.gz",
+          "original_sha256": "e1f25cadc2513521a314ce767821c69f92a2aa76c885e7fdaa973e00ef032887",
+          "portable_sha256": "e1f25cadc2513521a314ce767821c69f92a2aa76c885e7fdaa973e00ef032887",
+          "compressed_sha256": "0ecc84fbe520a84a7060b8d53d4013721f6efaa1bb12fe37a0a80c4b6b1f5b9f"
+        },
+        {
+          "path": "fixture-credit-green--steady_rtt_250ms_120s--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "fixture-credit-inventory",
+      "case": "net-input-acceptance-selftest",
+      "exe_sha256": "24ac3869cc71665f16efb346b68cf397e5074280a273792ae5555df348d97b47",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "fixture-credit-inventory--net-input-acceptance-selftest--stdout.log.gz",
+          "original_sha256": "e85bdebf2bb7e6931429ec7228a3e2942c87da3686eb6de5728248a0e9ed169d",
+          "portable_sha256": "e85bdebf2bb7e6931429ec7228a3e2942c87da3686eb6de5728248a0e9ed169d",
+          "compressed_sha256": "e87ccfdbe1c7a5938e08db3178294e54a27b1620eccb28cc09ad49a6a25f7c43"
+        },
+        {
+          "path": "fixture-credit-inventory--net-input-acceptance-selftest--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "fixture-credit-inventory",
+      "case": "net-lockstep-release-paths-selftest",
+      "exe_sha256": "24ac3869cc71665f16efb346b68cf397e5074280a273792ae5555df348d97b47",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "fixture-credit-inventory--net-lockstep-release-paths-selftest--stdout.log.gz",
+          "original_sha256": "5e4785737a6865300acc0c071e1ba610be196c5f6ce3506062646fc9eefb7819",
+          "portable_sha256": "5e4785737a6865300acc0c071e1ba610be196c5f6ce3506062646fc9eefb7819",
+          "compressed_sha256": "a7a7326214410ec648a4b6aef15af9ad1f164a4558d66271c1199a50e7102a3b"
+        },
+        {
+          "path": "fixture-credit-inventory--net-lockstep-release-paths-selftest--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "fixture-credit-inventory",
+      "case": "net-lockstep-released-claims-selftest",
+      "exe_sha256": "24ac3869cc71665f16efb346b68cf397e5074280a273792ae5555df348d97b47",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "fixture-credit-inventory--net-lockstep-released-claims-selftest--stdout.log.gz",
+          "original_sha256": "1d127c5f49a32e16cd8da259843cabd4428945fac41c2d534a4c724617fdc397",
+          "portable_sha256": "1d127c5f49a32e16cd8da259843cabd4428945fac41c2d534a4c724617fdc397",
+          "compressed_sha256": "7f35e7ca46ce3681f319e11c0c9f8a39013342c530cd0aec7a3a9a4a8f3fb81a"
+        },
+        {
+          "path": "fixture-credit-inventory--net-lockstep-released-claims-selftest--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "fixture-credit-inventory",
+      "case": "net-lockstep-seat-admission-selftest",
+      "exe_sha256": "24ac3869cc71665f16efb346b68cf397e5074280a273792ae5555df348d97b47",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "fixture-credit-inventory--net-lockstep-seat-admission-selftest--stdout.log.gz",
+          "original_sha256": "7c145b1802547b3ffeb49598fa7b6733d87702d68620ba524ac29542e38bc556",
+          "portable_sha256": "7c145b1802547b3ffeb49598fa7b6733d87702d68620ba524ac29542e38bc556",
+          "compressed_sha256": "9e690768de4ef87183fe36153bbb4cdcbc6122454f4dc3548d15cf1347ea8d77"
+        },
+        {
+          "path": "fixture-credit-inventory--net-lockstep-seat-admission-selftest--stderr.log.gz",
+          "original_sha256": "f1b2fd4d18cce772cb75cf58926c45650d23a58dec9d19cc9a963a0f4271f284",
+          "portable_sha256": "f1b2fd4d18cce772cb75cf58926c45650d23a58dec9d19cc9a963a0f4271f284",
+          "compressed_sha256": "9a63c20c52fae3109af7a9fe6cc7566b3a92ab1f52342a0b9c7c363425c924d1"
+        }
+      ]
+    },
+    {
+      "collection": "fixture-credit-inventory",
+      "case": "net-lockstep-seat-succession-selftest",
+      "exe_sha256": "24ac3869cc71665f16efb346b68cf397e5074280a273792ae5555df348d97b47",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "fixture-credit-inventory--net-lockstep-seat-succession-selftest--stdout.log.gz",
+          "original_sha256": "23bb59e959b0da2aaa67e04a86ea6757da91a90a119dee85a1e9337e12451dd2",
+          "portable_sha256": "23bb59e959b0da2aaa67e04a86ea6757da91a90a119dee85a1e9337e12451dd2",
+          "compressed_sha256": "e9724ab3a74376137416b6cc4f0d2c64c6b5bf70d2551ebcdc69363752f5f993"
+        },
+        {
+          "path": "fixture-credit-inventory--net-lockstep-seat-succession-selftest--stderr.log.gz",
+          "original_sha256": "dfa7726ec2f3ef47d7403769f7365ed29a5d9eb9a9cf02895bb4242a69dad5cb",
+          "portable_sha256": "dfa7726ec2f3ef47d7403769f7365ed29a5d9eb9a9cf02895bb4242a69dad5cb",
+          "compressed_sha256": "062af8542d08fbd7c671a9724d97c68e54adae462eb8614e1a3ba623b834137c"
+        }
+      ]
+    },
+    {
+      "collection": "fixture-credit-inventory",
+      "case": "net-lockstep-selftest",
+      "exe_sha256": "24ac3869cc71665f16efb346b68cf397e5074280a273792ae5555df348d97b47",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "fixture-credit-inventory--net-lockstep-selftest--stdout.log.gz",
+          "original_sha256": "6ee403aab55cfeed09b240e5b18e77ac8b6a3b312d370d2f5c35de06d315b232",
+          "portable_sha256": "6ee403aab55cfeed09b240e5b18e77ac8b6a3b312d370d2f5c35de06d315b232",
+          "compressed_sha256": "35c779823b9570b56f57dc556cbddb12e2ee696284cd5ab497c3df3d106fc198"
+        },
+        {
+          "path": "fixture-credit-inventory--net-lockstep-selftest--stderr.log.gz",
+          "original_sha256": "bfdc29fdfcf5b37842f01c5f7984efc1e426e23802e96de04ab4862ddf5fc6b1",
+          "portable_sha256": "bfdc29fdfcf5b37842f01c5f7984efc1e426e23802e96de04ab4862ddf5fc6b1",
+          "compressed_sha256": "6c817c1615e7669051461a53cbf38cffb663b4a0cf0b5e6f350c95fd3d247506"
+        }
+      ]
+    },
+    {
+      "collection": "fixture-credit-inventory",
+      "case": "net-rejoin-matrix-selftest",
+      "exe_sha256": "24ac3869cc71665f16efb346b68cf397e5074280a273792ae5555df348d97b47",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "fixture-credit-inventory--net-rejoin-matrix-selftest--stdout.log.gz",
+          "original_sha256": "d82ea77097a8169a1efc939bc0b8501b823681ab6dd1074e91b78290efa24074",
+          "portable_sha256": "d82ea77097a8169a1efc939bc0b8501b823681ab6dd1074e91b78290efa24074",
+          "compressed_sha256": "3b86902231c94b4dcaa0c9d4259889574e265a82436dbe791ef73f48780efc83"
+        },
+        {
+          "path": "fixture-credit-inventory--net-rejoin-matrix-selftest--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "fixture-credit-inventory",
+      "case": "net-session-plane-hold-schedules-selftest",
+      "exe_sha256": "24ac3869cc71665f16efb346b68cf397e5074280a273792ae5555df348d97b47",
+      "visible_window": true,
+      "exit_code": 1,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "fixture-credit-inventory--net-session-plane-hold-schedules-selftest--stdout.log.gz",
+          "original_sha256": "31d32b04a674e0e2e6d2ecab7b7bf550521cd31b5bda2caf1daac59725ed906f",
+          "portable_sha256": "31d32b04a674e0e2e6d2ecab7b7bf550521cd31b5bda2caf1daac59725ed906f",
+          "compressed_sha256": "aabd45f0ef2bf60addd718dc5de60d6dd671b33afcb2b7466d941b406e40570d"
+        },
+        {
+          "path": "fixture-credit-inventory--net-session-plane-hold-schedules-selftest--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "fixture-credit-inventory",
+      "case": "net-session-plane-selftest",
+      "exe_sha256": "24ac3869cc71665f16efb346b68cf397e5074280a273792ae5555df348d97b47",
+      "visible_window": true,
+      "exit_code": 1,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "fixture-credit-inventory--net-session-plane-selftest--stdout.log.gz",
+          "original_sha256": "b79ddab7c67e1437df981e093c087c1c1fb569b4d8bb20598062a97bfd357c73",
+          "portable_sha256": "b79ddab7c67e1437df981e093c087c1c1fb569b4d8bb20598062a97bfd357c73",
+          "compressed_sha256": "816bbc671f8caec1489edd712287fd704e400dea5f2a55265a44cdd83881298d"
+        },
+        {
+          "path": "fixture-credit-inventory--net-session-plane-selftest--stderr.log.gz",
+          "original_sha256": "e297e3bbe435723304639d20623a81dd7a93a3e092edee35061d9c4c9800e00c",
+          "portable_sha256": "e297e3bbe435723304639d20623a81dd7a93a3e092edee35061d9c4c9800e00c",
+          "compressed_sha256": "79798acc13dd7e0c97d3ca3c84168ac85fae44f89abae45f86f9e3d94b5e1610"
+        }
+      ]
+    },
+    {
+      "collection": "fixture-credit-inventory",
+      "case": "net-world-join-selftest",
+      "exe_sha256": "24ac3869cc71665f16efb346b68cf397e5074280a273792ae5555df348d97b47",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "fixture-credit-inventory--net-world-join-selftest--stdout.log.gz",
+          "original_sha256": "89ca1ee2062ea2dc4ee52a7796a1bc25daa69d2e306f232cadc1a310ed7f4263",
+          "portable_sha256": "89ca1ee2062ea2dc4ee52a7796a1bc25daa69d2e306f232cadc1a310ed7f4263",
+          "compressed_sha256": "070e771f9332a9b1e5e15aad9f61ddb1392f7a8e82b08f3a1926df40f32e1b12"
+        },
+        {
+          "path": "fixture-credit-inventory--net-world-join-selftest--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "fixture-credit-direct-controls",
+      "case": "direct-split-human-majority",
+      "exe_sha256": "24ac3869cc71665f16efb346b68cf397e5074280a273792ae5555df348d97b47",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "fixture-credit-direct-controls--direct-split-human-majority--stdout.log.gz",
+          "original_sha256": "2108f3cee84bce7915a8a1005f7b177a5b0e72e62852560cc3c53fab4525ba46",
+          "portable_sha256": "2108f3cee84bce7915a8a1005f7b177a5b0e72e62852560cc3c53fab4525ba46",
+          "compressed_sha256": "d1a8f444d7310a11b980bc9732fd59b4eec4c2ae8c64bf881d4a6946d48a4c70"
+        },
+        {
+          "path": "fixture-credit-direct-controls--direct-split-human-majority--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "fixture-credit-direct-controls",
+      "case": "direct-split-lone",
+      "exe_sha256": "24ac3869cc71665f16efb346b68cf397e5074280a273792ae5555df348d97b47",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "fixture-credit-direct-controls--direct-split-lone--stdout.log.gz",
+          "original_sha256": "4fa1f7f83f13b4d682fdbdab13ebc325e72fb873a8c978cb9f38fb364e044a9e",
+          "portable_sha256": "4fa1f7f83f13b4d682fdbdab13ebc325e72fb873a8c978cb9f38fb364e044a9e",
+          "compressed_sha256": "66c00b01b61650216707850c0507f4984e5b916f4fb827af80e8926674cdea97"
+        },
+        {
+          "path": "fixture-credit-direct-controls--direct-split-lone--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "fixture-credit-direct-controls",
+      "case": "direct-split-one-way",
+      "exe_sha256": "24ac3869cc71665f16efb346b68cf397e5074280a273792ae5555df348d97b47",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "fixture-credit-direct-controls--direct-split-one-way--stdout.log.gz",
+          "original_sha256": "85999883c7ddad81ca0639850d664f8bbd29d7930382706dd3ea918ac346d461",
+          "portable_sha256": "85999883c7ddad81ca0639850d664f8bbd29d7930382706dd3ea918ac346d461",
+          "compressed_sha256": "f3a3feaf47f257f0ced44221cd471c99030cef1c1642e76dca8da4204027b320"
+        },
+        {
+          "path": "fixture-credit-direct-controls--direct-split-one-way--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "fixture-credit-direct-controls",
+      "case": "direct-split-one-way-joiner",
+      "exe_sha256": "24ac3869cc71665f16efb346b68cf397e5074280a273792ae5555df348d97b47",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "fixture-credit-direct-controls--direct-split-one-way-joiner--stdout.log.gz",
+          "original_sha256": "6bfc9ca895f12c9b84428af455ca7eaf3783116d56aef8bd2678ddf1a4d4b44e",
+          "portable_sha256": "6bfc9ca895f12c9b84428af455ca7eaf3783116d56aef8bd2678ddf1a4d4b44e",
+          "compressed_sha256": "177817182d33dd9187c9f8f0cd99a5d742c783caad8d5d34e68af7c014fcdc7e"
+        },
+        {
+          "path": "fixture-credit-direct-controls--direct-split-one-way-joiner--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "fixture-credit-direct-controls",
+      "case": "direct-split-two-two",
+      "exe_sha256": "24ac3869cc71665f16efb346b68cf397e5074280a273792ae5555df348d97b47",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "fixture-credit-direct-controls--direct-split-two-two--stdout.log.gz",
+          "original_sha256": "bd55d7e3f75061e27706fa4e7055719220c8443a6caee4f144dd3d5a37b97acd",
+          "portable_sha256": "bd55d7e3f75061e27706fa4e7055719220c8443a6caee4f144dd3d5a37b97acd",
+          "compressed_sha256": "ef65bf77a3e23f77c74ad84ab0cd076904f656472343673cc237eb1d51e0de5e"
+        },
+        {
+          "path": "fixture-credit-direct-controls--direct-split-two-two--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    }
+  ]
+}

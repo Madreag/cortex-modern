@@ -1123,6 +1123,22 @@ namespace RTE {
 		}
 		// A row on a pool worker runs beside others: no plane ticks its coordinators, so it takes no plane lock and none waits on it.
 		thread_local bool t_PoolWorker = false;
+		// FLAGGED fixture departure: Main/TimerMan retain ordinary elapsed time separately from the bounded extra grants.
+		// A neutral return or a filled receipt runway can end acceleration between any two ticks, including one burst.
+		struct FixtureTickCredit {
+			double ordinary = 0, accelerated = 0;
+			void Accrue(double elapsedMs, double ordinaryRate, double catchUpRate, bool catchingUp) {
+				ordinary = std::min(6.0, ordinary + elapsedMs * ordinaryRate / c_TestTickMs);
+				accelerated = catchingUp ? std::min(6.0, accelerated + elapsedMs * catchUpRate / c_TestTickMs) : 0;
+			}
+			bool MayGrant(bool catchingUp) const { return catchingUp ? accelerated >= 1 : ordinary >= 1; }
+			void Consume(bool catchingUp) {
+				// GrantSimUpdates adds one whole tick only when ordinary time cannot fund it; its fractional remainder survives.
+				if (ordinary >= 1) ordinary -= 1;
+				if (catchingUp) accelerated -= 1;
+			}
+			void Reset() { ordinary = accelerated = 0; }
+		};
 		struct Fixture {
 			NetSeatRoster agreedRoster;
 			WorldDigestCache sharedDigests;
@@ -1148,7 +1164,7 @@ namespace RTE {
 			std::function<void()> onThaw;
 			bool freezeStarted = false, thawed = false;
 			uint64_t freezeWallMs = 0;
-			std::vector<double> credits;
+			std::vector<FixtureTickCredit> credits;
 			std::vector<uint64_t> queued, waitAt, maxWait, caughtAt;
 			std::vector<uint64_t> displayedAt, blackoutGap, returnedAt, postReturnWait, imageAt;
 			std::vector<uint64_t> firstDisplayedAt;
@@ -1499,7 +1515,7 @@ namespace RTE {
 					if (earlierRoundRule.empty()) earlierRoundRule = TwoReturnFrames();
 					for (auto& peer: peers) peer = std::make_unique<NetLockstepCoordinator>();
 					for (uint8_t id = 1; id <= hub.row.seats; ++id) {
-						worlds[id - 1] = World{}; worlds[id - 1].sharedDigests = &sharedDigests; credits[id - 1] = 0; queued[id - 1] = 0; waitAt[id - 1] = 0;
+						worlds[id - 1] = World{}; worlds[id - 1].sharedDigests = &sharedDigests; credits[id - 1].Reset(); queued[id - 1] = 0; waitAt[id - 1] = 0;
 						if (heldSince[id] != UINT64_MAX) { heldSpans[id].push_back({heldSince[id], hub.now}); heldSince[id] = UINT64_MAX; }
 					}
 					hashedThrough = 0; sharedDigests.clear(); roundStartMs = hub.now;
@@ -1618,7 +1634,7 @@ namespace RTE {
 						if (!startupResumeAt[id - 1]) startupResumeAt[id - 1] = hub.now + (id - 1) * 70;
 						if (hub.now < startupResumeAt[id - 1]) continue;
 					}
-					if ((hub.row.frozen && id == hub.row.subject && hub.DuringFault()) || hung(id) || stopped(id)) { credits[id - 1] = 0; continue; }
+					if ((hub.row.frozen && id == hub.row.subject && hub.DuringFault()) || hung(id) || stopped(id)) { credits[id - 1].Reset(); continue; }
 					const Spell* const spell = scheduled ? scheduled->Active(id, hub.now) : nullptr;
 					const bool refault = hub.row.refaultPercent && id == hub.row.subject && hub.InRefault();
 					const bool slowed = refault || (hub.row.slowPercent && id == hub.row.subject && hub.DuringFault()) || (spell && spell->kind == Spell::Kind::Slow);
@@ -1626,9 +1642,9 @@ namespace RTE {
 					const uint32_t capacity = scheduled ? scheduled->CapacityPercent(id, hub.now) : 0;
 					const bool atRoundRate = id == hub.row.subject && hub.row.roundRateAfterMs && hub.now >= hub.faultEnd + hub.row.roundRateAfterMs;
 					const double catchUpRate = scheduled ? capacity / 100.0 : atRoundRate ? 1.0 : hub.row.catchUpPercent && id == hub.row.subject ? hub.row.catchUpPercent / 100.0 : c_TestCatchUpRate;
-					credits[id - 1] += hub.row.stepMs * (slowed ? ratePercent / 100.0 : CatchingUp(peer) ? catchUpRate : 1) / c_TestTickMs;
-					credits[id - 1] = std::min(credits[id - 1], 6.0);
-					while (credits[id - 1] >= 1) {
+					credits[id - 1].Accrue(hub.row.stepMs, slowed ? ratePercent / 100.0 : 1, catchUpRate, !slowed && CatchingUp(peer));
+					while (credits[id - 1].MayGrant(!slowed && CatchingUp(peer))) {
+						const bool accelerated = !slowed && CatchingUp(peer);
 						const uint64_t next = world.applied + 1;
 						if (queued[id - 1] != next && !peer.TimingDecisionPendingAt(next)) {
 							ControllerFrame input; input.actorUniqueID = 1000 + id; input.analogMoveX = id * 100;
@@ -1659,7 +1675,7 @@ namespace RTE {
 						frameMembers[id - 1].push_back(s_FrameMembers(peer, ready.frame));
 						frameAuthors[id - 1].push_back(id);
 						if (hub.row.captureFrames) committed[id - 1][ready.frame] = ready;
-						peer.FinishSimulationTick(ready.frame); credits[id - 1] -= 1;
+						peer.FinishSimulationTick(ready.frame); credits[id - 1].Consume(accelerated);
 						if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) {
 							const char* watched = std::getenv("CC_TEST_LOCKSTEP_OBSERVE_TARGET");
 							const uint64_t target = watched ? std::strtoull(watched, nullptr, 10) : UINT64_MAX;
@@ -2092,7 +2108,7 @@ namespace RTE {
 			    std::to_string(static_cast<int>(fixture.peers[seat - 1]->GetState())) + " starts_received=" + std::to_string(fixture.peers[seat - 1]->GetStats().startPacketsReceived) + s_WaitState(*fixture.peers[seat - 1]));
 			fixture.peers[seat - 1]->AdoptReplayedSeatTransitions(replayCoordinator, activation - 1);
 			fixture.discardedHistories[seat - 1].push_back(fixture.worlds[seat - 1].hashes);
-			fixture.worlds[seat - 1] = std::move(replay); fixture.queued[seat - 1] = activation - 1; fixture.credits[seat - 1] = 0; fixture.waitAt[seat - 1] = 0;
+			fixture.worlds[seat - 1] = std::move(replay); fixture.queued[seat - 1] = activation - 1; fixture.credits[seat - 1].Reset(); fixture.waitAt[seat - 1] = 0;
 			fixture.frameMembers[seat - 1].assign(fixture.frameMembers[donor - 1].begin(), fixture.frameMembers[donor - 1].begin() + activation);
 			fixture.frameAuthors[seat - 1].assign(fixture.frameAuthors[donor - 1].begin(), fixture.frameAuthors[donor - 1].begin() + activation);
 			fixture.committed[seat - 1].clear();
@@ -2260,6 +2276,22 @@ namespace RTE {
 			return passed;
 		}
 		bool CheckAuthorityOracle(std::string& error) {
+			// Main checks every extra grant again; ending catch-up cannot spend its leftover acceleration as ordinary time.
+			FixtureTickCredit credit;
+			credit.Accrue(2 * c_TestTickMs, 1, 3, true);
+			if (!credit.MayGrant(true)) { error = "fixture lost its bounded accelerated grant"; return false; }
+			credit.Consume(true);
+			unsigned ordinary = 0;
+			while (credit.MayGrant(false)) { credit.Consume(false); ++ordinary; }
+			if (ordinary != 1) {
+				error = "fixture spent accelerated credit after catch-up ended: ordinary_grants=" + std::to_string(ordinary) + " expected=1"; return false;
+			}
+			FixtureTickCredit fractional;
+			fractional.Accrue(c_TestTickMs / 2, 1, 3, true); fractional.Consume(true);
+			fractional.Accrue(c_TestTickMs / 2, 1, 3, false);
+			if (!fractional.MayGrant(false)) { error = "fixture extra grant discarded fractional ordinary time"; return false; }
+			fractional.Consume(false);
+			if (fractional.MayGrant(false)) { error = "fixture counted its fractional ordinary time twice"; return false; }
 			Hub fault;
 			fault.row.subject = 1; fault.row.gapMs = 8000; fault.row.hung = true;
 			fault.now = 7000; fault.faultEnd = 14000;
