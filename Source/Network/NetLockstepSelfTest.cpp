@@ -8,6 +8,7 @@
 #include "LoopbackTransport.h"
 #include "GnsTransport.h"
 #include "NetLockstep.h"
+#include "NetPeerFrameHelpers.h"
 #include "NetMatchService.h"
 #include "NetAuthCrypto.h"
 #include "NetLobbySession.h"
@@ -178,7 +179,7 @@ namespace RTE {
 				peer.m_TimingNowMs = 1041;
 				const bool held = peer.ProposePeerBridge(349, 1041);
 				if (complete) {
-					if (held || peer.m_PeerBridgeCertificates.contains({349, 0})) { *error = "complete input acceptance held a healthy member"; return false; }
+					if (held || NetPeerFrameDetail::HasHoldDecision(peer.m_PeerBridgeCertificates, 349)) { *error = "complete input acceptance held a healthy member"; return false; }
 				} else if (!held || peer.m_FrameGroupMembers != 3 || peer.IsSeatUnderAI(1, 349) ||
 				    !peer.IsSeatUnderAI(3, 349) || !peer.IsSeatUnderAI(4, 349)) {
 					*error = "the local input's complete receipts hid another required sender's missing quorum at the consumer bound"; return false;
@@ -209,11 +210,11 @@ namespace RTE {
 					peer.m_PeerInputReceipts[1] = {{1, 352}, {2, 352}, {3, 352}};
 				}
 				peer.m_TimingNowMs = 1030;
-				if (peer.ProposePeerBridge(351, 1030) || peer.m_PeerBridgeVotes.contains({351, 0})) {
+				if (peer.ProposePeerBridge(351, 1030) || NetPeerFrameDetail::HasHoldDecision(peer.m_PeerBridgeVotes, 351)) {
 					*error = "a consumer hold spent a healthy displayed slot before its bounded deadline"; return false;
 				}
 				peer.m_TimingNowMs = 1041;
-				if (!peer.ProposePeerBridge(351, 1041) || !peer.m_PeerBridgeCertificates.contains({351, 0}) ||
+				if (!peer.ProposePeerBridge(351, 1041) || !NetPeerFrameDetail::HasHoldDecision(peer.m_PeerBridgeCertificates, 351, 1) ||
 				    !peer.IsSeatUnderAI(1, 351) || peer.IsSeatUnderAI(3, 351)) {
 					*error = std::string(receiptOnly ? "receipt" : "input") +
 					    " hold adds a normal tick to the 50ms displayed bound, or its certificate uses another deadline"; return false;
@@ -266,6 +267,50 @@ namespace RTE {
 				const bool held = peer.ProposePeerBridge(351, 1041);
 				if (held != (role == 0 || role == 3) || (held && (!peer.IsSeatUnderAI(1, 351) || peer.IsSeatUnderAI(3, 351)))) {
 					*error = "a participating neutral return needs no own human input to hold another missing sender, while a private reader does"; return false;
+				}
+			}
+			return true;
+		}
+
+		static bool ConcurrentVoluntaryHoldsKeepBothOwners(std::string* error) {
+			Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
+			peer.m_Config.localPeerId = 1;
+			peer.m_Config.peerFrameGroups = peer.m_Config.substituteSlowPeers = true;
+			peer.m_Config.slowPlayerBoundTicks = 3;
+			peer.m_MigrationPhase = NetHostMigrationPhase::None;
+			peer.m_FrameGroupMembers = 7; peer.m_FrameGroupChanges = {{1, 7}};
+			peer.m_RemotePeerIds = {2, 3}; peer.m_RemoteTransports = {{2, 42}, {3, 43}};
+			peer.m_Stats.nextFrame = 353; peer.m_LastCompletedSimulationTick = 350;
+			peer.m_MigrationHistory[350] = {1, 2, 3};
+			for (uint8_t owner: {2, 3}) {
+				auto proposal = peer.PeerFrameMessage(NetHostMigrationMessageType::PeerBridge);
+				proposal.senderPeerId = owner; proposal.successorPeerId = 1;
+				proposal.voterMask = 1U << (owner - 1);
+				proposal.frame = 358; proposal.boundary = 350; proposal.preparedFrame = 0;
+				proposal.members = {owner}; proposal.connectedMask = 7 & ~proposal.voterMask;
+				const auto prefix = peer.PeerAppliedFramePrefix(350);
+				proposal.bytes.assign(prefix.begin(), prefix.end()); proposal.totalBytes = proposal.bytes.size();
+				if (!peer.HandlePeerFrameMessage(proposal, 1000)) { *error = "a voluntary hold was not handled"; return false; }
+			}
+			if (peer.m_PeerBridgeVotes.size() != 2) {
+				*error = "independent owners' holds at the same frame collide in one decision slot"; return false;
+			}
+			peer.m_Stats.nextFrame = 358; peer.m_LastCompletedSimulationTick = 357;
+			peer.m_MigrationHistory[357] = {4, 5, 6};
+			const auto preceding = peer.PeerAppliedFramePrefix(357);
+			peer.m_PeerConsumerAtMs = 1000; peer.m_ConsumerWaitingFrame = 358; peer.m_ConsumerWaitStartMs = 1017;
+			peer.m_TimingNowMs = 1041;
+			for (const auto& [key, votes]: peer.m_PeerBridgeVotes) peer.TryCommitPeerBridge(key.first, 1041, key.second);
+			if (peer.m_PeerBridgeCertificates.size() != 2 || peer.m_FrameGroupMembers != 1 ||
+			    !peer.IsSeatUnderAI(2, 358) || !peer.IsSeatUnderAI(3, 358) || peer.IsSeatUnderAI(1, 358) ||
+			    peer.IsSeatUnderAI(2, 357) || peer.IsSeatUnderAI(3, 357) || peer.PeerAppliedFramePrefix(357) != preceding) {
+				*error = "the same-frame holds did not compose at the local deadline with the preceding history intact"; return false;
+			}
+			for (const auto& [key, certificate]: peer.m_PeerBridgeCertificates) {
+				NetHostMigrationMessage agreed; uint32_t voters = 0;
+				if (!peer.DecodePeerBridgeCertificate(certificate, agreed, voters) || agreed.members.size() != 1 ||
+				    (voters & (1U << (agreed.members.front() - 1))) == 0 || (voters & 1) == 0) {
+					*error = "a composed hold lost its owner's or survivor's actual signature"; return false;
 				}
 			}
 			return true;
@@ -482,7 +527,7 @@ namespace RTE {
 				peer.InstallPeerBridge(certificate, 1000);
 				const std::string mode = std::string(directory ? "directory" : "direct") + " role=" + std::to_string(role);
 				if (role == 2) {
-					check(peer.m_PeerBridgeCertificates.contains({100, 0}) && peer.m_FrameGroupMembers == 3, mode + " a matching historical hold was rejected");
+					check(peer.m_PeerBridgeCertificates.contains({100, NetPeerFrameDetail::DecisionKind(vote)}) && peer.m_FrameGroupMembers == 3, mode + " a matching historical hold was rejected");
 				} else check(!peer.m_PeerBridges.contains(role == 0 ? 1 : 3) && peer.m_FrameGroupMembers == (role == 0 ? 3U : 7U) &&
 				    peer.m_PendingPeerDecisions.empty(), mode + " foreign hold replaced played history");
 				check(peer.m_PeerFrameTie && !peer.m_PeerFrameTie->queryOnly && peer.m_PeerFrameTie->members == std::vector<uint16_t>{1}, mode + " foreign hold replaced the local arbitration question");
@@ -1173,7 +1218,7 @@ namespace RTE {
 					certificate.totalBytes = certificate.bytes.size();
 					if (!held) { lastReturn = certificate; peer.m_PeerReturnProofs[frame] = certificate; }
 					if (deliver) peer.InstallPeerBridge(certificate, 1000 + frame);
-					return peer.m_PeerBridgeCertificates.contains({frame, held ? 0 : 1});
+					return peer.m_PeerBridgeCertificates.contains({frame, NetPeerFrameDetail::DecisionKind(proposal)});
 				};
 				if (!install(2, true, 51, 13, 15)) { *error = "the first signed hold was not installed"; return false; }
 				peer.m_Stats.nextFrame = 91;
@@ -1583,7 +1628,7 @@ namespace RTE {
 			}
 			certificate.totalBytes = certificate.bytes.size();
 			peer.InstallPeerBridge(certificate, 1000);
-			if (!peer.m_PeerBridgeCertificates.contains({4460, 0}) || peer.m_PeerBridges[1].returnFrame || peer.m_HoldTransactions.contains(1)) {
+			if (!NetPeerFrameDetail::HasHoldDecision(peer.m_PeerBridgeCertificates, 4460, 1) || peer.m_PeerBridges[1].returnFrame || peer.m_HoldTransactions.contains(1)) {
 				*error = "the signed future hold did not install before its AI handoff"; return false;
 			}
 			NetLockstepReadyFrame ready;
@@ -1910,10 +1955,10 @@ namespace RTE {
 				invitation.preparedFrame = 0; invitation.connectedMask = 2; invitation.voterMask = 0; invitation.members = {1};
 				const auto invitationPrefix = survivor.PeerFramePrefix(4422);
 				invitation.bytes.assign(invitationPrefix.begin(), invitationPrefix.end()); invitation.totalBytes = invitation.bytes.size();
-				survivor.m_PeerBridgeVotes[{4423, 0}][2] = invitation;
-				const auto pending = survivor.m_PeerBridgeVotes.find({4423, 0});
+				survivor.m_PeerBridgeVotes[{4423, NetPeerFrameDetail::DecisionKind(invitation)}][2] = invitation;
+				const auto pending = survivor.m_PeerBridgeVotes.find({4423, NetPeerFrameDetail::DecisionKind(invitation)});
 				if (pending == survivor.m_PeerBridgeVotes.end() || !pending->second.contains(2) || pending->second.at(2).voterMask != 0 ||
-				    (survivor.m_PeerRejectedInputs[4423] & 1) != 0 || survivor.m_PeerBridgeCertificates.contains({4423, 0})) {
+				    (survivor.m_PeerRejectedInputs[4423] & 1) != 0 || NetPeerFrameDetail::HasHoldDecision(survivor.m_PeerBridgeCertificates, 4423, 1)) {
 					*error = "a hold needing its owner's consent fenced a timely input before that consent"; return false;
 				}
 				if (produced) owner.m_LastQueuedTargetFrame = 4423;
@@ -1928,7 +1973,7 @@ namespace RTE {
 					survivor.HandlePeerFrameMessage(message, 1020);
 				}
 				const bool consent = !produced;
-				if (signedByOwner != consent || survivor.m_PeerBridgeCertificates.contains({4423, 0}) != consent ||
+				if (signedByOwner != consent || NetPeerFrameDetail::HasHoldDecision(survivor.m_PeerBridgeCertificates, 4423, 1) != consent ||
 				    ((survivor.m_PeerRejectedInputs[4423] & 1) != 0) != consent) {
 					*error = "the hold failed to require its owner's promise before fencing and certifying"; return false;
 				}
@@ -1961,7 +2006,7 @@ namespace RTE {
 			proposal.bytes.assign(prefix.begin(), prefix.end()); proposal.totalBytes = proposal.bytes.size();
 			if (!host.CoSignsOwnHold(proposal)) { *error = "a slow host cannot co-sign its own future hold"; return false; }
 			host.HandlePeerFrameMessage(proposal, 100);
-			if (!host.m_PeerBridgeVotes[{4460, 0}].contains(1)) { *error = "the host did not sign the agreed future cutoff"; return false; }
+			if (!host.m_PeerBridgeVotes[{4460, NetPeerFrameDetail::DecisionKind(proposal)}].contains(1)) { *error = "the host did not sign the agreed future cutoff"; return false; }
 			if (host.QueueInputAtTarget(4460, {}, {}, error, {}) || host.m_LocalFrames.contains(4460)) {
 				*error = "a co-signing seat produced an input at its own promised hold cutoff"; return false;
 			}
@@ -1995,7 +2040,7 @@ namespace RTE {
 				volunteer.m_OwnDisplayProgress = {{0, arm == 1 ? 4382 : 4364}, {1000, 4422}};
 				if (arm != 3) volunteer.m_PeerAppliedProgress[2] = {{0, arm == 1 ? 4382 : 4362}, {1000, 4422}};
 				(void)volunteer.ProposePeerBridge(4423, 1000, true);
-				const auto future = volunteer.m_PeerBridgeVotes.find({4426, 0});
+				const auto future = volunteer.m_PeerBridgeVotes.find({4426, 0x11});
 				const bool offered = future != volunteer.m_PeerBridgeVotes.end() && future->second.contains(1) &&
 				    future->second.at(1).members == std::vector<uint8_t>{1} && future->second.at(1).connectedMask == 2;
 				if (offered != (arm == 0)) { *error = "own future handoff did not distinguish sustained relative slowdown, shared load, capture and clocks"; return false; }
@@ -2069,7 +2114,7 @@ namespace RTE {
 					directoryAnswered = true;
 					for (auto& peer: peers) {
 						if (peer.TakePendingPeerDecisions(7000) || !peer.m_PendingPeerDecisions.empty() ||
-						    !peer.m_PeerBridgeCertificates.contains({4423, 0}) || !peer.m_PeerBridges.contains(1) || peer.m_PeerBridges.at(1).fromFrame != 4423) {
+						    !NetPeerFrameDetail::HasHoldDecision(peer.m_PeerBridgeCertificates, 4423, 1) || !peer.m_PeerBridges.contains(1) || peer.m_PeerBridges.at(1).fromFrame != 4423) {
 							*error = "the late real authority answer changed the retained local hold"; return false;
 						}
 					}
@@ -31422,6 +31467,12 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS legacy_combat_hold_uses_its_input_deadline\n[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "concurrent-hold-identity") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::ConcurrentVoluntaryHoldsKeepBothOwners(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS concurrent_voluntary_holds_keep_both_owners\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "direct-hold-scope") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::DirectHoldScope(&error)) return fail(error);
@@ -31743,6 +31794,7 @@ namespace {
 		row(&NetSessionPlaneSelfTest::CheckHeldHostControllers, "a_held_host_preserves_controller_disable_before_its_return_arrives");
 		row(&SessionPlaneRecoveryTest::LinkDelay, "input_delay_follows_the_measured_link");
 		row(&SessionPlaneRecoveryTest::ConsumerHoldDeadlineIncludesTheDisplayedSlot, "consumer_hold_deadline_includes_the_displayed_slot");
+		row(&SessionPlaneRecoveryTest::ConcurrentVoluntaryHoldsKeepBothOwners, "concurrent_voluntary_holds_keep_both_owners");
 		row(&SessionPlaneRecoveryTest::LegacyCombatHoldUsesItsInputDeadline, "legacy_combat_hold_uses_its_input_deadline");
 		row(&SessionPlaneRecoveryTest::RemoteInputReceiptsFormTheLocalHoldGroup, "remote_input_receipts_form_the_local_hold_group");
 		row(&SessionPlaneRecoveryTest::MissingOrZeroLinkNeverUsesReceipts, "missing_or_zero_rtt_never_uses_machine_receipts");

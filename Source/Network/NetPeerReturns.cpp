@@ -130,7 +130,9 @@ namespace RTE {
 			std::set<PeerDecisionKey> proofs;
 			for (const auto& [kind, decision]: latest) proofs.emplace(decision->frame, kind);
 			for (const auto& [key, decision]: m_PeerBridgeCertificates) if (key.second == 3) proofs.insert(key);
-			for (const auto& [seat, bridge]: m_PeerBridges) if (bridge.fromFrame <= kept->first) proofs.emplace(bridge.fromFrame, 0);
+			for (const auto& [seat, bridge]: m_PeerBridges) if (bridge.fromFrame <= kept->first)
+				for (auto proof = m_PeerBridgeCertificates.lower_bound({bridge.fromFrame, 0x10}); proof != m_PeerBridgeCertificates.end() && proof->first.first == bridge.fromFrame; ++proof)
+					if (IsHoldDecision(proof->first.second) && (proof->first.second & SeatBit(seat)) != 0) proofs.insert(proof->first);
 			std::vector<std::vector<uint8_t>> certificates;
 			for (const auto& key: proofs) if (const auto proof = m_PeerBridgeCertificates.find(key); proof != m_PeerBridgeCertificates.end()) {
 				// The reader's confirmed prefix omits decisions it has already applied.

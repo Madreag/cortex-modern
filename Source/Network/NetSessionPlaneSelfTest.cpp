@@ -1,6 +1,7 @@
 #include "NetSessionPlaneSelfTest.h"
 
 #include "NetLockstep.h"
+#include "NetPeerFrameHelpers.h"
 #include "NetLockstepSelfTest.h"
 #include "NetMatchService.h"
 #include "LoopbackTransport.h"
@@ -3871,7 +3872,7 @@ namespace RTE {
 				    " consumer=" + (peer.m_ConsumerWaitingFrame ? std::to_string(*peer.m_ConsumerWaitingFrame) : "none") +
 				    " wait_since=" + std::to_string(peer.m_ConsumerWaitStartMs) + " members=" + std::to_string(peer.m_FrameGroupMembers) +
 				    " local_held=" + std::to_string(peer.m_LocalSeatHeld) + " granted=" + (peer.m_GrantedSimulationTick ? std::to_string(*peer.m_GrantedSimulationTick) : "none") +
-				    " hold_certificate=" + std::to_string(peer.m_PeerBridgeCertificates.contains({peer.m_Stats.nextFrame, 0})) + starts;
+				    " hold_certificate=" + std::to_string(NetPeerFrameDetail::HasHoldDecision(peer.m_PeerBridgeCertificates, peer.m_Stats.nextFrame)) + starts;
 			};
 			s_HeldSeats = [](const NetLockstepCoordinator& peer, uint64_t frame) { return peer.PeerHeldSeatsAt(frame); };
 			s_HoldBoundaries = [](const NetLockstepCoordinator& peer) -> const HoldBoundaries& { return peer.m_PeerFrameHolds; };
@@ -3940,7 +3941,7 @@ namespace RTE {
 				    " consumer=" + (peer.m_ConsumerWaitingFrame ? std::to_string(*peer.m_ConsumerWaitingFrame) : "none") +
 				    " wait_since=" + std::to_string(peer.m_ConsumerWaitStartMs) + " members=" + std::to_string(peer.m_FrameGroupMembers) +
 				    " local_held=" + std::to_string(peer.m_LocalSeatHeld) + " granted=" + (peer.m_GrantedSimulationTick ? std::to_string(*peer.m_GrantedSimulationTick) : "none") +
-				    " hold_certificate=" + std::to_string(peer.m_PeerBridgeCertificates.contains({peer.m_Stats.nextFrame, 0})) + starts;
+				    " hold_certificate=" + std::to_string(NetPeerFrameDetail::HasHoldDecision(peer.m_PeerBridgeCertificates, peer.m_Stats.nextFrame)) + starts;
 			};
 			s_HeldSeats = [](const NetLockstepCoordinator& peer, uint64_t frame) { return peer.PeerHeldSeatsAt(frame); };
 			s_HoldBoundaries = [](const NetLockstepCoordinator& peer) -> const HoldBoundaries& { return peer.m_PeerFrameHolds; };
@@ -4017,7 +4018,7 @@ namespace RTE {
 				    " consumer=" + (peer.m_ConsumerWaitingFrame ? std::to_string(*peer.m_ConsumerWaitingFrame) : "none") +
 				    " wait_since=" + std::to_string(peer.m_ConsumerWaitStartMs) + " members=" + std::to_string(peer.m_FrameGroupMembers) +
 				    " local_held=" + std::to_string(peer.m_LocalSeatHeld) + " granted=" + (peer.m_GrantedSimulationTick ? std::to_string(*peer.m_GrantedSimulationTick) : "none") +
-				    " hold_certificate=" + std::to_string(peer.m_PeerBridgeCertificates.contains({peer.m_Stats.nextFrame, 0})) + starts;
+				    " hold_certificate=" + std::to_string(NetPeerFrameDetail::HasHoldDecision(peer.m_PeerBridgeCertificates, peer.m_Stats.nextFrame)) + starts;
 			};
 			s_HeldSeats = [](const NetLockstepCoordinator& peer, uint64_t frame) { return peer.PeerHeldSeatsAt(frame); };
 			s_HoldBoundaries = [](const NetLockstepCoordinator& peer) -> const HoldBoundaries& { return peer.m_PeerFrameHolds; };
@@ -4746,7 +4747,7 @@ namespace RTE {
 				    " consumer=" + (peer.m_ConsumerWaitingFrame ? std::to_string(*peer.m_ConsumerWaitingFrame) : "none") +
 				    " wait_since=" + std::to_string(peer.m_ConsumerWaitStartMs) + " members=" + std::to_string(peer.m_FrameGroupMembers) +
 				    " local_held=" + std::to_string(peer.m_LocalSeatHeld) + " granted=" + (peer.m_GrantedSimulationTick ? std::to_string(*peer.m_GrantedSimulationTick) : "none") +
-				    " hold_certificate=" + std::to_string(peer.m_PeerBridgeCertificates.contains({peer.m_Stats.nextFrame, 0})) + starts;
+				    " hold_certificate=" + std::to_string(NetPeerFrameDetail::HasHoldDecision(peer.m_PeerBridgeCertificates, peer.m_Stats.nextFrame)) + starts;
 			};
 			s_HeldSeats = [](const NetLockstepCoordinator& peer, uint64_t frame) { return peer.PeerHeldSeatsAt(frame); };
 			s_HoldBoundaries = [](const NetLockstepCoordinator& peer) -> const HoldBoundaries& { return peer.m_PeerFrameHolds; };
@@ -5071,7 +5072,9 @@ namespace RTE {
 							std::set<NetLockstepCoordinator::PeerDecisionKey> proofs;
 							for (const auto& [kind, key]: latest) proofs.insert(key);
 							for (const auto& [key, decision]: donor.m_PeerBridgeCertificates) if (key.second == 3) proofs.insert(key);
-							for (const auto& [seat, bridge]: donor.m_PeerBridges) if (bridge.fromFrame <= frame) proofs.emplace(bridge.fromFrame, 0);
+							for (const auto& [seat, bridge]: donor.m_PeerBridges) if (bridge.fromFrame <= frame)
+								for (auto proof = donor.m_PeerBridgeCertificates.lower_bound({bridge.fromFrame, 0x10}); proof != donor.m_PeerBridgeCertificates.end() && proof->first.first == bridge.fromFrame; ++proof)
+									if (NetPeerFrameDetail::IsHoldDecision(proof->first.second) && (proof->first.second & (1U << (seat - 1))) != 0) proofs.insert(proof->first);
 							size_t count = 0;
 							for (const auto& key: proofs) if (donor.m_PeerBridgeCertificates.contains(key) &&
 							    (key.second == 3 || !donor.m_PeerAppliedThrough.contains(former) || key.first > donor.m_PeerAppliedThrough.at(former))) ++count;

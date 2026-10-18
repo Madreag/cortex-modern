@@ -557,8 +557,8 @@ namespace RTE {
 			if (m_RelayHost && m_Config.localPeerId == GetHostPeerId()) for (const auto& [peer, notice]: m_PeerRemovalNotices)
 				if (m_RemovedPeers.contains(peer)) (void)SendPacket({notice}, NetTransportLane::ControlReliable, nullptr);
 			for (const auto& [key, certificate]: m_PeerBridgeCertificates) {
-				const bool standingHold = key.second == 0 && std::any_of(m_PeerBridges.begin(), m_PeerBridges.end(), [&](const auto& entry) {
-					return entry.second.committedHold && entry.second.fromFrame == key.first && !entry.second.returnFrame;
+				const bool standingHold = IsHoldDecision(key.second) && std::any_of(m_PeerBridges.begin(), m_PeerBridges.end(), [&](const auto& entry) {
+					return (key.second & SeatBit(entry.first)) != 0 && entry.second.committedHold && entry.second.fromFrame == key.first && !entry.second.returnFrame;
 				});
 				// A suspended owner still needs its standing hold when it wakes. Its input horizon is not a lifetime
 				// for the seat's authority record; otherwise it can resume old human input before hearing its hold.
@@ -581,8 +581,8 @@ namespace RTE {
 		m_PeerRejectedInputs.erase(m_PeerRejectedInputs.begin(), m_PeerRejectedInputs.lower_bound(kept));
 		m_PeerBridgeVotes.erase(m_PeerBridgeVotes.begin(), m_PeerBridgeVotes.lower_bound({kept, 0}));
 		for (auto certificate = m_PeerBridgeCertificates.begin(); certificate != m_PeerBridgeCertificates.end() && certificate->first.first < kept;) {
-			const bool standingHold = certificate->first.second == 0 && std::any_of(m_PeerBridges.begin(), m_PeerBridges.end(), [&](const auto& entry) {
-				return entry.second.committedHold && entry.second.fromFrame == certificate->first.first && !entry.second.returnFrame;
+			const bool standingHold = IsHoldDecision(certificate->first.second) && std::any_of(m_PeerBridges.begin(), m_PeerBridges.end(), [&](const auto& entry) {
+				return (certificate->first.second & SeatBit(entry.first)) != 0 && entry.second.committedHold && entry.second.fromFrame == certificate->first.first && !entry.second.returnFrame;
 			});
 			certificate = standingHold ? std::next(certificate) : m_PeerBridgeCertificates.erase(certificate);
 		}

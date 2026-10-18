@@ -150,24 +150,39 @@ namespace RTE {
 	}
 
 	void NetLockstepCoordinator::ResolvePeerBridgeInputConflicts(uint64_t nowMs) {
+		std::map<uint64_t, uint32_t> released;
 		for (auto& [key, votes]: m_PeerBridgeVotes) {
-			if (key.second != 0 || key.first < m_Stats.nextFrame || m_PeerBridgeCertificates.contains(key)) continue;
+			if (!IsHoldDecision(key.second) || key.first < m_Stats.nextFrame || m_PeerBridgeCertificates.contains(key)) continue;
 			const auto own = votes.find(m_Config.localPeerId);
 			if (own != votes.end() && PeerBridgeHasInputConflict(own->second)) {
 				// This proposal requires a signer that has already accepted an
 				// excluded input. That signer cannot also vote for this bridge,
 				// so no certificate can exist for the abandoned proposal.
-				for (uint8_t peer: own->second.members) m_PeerRejectedInputs[key.first] &= ~SeatBit(peer);
+				for (uint8_t peer: own->second.members) released[key.first] |= SeatBit(peer);
 			}
 			std::erase_if(votes, [&](const auto& vote) { return PeerBridgeHasInputConflict(vote.second); });
 		}
+		for (const auto& [frame, owners]: released) {
+			uint32_t retained = 0;
+			for (auto vote = m_PeerBridgeVotes.lower_bound({frame, 0x10}); vote != m_PeerBridgeVotes.end() && vote->first.first == frame; ++vote)
+				if (IsHoldDecision(vote->first.second))
+					if (const auto own = vote->second.find(m_Config.localPeerId); own != vote->second.end() && own->second.voterMask == SeatBit(m_Config.localPeerId))
+						for (uint8_t held: own->second.members) retained |= SeatBit(held);
+			for (auto certificate = m_PeerBridgeCertificates.lower_bound({frame, 0x10}); certificate != m_PeerBridgeCertificates.end() && certificate->first.first == frame; ++certificate)
+				if (IsHoldDecision(certificate->first.second)) retained |= certificate->first.second & 0xF;
+			m_PeerRejectedInputs[frame] = (m_PeerRejectedInputs[frame] & ~owners) | retained;
+		}
 		for (auto pending = m_PeerPendingBridgeInputs.begin(); pending != m_PeerPendingBridgeInputs.end();) {
-			if (pending->first < m_Stats.nextFrame || m_PeerBridgeCertificates.contains({pending->first, 0})) {
+			if (pending->first < m_Stats.nextFrame) {
 				pending = m_PeerPendingBridgeInputs.erase(pending);
 				continue;
 			}
 			for (auto input = pending->second.begin(); input != pending->second.end();) {
-				if ((m_PeerRejectedInputs[pending->first] & SeatBit(input->first)) != 0) { ++input; continue; }
+				if ((m_PeerRejectedInputs[pending->first] & SeatBit(input->first)) != 0) {
+					if (HasHoldDecision(m_PeerBridgeCertificates, pending->first, input->first)) input = pending->second.erase(input);
+					else ++input;
+					continue;
+				}
 				AcceptRemoteTick(input->second, nowMs, false);
 				input = pending->second.erase(input);
 			}
@@ -266,12 +281,12 @@ namespace RTE {
 	}
 
 	bool NetLockstepCoordinator::ProposePeerBridge(uint64_t frame, uint64_t nowMs, bool returningOnly) {
-		if (!UsesPeerFrameGroups() || WaitsForPlacement() || frame != m_Stats.nextFrame || m_PeerBridgeCertificates.contains({frame, 0})) return false;
+		if (!UsesPeerFrameGroups() || WaitsForPlacement() || frame != m_Stats.nextFrame) return false;
 		// A lagging reader can receive its own hold before the last few preceding inputs. Fetch that committed tail;
 		// it must not turn its stale display clock into a new hold of the survivor whose record it is catching up to.
 		if (PeerFrameCatchUpActive()) for (const auto& [key, kept]: m_PendingPeerDecisions) {
 			const auto& hold = kept.first;
-			if (key.second == 0 && key.first > frame && std::find(hold.members.begin(), hold.members.end(), m_Config.localPeerId) != hold.members.end()) {
+			if (IsHoldDecision(key.second) && key.first > frame && std::find(hold.members.begin(), hold.members.end(), m_Config.localPeerId) != hold.members.end()) {
 				RequestPeerCommittedTail(nowMs);
 				return false;
 			}
@@ -469,7 +484,7 @@ namespace RTE {
 		if (heldAhead) {
 			if (!slowMachine || (!ownYield && std::countr_zero(proposal.connectedMask) + 1 != m_Config.localPeerId)) return false;
 			for (const auto& [key, votes]: m_PeerBridgeVotes) {
-				if (key.second != 0 || key.first <= frame || m_PeerBridgeCertificates.contains(key)) continue;
+				if (!IsHoldDecision(key.second) || key.first <= frame || m_PeerBridgeCertificates.contains(key)) continue;
 				if (const auto own = votes.find(m_Config.localPeerId); own != votes.end())
 					for (uint8_t peer: own->second.members) if (std::find(proposal.members.begin(), proposal.members.end(), peer) != proposal.members.end()) return false;
 			}
@@ -544,14 +559,16 @@ namespace RTE {
 		}
 		proposal.totalBytes = static_cast<uint32_t>(proposal.bytes.size());
 		if (!ValidatePeerBridge(proposal) && !(ownYield && CoSignsOwnHold(proposal))) return false;
-		auto& votes = m_PeerBridgeVotes[{proposal.frame, DecisionKind(proposal)}];
+		const PeerDecisionKey decision{proposal.frame, DecisionKind(proposal)};
+		if (m_PeerBridgeCertificates.contains(decision)) return false;
+		auto& votes = m_PeerBridgeVotes[decision];
 		const auto own = votes.find(m_Config.localPeerId);
 		// A matching proposal is still pending until its certificate is installed.
 		// Reporting it as progress makes AdvanceReadyFrames spin on the same frame
 		// and prevents the wire from delivering the other voters' answers.
 		if (own != votes.end()) {
 			if (own->second.voterMask != 0 || !SameBridge(own->second, proposal) || !PeerGroupMayHold(proposal.connectedMask, proposal.frame))
-				return m_PeerBridgeCertificates.contains({frame, 0});
+				return false;
 		}
 		if (VotedOtherPeerReturn(proposal)) return false;
 		const bool invitation = proposal.preparedFrame == 0 && !ownYield && !PeerGroupMayHold(proposal.connectedMask, proposal.frame);
@@ -615,7 +632,7 @@ namespace RTE {
 		}
 		SendPeerFrameMessage(proposal);
 		TryCommitPeerBridge(proposal.frame, nowMs, DecisionKind(proposal));
-		return m_PeerBridgeCertificates.contains({frame, 0});
+		return proposal.preparedFrame == 0 && proposal.frame == frame && m_PeerBridgeCertificates.contains(decision);
 	}
 
 	void NetLockstepCoordinator::TryCommitPeerBridge(uint64_t frame, uint64_t nowMs, uint8_t kind) {
@@ -944,7 +961,7 @@ namespace RTE {
 		for (const auto& [key, kept]: pending) {
 			if (m_PeerBridgeCertificates.contains(key) || key.first < m_Stats.nextFrame) continue;
 			// A hold is taken at its own frame. Local silence never cancels an unresolved authority decision.
-			if (key.second == 0 && key.first > m_Stats.nextFrame) { m_PendingPeerDecisions.emplace(key, kept); continue; }
+			if (IsHoldDecision(key.second) && key.first > m_Stats.nextFrame) { m_PendingPeerDecisions.emplace(key, kept); continue; }
 			InstallPeerBridge(kept.first, nowMs);
 			if (const auto again = m_PendingPeerDecisions.find(key); again != m_PendingPeerDecisions.end()) {
 				again->second.second = kept.second;
@@ -961,6 +978,7 @@ namespace RTE {
 		// every member that knows of a return proposed there for a seat still held: the others may certify it without this one's vote.
 		std::erase_if(m_PeerVotedAtMs, [this](const auto& voted) { return voted.first.first < m_Stats.nextFrame || m_PeerBridgeCertificates.contains(voted.first); });
 		for (auto votes = m_PeerBridgeVotes.lower_bound({m_Stats.nextFrame, 1}); votes != m_PeerBridgeVotes.end() && votes->first.first == m_Stats.nextFrame; ++votes) {
+			if (IsHoldDecision(votes->first.second)) continue;
 			if (m_PeerBridgeCertificates.contains(votes->first)) continue;
 			bool open = votes->second.contains(m_Config.localPeerId);
 			if (!open && votes->first.second == 1)
