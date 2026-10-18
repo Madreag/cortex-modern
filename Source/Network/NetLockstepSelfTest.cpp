@@ -389,12 +389,20 @@ namespace RTE {
 				peer.m_Stats.nextFrame = 150; peer.m_LastCompletedSimulationTick = 149;
 				peer.m_MigrationHistory[99] = {1, 2, 3};
 			};
-			for (bool directory: {false, true}) {
+			for (bool directory: {false, true}) for (unsigned role = 0; role < 3; ++role) {
 				Wire wire; NetLockstepCoordinator peer; configure(peer, wire, directory);
+				if (role != 0) {
+					peer.m_Config.peerCount = peer.m_Config.matchConfig.peerCount = 3;
+					peer.m_Config.matchConfig.players.push_back({3, 2, false, "Third"});
+					peer.m_RemotePeerIds = {2, 3}; peer.m_RemoteTransports = {{2, 42}, {3, 43}};
+					peer.m_FrameGroupMembers = role == 2 ? 3 : 7; peer.m_FrameGroupChanges = {{1, 7}};
+					if (role == 2) { peer.m_FrameGroupChanges[100] = 3; peer.m_PeerFrameHolds[3][100] = true; }
+					peer.m_RoundConfigHash = NetMatchConfigUtil::HashConfig(peer.m_Config.matchConfig);
+				}
 				peer.CheckPeerFrameTie(120, 1, 950);
 				auto vote = peer.PeerFrameMessage(NetHostMigrationMessageType::PeerBridge);
 				vote.senderPeerId = vote.successorPeerId = 2; vote.frame = vote.boundary = 100;
-				vote.preparedFrame = 0; vote.connectedMask = vote.voterMask = 2; vote.members = {1};
+				vote.preparedFrame = 0; vote.connectedMask = role == 0 ? 2 : 3; vote.voterMask = 2; vote.members = {static_cast<uint8_t>(role == 0 ? 1 : 3)};
 				const auto prefix = peer.PeerFramePrefix(99); vote.bytes.assign(prefix.begin(), prefix.end()); vote.totalBytes = vote.bytes.size();
 				std::vector<uint8_t> signedVote;
 				if (!NetHostMigrationCodec::Encode(vote, peer.m_Config.migrationKey, signedVote)) { *error = "foreign continuation vote did not encode"; return false; }
@@ -402,8 +410,11 @@ namespace RTE {
 				for (unsigned shift = 0; shift < 32; shift += 8) certificate.bytes.push_back(static_cast<uint8_t>(signedVote.size() >> shift));
 				certificate.bytes.insert(certificate.bytes.end(), signedVote.begin(), signedVote.end()); certificate.totalBytes = certificate.bytes.size();
 				peer.InstallPeerBridge(certificate, 1000);
-				const std::string mode = directory ? "directory" : "direct";
-				check(!peer.m_PeerBridges.contains(1) && peer.m_FrameGroupMembers == 3 && peer.m_PendingPeerDecisions.empty(), mode + " foreign hold replaced played history");
+				const std::string mode = std::string(directory ? "directory" : "direct") + " role=" + std::to_string(role);
+				if (role == 2) {
+					check(peer.m_PeerBridgeCertificates.contains({100, 0}) && peer.m_FrameGroupMembers == 3, mode + " a matching historical hold was rejected");
+				} else check(!peer.m_PeerBridges.contains(role == 0 ? 1 : 3) && peer.m_FrameGroupMembers == (role == 0 ? 3U : 7U) &&
+				    peer.m_PendingPeerDecisions.empty(), mode + " foreign hold replaced played history");
 				check(peer.m_PeerFrameTie && !peer.m_PeerFrameTie->queryOnly && peer.m_PeerFrameTie->members == std::vector<uint16_t>{1}, mode + " foreign hold replaced the local arbitration question");
 			}
 			for (bool directory: {false, true}) for (unsigned role = 0; role < 3; ++role) {

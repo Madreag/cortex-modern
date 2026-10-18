@@ -768,13 +768,15 @@ namespace RTE {
 			    delay > NetLockstepCodec::c_MaxPeerInputDelayFrames || neutral < delay || neutral > NetLockstepCodec::c_MaxFutureFrameSkew || agreed.frame > UINT64_MAX - neutral) { refused("runway"); return; }
 			returnDelays[peer] = {static_cast<uint16_t>(delay), agreed.frame + neutral, incarnation};
 		}
-		if (agreed.preparedFrame == 0 && (agreed.connectedMask & SeatBit(m_Config.localPeerId)) == 0 &&
+		if (agreed.preparedFrame == 0 && PeerFrameMembersAt(agreed.frame) !=
+		    (agreed.connectedMask & PeerRetainedSeatsAt(agreed.frame) & ~PeerHeldSeatsAt(agreed.frame)) &&
 		    (voters & SeatBit(m_Config.localPeerId)) == 0 && (PeerFrameMembersAt(agreed.frame) & SeatBit(m_Config.localPeerId)) != 0 &&
 		    !IsSeatReclaimGap(m_Config.localPeerId, agreed.frame) &&
 		    (GetResumeFrame() > agreed.frame || (m_LastDeliveredFrame && *m_LastDeliveredFrame >= agreed.frame) ||
 		     (m_GrantedSimulationTick && *m_GrantedSimulationTick >= agreed.frame))) {
 			// Every hold is local, including a directory match's. A played or delivered continuation cannot adopt another
-			// group's hold as its own history, nor replace its arbitration question with a private reader's query.
+			// group's hold as its own history, nor replace its arbitration question. Naming this nonsigner in that group's
+			// membership does not make it a participant; an already matching historical hold remains valid.
 			const auto arbitration = m_PeerSplitArbitrations.find(PeerSplitEpoch(agreed.frame));
 			if (arbitration != m_PeerSplitArbitrations.end()) arbitration->second.offeredHold = certificate;
 			refused("foreign continuation"); return;
