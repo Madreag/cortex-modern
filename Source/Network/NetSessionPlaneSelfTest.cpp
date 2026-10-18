@@ -2238,7 +2238,9 @@ namespace RTE {
 					if (sawSplit) continue; // Split participants are checked by their delivered decision and completed private image, below.
 					if (!caughtAt[id - 1]) {
 						error = "a retained seat did not return automatically: peer=" + std::to_string(id) + " applied=" + std::to_string(worlds[id - 1].applied) +
-						    " prepared=" + std::to_string(peers[id - 1]->GetStats().nextFrame) + " bridge_count=" + std::to_string(Bridges(*peers[id - 1]).size());
+						    " prepared=" + std::to_string(peers[id - 1]->GetStats().nextFrame) + " bridge_count=" + std::to_string(Bridges(*peers[id - 1]).size()) +
+						    " holds_returning_seat=" + std::to_string(peers[id - 1]->HasHeldAISeat(hub.ReturningSeat())) + " image_returns=" + std::to_string(imageReturns[id - 1]) +
+						    " highest_applied=" + std::to_string(std::max_element(worlds.begin(), worlds.end(), [](const World& a, const World& b) { return a.applied < b.applied; })->applied);
 						return false;
 					}
 					const uint8_t held = row.subject;
@@ -2583,11 +2585,13 @@ namespace RTE {
 			const uint64_t observationAt = fixture.hub.now;
 			// FLAGGED fixture departure: a newly injected own-machine fault belongs to the next hold, not this return's healthy observation.
 			// FLAGGED fixture departure: a survivor split off before the activation plays its own continuation, which never took this
-			// return; its view of the seat is that half's, ruled at its heal. Every seat playing at the activation is still checked.
+			// return; its view of the seat is that half's, ruled at its heal. A playing survivor that has not yet applied the activation
+			// still shows the hold the return ends. Every seat playing at the activation is checked from the activation on.
 			const uint32_t playingAtActivation = s_FrameMembers(*fixture.peers[donor - 1], activation);
 			for (const uint64_t until = observationAt + 1000; fixture.hub.now <= until && !fixture.OwnMachineTrouble(seat);) {
 				for (uint8_t peer: survivors)
-					if ((playingAtActivation & (1U << (peer - 1))) != 0 && (fixture.peers[peer - 1]->HasHeldAISeat(seat) || Bridges(*fixture.peers[peer - 1]).contains(seat)))
+					if ((playingAtActivation & (1U << (peer - 1))) != 0 && fixture.worlds[peer - 1].applied >= activation &&
+					    (fixture.peers[peer - 1]->HasHeldAISeat(seat) || Bridges(*fixture.peers[peer - 1]).contains(seat)))
 						co_return fail("the image return was held again during its healthy observation: observer=" + std::to_string(peer) +
 						    " playing_at_activation=" + std::to_string((s_FrameMembers(*fixture.peers[donor - 1], activation) & (1U << (peer - 1))) != 0) +
 						    " observer_members=" + std::to_string(s_FrameMembers(*fixture.peers[peer - 1], fixture.worlds[peer - 1].applied + 1)) +
