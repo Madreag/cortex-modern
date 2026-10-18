@@ -390,12 +390,27 @@ namespace RTE {
 		if (const auto phase = InputDelayRetimingTarget(); phase && *m_LastCompletedSimulationTick < *phase) return true;
 		if (!UsesPeerFrameGroups()) return false;
 		const uint64_t next = *m_LastCompletedSimulationTick + 1;
+		const auto playingClockAhead = [&](uint8_t peer) -> std::optional<bool> {
+			const auto applied = m_PeerAppliedThrough.find(peer), observed = m_PeerAppliedAtMs.find(peer);
+			const auto [wire, route] = PeerFrameRoute(peer);
+			const bool measured = wire && wire->IsPeerPingMeasured(route);
+			const uint64_t freshnessMs = measured ? std::max<uint64_t>(250, wire->GetPeerPingMs(route) + 250ULL) : 250;
+			if (m_Config.simTickMs <= 0 || applied == m_PeerAppliedThrough.end() || observed == m_PeerAppliedAtMs.end() ||
+			    m_TimingNowMs < observed->second || m_TimingNowMs - observed->second > freshnessMs) return std::nullopt;
+			const double transit = measured ? wire->GetPeerPingMs(route) / 2.0 : 0.0;
+			const uint64_t elapsed = static_cast<uint64_t>((m_TimingNowMs - observed->second + transit) / m_Config.simTickMs);
+			return applied->second > next || elapsed > next - std::min(applied->second, next);
+		};
 		// A future return certificate does not end private replay before its activation tick.
 		if (m_PeerTailThrough && *m_LastCompletedSimulationTick < *m_PeerTailThrough && IsLocalPrivateReaderAt(next)) return true;
-		// The certified neutral interval is the returner's remaining catch-up runway. Keep using its existing bounded replay
-		// budget through that interval; matching one survivor's display clock can still leave it behind a faster survivor's phase.
+		// Neutral ticks can close the remaining image lag, but cannot put the returner ahead of every survivor. Spending
+		// the entire neutral interval at 3x after alignment steals other senders' receipt runway on the first human tick.
 		if (const auto back = m_ReclaimTransactions.find(m_Config.localPeerId); back != m_ReclaimTransactions.end() &&
-		    next >= back->second.activationFrame && next <= back->second.neutralThroughFrame) return true;
+		    next >= back->second.activationFrame && next <= back->second.neutralThroughFrame) {
+			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer)
+				if (peer != m_Config.localPeerId && (PeerFrameMembersAt(next) & SeatBit(peer)) != 0 && playingClockAhead(peer).value_or(false)) return true;
+			return false;
+		}
 		// An extrapolated display clock is a phase goal, not receipt credit. An extra tick must leave the first outstanding
 		// own target enough ordinary tick slots for its full trip to every playing reader. Otherwise catching up spends the
 		// delay queue faster than production/receipts can refill it and invents a missing peer on a healthy steady link.
@@ -427,19 +442,7 @@ namespace RTE {
 			// The pace leader advances at the ordinary rate after a shared pause.
 			// No displayed peer clock justifies replaying the group's paused time.
 			if (reference == m_Config.localPeerId) return false;
-			const auto applied = m_PeerAppliedThrough.find(reference), observed = m_PeerAppliedAtMs.find(reference);
-			const auto [wire, route] = PeerFrameRoute(reference);
-			const bool measured = wire && wire->IsPeerPingMeasured(route);
-			const uint64_t freshnessMs = measured ? std::max<uint64_t>(250, wire->GetPeerPingMs(route) + 250ULL) : 250;
-			if (reference != m_Config.localPeerId && applied != m_PeerAppliedThrough.end() && observed != m_PeerAppliedAtMs.end() &&
-			    m_TimingNowMs >= observed->second && m_TimingNowMs - observed->second <= freshnessMs) {
-				double transit = 0.0;
-				if (measured) transit = wire->GetPeerPingMs(route) / 2.0;
-				const uint64_t elapsed = static_cast<uint64_t>((m_TimingNowMs - observed->second + transit) / m_Config.simTickMs);
-				if (applied->second > *m_LastCompletedSimulationTick + 1 ||
-				    elapsed > *m_LastCompletedSimulationTick + 1 - std::min(applied->second, *m_LastCompletedSimulationTick + 1)) return true;
-				return false;
-			}
+			if (const auto ahead = playingClockAhead(reference)) return *ahead;
 		}
 		if (!m_PeerHadHitch || !m_PeerPaceStartMs || m_TimingNowMs < *m_PeerPaceStartMs || m_Config.simTickMs <= 0) return false;
 		const uint64_t due = m_PeerPaceStartFrame + static_cast<uint64_t>((m_TimingNowMs - *m_PeerPaceStartMs) / m_Config.simTickMs);

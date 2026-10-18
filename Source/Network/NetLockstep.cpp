@@ -3796,8 +3796,6 @@ namespace RTE {
 		// adding it again gives a three-tick bound four ticks. Future buffered frames retain their intervening slots.
 		if (m_PeerConsumerAtMs && m_LastCompletedSimulationTick && frame > *m_LastCompletedSimulationTick)
 			due = *m_PeerConsumerAtMs + (frame - *m_LastCompletedSimulationTick - 1) * m_Config.simTickMs;
-		// Our own suspended interval is not evidence that a remote sender was late. Its shifted observation remains the floor.
-		if (due && m_FirstMissingFrame == frame) *due = std::max(*due, static_cast<double>(m_FirstMissingMs));
 		// A catching-up consumer can need a frame before its original pacing slot.
 		if (m_ConsumerWaitingFrame == frame)
 			due = due ? std::min(*due, static_cast<double>(m_ConsumerWaitStartMs)) : m_ConsumerWaitStartMs;
@@ -9435,6 +9433,10 @@ namespace RTE {
 		const auto shift = [&](uint64_t& stamp) { if (stamp != 0) stamp = std::min(nowMs, stamp + gap); };
 		shift(m_FirstMissingMs);
 		shift(m_ConsumerWaitStartMs);
+		// Displayed and producer slots share this clock. Only an actual own park moves their anchors;
+		// observing a missing input later must never buy a remote sender a longer displayed deadline.
+		if (m_PeerConsumerAtMs) *m_PeerConsumerAtMs = std::min<double>(nowMs, *m_PeerConsumerAtMs + gap);
+		if (m_PeerPaceStartMs) *m_PeerPaceStartMs = std::min<double>(nowMs, *m_PeerPaceStartMs + gap);
 		if (m_ConsumerCostObservedAtMs) *m_ConsumerCostObservedAtMs = std::min(nowMs, *m_ConsumerCostObservedAtMs + gap);
 		shift(m_WaitStartMs);
 		shift(m_AuthorityLastHeardMs);

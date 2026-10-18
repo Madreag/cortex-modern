@@ -188,7 +188,7 @@ namespace RTE {
 		}
 
 		static bool ConsumerHoldDeadlineIncludesTheDisplayedSlot(std::string* error) {
-			for (bool receiptOnly: {false, true}) {
+			for (bool receiptOnly: {false, true}) for (bool laterObservation: {false, true}) {
 				Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
 				peer.m_Config.peerFrameGroups = peer.m_Config.substituteSlowPeers = true;
 				peer.m_Config.slowPlayerBoundTicks = 3;
@@ -198,7 +198,7 @@ namespace RTE {
 				peer.m_Stats.nextFrame = 351; peer.m_LastCompletedSimulationTick = 350;
 				peer.m_MigrationHistory[350] = {1, 2, 3};
 				peer.m_PeerPaceStartFrame = 350; peer.m_PeerPaceStartMs = peer.m_PeerConsumerAtMs = 1000;
-				peer.m_FirstMissingFrame = 351; peer.m_FirstMissingMs = 992;
+				peer.m_FirstMissingFrame = 351; peer.m_FirstMissingMs = laterObservation ? 1010 : 992;
 				peer.m_ConsumerWaitingFrame = 351; peer.m_ConsumerWaitStartMs = 1017;
 				for (uint8_t owner: {2, 3}) {
 					peer.m_PeerSourceInputs[351][owner] = {owner, 351};
@@ -218,6 +218,17 @@ namespace RTE {
 					*error = std::string(receiptOnly ? "receipt" : "input") +
 					    " hold adds a normal tick to the 50ms displayed bound, or its certificate uses another deadline"; return false;
 				}
+			}
+			Wire wire; NetLockstepCoordinator parked; Configure(parked, wire);
+			parked.m_Config.peerFrameGroups = true; parked.m_Config.slowPlayerBoundTicks = 3;
+			parked.m_LastTickMs = 1017; parked.m_LastCompletedSimulationTick = 350;
+			parked.m_PeerPaceStartFrame = 350; parked.m_PeerPaceStartMs = parked.m_PeerConsumerAtMs = 1000;
+			parked.m_FirstMissingFrame = parked.m_ConsumerWaitingFrame = 351;
+			parked.m_FirstMissingMs = 992; parked.m_ConsumerWaitStartMs = 1017;
+			parked.ShiftDeadlinesPastOurOwnPark(2017);
+			const auto deadline = parked.PeerInputDeadlineMs(351);
+			if (!deadline || std::abs(*deadline - 2050) > 1e-6 || parked.m_Stats.ownParksExcluded != 1) {
+				*error = "an actual own pause did not shift the displayed and pacing clocks together"; return false;
 			}
 			return true;
 		}
@@ -590,6 +601,26 @@ namespace RTE {
 			return passed;
 		}
 
+		static bool NeutralReplayStopsAtThePlayingClock(std::string* error) {
+			for (unsigned arm = 0; arm != 3; ++arm) {
+				DelayWire wire; wire.rtt = 100;
+				NetLockstepCoordinator peer; ConfigureDelay(peer, wire, 0, 7);
+				peer.m_Config.localPeerId = 2; peer.m_RemotePeerIds = {1}; peer.m_RemoteTransports = {{1, 42}};
+				peer.m_FrameGroupChanges = {{1, 3}}; peer.m_RemoteStartsReceived = {1};
+				peer.m_LastCompletedSimulationTick = 110; peer.m_Stats.nextFrame = 111;
+				peer.m_PeerBridges[2] = {90, 90, true, 100, {}, 3};
+				peer.m_ReclaimTransactions[2] = {2, 1, 802, 2, 100, 7, 121};
+				peer.m_PeerPaceReference = 1;
+				peer.m_PeerAppliedThrough[1] = arm == 0 ? 120 : 107;
+				peer.m_PeerAppliedAtMs[1] = arm == 2 ? 500 : 1000;
+				peer.m_TimingNowMs = 1000;
+				const bool active = peer.PeerFrameCatchUpActive();
+				std::cout << "[neutral-replay-clock] arm=" << arm << " acceleration=" << active << " expected=" << (arm == 0) << std::endl;
+				if (active != (arm == 0)) { *error = "neutral image replay accelerated past the fresh playing clock or lost genuine catch-up"; return false; }
+			}
+			return true;
+		}
+
 		static bool ActivePacePreservesReceiptRunway(std::string* error) {
 			DelayWire wire; wire.rtt = 250;
 			NetLockstepCoordinator peer; ConfigureDelay(peer, wire, 0, 16);
@@ -629,6 +660,9 @@ namespace RTE {
 			if (!peer.IsLocalPrivateReaderAt(29) || !peer.PeerFrameCatchUpActive()) {
 				*error = "a future return disabled certified private replay before its activation"; return false;
 			}
+			// FLAGGED fixture departure: neutral catch-up requires actual image lag. Its old self-reference setup demanded
+			// 3x even ahead of all survivors; the separate neutral-replay-clock row now rejects that invented acceleration.
+			peer.m_PeerAppliedThrough[1] = 55; peer.m_PeerAppliedAtMs[1] = peer.m_TimingNowMs;
 			peer.m_LastCompletedSimulationTick = 37;
 			if (peer.IsLocalPrivateReaderAt(38) || !peer.PeerFrameCatchUpActive()) {
 				*error = "the first neutral activation tick lost its bounded replay budget"; return false;
@@ -30987,6 +31021,12 @@ namespace {
 		};
 		static const char* selectedCase = std::getenv("CC_TEST_LOCKSTEP_SELFTEST_CASE");
 		if (selectedCase) {
+			if (std::string_view(selectedCase) == "neutral-replay-clock") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::NeutralReplayStopsAtThePlayingClock(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS neutral_replay_stops_at_the_playing_clock\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "stopped-start-handshake") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::StoppedContinuationHasNoStartHandshake(&error)) return fail(error);
@@ -31341,6 +31381,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::ReturnStartAdmission, "a_return_start_uses_its_certified_admission");
 		row(&SessionPlaneRecoveryTest::ReturnMemberStarts, "a_return_keeps_each_authenticated_members_start");
 		row(&SessionPlaneRecoveryTest::WaitingMeshPublishesOwnStart, "waiting_mesh_publishes_its_own_start");
+		row(&SessionPlaneRecoveryTest::NeutralReplayStopsAtThePlayingClock, "neutral_replay_stops_at_the_playing_clock");
 		row(&SessionPlaneRecoveryTest::StoppedContinuationHasNoStartHandshake, "stopped_continuation_has_no_start_handshake");
 		row(&SessionPlaneRecoveryTest::RemovalNoticeRetries, "a_roster_removal_keeps_its_frame_after_a_cut");
 		row(&SessionPlaneRecoveryTest::FutureDepartureKeepsFramePrefix, "a_future_removal_does_not_rewrite_an_earlier_frame_prefix");

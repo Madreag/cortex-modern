@@ -20,6 +20,14 @@ namespace RTE {
 
 	using namespace NetPeerFrameDetail;
 
+	namespace {
+		bool ObservedReceiptFrame(uint64_t frame) {
+			static const char* value = std::getenv("CC_TEST_LOCKSTEP_OBSERVE_TARGET");
+			static const uint64_t observed = value ? std::strtoull(value, nullptr, 10) : UINT64_MAX;
+			return value && frame >= observed && frame - observed <= 1;
+		}
+	}
+
 	void NetLockstepCoordinator::SendForwardedPeerInput(const NetLockstepFrame& input, uint8_t onlyPeer) {
 		NetLockstepFrame frame = input;
 		frame.priorWindow.clear();
@@ -123,6 +131,12 @@ namespace RTE {
 		auto& ahead = m_PeerAcceptedAhead[frame.senderPeerId];
 		if (frame.targetFrame >= accepted->second) ahead.insert(frame.targetFrame);
 		while (accepted->second != UINT64_MAX && ahead.erase(accepted->second) != 0) ++accepted->second;
+		if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) if (const auto own = m_ReclaimTransactions.find(m_Config.localPeerId);
+		    ObservedReceiptFrame(frame.targetFrame) || (own != m_ReclaimTransactions.end() && frame.targetFrame >= own->second.activationFrame &&
+		    frame.targetFrame > own->second.neutralThroughFrame && frame.targetFrame - own->second.neutralThroughFrame <= 8))
+			DiagnosticLine() << "[net-return-input-receipt] local=" << unsigned(m_Config.localPeerId) << " owner=" << unsigned(frame.senderPeerId)
+			    << " target=" << frame.targetFrame << " through=" << accepted->second << " first_ahead=" << (ahead.empty() ? UINT64_MAX : *ahead.begin())
+			    << " effective_start=" << EffectiveStartOf(frame.senderPeerId) << " next=" << m_Stats.nextFrame << " now_ms=" << m_TimingNowMs << std::endl;
 		auto receipt = PeerFrameMessage(NetHostMigrationMessageType::PeerReceipt);
 		receipt.successorPeerId = frame.senderPeerId;
 		receipt.frame = accepted->second;
@@ -368,6 +382,10 @@ namespace RTE {
 					}
 				}
 				receipt = std::max(receipt, message.frame);
+				if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS") && ObservedReceiptFrame(message.frame))
+					DiagnosticLine() << "[net-input-receipt-read] local=" << unsigned(m_Config.localPeerId) << " owner=" << unsigned(message.successorPeerId)
+					    << " receiver=" << unsigned(message.senderPeerId) << " through=" << message.frame << " retained=" << receipt
+					    << " next=" << m_Stats.nextFrame << " now_ms=" << nowMs << std::endl;
 				ResolvePeerBridgeInputConflicts(nowMs);
 			}
 			return true;
