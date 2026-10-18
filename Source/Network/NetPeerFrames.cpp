@@ -128,9 +128,12 @@ namespace RTE {
 
 	uint32_t NetLockstepCoordinator::PeerFrameMembersAt(uint64_t frame) const {
 		const auto group = m_FrameGroupChanges.upper_bound(frame);
-		const uint32_t members = group == m_FrameGroupChanges.begin() ? (1U << m_Config.peerCount) - 1 : std::prev(group)->second;
-		// A future return can have been signed before another seat's intervening hold.
-		// Its snapshot cannot return that other seat: only a return naming it ends its hold.
+		uint32_t members = group == m_FrameGroupChanges.begin() ? (1U << m_Config.peerCount) - 1 : std::prev(group)->second;
+		// A group snapshot cannot override another seat's independently certified hold or return.
+		for (const auto& [peer, changes]: m_PeerFrameHolds) {
+			const auto after = changes.upper_bound(frame);
+			if (after != changes.begin() && !std::prev(after)->second) members |= SeatBit(peer);
+		}
 		return members & PeerRetainedSeatsAt(frame) & ~PeerHeldSeatsAt(frame);
 	}
 

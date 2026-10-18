@@ -739,7 +739,13 @@ namespace RTE {
 		if (agreed.preparedFrame != 0 && agreed.preparedFrame != 3 &&
 		    (agreed.connectedMask & SeatBit(m_Config.localPeerId)) == 0 &&
 		    (PeerFrameMembersAt(agreed.frame) & SeatBit(m_Config.localPeerId)) != 0 && !IsLocalPrivateReaderAt(agreed.frame)) {
-			refused("foreign continuation"); return;
+			auto current = agreed;
+			current.connectedMask = PeerFrameMembersAt(agreed.frame);
+			// Concurrent returns may omit a neutral participant, but never another playing electorate.
+			if (agreed.preparedFrame != 1 || !IsSeatReclaimGap(m_Config.localPeerId, agreed.frame) ||
+			    PeerDecisionRequiredVoters(current) != PeerDecisionRequiredVoters(agreed)) {
+				refused("foreign continuation"); return;
+			}
 		}
 		if (agreed.preparedFrame == 0 && (agreed.connectedMask & SeatBit(m_Config.localPeerId)) == 0)
 			DiagnosticLine() << "[net-peer-foreign-hold] local=" << static_cast<int>(m_Config.localPeerId) << " frame=" << agreed.frame
