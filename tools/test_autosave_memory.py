@@ -1,6 +1,7 @@
 """Keep an autosaving match's memory bounded for an hour (one machine, two engines, proof:false).
 
-A hosted two-peer match saves every --autosave-seconds for --minutes while each engine's private (committed) bytes and
+A hosted two-peer match at the host's default automatic input delay saves every --autosave-seconds for --minutes while
+each engine's private (committed) bytes and
 working set are read from its process every --sample-seconds, beside the engine's own memory census lines. After the
 --settle-minutes warm-up, each peer's private bytes may rise by at most --slope-mb-per-minute on a least-squares line
 through the samples and may not end more than --rise-mb above their lowest settled sample. Every named capture must be
@@ -70,6 +71,8 @@ def main():
     p.add_argument('--census-histogram', action='store_true')
     p.add_argument('--split-cpus', action='store_true',
                    help='each engine on its own half of the logical CPUs, so one peer cannot take the other\'s time')
+    p.add_argument('--fixed-delay', type=int, default=None,
+                   help='a fixed input delay in ticks instead of the host default, the automatic delay')
     p.add_argument('--port', type=int, default=49488)
     a = p.parse_args()
     repo = a.repo.resolve()
@@ -84,7 +87,8 @@ def main():
     menu.write_text(f'in_play\nwait_file {quit_path.as_posix()} {seconds + 600}\nexit\n')
     # The match ends at its own tick count: a probe that could end it waits at most half an hour.
     ticks = str(60 * seconds)
-    common = ['-net-port', str(a.port), '-net-match-peers', '2', '-net-match-input-delay', '1',
+    delay = ['-net-match-input-delay', str(a.fixed_delay)] if a.fixed_delay is not None else ['-net-match-auto-delay']
+    common = ['-net-port', str(a.port), '-net-match-peers', '2', *delay,
               '-net-autosave-seconds', str(a.autosave_seconds), '-net-match-ticks', ticks, '-max-ticks', ticks,
               '-menu-script', str(menu), '-memory-census-ticks', '3600'] + (['-memory-census-histogram'] if a.census_histogram else [])
     argv = {'host': ['-net-match-service-e2e', '-net-host'] + common,
@@ -92,7 +96,8 @@ def main():
     env = {'CCCP_HEADLESS': '1', 'CC_RUNNER_IGNORE_FULLSCREEN': '1', 'CC_TEST_NET_MATCH_E2E_WAIT_PEERS': '1'}
     half = (os.cpu_count() or 2) // 2
     masks = {'host': (1 << half) - 1, 'client': ((1 << half) - 1) << half} if a.split_cpus else {}
-    settings = {'AutosaveSeconds': '0', 'NetworkHostDelayPolicy': 'Fixed', 'NetworkIceEnable': '0',
+    settings = {'AutosaveSeconds': '0', 'NetworkHostDelayPolicy': 'Fixed' if a.fixed_delay is not None else 'Auto',
+                'NetworkInputDelayFrames': str(a.fixed_delay or 0), 'NetworkIceEnable': '0',
                 'NetworkPortMapEnable': '0', 'NetworkHostVisibility': 'Unlisted', 'EnableLuaDebugging': '0',
                 'ResolutionX': '960', 'ResolutionY': '540', 'EnableVSync': '0'}
     runs, records, started = {}, {}, []
