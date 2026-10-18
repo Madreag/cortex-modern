@@ -1,0 +1,15 @@
+{
+  "topology": "single-box",
+  "proof": false,
+  "measurement_portability": {
+    "red": "FileNotFoundError: the Linux-only process inventory reads procfs on macOS",
+    "root_cause": "The POSIX measurement driver assumed Linux process discovery and wrapper PID identity",
+    "change": "Use checked ps inventory and the official runner's live engine PID through either launch route",
+    "unit_tests": {"passed": 12, "total": 12},
+    "runner_modes": ["off", "ssh"],
+    "runner_checks": ["exit code", "stdout and stderr", "signal", "timeout", "whole-group cleanup", "live engine identity"],
+    "runner_pass": true,
+    "timing_oracle_changed": false
+  },
+  "engine_measurement": "pending"
+}

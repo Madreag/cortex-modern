@@ -787,6 +787,11 @@ class IsolatedRun:
             except ProcessLookupError:
                 return
 
+    @property
+    def engine_pid(self) -> int | None:
+        """The owned engine, including while it is running through the local SSH hop."""
+        return self._hop_record().get("engine_pid") if self.hop else self.record.get("pid")
+
     def poll(self) -> int | None:
         if self._proc is None:
             return self.record.get("exit_code")
@@ -999,6 +1004,8 @@ def self_test(modes: Sequence[str]) -> int:
                     deadline = time.monotonic() + 15
                     while not (root / "child.pid").is_file() and time.monotonic() < deadline:
                         time.sleep(0.05)
+                    expect(drop.engine_pid == int((root / "parent.pid").read_text()),
+                           f"{mode}: the running engine identity survives the launch route")
                     drop.terminate()
                     record = drop.finish()
                 finally:

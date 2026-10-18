@@ -20,6 +20,7 @@ from feel import report
 from feel.records import compress_case_records, record_path
 from feel_measure import input_pattern, private_settings, stage_baseline, compare_pair, scratch_bytes
 from run_sim_test import engine_executable, make_run
+from run_selftests import BUILD_PROCESSES
 
 TICKS = report.TICKS
 ARMS = {'sp': None, '30ms': 30, '200ms': 200}
@@ -43,15 +44,16 @@ def sha(path):
 
 def contenders():
     found = []
-    for proc in Path('/proc').iterdir():
-        if not proc.name.isdecimal():
+    listing = subprocess.run(['ps', '-axo', 'pid=,comm='], capture_output=True,
+                             text=True, timeout=60, check=True).stdout
+    for line in listing.splitlines():
+        pid, separator, command = line.strip().partition(' ')
+        if not separator or not pid.isdecimal():
             continue
-        try:
-            exe = (proc / 'exe').resolve(strict=True)
-            if exe.name in ('ninja', 'CortexCommand', 'CortexCommand.exe'):
-                found.append({'pid': int(proc.name), 'exe': str(exe)})
-        except (OSError, ValueError):
-            pass
+        command = command.strip()
+        name = Path(command).name
+        if name in ('CortexCommand', 'CortexCommand.exe') or name.lower() in BUILD_PROCESSES:
+            found.append(dict(pid=int(pid), exe=command))
     return found
 
 
@@ -236,8 +238,8 @@ def launch_case(root, arm, repeat, port, exe_sha, size, lag_step=None, preview_c
             if peer == 'host':
                 time.sleep(.75)
         while any(run.poll() is None for run in runs.values()):
-            own = {run.record.get('pid') for run in runs.values()}
             live = contenders()
+            own = {run.engine_pid for run in runs.values()}
             manifest['quiet_samples'].append(dict(time=stamp(), foreign=[p for p in live if p['pid'] not in own], loadavg=os.getloadavg()))
             failed = {peer: run.poll() for peer, run in runs.items() if run.poll() not in (None, 0)}
             if failed:
@@ -302,7 +304,7 @@ def summarize(cases, repeats, selected):
                 pass_check=complete and coverage and all(r['pass_check'] for r in rise_checks) and
                            all(all(p[k] for k in ('b1_delay_pass', 'b2_depth_pass', 'b3_pass', 'b4_overlay_pass', 'c_duplicates_pass', 'c_own_hold_pass')) for p in judged),
                 definition='Existing feel.report.input_latencies: first completed presentation whose local actor changes aim/velocity in the requested direction and carries that input. Every missing response remains RED. Each network p50 must lie inside the measured single-player repeat p50 range, in milliseconds and presented frames; no added tolerance.',
-                scope='Headed Linux local two-engine fake-RTT measurement, not a spread/relay proof or physical display scanout measurement.')
+                scope='Headed POSIX local two-engine fake-RTT measurement, not a spread/relay proof or physical display scanout measurement.')
 
 
 def main():
@@ -321,8 +323,8 @@ def main():
     parser.add_argument('--dump-window', type=int, nargs=2, metavar=('FROM_TICK', 'THROUGH_TICK'),
                         help='retain per-object simulation and controller dumps for a failing handoff')
     args = parser.parse_args()
-    if sys.platform != 'linux' or args.repeats < 1 or not 1024 <= args.port <= 49151:
-        parser.error('requires Linux, positive repeats, and a lane-owned port below 49152')
+    if sys.platform not in ('linux', 'darwin') or args.repeats < 1 or not 1024 <= args.port <= 49151:
+        parser.error('requires Linux or macOS, positive repeats, and a lane-owned port below 49152')
     if not 640 <= args.size[0] <= 1920 or not 480 <= args.size[1] <= 1080:
         parser.error('size must be within 640x480 and 1920x1080')
     if args.lag_step and (args.only != ['30ms'] or not 180 <= args.lag_step[0] <= 900 or args.lag_step[1] != 100):

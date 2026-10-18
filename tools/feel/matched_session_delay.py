@@ -98,7 +98,7 @@ def main(argv=None):
                 envelope='Observed SP repeat p50 minimum and maximum, separately for each actor team and action/held state. Software milliseconds and presented-frame counts are retained. No tolerance is added.',
                 order='All SP controls are collected first, alternating actor teams. Then each repeat measures both RTT arms.',
                 matching='Same fixture, actor team, model, weapon, script, draw cap and resolution. The SP team1 control swaps player-team assignments so player0 drives and draws that seat.',
-                scope='One Linux box, official runners, software input sample through completed UploadFrame; no physical scanout or spread claim.')
+                scope='One POSIX box, official runners, software input sample through completed UploadFrame; no physical scanout or spread claim.')
     driver.write_json(root / 'plan.json', plan)
     original_stage = driver.stage_baseline
     cases = []

@@ -1,9 +1,24 @@
 import unittest
+from unittest.mock import patch
 
-from feel.session_delay import live_resize_proof, preview_obligations, summarize
+from feel.session_delay import contenders, live_resize_proof, preview_obligations, summarize
 
 
 class SessionDelayMeasurement(unittest.TestCase):
+    def test_posix_process_inventory_includes_engines_and_compilers(self):
+        listing = ' 10 /lane/build/CortexCommand\n 11 /tool/cc1plus\n 12 /tool/ninja\n 13 /usr/bin/python3\n'
+        with patch('feel.session_delay.subprocess.run') as run:
+            run.return_value.stdout = listing
+            self.assertEqual(contenders(), [dict(pid=10, exe='/lane/build/CortexCommand'),
+                                            dict(pid=11, exe='/tool/cc1plus'), dict(pid=12, exe='/tool/ninja')])
+            run.assert_called_once_with(['ps', '-axo', 'pid=,comm='], capture_output=True,
+                                        text=True, timeout=60, check=True)
+
+    def test_process_inventory_failure_cannot_claim_a_quiet_box(self):
+        with patch('feel.session_delay.subprocess.run', side_effect=OSError('process list unavailable')):
+            with self.assertRaises(OSError):
+                contenders()
+
     def test_live_resize_requires_both_applied_boundaries_and_real_fault_readback(self):
         fault = '[feel-lag-step] requested_frame=600 observed_target_frame=600 per_engine_lag_ms=100 applied=1 readback=1 send_lag_ms=50 receive_lag_ms=50\n'
         first = fault + '[net-input-delay-applied] local=1 peer=1 frame=625 ticks=14\n'
