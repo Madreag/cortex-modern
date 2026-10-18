@@ -17835,6 +17835,7 @@ void LuaMan::PrepareCheckpointValues() {
 	if (CheckpointNativeStorage::Enabled()) { g_UInputMan.PrepareCheckpointValues(); g_FrameMan.PrepareCheckpointValues(); g_PostProcessMan.PrepareCheckpointValues(); }
 	if (CheckpointNativeStorage::Enabled()) g_ActivityMan.PrepareCheckpointValues();
 	if (CheckpointNativeStorage::Enabled()) { g_AudioMan.PrepareCheckpointRegistryValues(); g_AudioMan.PrepareCheckpointValues(); }
+	if (CheckpointNativeStorage::Enabled() && GUISound::IsConstructed()) g_GUISound.PrepareCheckpointValues();
 	if (CheckpointNativeStorage::Enabled()) g_MovableMan.PrepareCheckpointActorValues();
 	if (CheckpointNativeStorage::Enabled()) g_MovableMan.PrepareCheckpointLooseValues();
 	if (CheckpointNativeStorage::Enabled()) g_MovableMan.PrepareCheckpointLookupValues();

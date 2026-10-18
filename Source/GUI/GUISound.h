@@ -14,6 +14,8 @@ namespace RTE {
 		friend struct GUISoundCheckpoint;
 
 	public:
+		/// Moves the interface's sound sets and links into checkpoint storage, so a save reads them as its boundary left them.
+		void PrepareCheckpointValues();
 		std::string SaveCheckpoint() const;
 		bool LoadCheckpoint(std::string_view text, bool validateOnly = false);
 		bool LoadCheckpointWithAudio(std::string_view text, std::string_view music, std::string_view audio);
