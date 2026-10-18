@@ -9078,6 +9078,13 @@ bool LuaStateWrapper::CapturePreparedScriptGraphs(const CheckpointLua::Boundary&
 			lua_getglobal(state, "_ScriptGraphCallbacks"); lua_pushvalue(state, -2); lua_setfield(state, -2, "async"); lua_pop(state, 2);
 			part.callbacksUs = std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - callbacksStarted).count();
 			part.callbacksCpu = CheckpointThreadCpuUnits() - callbacksCpu;
+			// Lua-owned native copies were made after this state's initial read index. Give every one its original
+			// identity before descriptor calls push borrowed owners or NativeSave asks the snapshot for that object.
+			// Otherwise a live owner looks unknown and a copy of an already-frozen Actor loses its complete menu.
+			auto nativeRoots = snapshot->ReadValues();
+			const auto nativeViews = CheckpointNativeStorage::CurrentViews();
+			nativeRoots.insert(nativeRoots.end(), nativeViews.roots.begin(), nativeViews.roots.end());
+			CheckpointNativeStorage::ReadScope nativeIdentities({true, nativeViews.pages, std::move(nativeRoots), nativeViews.privateValues, nativeViews.owner});
 			lua_getglobal(state, "_ScriptGraph"); lua_getfield(state, -1, "serialize");
 			lua_pushvalue(state, -3); lua_pushnumber(state, static_cast<lua_Number>(ScriptGraphBirthHorizon(heap)));
 			std::unordered_set<const MovableObject*> carried;
