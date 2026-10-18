@@ -1,0 +1,19 @@
+{
+  "single_player_repeats_per_team": 12,
+  "network_pairs_per_rtt": 3,
+  "teams": [
+    0,
+    1
+  ],
+  "rtts_ms": [
+    30,
+    200
+  ],
+  "ticks": 1200,
+  "binary_sha256": "9cd877ab2482d62db341c646b45ded0e4a6b2d589b8ef5272426bc0bccda44a1",
+  "script_sha256": "783571d2c4a5e997f9333cac73da93b4f8296f775bd8d802ff9912cd4c20a295",
+  "envelope": "Observed SP repeat p50 minimum and maximum, separately for each actor team and action/held state. Software milliseconds and presented-frame counts are retained. No tolerance is added.",
+  "order": "All SP controls are collected first, alternating actor teams. Then each repeat measures both RTT arms.",
+  "matching": "Same fixture, actor team, model, weapon, script, draw cap and resolution. The SP team1 control swaps player-team assignments so player0 drives and draws that seat.",
+  "scope": "One POSIX box, official runners, software input sample through completed UploadFrame; no physical scanout or spread claim."
+}

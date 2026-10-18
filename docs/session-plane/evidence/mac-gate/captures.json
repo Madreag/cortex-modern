@@ -1,0 +1,17 @@
+[
+  {
+    "path": "steady-30ms-host.png",
+    "sha256": "31183ad933cdcd3ae904d7c19fbbdbe1c14cfaa5e0e6aaf641ca5fd275a12a81",
+    "source": "Unmodified engine-side capture; inspected at native resolution."
+  },
+  {
+    "path": "steady-200ms-client.png",
+    "sha256": "a873e1cbef19f31e40d5a7705a8a467c553ca9ae69a19af8720e2fd213ebc40e",
+    "source": "Unmodified engine-side capture; inspected at native resolution."
+  },
+  {
+    "path": "own-hold-host.png",
+    "sha256": "4d73746ae83633e9967207c696e1644a4e5750e262223889697c6e08c3e5891c",
+    "source": "Unmodified engine-side capture; inspected at native resolution."
+  }
+]

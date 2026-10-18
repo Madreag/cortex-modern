@@ -1,0 +1,63 @@
+{
+  "scope": "Single headed Mac, official runners, topology single-box, proof false for field play.",
+  "engine_source": "3e35b69c437a6f34d7673c820c04db38f4ccc5c3",
+  "binary_sha256": "9cd877ab2482d62db341c646b45ded0e4a6b2d589b8ef5272426bc0bccda44a1",
+  "sanitization": "Owned repository, dependency, user-home and toolchain prefixes replaced with explicit tokens. Timing values, observed actor states and verdicts are unchanged.",
+  "raw_stage_records": "Original complete feel JSONL files remain in the local review root; matched-cases retains every measured and censored response edge, with the original raw-file SHA.",
+  "records": [
+    {
+      "path": "matched-cases.json.gz",
+      "original_sha256": "1b21ba43294dc64ef90d0b529e84807a79eb7259be6893e73c88812b62e134a1",
+      "portable_sha256": "8793300fa06a2f86c481268e1f566b21a68294d2c34d89ca531c9666a5bd52c7",
+      "compressed_sha256": "59dc3becc25e49cd09ed7fd7dcdba381651bda030eeefe8c6d7e709ed02d3615"
+    },
+    {
+      "path": "live-resize-host-stdout.log.gz",
+      "original_sha256": "55fdd0dfeb2386c318a04baa281451e8c3be64f3bd43207fb2ca290524d82aae",
+      "portable_sha256": "c374c2c099cc4470b758fb429f676e5e338338bbff218c3935fd2a474b8c78a2",
+      "compressed_sha256": "2b7d37872e6533dc2f4988beb0c2754869819711a069db304c20a03a106a338f"
+    },
+    {
+      "path": "live-resize-client-stdout.log.gz",
+      "original_sha256": "d0321955dcc4fe7135065f0541cb99d07e4dd88ff9bff02ab7f8f3159b8bcafe",
+      "portable_sha256": "932f4a654b3984a795d7b01d4d95c2ddf734326005ae42e868027667303e07c7",
+      "compressed_sha256": "2ac8517f228227d06c671c4a25fbd93877681fc50682d2877f7af8dc732acf35"
+    },
+    {
+      "path": "own-hold-host-stdout.log.gz",
+      "original_sha256": "d76870711cab160698de35ab8ea78724b849d7edf5cd0085b24695b3151db230",
+      "portable_sha256": "a1ef51de368779d7dab1e0fc031aa86feb5d85cf885619763e3feb565817a95d",
+      "compressed_sha256": "e337e994bf95a1a1f93a9cd3b70b1ff300b848169e1ae9aabdd45aca91ea5cb8"
+    },
+    {
+      "path": "own-hold-client-stdout.log.gz",
+      "original_sha256": "a13dd130bf89037e6a6105fc2134f7265a06c41ef7aea9627d52c14874b0612f",
+      "portable_sha256": "c5c2233a58288f6c6cdd80027700e261e8ee2369e55f69ad185cf68dfe6a81b1",
+      "compressed_sha256": "d47188abcdbdc382796a68cf7cf36d40cc61c6415b095c4e927fdabddeb4560a"
+    },
+    {
+      "path": "preview-cap-1-stdout.log.gz",
+      "original_sha256": "2d44526f074ad0a26e176b1f9155370d2f637c40b3e02f7d40cd36d503fce78b",
+      "portable_sha256": "2d44526f074ad0a26e176b1f9155370d2f637c40b3e02f7d40cd36d503fce78b",
+      "compressed_sha256": "43c1ffd6c58d6439f53d46250cefb027b1ab7c83a996f86e6fcd416bd1b2186d"
+    },
+    {
+      "path": "preview-cap-20-stdout.log.gz",
+      "original_sha256": "153aa860260012cd8bac08a5e9ae6ecad7db2290ba1f80efec178a54f8a368c8",
+      "portable_sha256": "153aa860260012cd8bac08a5e9ae6ecad7db2290ba1f80efec178a54f8a368c8",
+      "compressed_sha256": "e0248f5136462c5054e92064020dbccf824531008d91e893b8ccf9da2652b539"
+    },
+    {
+      "path": "stage-reducer-smoke.txt.gz",
+      "original_sha256": "1ff6c702ccea9447e7750d1ee998828a7669277a408c4db145bc27a9172619a9",
+      "portable_sha256": "1ff6c702ccea9447e7750d1ee998828a7669277a408c4db145bc27a9172619a9",
+      "compressed_sha256": "86d097629faa517cf427972715783097f427fe0018587678bfafede8520b0b65"
+    },
+    {
+      "path": "delay-driver-tests.txt.gz",
+      "original_sha256": "72f09eca554e87a45b7156c6109520cf15e8b6ec157dc5c033610649b49b8698",
+      "portable_sha256": "72f09eca554e87a45b7156c6109520cf15e8b6ec157dc5c033610649b49b8698",
+      "compressed_sha256": "0a0c6c88bb5db38f0808eec1a80c3053f15683a71c416f9015f5f30b3fdce251"
+    }
+  ]
+}
