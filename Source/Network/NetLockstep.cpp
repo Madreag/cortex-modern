@@ -6707,7 +6707,7 @@ namespace RTE {
 			return false;
 		}
 		const uint64_t heard = LastAuthenticatedTraffic(peerId);
-		if (peerId == GetHostPeerId() || nowMs < heard || nowMs - heard < c_NetSeatDisconnectSilenceMs) {
+		if (peerId == GetHostPeerId() || (!bridge && (nowMs < heard || nowMs - heard < c_NetSeatDisconnectSilenceMs))) {
 			if (error) *error = "authenticated traffic keeps this human seat";
 			return false;
 		}
@@ -7217,15 +7217,22 @@ namespace RTE {
 		return quality;
 	}
 
-	bool NetLockstepCoordinator::DeclareOverdueInputs(uint64_t frame, uint64_t nowMs, uint64_t /*firstMissingMs*/, const std::vector<uint8_t>& missing) {
+	bool NetLockstepCoordinator::DeclareOverdueInputs(uint64_t frame, uint64_t nowMs, uint64_t firstMissingMs, const std::vector<uint8_t>& missing) {
 		if (m_Playback || WaitsForPlacement() || m_Config.localPeerId != GetHostPeerId() ||
 		    m_GoodbyeDrain || frame > m_FinalFrame || m_CaptureParkAwaitingReports) return false;
 		bool held = false;
+		// Ordinary current matches use peer-frame groups; their older coordinator contract retains its silence allowance.
+		const bool agreedCombat = (m_Config.matchConfig.dedicated || m_Config.matchConfig.persistentWorld) && m_Config.matchConfig.sessionId == m_Config.sessionId &&
+		    m_Config.matchConfig.version >= NetMatchConfigUtil::c_TimingOptionsVersion &&
+		    m_Config.matchConfig.slowPlayerPolicy == NetSlowPlayerPolicy::Substitute;
+		const bool combatBound = UsesBoundedWait() && agreedCombat && nowMs >= firstMissingMs &&
+		    static_cast<double>(nowMs - firstMissingMs) >= m_Config.slowPlayerBoundTicks * m_Config.simTickMs;
 		for (uint8_t peer: missing) {
 			const uint64_t heard = LastAuthenticatedTraffic(peer);
-			if (peer == GetHostPeerId() || nowMs < heard || nowMs - heard < c_NetSeatDisconnectSilenceMs) continue;
-			if (ProposePeerHold(peer, nowMs, nullptr, 0, "disconnect")) {
-				m_Stats.lastHoldDeclarationMs = nowMs - heard;
+			const bool bridge = combatBound && m_PeersPlayedThisRound.contains(peer);
+			if (peer == GetHostPeerId() || (!bridge && (nowMs < heard || nowMs - heard < c_NetSeatDisconnectSilenceMs))) continue;
+			if (ProposePeerHold(peer, nowMs, nullptr, bridge ? frame : 0, bridge ? "combat_bridge" : "disconnect")) {
+				m_Stats.lastHoldDeclarationMs = bridge ? nowMs - firstMissingMs : nowMs - heard;
 				held |= IsSeatUnderAI(peer, frame);
 			}
 		}
@@ -13325,11 +13332,11 @@ namespace RTE {
 	// ProposePeerHold chooses the first future missing frame, preserving every accepted earlier input.
 	// Startup and placement remain barriers; neither phase can create an absence hold.
 	void NetLockstepCoordinator::AdjudicateSilentPeers(uint64_t nowMs) {
-		if (UsesPeerFrameGroups() || !IsRunning() || WaitsForPlacement() || m_Config.localPeerId != GetHostPeerId()) return;
-		std::vector<uint8_t> missing;
+		if (UsesPeerFrameGroups() || m_Playback || !IsRunning() || WaitsForPlacement() || m_Config.localPeerId != GetHostPeerId() ||
+		    m_GoodbyeDrain || m_Stats.nextFrame > m_FinalFrame || m_CaptureParkAwaitingReports) return;
 		for (uint8_t peer: m_RemotePeerIds)
-			if (!IsPeerGoneAtFrame(peer, m_Stats.nextFrame) && !IsSeatUnderAI(peer, m_Stats.nextFrame)) missing.push_back(peer);
-		(void)DeclareOverdueInputs(m_Stats.nextFrame, nowMs, m_FirstMissingMs, missing);
+			if (!IsPeerGoneAtFrame(peer, m_Stats.nextFrame) && !IsSeatUnderAI(peer, m_Stats.nextFrame) && ProposePeerHold(peer, nowMs, nullptr, 0, "disconnect"))
+				m_Stats.lastHoldDeclarationMs = nowMs - LastAuthenticatedTraffic(peer);
 	}
 
 	void NetLockstepCoordinator::DropUnreachablePeers(uint64_t nowMs) {

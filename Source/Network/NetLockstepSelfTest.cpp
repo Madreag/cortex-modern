@@ -542,6 +542,30 @@ namespace RTE {
 			return std::nullopt;
 		}
 
+		static bool LegacyCombatHoldUsesItsInputDeadline(std::string* error) {
+			for (unsigned mode: {1U, 2U}) for (bool started: {false, true}) {
+				DelayWire wire; wire.rtt = 2;
+				NetLockstepCoordinator peer; ConfigureDelay(peer, wire, mode, 1);
+				if (started) peer.m_PeersPlayedThisRound.insert(2);
+				const uint64_t frame = peer.m_Stats.nextFrame;
+				peer.m_PeerLastHeardMs[2] = 1049;
+				if (peer.ProposePeerHold(2, 1049) || peer.DeclareOverdueInputs(frame, 1049, 1000, {2}) || peer.HasHeldAISeat(2)) {
+					*error = "a live legacy seat was held before its combat deadline"; return false;
+				}
+				peer.m_PeerLastHeardMs[2] = 1050;
+				const bool held = peer.DeclareOverdueInputs(frame, 1050, 1000, {2});
+				if (held != started || peer.IsSeatUnderAI(2, frame) != started) {
+					*error = "fresh authenticated traffic hid a missing-input combat deadline: mode=" + std::to_string(mode); return false;
+				}
+				if (!started) continue;
+				const auto fact = peer.LastHoldOf(2);
+				if (!fact || fact->frame != frame || fact->cause != "combat_bridge" || fact->boundMs != 50) {
+					*error = "the combat hold lost its exact frame, cause or configured bound"; return false;
+				}
+			}
+			return true;
+		}
+
 		static void SampleDelay(NetLockstepCoordinator& peer, uint64_t nowMs) {
 			peer.m_TimingNowMs = nowMs;
 			if (peer.UsesPeerFrameGroups()) peer.TickPeerInputDelay(nowMs);
@@ -31392,6 +31416,12 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS consumer_hold_deadline_includes_the_displayed_slot\n[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "legacy-combat-deadline") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::LegacyCombatHoldUsesItsInputDeadline(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS legacy_combat_hold_uses_its_input_deadline\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "direct-hold-scope") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::DirectHoldScope(&error)) return fail(error);
@@ -31713,6 +31743,7 @@ namespace {
 		row(&NetSessionPlaneSelfTest::CheckHeldHostControllers, "a_held_host_preserves_controller_disable_before_its_return_arrives");
 		row(&SessionPlaneRecoveryTest::LinkDelay, "input_delay_follows_the_measured_link");
 		row(&SessionPlaneRecoveryTest::ConsumerHoldDeadlineIncludesTheDisplayedSlot, "consumer_hold_deadline_includes_the_displayed_slot");
+		row(&SessionPlaneRecoveryTest::LegacyCombatHoldUsesItsInputDeadline, "legacy_combat_hold_uses_its_input_deadline");
 		row(&SessionPlaneRecoveryTest::RemoteInputReceiptsFormTheLocalHoldGroup, "remote_input_receipts_form_the_local_hold_group");
 		row(&SessionPlaneRecoveryTest::MissingOrZeroLinkNeverUsesReceipts, "missing_or_zero_rtt_never_uses_machine_receipts");
 		row(&SessionPlaneRecoveryTest::LinkSizingInEveryMode, "every_mode_sizes_live_and_return_from_the_link");

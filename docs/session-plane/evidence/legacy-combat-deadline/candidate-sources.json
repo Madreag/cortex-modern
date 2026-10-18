@@ -1,0 +1,12 @@
+[
+  {
+    "name": "first-candidate.cpp.gz",
+    "sha256": "66ed492a68ca6ff64d256b3af0929c933076956668960014e47dfd99bd3fe030",
+    "compressed_sha256": "3a94d82986c3357c086e5d08f343fa89a99507689d0ea25bb5c67a92bdc36ff8"
+  },
+  {
+    "name": "current-engine.patch.gz",
+    "sha256": "072a72ea88bcc4bf4f66dbf74eb0a20f4bb0af7e33e7be028ac4ab529af6870a",
+    "compressed_sha256": "65311139c08628383621c000d63c304af62e6a2708651d9b66127602912f896b"
+  }
+]
