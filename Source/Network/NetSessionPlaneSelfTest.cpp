@@ -1046,6 +1046,10 @@ namespace RTE {
 				return static_cast<uint16_t>(estimator.SenderRequiredFrames(c_TestTickMs, c_TestBoundTicks, floor));
 			else return host ? floor : static_cast<uint16_t>(std::min<uint32_t>(NetMatchConfigUtil::c_MaxInputDelayFrames, estimator.RequiredFrames(c_TestTickMs, floor) + c_TestBoundTicks));
 		}
+		bool IsLosingContinuationDecision(bool wasSplit, uint8_t seat, const NetFrameTieRequest& request, const NetFrameTieReply& reply) {
+			// FLAGGED fixture departure: a private reader queries a ruling without offering another continuation to discard.
+			return wasSplit && !request.queryOnly && std::find(reply.members.begin(), reply.members.end(), seat) == reply.members.end();
+		}
 		// A row on a pool worker runs beside others: no plane ticks its coordinators, so it takes no plane lock and none waits on it.
 		thread_local bool t_PoolWorker = false;
 		struct Fixture {
@@ -1185,6 +1189,13 @@ namespace RTE {
 				if (duration > static_cast<uint64_t>(std::ceil(c_TestBoundTicks * c_TestTickMs))) waits.push_back({seat, waitAt[index], hub.now, frame, waitPlaying[index]});
 				if (returnedAt[index]) postReturnWait[index] = std::max(postReturnWait[index], duration);
 				waitAt[index] = 0;
+			}
+			void ObserveBoundRole(size_t index, bool playing) {
+				if (!waitAt[index] || !waitPlaying[index] || playing) return;
+				// FLAGGED fixture departure: an installed own hold ends this wait's playing portion. Keep its raw start and any
+				// actual bound overrun; later private-tail time does not become a new wait charged to a playing survivor.
+				playingMaxWait[index] = std::max(playingMaxWait[index], hub.now - waitAt[index]);
+				waitPlaying[index] = false;
 			}
 			bool CheckBound(std::string& error) const {
 				for (uint8_t seat = 1; seat <= hub.row.seats; ++seat) {
@@ -1457,9 +1468,15 @@ namespace RTE {
 							bool wasSplit = false;
 							for (uint8_t other = 1; other <= hub.row.seats; ++other) wasSplit |= splitFrom[std::min(id, other)][std::max(id, other)] != 0;
 							const auto key = std::make_tuple(decision.request.generation, decision.request.roundId, decision.request.configHash, decision.request.frame);
-							if (wasSplit && std::find(decision.reply.members.begin(), decision.reply.members.end(), id) == decision.reply.members.end() &&
+							if (IsLosingContinuationDecision(wasSplit, id, decision.request, decision.reply) &&
 							    splitDecisions[id - 1].insert(key).second) {
-								lostAt[id - 1] = hub.now; lostFrame[id - 1] = peer.GetStats().nextFrame; imageNeeded[id - 1] = true;
+								if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) DiagnosticLine() << "[session-plane-decision-class] seat=" << unsigned(id)
+								    << " query_only=" << decision.request.queryOnly << " question=" << decision.request.frame << " now_ms=" << hub.now
+								    << " image_reading=" << imageReading[id - 1] << " image_returns=" << imageReturns[id - 1]
+								    << " displayed=" << world.applied << " resume=" << peer.GetResumeFrame() << std::endl;
+								// FLAGGED fixture departure: preparation can lead the world by hundreds of ticks. The ruling's decision
+								// boundary is the actual completed cursor, as in the direct oracle; never compare a stop to prepared input.
+								lostAt[id - 1] = hub.now; lostFrame[id - 1] = peer.GetResumeFrame(); imageNeeded[id - 1] = true;
 							}
 						}
 					}
@@ -1485,6 +1502,9 @@ namespace RTE {
 						error = "authority ruling: losing peer " + std::to_string(id) + " did not stop at decision frame " + std::to_string(lostFrame[id - 1]); return false;
 					}
 					if (!peer.IsRunning() || imageReading[id - 1]) continue;
+					const uint64_t boundNext = world.applied + 1;
+					ObserveBoundRole(id - 1, !peer.IsLocalPrivateReaderAt(boundNext) && !peer.IsSeatUnderAI(id, boundNext) &&
+					    (s_FrameMembers(peer, boundNext) & (1U << (id - 1))));
 					if (splitParticipant[id - 1] && observedSplit[id - 1] && !imageNeeded[id - 1] &&
 					    (!(s_FrameMembers(peer, world.applied + 1) & (1U << (id - 1))) || peer.IsLocalPrivateReaderAt(world.applied + 1))) {
 						error = "authority ruling: playing split peer " + std::to_string(id) + " became a private reader before a losing decision; a pending referee never suspends its half"; return false;
@@ -2040,6 +2060,24 @@ namespace RTE {
 			if (fixture.CheckBound(why)) { error = "fixture waived a playing half's bound during a directory outage"; return false; }
 			fixture.playingMaxWait[1] = 50;
 			if (!fixture.CheckBound(why)) { error = "fixture rejected a wait exactly at the agreed bound"; return false; }
+			NetFrameTieRequest request; request.queryOnly = true;
+			NetFrameTieReply reply; reply.state = NetFrameTieReply::State::Decided; reply.members = {1};
+			const bool readerIsNotLoser = !IsLosingContinuationDecision(true, 2, request, reply);
+			request.queryOnly = false;
+			const bool liveLoser = IsLosingContinuationDecision(true, 2, request, reply);
+			const bool nonSplit = !IsLosingContinuationDecision(false, 2, request, reply);
+			const bool winner = !IsLosingContinuationDecision(true, 1, request, reply);
+			fixture.playingMaxWait = {0, 0}; fixture.waitAt = {100, 0}; fixture.waitPlaying = {true, false}; fixture.hub.now = 105;
+			fixture.ObserveBoundRole(0, false); fixture.hub.now = 155;
+			const bool endedAtHold = !fixture.waitPlaying[0] && fixture.waitAt[0] == 100 && fixture.playingMaxWait[0] == 5 && fixture.CheckBound(why);
+			fixture.playingMaxWait = {0, 0}; fixture.waitAt = {100, 0}; fixture.waitPlaying = {true, false}; fixture.hub.now = 151;
+			fixture.ObserveBoundRole(0, false);
+			const bool overrunRetained = !fixture.CheckBound(why);
+			if (!readerIsNotLoser || !liveLoser || !nonSplit || !winner || !endedAtHold || !overrunRetained) {
+				error = "fixture role classification: private_query_is_not_a_loser=" + std::to_string(readerIsNotLoser) +
+				    " actual_loser_checked=" + std::to_string(liveLoser) + " nonsplit_unchanged=" + std::to_string(nonSplit) + " winner_unchanged=" + std::to_string(winner) +
+				    " playing_wait_ends_at_hold=" + std::to_string(endedAtHold) + " actual_51ms_overrun_rejected=" + std::to_string(overrunRetained); return false;
+			}
 			return true;
 		}
 
