@@ -1193,9 +1193,9 @@ namespace RTE {
 				waitAt[index] = 0;
 			}
 			void ObserveBoundRole(size_t index, bool playing) {
-				if (!waitAt[index] || !waitPlaying[index] || playing) return;
-				// FLAGGED fixture departure: an installed own hold ends this wait's playing portion. Keep its raw start and any
-				// actual bound overrun; later private-tail time does not become a new wait charged to a playing survivor.
+				if (!waitAt[index] || !waitPlaying[index] || (playing && !OwnMachineTrouble(static_cast<uint8_t>(index + 1)))) return;
+				// FLAGGED fixture departure: an own hold or injected own-machine pause ends this wait's playing portion.
+				// As when a wait begins during that pause, its raw time remains, as does any preceding playing overrun.
 				playingMaxWait[index] = std::max(playingMaxWait[index], hub.now - waitAt[index]);
 				waitPlaying[index] = false;
 			}
@@ -1233,9 +1233,10 @@ namespace RTE {
 						const uint32_t first = authors ? 1U << (authorA - 1) : 0, second = authors ? 1U << (authorB - 1) : 0;
 						// FLAGGED fixture departure: bounded local holds are asynchronous. A cut peer can still consume human inputs
 						// sent before the other side's hold, so its installed sender mask can temporarily overlap that continuation.
-						// Require physical separation and an installed exclusion of the other author. Connected authors, the shared
+						// A third sender's hold can differ while the two authors still include each other. Require physical separation
+						// and distinct installed groups. Connected authors, the shared
 						// pre-cut prefix and an adopted image's same-author history never get this exception; no fixture supplies a group.
-						if (separated && frame >= separated && (l & first) && (r & second) && (!(l & second) || !(r & first))) {
+						if (separated && frame >= separated && (l & first) && (r & second) && l != r) {
 							splitHistories = true; continue;
 						}
 						error = "histories differ at displayed frame " + std::to_string(frame) + ": peer " + std::to_string(a) + " members=" + std::to_string(l) +
@@ -1949,10 +1950,11 @@ namespace RTE {
 				fixture.imageWithoutHeadroom[seat - 1] = true;
 				return fixture.CheckBound(error);
 			}
-			if (!agreed || replay.applied + 1 != activation) return fail("the private replay did not reach an activation every survivor certified");
+			if (!agreed || replay.applied + 1 != activation) return fail("the private replay did not reach an activation every survivor certified: donor=" +
+			    std::to_string(donor) + " activation=" + std::to_string(activation) + " replay=" + std::to_string(replay.applied) + " agreed=" + std::to_string(agreed) + s_WaitState(*fixture.peers[donor - 1]));
 			if (!liveStarted) return fail("the returning seat could not adopt its received return certificate: " + (lastRefusal.empty() ? "none received" : lastRefusal));
 			if (!fixture.peers[seat - 1]->IsRunning()) return fail("the returning seat did not finish its live handshake before activation: state=" +
-			    std::to_string(static_cast<int>(fixture.peers[seat - 1]->GetState())) + " starts_received=" + std::to_string(fixture.peers[seat - 1]->GetStats().startPacketsReceived));
+			    std::to_string(static_cast<int>(fixture.peers[seat - 1]->GetState())) + " starts_received=" + std::to_string(fixture.peers[seat - 1]->GetStats().startPacketsReceived) + s_WaitState(*fixture.peers[seat - 1]));
 			fixture.peers[seat - 1]->AdoptReplayedSeatTransitions(replayCoordinator, activation - 1);
 			fixture.discardedHistories[seat - 1].push_back(fixture.worlds[seat - 1].hashes);
 			fixture.worlds[seat - 1] = std::move(replay); fixture.queued[seat - 1] = activation - 1; fixture.credits[seat - 1] = 0; fixture.waitAt[seat - 1] = 0;
@@ -2174,6 +2176,13 @@ namespace RTE {
 			for (auto& world: causal.worlds) { world.applied = 1; world.hashes[1] = {}; }
 			causal.worlds[1].hashes[1][0] = causal.worlds[2].hashes[1][0] = 1;
 			const bool asymmetricHold = causal.CompareHistories(why);
+			// Two cut authors can still include each other while one holds a third sender and the other consumes its buffered input.
+			Fixture overlap; overlap.hub.row.seats = 3; overlap.worlds.resize(3);
+			overlap.frameMembers = {{0, 7}, {0, 6}, {0, 7}}; overlap.frameAuthors = {{0, 1}, {0, 2}, {0, 3}};
+			overlap.ObserveSplit(1, 2); overlap.ObserveSplit(2, 3);
+			for (auto& world: overlap.worlds) { world.applied = 1; world.hashes[1] = {}; }
+			overlap.worlds[1].hashes[1][0] = 1;
+			const bool asymmetricThirdSender = overlap.CompareHistories(why);
 			// The connected half still has one history, even while the cut pair's installed masks overlap.
 			causal.compared = {}; causal.compared[1][2] = causal.compared[1][3] = 1;
 			causal.worlds[2].hashes[1][0] = 2;
@@ -2201,14 +2210,32 @@ namespace RTE {
 			fixture.playingMaxWait = {0, 0}; fixture.waitAt = {100, 0}; fixture.waitPlaying = {true, false}; fixture.hub.now = 151;
 			fixture.ObserveBoundRole(0, false);
 			const bool overrunRetained = !fixture.CheckBound(why);
+			const auto ownPause = [&](uint64_t begins) {
+				fixture.hub.row.subject = 1; fixture.hub.row.frozen = true;
+				fixture.hub.faultAt = fixture.hub.now = begins; fixture.hub.faultEnd = begins + 1000;
+				fixture.playingMaxWait = {0, 0}; fixture.waitAt = {100, 0}; fixture.waitPlaying = {true, false};
+				fixture.maxWait = fixture.returnedAt = {0, 0}; fixture.waits.clear();
+				fixture.ObserveBoundRole(0, true); fixture.hub.now = begins + 100;
+				const bool bounded = fixture.CheckBound(why);
+				const bool segment = !fixture.waitPlaying[0] && fixture.waitAt[0] == 100 && fixture.playingMaxWait[0] == begins - 100;
+				fixture.FinishWait(1, 1);
+				const bool raw = fixture.maxWait[0] == begins && fixture.waits.size() == 1 && !fixture.waits[0].playing;
+				return segment && raw && bounded == (begins <= 150);
+			};
+			const bool ownPauseEndsPlaying = ownPause(110), ownPauseKeepsOverrun = ownPause(151);
 			DiagnosticLine() << "[session-plane-oracle-causality] asymmetric_local_hold=" << asymmetricHold
+			    << " asymmetric_third_sender=" << asymmetricThirdSender << " own_pause_ends_playing=" << ownPauseEndsPlaying
+			    << " own_pause_keeps_51ms=" << ownPauseKeepsOverrun
 			    << " first_shared_prefix=" << sharedPrefix << " connected_half_rejected=" << connectedHalfRejected << " prior_history_rejected=" << priorHistoryRejected;
 			if (!readerIsNotLoser || !liveLoser || !nonSplit || !winner || !endedAtHold || !overrunRetained ||
-			    !asymmetricHold || !sharedPrefix || !connectedHalfRejected || !priorHistoryRejected) {
+			    !asymmetricHold || !asymmetricThirdSender || !ownPauseEndsPlaying || !ownPauseKeepsOverrun ||
+			    !sharedPrefix || !connectedHalfRejected || !priorHistoryRejected) {
 				error = "fixture role classification: private_query_is_not_a_loser=" + std::to_string(readerIsNotLoser) +
 				    " actual_loser_checked=" + std::to_string(liveLoser) + " nonsplit_unchanged=" + std::to_string(nonSplit) + " winner_unchanged=" + std::to_string(winner) +
 				    " playing_wait_ends_at_hold=" + std::to_string(endedAtHold) + " actual_51ms_overrun_rejected=" + std::to_string(overrunRetained) +
 				    " asymmetric_local_hold=" + std::to_string(asymmetricHold) + " first_shared_prefix=" + std::to_string(sharedPrefix) +
+				    " asymmetric_third_sender=" + std::to_string(asymmetricThirdSender) + " own_pause_ends_playing=" + std::to_string(ownPauseEndsPlaying) +
+				    " own_pause_keeps_51ms=" + std::to_string(ownPauseKeepsOverrun) +
 				    " connected_half_rejected=" + std::to_string(connectedHalfRejected) + " prior_history_rejected=" + std::to_string(priorHistoryRejected); return false;
 			}
 			return true;
@@ -3309,11 +3336,14 @@ namespace RTE {
 		std::call_once(s_FixtureObservers, [] {
 			s_FrameMembers = [](const NetLockstepCoordinator& peer, uint64_t frame) { return peer.PeerFrameMembersAt(frame); };
 			s_WaitState = [](const NetLockstepCoordinator& peer) {
+				std::string starts;
+				for (uint8_t remote: peer.m_RemotePeerIds) starts += " start=" + std::to_string(remote) + ":" + std::to_string(peer.m_RemoteStartsReceived.contains(remote)) +
+				    "/required=" + std::to_string(peer.IsRemoteRequiredForFrame(remote, peer.m_Config.startFrame)) + "/held=" + std::to_string(peer.IsSeatUnderAI(remote, peer.m_Config.startFrame));
 				return " next=" + std::to_string(peer.m_Stats.nextFrame) + " blocked=" + peer.m_AdvanceBlock +
 				    " consumer=" + (peer.m_ConsumerWaitingFrame ? std::to_string(*peer.m_ConsumerWaitingFrame) : "none") +
 				    " wait_since=" + std::to_string(peer.m_ConsumerWaitStartMs) + " members=" + std::to_string(peer.m_FrameGroupMembers) +
 				    " local_held=" + std::to_string(peer.m_LocalSeatHeld) + " granted=" + (peer.m_GrantedSimulationTick ? std::to_string(*peer.m_GrantedSimulationTick) : "none") +
-				    " hold_certificate=" + std::to_string(peer.m_PeerBridgeCertificates.contains({peer.m_Stats.nextFrame, 0}));
+				    " hold_certificate=" + std::to_string(peer.m_PeerBridgeCertificates.contains({peer.m_Stats.nextFrame, 0})) + starts;
 			};
 			s_HeldSeats = [](const NetLockstepCoordinator& peer, uint64_t frame) { return peer.PeerHeldSeatsAt(frame); };
 			s_HoldBoundaries = [](const NetLockstepCoordinator& peer) -> const HoldBoundaries& { return peer.m_PeerFrameHolds; };
@@ -3374,11 +3404,14 @@ namespace RTE {
 		std::call_once(s_FixtureObservers, [] {
 			s_FrameMembers = [](const NetLockstepCoordinator& peer, uint64_t frame) { return peer.PeerFrameMembersAt(frame); };
 			s_WaitState = [](const NetLockstepCoordinator& peer) {
+				std::string starts;
+				for (uint8_t remote: peer.m_RemotePeerIds) starts += " start=" + std::to_string(remote) + ":" + std::to_string(peer.m_RemoteStartsReceived.contains(remote)) +
+				    "/required=" + std::to_string(peer.IsRemoteRequiredForFrame(remote, peer.m_Config.startFrame)) + "/held=" + std::to_string(peer.IsSeatUnderAI(remote, peer.m_Config.startFrame));
 				return " next=" + std::to_string(peer.m_Stats.nextFrame) + " blocked=" + peer.m_AdvanceBlock +
 				    " consumer=" + (peer.m_ConsumerWaitingFrame ? std::to_string(*peer.m_ConsumerWaitingFrame) : "none") +
 				    " wait_since=" + std::to_string(peer.m_ConsumerWaitStartMs) + " members=" + std::to_string(peer.m_FrameGroupMembers) +
 				    " local_held=" + std::to_string(peer.m_LocalSeatHeld) + " granted=" + (peer.m_GrantedSimulationTick ? std::to_string(*peer.m_GrantedSimulationTick) : "none") +
-				    " hold_certificate=" + std::to_string(peer.m_PeerBridgeCertificates.contains({peer.m_Stats.nextFrame, 0}));
+				    " hold_certificate=" + std::to_string(peer.m_PeerBridgeCertificates.contains({peer.m_Stats.nextFrame, 0})) + starts;
 			};
 			s_HeldSeats = [](const NetLockstepCoordinator& peer, uint64_t frame) { return peer.PeerHeldSeatsAt(frame); };
 			s_HoldBoundaries = [](const NetLockstepCoordinator& peer) -> const HoldBoundaries& { return peer.m_PeerFrameHolds; };
@@ -3447,11 +3480,14 @@ namespace RTE {
 		std::call_once(s_FixtureObservers, [] {
 			s_FrameMembers = [](const NetLockstepCoordinator& peer, uint64_t frame) { return peer.PeerFrameMembersAt(frame); };
 			s_WaitState = [](const NetLockstepCoordinator& peer) {
+				std::string starts;
+				for (uint8_t remote: peer.m_RemotePeerIds) starts += " start=" + std::to_string(remote) + ":" + std::to_string(peer.m_RemoteStartsReceived.contains(remote)) +
+				    "/required=" + std::to_string(peer.IsRemoteRequiredForFrame(remote, peer.m_Config.startFrame)) + "/held=" + std::to_string(peer.IsSeatUnderAI(remote, peer.m_Config.startFrame));
 				return " next=" + std::to_string(peer.m_Stats.nextFrame) + " blocked=" + peer.m_AdvanceBlock +
 				    " consumer=" + (peer.m_ConsumerWaitingFrame ? std::to_string(*peer.m_ConsumerWaitingFrame) : "none") +
 				    " wait_since=" + std::to_string(peer.m_ConsumerWaitStartMs) + " members=" + std::to_string(peer.m_FrameGroupMembers) +
 				    " local_held=" + std::to_string(peer.m_LocalSeatHeld) + " granted=" + (peer.m_GrantedSimulationTick ? std::to_string(*peer.m_GrantedSimulationTick) : "none") +
-				    " hold_certificate=" + std::to_string(peer.m_PeerBridgeCertificates.contains({peer.m_Stats.nextFrame, 0}));
+				    " hold_certificate=" + std::to_string(peer.m_PeerBridgeCertificates.contains({peer.m_Stats.nextFrame, 0})) + starts;
 			};
 			s_HeldSeats = [](const NetLockstepCoordinator& peer, uint64_t frame) { return peer.PeerHeldSeatsAt(frame); };
 			s_HoldBoundaries = [](const NetLockstepCoordinator& peer) -> const HoldBoundaries& { return peer.m_PeerFrameHolds; };
@@ -4172,11 +4208,14 @@ namespace RTE {
 		std::call_once(s_FixtureObservers, [] {
 			s_FrameMembers = [](const NetLockstepCoordinator& peer, uint64_t frame) { return peer.PeerFrameMembersAt(frame); };
 			s_WaitState = [](const NetLockstepCoordinator& peer) {
+				std::string starts;
+				for (uint8_t remote: peer.m_RemotePeerIds) starts += " start=" + std::to_string(remote) + ":" + std::to_string(peer.m_RemoteStartsReceived.contains(remote)) +
+				    "/required=" + std::to_string(peer.IsRemoteRequiredForFrame(remote, peer.m_Config.startFrame)) + "/held=" + std::to_string(peer.IsSeatUnderAI(remote, peer.m_Config.startFrame));
 				return " next=" + std::to_string(peer.m_Stats.nextFrame) + " blocked=" + peer.m_AdvanceBlock +
 				    " consumer=" + (peer.m_ConsumerWaitingFrame ? std::to_string(*peer.m_ConsumerWaitingFrame) : "none") +
 				    " wait_since=" + std::to_string(peer.m_ConsumerWaitStartMs) + " members=" + std::to_string(peer.m_FrameGroupMembers) +
 				    " local_held=" + std::to_string(peer.m_LocalSeatHeld) + " granted=" + (peer.m_GrantedSimulationTick ? std::to_string(*peer.m_GrantedSimulationTick) : "none") +
-				    " hold_certificate=" + std::to_string(peer.m_PeerBridgeCertificates.contains({peer.m_Stats.nextFrame, 0}));
+				    " hold_certificate=" + std::to_string(peer.m_PeerBridgeCertificates.contains({peer.m_Stats.nextFrame, 0})) + starts;
 			};
 			s_HeldSeats = [](const NetLockstepCoordinator& peer, uint64_t frame) { return peer.PeerHeldSeatsAt(frame); };
 			s_HoldBoundaries = [](const NetLockstepCoordinator& peer) -> const HoldBoundaries& { return peer.m_PeerFrameHolds; };
