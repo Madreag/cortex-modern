@@ -779,9 +779,27 @@ namespace RTE {
 			std::map<std::pair<uint8_t, uint8_t>, uint64_t> inputSends;
 			struct InputWireObservation { uint64_t at; uint8_t receiver; bool impaired; NetHostMigrationMessage packet; };
 			std::multimap<uint64_t, InputWireObservation> inputEvidence;
+			std::multimap<uint64_t, InputWireObservation> receiptEvidence;
 			void ObserveInput(const NetHostMigrationMessage& packet, uint8_t receiver, bool impaired) {
 				if ((packet.type == NetHostMigrationMessageType::PeerInput || packet.type == NetHostMigrationMessageType::PeerForwardInput) &&
 				    packet.offset == 0 && packet.totalBytes == packet.bytes.size()) inputEvidence.emplace(packet.frame, InputWireObservation{now, receiver, impaired, packet});
+				// A cumulative receipt: its sender accepted its successor's inputs before its frame. Witness receipts name history instead.
+				if (packet.type == NetHostMigrationMessageType::PeerReceipt && packet.preparedFrame != UINT64_MAX)
+					receiptEvidence.emplace(packet.frame, InputWireObservation{now, receiver, impaired, packet});
+			}
+			// The acceptor's receipt for the held seat's own input at this frame was impaired on its way to the held seat, and none that
+			// covers the frame reached it before it displayed the frame: the held seat could not know its input was taken.
+			const InputWireObservation* ReceiptPartition(uint8_t acceptor, uint8_t held, uint64_t frame, uint64_t heldAt) const {
+				if (acceptor == held) return nullptr;
+				const InputWireObservation* impaired = nullptr;
+				// A receipt names the first frame its sender has not yet accepted: one covers this frame only past it.
+				for (auto it = receiptEvidence.upper_bound(frame); it != receiptEvidence.end(); ++it) {
+					const auto& observation = it->second;
+					if (observation.receiver != held || observation.packet.senderPeerId != acceptor || observation.packet.successorPeerId != held || observation.at > heldAt) continue;
+					if (!observation.impaired) return nullptr;
+					if (!impaired || observation.at < impaired->at) impaired = &observation;
+				}
+				return impaired;
 			}
 			const InputWireObservation* InputPartition(uint8_t owner, uint8_t human, uint8_t held, uint64_t frame, uint64_t humanAt, uint64_t heldAt) const {
 				if (owner == held) return nullptr;
@@ -1725,14 +1743,17 @@ namespace RTE {
 								const auto& human = humanLeft ? left : right; const auto& held = humanLeft ? right : left;
 								const auto ai = held.aiAt.find(frame);
 								if (ai == held.aiAt.end() || ("," + ai->second + ",").find("," + std::to_string(owner) + ",") == std::string::npos) continue;
+								// FLAGGED fixture departure: an exact impaired receipt separates histories at the held seat's bound as an input does.
+								const bool heldInHuman = ((humanLeft ? l : r) & (1U << ((humanLeft ? b : a) - 1))) != 0;
 								const auto* cause = hub.InputPartition(owner, humanLeft ? a : b, humanLeft ? b : a, frame, human.shownAt.at(frame), held.shownAt.at(frame));
+								if (!cause && heldInHuman) cause = hub.ReceiptPartition(owner, humanLeft ? b : a, frame, held.shownAt.at(frame));
 								if (!cause) continue;
 								inputSplits[a][b][frame] = 0; separated = frame; sawSplit = true;
 								inputSplitCauses.push_back({humanLeft ? a : b, humanLeft ? b : a, cause->packet.senderPeerId, cause->receiver,
 								    cause->at, std::max(human.shownAt.at(frame), held.shownAt.at(frame))});
 								DiagnosticLine() << "[session-plane-input-partition] frame=" << frame << " owner=" << unsigned(owner)
 								    << " human_author=" << unsigned(humanLeft ? a : b) << " held_author=" << unsigned(humanLeft ? b : a)
-								    << " exact_impaired_input=1 delivered_before_hold=0" << std::endl;
+								    << (cause->packet.type == NetHostMigrationMessageType::PeerReceipt ? " exact_impaired_receipt=1" : " exact_impaired_input=1") << " delivered_before_hold=0" << std::endl;
 								break;
 							}
 						}
@@ -1750,6 +1771,7 @@ namespace RTE {
 				uint64_t floor = UINT64_MAX;
 				for (uint8_t a = 1; a <= hub.row.seats; ++a) for (uint8_t b = a + 1; b <= hub.row.seats; ++b) floor = std::min(floor, compared[a][b]);
 				if (floor != UINT64_MAX) hub.inputEvidence.erase(hub.inputEvidence.begin(), hub.inputEvidence.upper_bound(floor));
+				if (floor != UINT64_MAX) hub.receiptEvidence.erase(hub.receiptEvidence.begin(), hub.receiptEvidence.upper_bound(floor));
 				return true;
 			}
 			// The round is under way once every seat has displayed its first second; waits before that are the start's, not a hold's.
@@ -1946,7 +1968,7 @@ namespace RTE {
 					std::fill(imageReading.begin(), imageReading.end(), false); std::fill(imageWithoutHeadroom.begin(), imageWithoutHeadroom.end(), false);
 					frameMembers.assign(hub.row.seats, {0}); frameAuthors.assign(hub.row.seats, {0}); installedBoundaries.assign(hub.row.seats, {});
 					// The wire's records count frames, which start again: the round that ended is judged on them first.
-					hub.bridgeBoundaries.clear(); hub.inputSentThrough.clear(); hub.returnsProposed.clear(); hub.inputEvidence.clear();
+					hub.bridgeBoundaries.clear(); hub.inputSentThrough.clear(); hub.returnsProposed.clear(); hub.inputEvidence.clear(); hub.receiptEvidence.clear();
 					if (!StartPeers(78, error)) return false;
 				}
 				const auto gone = [&](uint8_t id) { return scheduled && scheduled->Left(id, hub.now); };
@@ -2794,6 +2816,37 @@ namespace RTE {
 			if (high <= 100 || high == low) { error = "injected physical jitter was hidden behind a constant measured RTT"; return false; }
 			return true;
 		}
+		// A held seat that took its own input without the acceptor's receipt cannot know the acceptor took it: an exact impaired
+		// receipt separates the two histories at its bound, exactly as a lost input does, and nothing weaker does.
+		bool CheckReceiptHistoryOracle(std::string& error) {
+			for (unsigned variant = 0; variant < 8; ++variant) {
+				Fixture fixture; fixture.hub.row.seats = 2;
+				fixture.worlds.resize(2);
+				fixture.frameMembers = {{0, variant == 6 ? 1U : 3U}, {0, 2}};
+				fixture.frameAuthors = {{0, 1}, {0, 2}};
+				for (uint8_t peer = 1; peer <= 2; ++peer) {
+					auto& world = fixture.worlds[peer - 1]; world.applied = 1; world.hashes[1] = {}; world.shownAt[1] = peer == 2 ? 150 : 100;
+					if (peer == 2) world.hashes[1][0] = 1;
+				}
+				fixture.worlds[1].aiAt[1] = "1";
+				NetHostMigrationMessage receipt; receipt.type = NetHostMigrationMessageType::PeerReceipt; receipt.roundId = 77;
+				receipt.senderPeerId = 1; receipt.successorPeerId = variant == 4 ? 1 : 2; receipt.frame = variant == 7 ? 1 : 2;
+				fixture.hub.now = variant == 3 ? 151 : 50;
+				if (variant != 1) fixture.hub.ObserveInput(receipt, variant == 5 ? 1 : 2, true);
+				if (variant == 2) { fixture.hub.now = 100; fixture.hub.ObserveInput(receipt, 2, false); }
+				fixture.hub.now = 200;
+				std::string why;
+				const bool accepted = fixture.CompareHistories(why), expected = variant == 0;
+				if (accepted != expected) {
+					error = "causal receipt-history oracle variant=" + std::to_string(variant) + " expected_split=" + std::to_string(expected) + ": " + why; return false;
+				}
+				if (variant == 0 && (!fixture.InputSplitCausedHold(2, 150, 180, 1, 40, 60) || fixture.InputSplitCausedHold(2, 150, 180, 1, 51, 60))) {
+					error = "a receipt split hold cause escaped its exact impaired link or fault interval"; return false;
+				}
+			}
+			return true;
+		}
+
 		bool CheckInputHistoryOracle(std::string& error) {
 			for (unsigned variant = 0; variant < 11; ++variant) {
 				const bool thirdSource = variant == 8 || variant == 9;
@@ -5344,6 +5397,8 @@ namespace RTE {
 		// FLAGGED fixture departure: an exact input lost on one wire can create two continuations without a total transport cut.
 		if (!selected || std::string_view(selected) == "history_fixture_requires_causal_input_wire_evidence")
 			named.push_back({"history_fixture_requires_causal_input_wire_evidence", CheckInputHistoryOracle});
+		if (!selected || std::string_view(selected) == "history_fixture_accepts_only_exact_receipt_wire_evidence")
+			named.push_back({"history_fixture_accepts_only_exact_receipt_wire_evidence", CheckReceiptHistoryOracle});
 		if (!selected || std::string_view(selected) == "private_history_author_requires_authenticated_commit_evidence") {
 			named.push_back({"private_history_author_requires_authenticated_commit_evidence", [](std::string& error) {
 				for (unsigned variant = 0; variant < 11; ++variant) {
