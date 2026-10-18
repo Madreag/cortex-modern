@@ -69,11 +69,22 @@ namespace RTE {
 		using HoldBoundaries = std::map<uint8_t, std::map<uint64_t, bool>>;
 		// Installed state, read by the self-test's friend accessors. The fixture never supplies a voting group to a peer.
 		std::function<uint32_t(const NetLockstepCoordinator&, uint64_t)> s_FrameMembers, s_HeldSeats;
+		std::function<uint8_t(const NetLockstepCoordinator&, const NetLockstepReadyFrame&)> s_FrameAuthor;
 		std::function<const HoldBoundaries&(const NetLockstepCoordinator&)> s_HoldBoundaries;
 		std::function<std::string(const NetLockstepCoordinator&)> s_WaitState;
 		std::function<NetPeerId(const NetLockstepCoordinator&, uint8_t)> s_ReturnTransport;
 		std::function<std::pair<INetTransport*, NetPeerId>(const NetLockstepCoordinator&, uint8_t)> s_ReturnRoute;
 		std::once_flag s_FixtureObservers;
+		uint8_t WitnessedFrameAuthor(uint64_t frame, uint32_t members, const NetHash32& digest, const NetHash32& prepared,
+		    const std::map<uint8_t, NetHostMigrationMessage>& witnesses) {
+			for (const auto& [sender, witness]: witnesses)
+				if (sender > 0 && sender <= NetMatchConfigUtil::c_MaxPeerCount && (members & (1U << (sender - 1))) &&
+				    witness.type == NetHostMigrationMessageType::PeerReceipt && witness.senderPeerId == sender && witness.successorPeerId == sender &&
+				    witness.frame == frame && witness.appliedFrame == frame && witness.preparedFrame == UINT64_MAX && witness.voterMask == members &&
+				    witness.bytes.size() == digest.size() + prepared.size() && std::equal(digest.begin(), digest.end(), witness.bytes.begin()) &&
+				    std::equal(prepared.begin(), prepared.end(), witness.bytes.begin() + digest.size())) return sender;
+			return 0;
+		}
 		struct Fixture;
 		struct ImageReturnTask {
 			struct promise_type;
@@ -2071,7 +2082,8 @@ namespace RTE {
 						peer.FinishFrameWait(hub.now);
 						if (!CheckCommittedInputs(ready, id, error) || !world.Apply(ready, error, hub.now)) return false;
 						frameMembers[id - 1].push_back(s_FrameMembers(peer, ready.frame));
-						frameAuthors[id - 1].push_back(id);
+						// FLAGGED fixture departure: a held reader copies a witnessed committer's history; it does not author that continuation.
+						frameAuthors[id - 1].push_back(s_FrameAuthor(peer, ready));
 						if (hub.row.captureFrames) committed[id - 1][ready.frame] = ready;
 						peer.FinishSimulationTick(ready.frame); credits[id - 1].Consume(catchingUp);
 						if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) {
@@ -4182,6 +4194,15 @@ namespace RTE {
 	bool NetSessionPlaneSelfTest::CheckOwnerHitch(unsigned arm, std::string* error) {
 		std::call_once(s_FixtureObservers, [] {
 			s_FrameMembers = [](const NetLockstepCoordinator& peer, uint64_t frame) { return peer.PeerFrameMembersAt(frame); };
+			s_FrameAuthor = [](const NetLockstepCoordinator& peer, const NetLockstepReadyFrame& ready) -> uint8_t {
+				const uint8_t local = peer.m_Config.localPeerId;
+				const uint32_t members = peer.PeerFrameMembersAt(ready.frame);
+				if (!peer.UsesPeerFrameGroups() || (members & (1U << (local - 1)))) return local;
+				if (!peer.IsLocalPrivateReaderAt(ready.frame)) return 0;
+				const auto witnesses = peer.m_PeerFrameWitnesses.find(ready.frame);
+				if (witnesses == peer.m_PeerFrameWitnesses.end()) return 0;
+				return WitnessedFrameAuthor(ready.frame, members, peer.CommittedFramePrefix(ready), peer.PeerFramePrefix(ready.frame), witnesses->second);
+			};
 			s_WaitState = [](const NetLockstepCoordinator& peer) {
 				std::string starts;
 				for (uint8_t remote: peer.m_RemotePeerIds) starts += " start=" + std::to_string(remote) + ":" + std::to_string(peer.m_RemoteStartsReceived.contains(remote)) +
@@ -4251,6 +4272,15 @@ namespace RTE {
 	bool NetSessionPlaneSelfTest::CheckHostAdministration(unsigned arm, std::string* error) {
 		std::call_once(s_FixtureObservers, [] {
 			s_FrameMembers = [](const NetLockstepCoordinator& peer, uint64_t frame) { return peer.PeerFrameMembersAt(frame); };
+			s_FrameAuthor = [](const NetLockstepCoordinator& peer, const NetLockstepReadyFrame& ready) -> uint8_t {
+				const uint8_t local = peer.m_Config.localPeerId;
+				const uint32_t members = peer.PeerFrameMembersAt(ready.frame);
+				if (!peer.UsesPeerFrameGroups() || (members & (1U << (local - 1)))) return local;
+				if (!peer.IsLocalPrivateReaderAt(ready.frame)) return 0;
+				const auto witnesses = peer.m_PeerFrameWitnesses.find(ready.frame);
+				if (witnesses == peer.m_PeerFrameWitnesses.end()) return 0;
+				return WitnessedFrameAuthor(ready.frame, members, peer.CommittedFramePrefix(ready), peer.PeerFramePrefix(ready.frame), witnesses->second);
+			};
 			s_WaitState = [](const NetLockstepCoordinator& peer) {
 				std::string starts;
 				for (uint8_t remote: peer.m_RemotePeerIds) starts += " start=" + std::to_string(remote) + ":" + std::to_string(peer.m_RemoteStartsReceived.contains(remote)) +
@@ -4328,6 +4358,15 @@ namespace RTE {
 	bool NetSessionPlaneSelfTest::CheckSceneLifecycle(const std::string& name, std::string* error) {
 		std::call_once(s_FixtureObservers, [] {
 			s_FrameMembers = [](const NetLockstepCoordinator& peer, uint64_t frame) { return peer.PeerFrameMembersAt(frame); };
+			s_FrameAuthor = [](const NetLockstepCoordinator& peer, const NetLockstepReadyFrame& ready) -> uint8_t {
+				const uint8_t local = peer.m_Config.localPeerId;
+				const uint32_t members = peer.PeerFrameMembersAt(ready.frame);
+				if (!peer.UsesPeerFrameGroups() || (members & (1U << (local - 1)))) return local;
+				if (!peer.IsLocalPrivateReaderAt(ready.frame)) return 0;
+				const auto witnesses = peer.m_PeerFrameWitnesses.find(ready.frame);
+				if (witnesses == peer.m_PeerFrameWitnesses.end()) return 0;
+				return WitnessedFrameAuthor(ready.frame, members, peer.CommittedFramePrefix(ready), peer.PeerFramePrefix(ready.frame), witnesses->second);
+			};
 			s_WaitState = [](const NetLockstepCoordinator& peer) {
 				std::string starts;
 				for (uint8_t remote: peer.m_RemotePeerIds) starts += " start=" + std::to_string(remote) + ":" + std::to_string(peer.m_RemoteStartsReceived.contains(remote)) +
@@ -5057,6 +5096,15 @@ namespace RTE {
 	int NetSessionPlaneSelfTest::Run() {
 		std::call_once(s_FixtureObservers, [] {
 			s_FrameMembers = [](const NetLockstepCoordinator& peer, uint64_t frame) { return peer.PeerFrameMembersAt(frame); };
+			s_FrameAuthor = [](const NetLockstepCoordinator& peer, const NetLockstepReadyFrame& ready) -> uint8_t {
+				const uint8_t local = peer.m_Config.localPeerId;
+				const uint32_t members = peer.PeerFrameMembersAt(ready.frame);
+				if (!peer.UsesPeerFrameGroups() || (members & (1U << (local - 1)))) return local;
+				if (!peer.IsLocalPrivateReaderAt(ready.frame)) return 0;
+				const auto witnesses = peer.m_PeerFrameWitnesses.find(ready.frame);
+				if (witnesses == peer.m_PeerFrameWitnesses.end()) return 0;
+				return WitnessedFrameAuthor(ready.frame, members, peer.CommittedFramePrefix(ready), peer.PeerFramePrefix(ready.frame), witnesses->second);
+			};
 			s_WaitState = [](const NetLockstepCoordinator& peer) {
 				std::string starts;
 				for (uint8_t remote: peer.m_RemotePeerIds) starts += " start=" + std::to_string(remote) + ":" + std::to_string(peer.m_RemoteStartsReceived.contains(remote)) +
@@ -5261,7 +5309,7 @@ namespace RTE {
 				return ok ? 0 : 1;
 			}
 		}
-		DiagnosticLine() << "[net-session-plane-selftest] topology=single-box proof=false forced_rows=" << (selected ? 1 : rows.size() + 43 + FixedScheduleRows().size()) << std::endl;
+		DiagnosticLine() << "[net-session-plane-selftest] topology=single-box proof=false forced_rows=" << (selected ? 1 : rows.size() + 44 + FixedScheduleRows().size()) << std::endl;
 		// Every row runs on a pool of worker threads: a named row keeps its engine lines and is printed as soon as it ends, the longest
 		// rows started first; the random driver's rounds follow them in the same pool.
 		QuietLines quiet(std::cout);
@@ -5272,6 +5320,49 @@ namespace RTE {
 		// FLAGGED fixture departure: an exact input lost on one wire can create two continuations without a total transport cut.
 		if (!selected || std::string_view(selected) == "history_fixture_requires_causal_input_wire_evidence")
 			named.push_back({"history_fixture_requires_causal_input_wire_evidence", CheckInputHistoryOracle});
+		if (!selected || std::string_view(selected) == "private_history_author_requires_authenticated_commit_evidence") {
+			named.push_back({"private_history_author_requires_authenticated_commit_evidence", [](std::string& error) {
+				for (unsigned variant = 0; variant < 11; ++variant) {
+					NetLockstepCoordinator peer;
+					peer.m_Config.sessionId = 0xA0710;
+					peer.m_Config.matchConfig = NetMatchConfigUtil::MakeDefault(peer.m_Config.sessionId);
+					peer.m_Config.matchConfig.roundId = 77;
+					peer.m_Config.localPeerId = 2; peer.m_Config.peerCount = 3;
+					peer.m_Config.peerFrameGroups = variant != 7;
+					peer.m_Config.migrationKey.fill(1);
+					peer.m_FrameGroupChanges[1] = variant == 6 ? 6 : 4;
+					if (variant != 6 && variant != 10) {
+						NetLockstepCoordinator::PeerBridge own;
+						own.fromFrame = own.aiFrame = 1; own.committedHold = true; own.members = 4;
+						peer.m_PeerBridges[2] = own; peer.m_PeerFrameHolds[2][1] = true;
+					}
+					NetLockstepReadyFrame ready; ready.frame = 708; ready.localPeerId = 2;
+					ready.authorityPeerId = ready.updateAuthorityPeerId = 3;
+					ControllerFrame input; input.actorUniqueID = 1003; input.analogMoveX = 300;
+					ready.remoteFrameCounts[3] = 1; ready.remoteFrames = {input};
+					NetHash32 prepared{}; prepared.fill(9); peer.m_PeerPreparedPrefixes[ready.frame] = prepared;
+					const auto digest = peer.CommittedFramePrefix(ready);
+					auto witness = peer.PeerFrameMessage(NetHostMigrationMessageType::PeerReceipt);
+					witness.senderPeerId = witness.successorPeerId = 3;
+					witness.frame = witness.appliedFrame = ready.frame; witness.preparedFrame = UINT64_MAX;
+					witness.voterMask = 4;
+					witness.bytes.assign(digest.begin(), digest.end()); witness.bytes.insert(witness.bytes.end(), prepared.begin(), prepared.end());
+					if (variant == 2) witness.voterMask = 5;
+					if (variant == 3) witness.bytes[0] ^= 1;
+					if (variant == 4) witness.bytes[32] ^= 1;
+					if (variant == 5) witness.senderPeerId = witness.successorPeerId = 1;
+					if (variant == 8) witness.bytes.pop_back();
+					if (variant == 9) ++witness.frame;
+					if (variant != 1) peer.m_PeerFrameWitnesses[ready.frame][witness.senderPeerId] = witness;
+					const uint8_t expected = variant == 0 ? 3 : variant == 6 || variant == 7 ? 2 : 0;
+					const uint8_t observed = s_FrameAuthor(peer, ready);
+					if (observed != expected) {
+						error = "private frame provenance variant=" + std::to_string(variant) + " author=" + std::to_string(observed) + " expected=" + std::to_string(expected); return false;
+					}
+				}
+				return true;
+			}});
+		}
 		if (!selected || std::string_view(selected) == "transport_rtt_observes_the_injected_physical_jitter")
 			named.push_back({"transport_rtt_observes_the_injected_physical_jitter", CheckTransportRttOracle});
 		if (!selected || std::string_view(selected) == "host_hold_ai_authority_is_the_certified_frames")

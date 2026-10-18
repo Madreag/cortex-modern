@@ -2268,6 +2268,90 @@ namespace RTE {
 			return true;
 		}
 
+		static bool CertifiedTailKeepsItsWitnesses(std::string* error) {
+			for (unsigned role = 0; role < 6; ++role) {
+				const auto configure = [&](NetLockstepCoordinator& peer, Wire& wire, uint8_t local) {
+					Configure(peer, wire);
+					peer.m_Config.localPeerId = local; peer.m_Config.authorityPeerId = 1;
+					peer.m_Config.peerCount = peer.m_Config.matchConfig.peerCount = 4;
+					peer.m_Config.matchConfig.players.push_back({4, 3, false, "Fourth"});
+					peer.m_Config.peerFrameGroups = true; peer.m_MigrationPhase = NetHostMigrationPhase::None;
+					peer.m_RoundConfigHash = NetMatchConfigUtil::HashConfig(peer.m_Config.matchConfig);
+					peer.m_RemotePeerIds = {1, 2, 3, 4}; std::erase(peer.m_RemotePeerIds, local);
+					peer.m_RemoteTransports = {{1, 41}, {2, 42}, {3, 43}, {4, 44}}; peer.m_RemoteTransports.erase(local);
+					peer.m_Stats.nextFrame = 355; peer.m_LastCompletedSimulationTick = 354;
+					peer.m_FrameGroupMembers = 7; peer.m_FrameGroupChanges = {{1, 7}, {320, 5}, {340, 7}};
+					peer.m_PeerBridges[4] = {1, 1, true, {}, {}, 7}; peer.m_PeerFrameHolds[4][1] = true;
+					peer.m_PeerBridges[2] = {320, 320, true, 340, {}, 7}; peer.m_PeerFrameHolds[2] = {{320, true}, {340, false}};
+					peer.m_ReclaimTransactions[2] = {2, 1, 340 * 8 + 2, 2, 340, 7, 400};
+					NetLockstepReadyFrame previous; previous.frame = 354; previous.localPeerId = local;
+					previous.authorityPeerId = previous.updateAuthorityPeerId = 1;
+					peer.m_PeerPreparedPrefixes[354] = peer.CommittedFramePrefix(previous);
+				};
+				Wire wire; NetLockstepCoordinator peer; configure(peer, wire, 2);
+				const auto append32 = [](std::vector<uint8_t>& bytes, uint32_t value) {
+					for (unsigned shift = 0; shift < 32; shift += 8) bytes.push_back(static_cast<uint8_t>(value >> shift));
+				};
+				NetLockstepReadyFrame ready; ready.frame = 355; ready.localPeerId = 2;
+				ready.authorityPeerId = ready.updateAuthorityPeerId = 1;
+				ready.remoteFrameCounts = {{1, 0}, {3, 0}};
+				std::vector<uint8_t> record;
+				if (!peer.EncodeMigrationFrame(ready, record)) { *error = "the witnessed tail record did not encode"; return false; }
+				const auto previous = peer.PeerFramePrefix(354), digest = peer.CommittedFramePrefix(ready);
+				NetHash32 prepared{}; prepared.fill(0xA7);
+				auto tail = peer.PeerFrameMessage(NetHostMigrationMessageType::PeerTail);
+				tail.senderPeerId = tail.successorPeerId = 1; tail.frame = tail.appliedFrame = 355; tail.voterMask = 7;
+				tail.bytes.assign(previous.begin(), previous.end()); tail.bytes.insert(tail.bytes.end(), prepared.begin(), prepared.end());
+				append32(tail.bytes, static_cast<uint32_t>(record.size())); tail.bytes.insert(tail.bytes.end(), record.begin(), record.end());
+				tail.bytes.push_back(0); tail.bytes.push_back(2);
+				for (uint8_t signer: {1, 3}) {
+					auto witness = peer.PeerFrameMessage(NetHostMigrationMessageType::PeerReceipt);
+					witness.senderPeerId = witness.successorPeerId = role == 4 ? 1 : signer;
+					witness.preparedFrame = UINT64_MAX; witness.frame = witness.appliedFrame = 355; witness.voterMask = 7;
+					witness.bytes.assign(digest.begin(), digest.end()); witness.bytes.insert(witness.bytes.end(), prepared.begin(), prepared.end());
+					if (signer == 3 && role == 1) witness.bytes[0] ^= 1;
+					if (signer == 3 && role == 2) witness.voterMask = 5;
+					std::vector<uint8_t> encoded;
+					if (!NetHostMigrationCodec::Encode(witness, peer.m_Config.migrationKey, encoded)) { *error = "the tail witness did not encode"; return false; }
+					if (signer == 3 && role == 3) encoded.back() ^= 1;
+					append32(tail.bytes, static_cast<uint32_t>(encoded.size())); tail.bytes.insert(tail.bytes.end(), encoded.begin(), encoded.end());
+				}
+				if (role == 5) tail.bytes.push_back(0);
+				tail.totalBytes = tail.bytes.size();
+				std::vector<uint8_t> encoded; NetHostMigrationMessage authenticated;
+				if (!NetHostMigrationCodec::Encode(tail, peer.m_Config.migrationKey, encoded) ||
+				    !NetHostMigrationCodec::Decode(encoded, peer.m_Config.migrationKey, authenticated) || !peer.HandlePeerFrameMessage(authenticated, 1000)) {
+					*error = "the tail retention detector could not deliver its authenticated packet"; return false;
+				}
+				if (role != 0) {
+					if (!peer.m_PeerFrameWitnesses.empty() || peer.m_PeerCommittedTail.contains(355)) {
+						*error = "an invalid tail retained partial witness evidence: role=" + std::to_string(role); return false;
+					}
+					continue;
+				}
+				if (!peer.m_PeerFrameWitnesses.contains(355) || !peer.m_PeerFrameWitnesses.at(355).contains(1) || !peer.m_PeerFrameWitnesses.at(355).contains(3)) {
+					*error = "a validated committed tail discarded its authenticated member witnesses"; return false;
+				}
+				if (!peer.ApplyPeerCommittedTail(355, 1000) || !peer.PopReadyFrame(ready) || ready.frame != 355) {
+					*error = "the neutral member did not consume its certified tail"; return false;
+				}
+				peer.FinishSimulationTick(355); wire.sent.clear();
+				peer.SendPeerCommittedTail(4, 355); peer.FlushPeerCommittedTails(1001);
+				Wire readerWire; NetLockstepCoordinator reader; configure(reader, readerWire, 4);
+				unsigned delivered = 0;
+				for (const auto& bytes: wire.sent) {
+					NetHostMigrationMessage forwarded;
+					if (NetHostMigrationCodec::Decode(bytes, reader.m_Config.migrationKey, forwarded) && forwarded.type == NetHostMigrationMessageType::PeerTail) {
+						reader.HandlePeerFrameMessage(forwarded, 1002); ++delivered;
+					}
+				}
+				if (!delivered || !reader.m_PeerCommittedTail.contains(355)) {
+					*error = "a held reader could not confirm the neutral member's relayed certified history"; return false;
+				}
+			}
+			return true;
+		}
+
 		static bool TailHoldSignersAreNotAnotherPlayingHalf(std::string* error) {
 			for (unsigned role = 0; role < 3; ++role) {
 				Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
@@ -32008,6 +32092,12 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS foreign_history_keeps_an_active_continuation\n[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "tail-witness-retention") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::CertifiedTailKeepsItsWitnesses(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS certified_tail_keeps_its_witnesses\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "tail-hold-query") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::TailHoldSignersAreNotAnotherPlayingHalf(&error)) return fail(error);
@@ -32431,6 +32521,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::LoneMigrationFollowsItsAuthority, "lone_migration_follows_its_authority");
 		row(&SessionPlaneRecoveryTest::ForeignHistoryKeepsAnActiveContinuation, "foreign_history_keeps_an_active_continuation");
 		row(&SessionPlaneRecoveryTest::TailHoldSignersAreNotAnotherPlayingHalf, "tail_hold_signers_are_not_another_playing_half");
+		row(&SessionPlaneRecoveryTest::CertifiedTailKeepsItsWitnesses, "certified_tail_keeps_its_witnesses");
 
 		row(&SessionPlaneRecoveryTest::ConcurrentReturnMembership, "a_later_return_keeps_the_earlier_scheduled_return");
 		row(&SessionPlaneRecoveryTest::IndependentReturnMembership, "independently_certified_returns_keep_each_member");

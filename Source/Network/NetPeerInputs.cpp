@@ -636,6 +636,7 @@ namespace RTE {
 			if (witnessCount > m_Config.peerCount) return true;
 			const NetHash32 digest = CommittedFramePrefix(decoded);
 			uint32_t witnessed = 0;
+			std::vector<NetHostMigrationMessage> witnesses;
 			for (uint8_t n = 0; n < witnessCount; ++n) {
 				if (!TakeSize(body, at, size) || at > body.size() || size > body.size() - at) return true;
 				NetHostMigrationMessage witness;
@@ -646,11 +647,13 @@ namespace RTE {
 				    witness.senderPeerId == 0 || witness.senderPeerId > m_Config.peerCount || (witnessed & SeatBit(witness.senderPeerId)) != 0 ||
 				    (message.voterMask & SeatBit(witness.senderPeerId)) == 0 || witness.bytes.size() != 64 ||
 				    !std::equal(digest.begin(), digest.end(), witness.bytes.begin()) || !std::equal(prepared.begin(), prepared.end(), witness.bytes.begin() + 32)) return readFailed("witness-record");
-				witnessed |= SeatBit(witness.senderPeerId); at += size;
+				witnessed |= SeatBit(witness.senderPeerId); witnesses.push_back(std::move(witness)); at += size;
 			}
 			if (at != body.size()) return true;
 			heard();
 			if (!PeerGroupHasAuthority(message.voterMask, message.frame, PeerVotingScope::History)) return true;
+			// Retain complete validated evidence so this reader can certify the same history when it relays it.
+			for (auto& witness: witnesses) m_PeerFrameWitnesses[message.frame].try_emplace(witness.senderPeerId, std::move(witness));
 			uint32_t agreeing = witnessed;
 			if ((message.voterMask & SeatBit(m_Config.localPeerId)) != 0) {
 				const auto own = m_PeerSourceInputs.find(message.frame);
