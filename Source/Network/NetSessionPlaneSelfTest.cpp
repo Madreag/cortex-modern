@@ -1225,12 +1225,6 @@ namespace RTE {
 				}
 				return seat == hub.row.subject && ((hub.DuringFault() && (hub.row.frozen || hub.row.hung || hub.row.slowPercent)) || hub.InRefault());
 			}
-			bool HadMachineTrouble(uint8_t seat) const {
-				if (!hub.schedule) return seat == hub.row.subject && (hub.row.frozen || hub.row.hung || hub.row.slowPercent || hub.row.refaultPercent);
-				for (const auto& spell: hub.schedule->spells)
-					if (spell.seat == seat && spell.atMs <= hub.now && (spell.kind == Spell::Kind::Hung || spell.kind == Spell::Kind::Stopped || spell.kind == Spell::Kind::Slow)) return true;
-				return false;
-			}
 			uint32_t RankDirectHistories() const {
 				uint32_t humans = 0, winner = 0;
 				const auto& config = peers.front()->GetConfig().matchConfig;
@@ -1621,11 +1615,12 @@ namespace RTE {
 					if (peer.IsStopped()) {
 						// A losing half stops at its decision boundary. Its subsequent replay is private; survivors never stop for it.
 						const bool directLoser = !hub.row.internet && directRuling && !(directRuling & (1U << (id - 1)));
-						const bool imageStop = peer.GetStats().timeoutReason.starts_with("PeerHeld:");
+						const bool imageStop = peer.IsLocalSeatHeld() && peer.GetStats().timeoutReason.starts_with("PeerHeld:");
 						if (imageStop && directLoser && !lostAt[id - 1]) {
 							lostAt[id - 1] = hub.now; lostFrame[id - 1] = peer.GetResumeFrame();
 						}
-						if (imageStop && (lostAt[id - 1] || directLoser || hub.row.imageReturn || HadMachineTrouble(id))) {
+						// FLAGGED fixture departure: every genuine held stop enters recovery, including a case's other affected seats.
+						if (imageStop) {
 							if (lostAt[id - 1] && (peer.GetResumeFrame() != lostFrame[id - 1] || world.applied + 1 != lostFrame[id - 1])) {
 								error = "authority ruling: losing peer " + std::to_string(id) + " stopped away from its engine decision frame " + std::to_string(lostFrame[id - 1]); return false;
 							}
