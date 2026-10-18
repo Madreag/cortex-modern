@@ -3101,6 +3101,7 @@ namespace RTE {
 		AppendU32LE(bytes, message.connectedMask);
 		AppendU32LE(bytes, message.voterMask);
 		AppendU64LE(bytes, message.preparedFrame);
+		AppendU32LE(bytes, message.rosterRevision);
 		uint8_t mac[32]{};
 		if (!GetNetAuthCrypto().HmacSha256(key.data(), key.size(), bytes.data(), bytes.size(), mac)) {
 			bytes.clear();
@@ -3153,7 +3154,8 @@ namespace RTE {
 			if (!decision || decision->action != NetTimingAction::Delay || decision->phase != NetTimingPhase::Commit || decision->sessionId != decoded.sessionId) return false;
 			decoded.futureDelays.push_back(*decision);
 		}
-		if (!reader.ReadU32LE(decoded.connectedMask) || !reader.ReadU32LE(decoded.voterMask) || !reader.ReadU64LE(decoded.preparedFrame) || !reader.AtEnd()) return false;
+		if (!reader.ReadU32LE(decoded.connectedMask) || !reader.ReadU32LE(decoded.voterMask) || !reader.ReadU64LE(decoded.preparedFrame) ||
+		    !reader.ReadU32LE(decoded.rosterRevision) || !reader.AtEnd()) return false;
 		decoded.type = static_cast<NetHostMigrationMessageType>(type);
 		message = std::move(decoded);
 		return true;

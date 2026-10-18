@@ -197,10 +197,8 @@ namespace RTE {
 
 	bool NetLockstepCoordinator::PeerGroupMayHold(uint32_t voters, uint64_t frame) const {
 		const uint32_t owners = PeerVotingOwners(voters, frame);
-		if (owners == 0) return false;
-		// Local holds have no directory quorum. A losing live branch stops in PollPeerFrameTies when its decision arrives;
-		// making the permission depend on that answer would put the directory back on the input deadline.
-		return PeerTieRefereed(frame) || PeerGroupHasAuthority(voters, frame);
+		// Every playing group holds locally; only a healed split chooses which continuation survives.
+		return owners != 0;
 	}
 
 	uint64_t NetLockstepCoordinator::PeerSplitEpoch(uint64_t frame) const {
@@ -219,7 +217,7 @@ namespace RTE {
 	void NetLockstepCoordinator::CheckPeerFrameTie(uint64_t frame, uint32_t members, uint64_t nowMs) {
 		// The groups name a split by the last frame the whole group played, so every check-in of one split meets one decision.
 		const uint64_t split = PeerSplitEpoch(frame);
-		if (!PeerTieRefereed(frame) || m_PeerFrameTieWinners.contains(split)) return;
+		if ((m_Config.frameTieReferee && !PeerTieRefereed(frame)) || m_PeerFrameTieWinners.contains(split)) return;
 		NetFrameTieRequest request;
 		request.generation = m_Config.migrationGeneration; request.roundId = m_Config.matchConfig.roundId;
 		request.frame = split; request.configHash = m_RoundConfigHash; request.host = GetHostPeerId();
@@ -256,11 +254,11 @@ namespace RTE {
 	}
 
 	void NetLockstepCoordinator::PollPeerFrameTies(uint64_t nowMs) {
-		if (!m_Config.frameTieReferee) return;
 		for (const auto& [split, arbitration]: m_PeerSplitArbitrations) {
 			const auto& request = arbitration.request;
 			const uint32_t owners = arbitration.owners;
 			if (!m_PeerFrameTieWinners.contains(split)) {
+				if (!m_Config.frameTieReferee) continue;
 				const auto reply = m_Config.frameTieReferee(request);
 				if (reply.state != NetFrameTieReply::State::Decided) continue;
 				uint32_t winner = 0;
@@ -287,12 +285,48 @@ namespace RTE {
 				m_ReadyFrames.clear();
 				m_LocalSeatHeld = true; m_LocalHoldFrame = m_Stats.nextFrame;
 				m_State = NetLockstepState::Stopped;
-				m_Stats.timeoutReason = "PeerHeld:the directory selected the other split; returning through a private image";
+				m_Stats.timeoutReason = m_Config.frameTieReferee ? "PeerHeld:the directory selected the other split; returning through a private image" :
+				    "PeerHeld:the healed histories selected the other split; returning through a private image";
 				DiagnosticLine() << "[net-split-arbitration] local=" << static_cast<int>(m_Config.localPeerId)
 				    << " split=" << split << " frame=" << m_Stats.nextFrame << " winners=" << winner << " now_ms=" << nowMs << " action=image_return" << std::endl;
 				return;
 			}
 		}
+	}
+
+	uint32_t NetLockstepCoordinator::DirectPeerWinner(uint32_t first, uint32_t second) const {
+		uint32_t humans = 0;
+		for (const auto& player: m_Config.matchConfig.players)
+			if (!player.cpu && !(m_Config.matchConfig.dedicated && player.peerId == m_Config.matchConfig.hostPeerId)) humans |= SeatBit(player.peerId);
+		const auto firstHumans = std::popcount(first & humans), secondHumans = std::popcount(second & humans);
+		if (firstHumans != secondHumans) return firstHumans > secondHumans ? first : second;
+		const uint32_t originalHost = SeatBit(m_Config.matchConfig.hostPeerId);
+		if ((first & originalHost) != (second & originalHost)) return (first & originalHost) ? first : second;
+		return std::countr_zero(first) < std::countr_zero(second) ? first : second;
+	}
+
+	void NetLockstepCoordinator::CheckDirectPeerHistory(const NetHostMigrationMessage& message, uint64_t nowMs) {
+		if (m_Config.frameTieReferee || !m_LastCompletedSimulationTick || message.boundary == 0 ||
+		    message.appliedFrame < message.boundary || message.connectedMask == 0 ||
+		    (message.connectedMask & SeatBit(message.senderPeerId)) == 0 || message.bytes.size() != 8 + NetHash32{}.size()) return;
+		// A reader of this history has no competing continuation, whatever its current link or roster revision.
+		if (m_MigrationHistory.contains(message.appliedFrame)) {
+			const auto prefix = PeerAppliedFramePrefix(message.appliedFrame);
+			if (std::equal(prefix.begin(), prefix.end(), message.bytes.begin() + 8)) return;
+		}
+		for (const auto& [split, arbitration]: m_PeerSplitArbitrations) {
+			if (split != message.frame || arbitration.holdFrame == 0 || *m_LastCompletedSimulationTick < arbitration.holdFrame ||
+			    (message.connectedMask & ~arbitration.owners) != 0) continue;
+			const uint32_t playing = PeerFrameMembersAt(*m_LastCompletedSimulationTick) & arbitration.owners;
+			if ((playing & SeatBit(m_Config.localPeerId)) == 0 || (playing & message.connectedMask) != 0) continue;
+			const uint32_t chosen = DirectPeerWinner(playing, message.connectedMask);
+			auto [decision, inserted] = m_PeerFrameTieWinners.try_emplace(split, chosen);
+			if (!inserted) decision->second = DirectPeerWinner(decision->second, chosen);
+			DiagnosticLine() << "[net-direct-history] local=" << static_cast<int>(m_Config.localPeerId) << " peer=" << static_cast<int>(message.senderPeerId)
+			    << " split=" << split << " local_hold=" << arbitration.holdFrame << " remote_hold=" << message.boundary
+			    << " remote_applied=" << message.appliedFrame << " roster_revision=" << message.rosterRevision << " winners=" << decision->second << std::endl;
+		}
+		PollPeerFrameTies(nowMs);
 	}
 
 	bool NetLockstepCoordinator::PeerFrameBlackout(uint64_t nowMs) {
@@ -379,31 +413,6 @@ namespace RTE {
 		// No input clock starts while a cold mesh is still establishing a direct route.
 		if (m_State == NetLockstepState::WaitingForStart && m_Config.migrationTransportFactory && !m_Config.joinsRunningRound && !m_Config.continuesMatch &&
 		    std::any_of(m_RemotePeerIds.begin(), m_RemotePeerIds.end(), [&](uint8_t peer) { return !HasPeerFrameRoute(peer); })) return;
-		if (m_ConsumerWaitingFrame && *m_ConsumerWaitingFrame == m_Stats.nextFrame) {
-			const uint64_t frame = *m_ConsumerWaitingFrame;
-			const uint64_t elapsed = nowMs >= m_ConsumerWaitStartMs ? nowMs - m_ConsumerWaitStartMs : 0;
-			const auto remote = m_RemoteFrames.find(frame);
-			const auto hostEnd = m_PeerRoundEnds.find(GetHostPeerId());
-			const bool hostDeclaredLeave = hostEnd != m_PeerRoundEnds.end() && !hostEnd->second.closedLink;
-			if (!WaitsForPlacement() && !PeerTieRefereed(frame) && m_Config.localPeerId != GetHostPeerId() &&
-			    !hostDeclaredLeave &&
-			    (PeerHeldSeatsAt(frame) & (uint32_t{1} << (GetHostPeerId() - 1))) == 0 &&
-			    IsRemoteRequiredForFrame(GetHostPeerId(), frame) &&
-			    (remote == m_RemoteFrames.end() || !remote->second.contains(GetHostPeerId())) &&
-			    elapsed >= static_cast<uint64_t>(std::ceil(m_Config.slowPlayerBoundTicks * m_Config.simTickMs))) {
-				// Direct sessions have no independent arbitrator. A client cut from the playing host stops at its local bound;
-				// it can adopt the host's history through the existing private-image return when the link is available again.
-				if (!m_GrantedSimulationTick) {
-					m_Stats.nextFrame = GetResumeFrame(); m_ReadyFrames.clear();
-					m_LocalSeatHeld = true; m_LocalHoldFrame = m_Stats.nextFrame;
-					m_State = NetLockstepState::Stopped;
-					m_Stats.timeoutReason = "PeerHeld:the direct host link is unavailable; returning through a private image";
-					DiagnosticLine() << "[net-direct-partition] local=" << static_cast<int>(m_Config.localPeerId) << " frame=" << m_Stats.nextFrame
-					    << " now_ms=" << nowMs << " wait_ms=" << elapsed << " cause=input_missing action=image_return" << std::endl;
-				}
-				return;
-			}
-		}
 		if (m_Config.peerSessionLinks && nowMs >= m_PeerPathLogAtMs) {
 			m_PeerPathLogAtMs = nowMs + 5000;
 			for (const auto& [peer, path]: m_PeerReceiptDelaySamples) {
@@ -422,6 +431,14 @@ namespace RTE {
 		if (nowMs >= m_PeerHeartbeatAtMs) {
 			m_PeerHeartbeatAtMs = nowMs + c_NetPeerHeartbeatMs;
 			auto heartbeat = PeerFrameMessage(NetHostMigrationMessageType::PeerHeartbeat);
+			heartbeat.connectedMask = PeerFrameMembersAt(heartbeat.appliedFrame);
+			const auto* roster = m_RosterReader ? m_RosterReader() : nullptr;
+			heartbeat.rosterRevision = roster ? roster->revision : m_Config.matchConfig.seatRosterRevision;
+			if (!m_Config.frameTieReferee) for (auto split = m_PeerSplitArbitrations.rbegin(); split != m_PeerSplitArbitrations.rend(); ++split) {
+				if (!split->second.holdFrame || heartbeat.appliedFrame < split->second.holdFrame) continue;
+				heartbeat.frame = split->first; heartbeat.boundary = split->second.holdFrame;
+				break;
+			}
 			// Restored survivors can receive queued host traffic on a later local
 			// clock. Advertise eligibility before anyone fixes an immutable vote;
 			// this report grants no authority and does not replace voter validation.

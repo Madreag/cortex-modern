@@ -476,6 +476,7 @@ namespace RTE {
 		NetHash32 configHash{};
 		uint64_t appliedFrame = 0;
 		uint64_t preparedFrame = 0; //!< Highest complete input frame retained for the handover, even before simulation.
+		uint32_t rosterRevision = 0; //!< The roster revision accompanying a direct heal's committed history.
 		uint64_t completeFrom = 0;
 		uint64_t boundary = 0;
 		uint64_t frame = 0;
@@ -522,7 +523,7 @@ namespace RTE {
 	class NetHostMigrationCodec {
 	public:
 		static constexpr uint32_t c_Magic = 0x314D4843;
-		static constexpr uint16_t c_Version = 7;
+		static constexpr uint16_t c_Version = 8;
 		static constexpr size_t c_ChunkBytes = 64 * 1024;
 		static constexpr size_t c_MaxFrameBytes = 4 * 512 * 1024 + 256;
 		static constexpr size_t c_MaxPeerTailBytes = c_MaxFrameBytes + 64 * 1024;
@@ -1673,6 +1674,8 @@ namespace RTE {
 		bool PeerWantsLiveInput(uint8_t peer) const;
 		bool PeerReadsInputLive(uint8_t peer, uint64_t nowMs) const;
 		void TickPeerFrameGroups(uint64_t nowMs);
+		void CheckDirectPeerHistory(const NetHostMigrationMessage& message, uint64_t nowMs);
+		uint32_t DirectPeerWinner(uint32_t first, uint32_t second) const;
 		bool PeerFrameBlackout(uint64_t nowMs);
 		bool PeerInputAccepted(uint64_t frame, uint8_t owner = 0) const;
 		uint32_t PeerInputVoters(uint64_t frame, uint8_t owner) const;

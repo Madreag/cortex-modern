@@ -144,6 +144,58 @@ namespace RTE {
 			bool Send(NetPeerId, NetTransportLane, const std::vector<uint8_t>&, std::string* = nullptr, bool* = nullptr) override { return true; }
 		};
 
+		static bool DirectHistoriesChooseAtHeal(std::string* error) {
+			struct Arm { uint32_t own, remote; uint8_t local; bool loses; bool continued = true, cpuPair = false, granted = false; };
+			const std::vector<Arm> arms = {
+			    {12, 3, 3, true}, {3, 12, 1, false}, {14, 1, 2, false}, {1, 14, 1, true},
+			    {4, 2, 3, true}, {2, 4, 2, false}, {12, 3, 3, false, false},
+			    {12, 3, 3, false, true, true}, {12, 3, 3, true, true, false, true}};
+			for (size_t index = 0; index < arms.size(); ++index) {
+				const auto& arm = arms[index];
+				Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
+				peer.m_Config.peerFrameGroups = true; peer.m_Config.peerCount = peer.m_Config.matchConfig.peerCount = 4;
+				peer.m_Config.localPeerId = arm.local; peer.m_Config.authorityPeerId = 1;
+				peer.m_Config.matchConfig.players.push_back({4, 3, false, "Fourth"});
+				if (arm.cpuPair) for (auto& player: peer.m_Config.matchConfig.players) if (player.peerId <= 2) player.cpu = true;
+				peer.m_Config.matchConfig.seatRosterRevision = 17;
+				peer.m_RoundConfigHash = NetMatchConfigUtil::HashConfig(peer.m_Config.matchConfig);
+				peer.m_MigrationPhase = NetHostMigrationPhase::None;
+				peer.m_Stats.nextFrame = 201; peer.m_LastCompletedSimulationTick = peer.m_LastDeliveredFrame = 200;
+				peer.m_FrameGroupMembers = arm.own; peer.m_FrameGroupChanges = {{1, 15}, {100, arm.own}};
+				for (uint8_t seat = 1; seat <= 4; ++seat) if (!(arm.own & (1U << (seat - 1)))) peer.m_PeerFrameHolds[seat][100] = true;
+				NetFrameTieRequest request; request.frame = 1;
+				for (uint8_t seat = 1; seat <= 4; ++seat) {
+					request.owners.push_back(seat);
+					if (arm.own & (1U << (seat - 1))) request.members.push_back(seat);
+				}
+				peer.m_PeerSplitArbitrations[1] = {request, 15, 100};
+				peer.PollPeerFrameTies(1000);
+				if (!peer.IsRunning() || !peer.m_PeerFrameTieWinners.empty()) { *error = "transport silence selected a direct continuation"; return false; }
+				auto heartbeat = peer.PeerFrameMessage(NetHostMigrationMessageType::PeerHeartbeat);
+				heartbeat.senderPeerId = heartbeat.successorPeerId = static_cast<uint8_t>(std::countr_zero(arm.remote) + 1);
+				heartbeat.connectedMask = arm.remote; heartbeat.frame = 1; heartbeat.boundary = 100;
+				heartbeat.appliedFrame = arm.continued ? 200 : 99; heartbeat.preparedFrame = heartbeat.appliedFrame;
+				heartbeat.rosterRevision = 17;
+				heartbeat.bytes.assign(40, 0); std::fill(heartbeat.bytes.begin() + 8, heartbeat.bytes.end(), 0x6a);
+				heartbeat.totalBytes = static_cast<uint32_t>(heartbeat.bytes.size());
+				if (arm.granted) peer.m_GrantedSimulationTick = 201;
+				std::vector<uint8_t> signedBytes; NetHostMigrationMessage authenticated;
+				if (!NetHostMigrationCodec::Encode(heartbeat, peer.m_Config.migrationKey, signedBytes) ||
+				    !NetHostMigrationCodec::Decode(signedBytes, peer.m_Config.migrationKey, authenticated) || !peer.HandlePeerFrameMessage(authenticated, 1100)) {
+					*error = "the heal history did not traverse the authenticated peer wire"; return false;
+				}
+				if (arm.granted) {
+					if (!peer.IsRunning()) { *error = "a direct decision discarded a granted simulation tick"; return false; }
+					peer.m_GrantedSimulationTick.reset(); peer.m_LastCompletedSimulationTick = peer.m_LastDeliveredFrame = 201;
+					peer.PollPeerFrameTies(1101);
+				}
+				if (peer.IsStopped() != arm.loses || (arm.loses && (peer.GetResumeFrame() != (arm.granted ? 202 : 201) || !peer.GetStats().timeoutReason.starts_with("PeerHeld:")))) {
+					*error = "direct heal chose the wrong continuation or stop boundary: arm=" + std::to_string(index) + " state=" + NetLockstepCoordinator::StateName(peer.GetState()); return false;
+				}
+			}
+			return true;
+		}
+
 		static void ConfigureDelay(NetLockstepCoordinator& peer, DelayWire& wire, unsigned mode, uint16_t delay) {
 			Configure(peer, wire);
 			peer.m_Config.localPeerId = peer.m_Config.authorityPeerId = 1;
@@ -30477,6 +30529,12 @@ namespace {
 		};
 		static const char* selectedCase = std::getenv("CC_TEST_LOCKSTEP_SELFTEST_CASE");
 		if (selectedCase) {
+			if (std::string_view(selectedCase) == "direct-heal-history") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::DirectHistoriesChooseAtHeal(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS direct_heal_uses_committed_histories_and_human_seats\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "link-measurement-presence") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::MissingOrZeroLinkNeverUsesReceipts(&error)) return fail(error);
@@ -30700,6 +30758,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::LinkSizingInEveryMode, "every_mode_sizes_live_and_return_from_the_link");
 		row(&SessionPlaneRecoveryTest::LinkRiseHasNoResizeCooldown, "link_rise_has_no_resize_cooldown");
 		row(&SessionPlaneRecoveryTest::LinkFallNeedsFiveMeasuredSeconds, "link_fall_requires_five_continuous_measured_seconds");
+		row(&SessionPlaneRecoveryTest::DirectHistoriesChooseAtHeal, "direct_heal_uses_committed_histories_and_human_seats");
 
 		row(&SessionPlaneRecoveryTest::ConcurrentReturnMembership, "a_later_return_keeps_the_earlier_scheduled_return");
 		row(&SessionPlaneRecoveryTest::ReturnKeepsOtherSeatHeld, "a_return_cannot_return_another_held_seat");

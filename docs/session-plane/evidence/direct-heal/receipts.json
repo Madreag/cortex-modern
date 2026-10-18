@@ -1,0 +1,338 @@
+{
+  "topology": "single-box",
+  "proof": false,
+  "complete_gate": false,
+  "parent": "637a03ceba5a21b218a66d5f987ca643c7258d63",
+  "launches": [
+    {
+      "collection": "ruling-direct-red",
+      "case": "hung_host_18s_direct_survivor_holds_then_migrates_roster",
+      "exe_sha256": "9cd877ab2482d62db341c646b45ded0e4a6b2d589b8ef5272426bc0bccda44a1",
+      "visible_window": true,
+      "exit_code": 1,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "ruling-direct-red--hung_host_18s_direct_survivor_holds_then_migrates_roster--stdout.log.gz",
+          "original_sha256": "4876dd7da72d2f5b840fe8c230f439c31db1e6fd0b1f67281c57bb675da05f9b",
+          "portable_sha256": "4876dd7da72d2f5b840fe8c230f439c31db1e6fd0b1f67281c57bb675da05f9b",
+          "compressed_sha256": "f1e8577aeb05917b6a6266f775812b5f91b29c216e330543b21d7ff523d4e019"
+        },
+        {
+          "path": "ruling-direct-red--hung_host_18s_direct_survivor_holds_then_migrates_roster--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "ruling-direct-red",
+      "case": "hung_host_3s_direct_survivor_holds_without_a_split",
+      "exe_sha256": "9cd877ab2482d62db341c646b45ded0e4a6b2d589b8ef5272426bc0bccda44a1",
+      "visible_window": true,
+      "exit_code": 1,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "ruling-direct-red--hung_host_3s_direct_survivor_holds_without_a_split--stdout.log.gz",
+          "original_sha256": "2dda662ac938d06057e84dbe048f9784564a872cb2c8fa91e58a8d4a6d92e6af",
+          "portable_sha256": "2dda662ac938d06057e84dbe048f9784564a872cb2c8fa91e58a8d4a6d92e6af",
+          "compressed_sha256": "770e7f87697b6922ac2eb51433008fb3d8f9aa0e9fba93d128cc4094b5e9386e"
+        },
+        {
+          "path": "ruling-direct-red--hung_host_3s_direct_survivor_holds_without_a_split--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "ruling-direct-red",
+      "case": "two_direct_host_3s",
+      "exe_sha256": "9cd877ab2482d62db341c646b45ded0e4a6b2d589b8ef5272426bc0bccda44a1",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "ruling-direct-red--two_direct_host_3s--stdout.log.gz",
+          "original_sha256": "857ce35b239a1efdfa46aae4e28b70e9ec9fe9ed01d86457b3f2baf61246c12a",
+          "portable_sha256": "857ce35b239a1efdfa46aae4e28b70e9ec9fe9ed01d86457b3f2baf61246c12a",
+          "compressed_sha256": "58d4c1e4cc460d2fb91b32597edcc3cc118ce39c374e38be25c3f8ed9d759f60"
+        },
+        {
+          "path": "ruling-direct-red--two_direct_host_3s--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "direct-heal-spec-red",
+      "case": "direct-heal-history",
+      "exe_sha256": "5c7164b51934faf1a16b2bfdecfd64ef1c8a9d32e399fb550a54822832d1e155",
+      "visible_window": true,
+      "exit_code": 1,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "direct-heal-spec-red--direct-heal-history--stdout.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        },
+        {
+          "path": "direct-heal-spec-red--direct-heal-history--stderr.log.gz",
+          "original_sha256": "d452d95f3162f11b057e24caa435e72d36693be4078da810633ba2791293159c",
+          "portable_sha256": "d452d95f3162f11b057e24caa435e72d36693be4078da810633ba2791293159c",
+          "compressed_sha256": "b95cba448ce6a4f7e0fbf4766fe3da10e596eecf2179ecf7aa283c463eaa71bc"
+        }
+      ]
+    },
+    {
+      "collection": "direct-heal-first",
+      "case": "direct-heal-history",
+      "exe_sha256": "7291a23cf6b1f7b84ed36db1980b1f60cb3aae595428a536dd15a1dfda70e3ef",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "direct-heal-first--direct-heal-history--stdout.log.gz",
+          "original_sha256": "6992e2f7296fd535796633cda594535d1409af6960a90eacaeb586bb3798bece",
+          "portable_sha256": "6992e2f7296fd535796633cda594535d1409af6960a90eacaeb586bb3798bece",
+          "compressed_sha256": "181165a679e8e9a7b03f10ce78426bdd159150147a7d05e7dde0f3d01fab6f60"
+        },
+        {
+          "path": "direct-heal-first--direct-heal-history--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "direct-host-first",
+      "case": "hung_host_18s_direct_survivor_holds_then_migrates_roster",
+      "exe_sha256": "7291a23cf6b1f7b84ed36db1980b1f60cb3aae595428a536dd15a1dfda70e3ef",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "direct-host-first--hung_host_18s_direct_survivor_holds_then_migrates_roster--stdout.log.gz",
+          "original_sha256": "da2951313c392d9a643ef90655f5837e6622fd0804cbbf6b3fa033b833072646",
+          "portable_sha256": "da2951313c392d9a643ef90655f5837e6622fd0804cbbf6b3fa033b833072646",
+          "compressed_sha256": "b8661bbbc755d911922089cf14f86fdded37a0eb67c0119bb8cbc1200508f640"
+        },
+        {
+          "path": "direct-host-first--hung_host_18s_direct_survivor_holds_then_migrates_roster--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "direct-host-first",
+      "case": "hung_host_3s_direct_survivor_holds_without_a_split",
+      "exe_sha256": "7291a23cf6b1f7b84ed36db1980b1f60cb3aae595428a536dd15a1dfda70e3ef",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "direct-host-first--hung_host_3s_direct_survivor_holds_without_a_split--stdout.log.gz",
+          "original_sha256": "5d6f56dd3f0bba0a274bb47603c7fe5c3146374615a2d5bd8f0b0b5277e4c5bd",
+          "portable_sha256": "5d6f56dd3f0bba0a274bb47603c7fe5c3146374615a2d5bd8f0b0b5277e4c5bd",
+          "compressed_sha256": "939e4d3963c6608a2dc029d92811417aec54ca4a6dd64886135677d6d8d0f185"
+        },
+        {
+          "path": "direct-host-first--hung_host_3s_direct_survivor_holds_without_a_split--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "direct-host-first",
+      "case": "two_direct_host_3s",
+      "exe_sha256": "7291a23cf6b1f7b84ed36db1980b1f60cb3aae595428a536dd15a1dfda70e3ef",
+      "visible_window": true,
+      "exit_code": 1,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "direct-host-first--two_direct_host_3s--stdout.log.gz",
+          "original_sha256": "39a77a5d255fe7b509a421ce95e48f3ec5ec2443849fbd8869a091680148eb20",
+          "portable_sha256": "39a77a5d255fe7b509a421ce95e48f3ec5ec2443849fbd8869a091680148eb20",
+          "compressed_sha256": "fbbdbe5fb9ebed34f092e1224769971d4b530ba8163d97bd29afe4e868bdf876"
+        },
+        {
+          "path": "direct-host-first--two_direct_host_3s--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "direct-native-inventory",
+      "case": "net-lockstep-seat-succession-selftest",
+      "exe_sha256": "7291a23cf6b1f7b84ed36db1980b1f60cb3aae595428a536dd15a1dfda70e3ef",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "direct-native-inventory--net-lockstep-seat-succession-selftest--stdout.log.gz",
+          "original_sha256": "75d4275f6ae3aceb642db47a16844b8b73c0eaa3545a5039a80857e79a07b0c8",
+          "portable_sha256": "75d4275f6ae3aceb642db47a16844b8b73c0eaa3545a5039a80857e79a07b0c8",
+          "compressed_sha256": "cb323b22447c8222fc19fa40359ce5bff0e0eed00767ccb08ae81f1847418f0e"
+        },
+        {
+          "path": "direct-native-inventory--net-lockstep-seat-succession-selftest--stderr.log.gz",
+          "original_sha256": "b32c24e51cdf063d32f0442b34830d76efacc99f4420a8f38599e8e5eea0e6a9",
+          "portable_sha256": "b32c24e51cdf063d32f0442b34830d76efacc99f4420a8f38599e8e5eea0e6a9",
+          "compressed_sha256": "cbf41a3addc132ea3fc4af32cee5fcc1787eaec4c8fdc13d130a247f60c2c517"
+        }
+      ]
+    },
+    {
+      "collection": "direct-native-inventory",
+      "case": "net-lockstep-selftest",
+      "exe_sha256": "7291a23cf6b1f7b84ed36db1980b1f60cb3aae595428a536dd15a1dfda70e3ef",
+      "visible_window": true,
+      "exit_code": 1,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "direct-native-inventory--net-lockstep-selftest--stdout.log.gz",
+          "original_sha256": "ab5efb2c7e163d2e07d1846b81259b77f07e36a199a42f5af3bc5a5a35262f5d",
+          "portable_sha256": "ab5efb2c7e163d2e07d1846b81259b77f07e36a199a42f5af3bc5a5a35262f5d",
+          "compressed_sha256": "095c5ead8b83727982eeb9b3de982d658a5146808ed89b5bc0c043961e6accdb"
+        },
+        {
+          "path": "direct-native-inventory--net-lockstep-selftest--stderr.log.gz",
+          "original_sha256": "78623cb4ef063962c2a7306d5352a02e9c84f9abd8ff28ca4b520d2a7b2cd177",
+          "portable_sha256": "78623cb4ef063962c2a7306d5352a02e9c84f9abd8ff28ca4b520d2a7b2cd177",
+          "compressed_sha256": "02ebf0f8207b1f1ac7536756e6405fcfc36f9a353c7dd00c0b9ca8d95e0c824e"
+        }
+      ]
+    },
+    {
+      "collection": "direct-heal-verified",
+      "case": "direct-heal-history",
+      "exe_sha256": "88568bf3e3eed8a7c7f1358c6d20a34bb26dc002751467923a98bcced7c8eb46",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "direct-heal-verified--direct-heal-history--stdout.log.gz",
+          "original_sha256": "6992e2f7296fd535796633cda594535d1409af6960a90eacaeb586bb3798bece",
+          "portable_sha256": "6992e2f7296fd535796633cda594535d1409af6960a90eacaeb586bb3798bece",
+          "compressed_sha256": "181165a679e8e9a7b03f10ce78426bdd159150147a7d05e7dde0f3d01fab6f60"
+        },
+        {
+          "path": "direct-heal-verified--direct-heal-history--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "direct-host-verified",
+      "case": "hung_host_18s_direct_survivor_holds_then_migrates_roster",
+      "exe_sha256": "88568bf3e3eed8a7c7f1358c6d20a34bb26dc002751467923a98bcced7c8eb46",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "direct-host-verified--hung_host_18s_direct_survivor_holds_then_migrates_roster--stdout.log.gz",
+          "original_sha256": "d253a43be5603439551372c842aa517711dd68216c12375ac28224b1f48e8a02",
+          "portable_sha256": "d253a43be5603439551372c842aa517711dd68216c12375ac28224b1f48e8a02",
+          "compressed_sha256": "347037d987cb9456a0f9004d9420afe7dd984b7c9c3444315982d08700e094d3"
+        },
+        {
+          "path": "direct-host-verified--hung_host_18s_direct_survivor_holds_then_migrates_roster--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "direct-host-verified",
+      "case": "hung_host_3s_direct_survivor_holds_without_a_split",
+      "exe_sha256": "88568bf3e3eed8a7c7f1358c6d20a34bb26dc002751467923a98bcced7c8eb46",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "direct-host-verified--hung_host_3s_direct_survivor_holds_without_a_split--stdout.log.gz",
+          "original_sha256": "8c69e821c955286803ae945be6b7456d4e463d0959a2986e5d447170491aecd3",
+          "portable_sha256": "8c69e821c955286803ae945be6b7456d4e463d0959a2986e5d447170491aecd3",
+          "compressed_sha256": "3c8a7bebcc97caf1a06dc2bf4e1c72653f4c9c8ea12cf1ea2441279610b445f4"
+        },
+        {
+          "path": "direct-host-verified--hung_host_3s_direct_survivor_holds_without_a_split--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "direct-startup-verified",
+      "case": "net-lockstep-seat-succession-selftest",
+      "exe_sha256": "88568bf3e3eed8a7c7f1358c6d20a34bb26dc002751467923a98bcced7c8eb46",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "direct-startup-verified--net-lockstep-seat-succession-selftest--stdout.log.gz",
+          "original_sha256": "85ce9cb1934036423e8855b88f8832a78692fd09859e2625381c3cc33691ea3f",
+          "portable_sha256": "85ce9cb1934036423e8855b88f8832a78692fd09859e2625381c3cc33691ea3f",
+          "compressed_sha256": "2937ea2ea5b4e4e422f6cef6387c447d208be08db1a58872dfb6c4069cf653c0"
+        },
+        {
+          "path": "direct-startup-verified--net-lockstep-seat-succession-selftest--stderr.log.gz",
+          "original_sha256": "026f889b9a94eae1e62a7988f4b6d7c41ae9fda54c77361abfa68a7f3529be90",
+          "portable_sha256": "026f889b9a94eae1e62a7988f4b6d7c41ae9fda54c77361abfa68a7f3529be90",
+          "compressed_sha256": "108efee443c2c12da060ba70d9c03b3e08fa2421f0a2e6982bf1fc09adab074a"
+        }
+      ]
+    },
+    {
+      "collection": "direct-startup-verified",
+      "case": "net-match-selftest",
+      "exe_sha256": "88568bf3e3eed8a7c7f1358c6d20a34bb26dc002751467923a98bcced7c8eb46",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "direct-startup-verified--net-match-selftest--stdout.log.gz",
+          "original_sha256": "f8ac7c6132410c6e6c81a71af3dd808311c09628615c4f33c907b26957115a69",
+          "portable_sha256": "6b8b88f7aae07339970816f3fff3e7bdb687e6d35f90100d8aab371f27cd7cbc",
+          "compressed_sha256": "fd950e9757b21eaae4447badff4bcb1ee05683856429a7c328dd929def92ab66"
+        },
+        {
+          "path": "direct-startup-verified--net-match-selftest--stderr.log.gz",
+          "original_sha256": "dc652c7f6d0d5539e33e6b1b58e926b7492f4a823f4485fd072ec9db4f9591c8",
+          "portable_sha256": "427866cb5c791df1d7fd9a402811329610ca11c4bfffd7133bf60dceb4eb90d8",
+          "compressed_sha256": "a4743fd34e067cf97aaed4be152294068e5087ed42b3293652c480862db2e19e"
+        }
+      ]
+    }
+  ]
+}

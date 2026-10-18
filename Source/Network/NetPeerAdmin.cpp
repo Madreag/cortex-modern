@@ -32,12 +32,11 @@ namespace RTE {
 		}
 		// Each signer checks silence and the complete survivor set before voting.
 		// An already signed certificate remains valid when the old host returns.
-		// A lone direct joiner cannot distinguish a dead host from a partitioned
-		// host that still owns the frame tie. Only the directory can fence it.
+		// Direct groups migrate locally and resolve competing histories only when their link heals.
 		uint32_t owners = 0;
 		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer)
 			if (!m_RemovedPeers.contains(peer) && !IsSeatReleased(peer)) owners |= AdminBit(peer);
-		return std::popcount(voters) >= 2 && (voters & ~owners) == 0 && 2 * std::popcount(voters) > std::popcount(owners);
+		return voters != 0 && (voters & ~owners) == 0;
 	}
 
 	bool NetLockstepCoordinator::ValidatePeerAdmin(const NetHostMigrationMessage& proposal) const {
@@ -82,7 +81,7 @@ namespace RTE {
 				if (choice.generation != m_Config.migrationGeneration + 1 || choice.host == 0 || choice.host > m_Config.peerCount || choice.boundary == UINT64_MAX || choice.members.empty()) return;
 			} else {
 				const uint32_t survivors = PeerAdminSurvivors(nowMs);
-				if (std::popcount(survivors) < 2) return;
+				if (survivors == 0) return;
 				choice.generation = m_Config.migrationGeneration + 1; choice.boundary = *m_LastCompletedSimulationTick;
 				for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) if ((survivors & AdminBit(peer)) != 0) {
 					choice.members.push_back(peer);
@@ -150,7 +149,7 @@ namespace RTE {
 		NetGameHostAuthority authority{GetHostPeerId(), proposal.successorPeerId, proposal.completeFrom, proposal.frame, voters, voters, voters};
 		if (!authority.IsValid()) return;
 		m_AuthorityEvents.emplace(proposal.frame, authority);
-		if (2 * std::popcount(voters) >= m_Config.peerCount) m_PeerAdminFrameMembers = voters;
+		m_PeerAdminFrameMembers = voters;
 		m_MigrationBoundary = proposal.boundary;
 		m_MigrationSuccessor = proposal.successorPeerId;
 		m_MigrationGeneration = proposal.completeFrom;
