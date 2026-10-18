@@ -919,6 +919,8 @@ namespace RTE {
 		/// Adopts saved identity for the actor, its attachable tree, and its inventory.
 		void AdoptPersistedUniqueID() override;
 		void ResolveFaithfulLinks() override;
+		/// Installs the saved complete menu after all native IDs exist and before Lua borrows any slice.
+		void RestoreCompletePieMenuCheckpoint();
 
 		/// Applies the walk state a faithful clone carries in its stash, which the copy of its limb paths does not keep; nothing for an actor that does not walk.
 		virtual void AdoptCarriedWalkState() {}
@@ -1134,6 +1136,9 @@ namespace RTE {
 		CheckpointString m_PersistedControllerCheckpoint;
 		long long m_PersistedControllerInputMode; //!< Saved wire-applied input mode, -1 when absent.
 		int m_PersistedControllerQuickDisabled; //!< Saved quick-disable flag, -1 when absent.
+		CheckpointString m_PersistedCompletePieMenu;
+		CheckpointString m_LegacyCompletePieMenu; //!< Exact reconstructed values until the first update of an older image.
+		bool m_NeedsLegacyPieMenuBaseline = false;
 		CheckpointString m_PersistedPieMenuState; //!< Saved pie menu interaction state, applied on snapshot adopt.
 		Vector m_PersistedViewPoint; //!< Saved view point, applied on snapshot adopt (Create re-derives the live one).
 		bool m_HasPersistedViewPoint = false;
@@ -1365,6 +1370,7 @@ namespace RTE {
 
 		std::unique_ptr<PieMenu> m_PieMenu;
 		std::optional<CheckpointText> m_FrozenPieMenu;
+		PieMenu* m_FrozenCompletePieMenu = nullptr; //!< Borrowed from the capture, never a live actor field.
 		CheckpointString m_FrozenPieMenuState;
 
 		bool m_CheckpointInitialized = false;

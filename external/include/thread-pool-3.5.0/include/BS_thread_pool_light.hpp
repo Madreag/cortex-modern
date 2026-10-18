@@ -13,7 +13,7 @@
 #define BS_THREAD_POOL_LIGHT_VERSION "v3.5.0 (2023-05-25)"
 
 #include <condition_variable> // std::condition_variable
-#include <exception>          // std::current_exception
+#include <exception>          // std::bad_exception, std::current_exception, std::exception_ptr, std::make_exception_ptr
 #include <functional>         // std::bind, std::function, std::invoke
 #include <future>             // std::future, std::promise
 #include <memory>             // std::make_shared, std::make_unique, std::shared_ptr, std::unique_ptr
@@ -156,7 +156,7 @@ public:
     {
         std::shared_ptr<std::promise<R>> task_promise = std::make_shared<std::promise<R>>();
         push_task(
-            [task_function = std::bind(std::forward<F>(task), std::forward<A>(args)...), task_promise]
+            [this, task_function = std::bind(std::forward<F>(task), std::forward<A>(args)...), task_promise]
             {
                 try
                 {
@@ -174,7 +174,10 @@ public:
                 {
                     try
                     {
-                        task_promise->set_exception(std::current_exception());
+                        // Foreign runtime unwinding can leave no C++ exception handle.
+                        // The fallback was allocated before any worker started.
+                        const std::exception_ptr error = std::current_exception();
+                        task_promise->set_exception(error ? error : uncaptured_task_exception);
                     }
                     catch (...)
                     {
@@ -277,6 +280,12 @@ private:
     // ============
     // Private data
     // ============
+
+    /**
+     * @brief A failure for exceptions the runtime cannot capture, allocated before workers start.
+     * Avoids allocating a fallback while handling a task failure.
+     */
+    const std::exception_ptr uncaptured_task_exception = std::make_exception_ptr(std::bad_exception{});
 
     /**
      * @brief A condition variable to notify worker() that a new task has become available.

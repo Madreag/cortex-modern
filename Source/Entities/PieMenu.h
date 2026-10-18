@@ -51,6 +51,9 @@ namespace RTE {
 		/// @return An error return value signaling success or any particular failure. Anything below 0 is an error signal.
 		int Create(const PieMenu& reference);
 		static bool RunCheckpointSelfTest();
+		/// The whole runtime menu, including device-added clones, restored before Lua resolves borrowed handles.
+		std::string SaveCompleteCheckpoint() const;
+		bool LoadCompleteCheckpoint(std::string_view text);
 		static bool RunHoverOpenDelayPinSelfTest(std::string* error = nullptr);
 #pragma endregion
 
@@ -425,6 +428,9 @@ namespace RTE {
 		bool m_HighlightWobble = false; //!< Draw-only far-cursor pulse.
 		int m_HighlightDrawRadius = 0; //!< Drawn freeze radius when the highlight is held.
 		Timer m_HighlightViewTimer; //!< Real-time pulse for the draw-only wobble.
+		std::array<std::array<int, 10>, 4> m_FrozenSliceLayout{};
+		std::string m_FrozenTreeInteraction;
+		std::array<std::array<int, 10>, 4> CheckpointSliceLayout() const;
 		CheckpointString m_PersistedRuntime;
 		std::string SaveRuntimeCheckpoint() const;
 		bool LoadRuntimeCheckpoint(std::string_view text, bool validateOnly = false);

@@ -178,6 +178,8 @@ namespace RTE {
 		/// of anything moving, without resetting all of this' settings.
 		void PurgeAllMOs();
 		bool RunPurgeSelfTest();
+		/// Throws from real update workers and checks their consumer and thread context.
+		bool RunPoolUpdateSelfTest();
 		bool RunThreadedSyncedUpdateOrderSelfTest();
 
 		/// The state an object's scripts land on is its unique ID modulo the state count, so a machine that

@@ -126,20 +126,29 @@ namespace {
 			}
 			return true;
 		}
-		/// Gives a reserved range's committed runs back; a range committed whole keeps its memory.
-		void Decommit() noexcept {
-			if (committed || !committedBytes) return;
+		/// Keeps a cold preparation resident only in the runs the last cooling pass left Hot.
+		/// The owner holds the block lock; no boundary can write this copy meanwhile.
+		void RetainRun(size_t run, bool keep, size_t pageBytes) noexcept {
+			if (committed) return;
+			const size_t first = run * c_RunBytes, runBytes = std::min(c_RunBytes, bytes - first);
+			if (keep) {
+				if (runs[run] || !Commit(first, runBytes)) return;
+				auto* resident = static_cast<volatile unsigned char*>(data);
+				for (size_t offset = first; offset < first + runBytes; offset += pageBytes) resident[offset] = 0;
+				return;
+			}
+			if (!runs[run]) return;
 #ifdef _WIN32
-			VirtualFree(data, bytes, MEM_DECOMMIT);
+			if (!VirtualFree(data + first, runBytes, MEM_DECOMMIT)) return;
 #elif defined(__APPLE__)
 			// macOS keeps MADV_DONTNEED pages resident and in the footprint; reusable pages leave the footprint at once.
-			madvise(data, bytes, MADV_FREE_REUSABLE);
+			if (madvise(data + first, runBytes, MADV_FREE_REUSABLE) != 0) return;
 #else
-			madvise(data, bytes, MADV_DONTNEED);
+			if (madvise(data + first, runBytes, MADV_DONTNEED) != 0) return;
 #endif
-			std::fill(runs.begin(), runs.end(), 0);
-			if (betweenTicks) s_CommittedCopyBytes.fetch_sub(committedBytes, std::memory_order_relaxed);
-			committedBytes = 0;
+			runs[run] = 0;
+			if (betweenTicks) s_CommittedCopyBytes.fetch_sub(runBytes, std::memory_order_relaxed);
+			committedBytes -= runBytes;
 		}
 		// One large release holds the process's address space while the game faults on its own pages, so a saver gives
 		// the copy back a piece at a time, and a game thread leaves it to the savers.
@@ -207,6 +216,7 @@ struct CheckpointPagePool::Copy {
 	std::atomic<uint64_t> simFaults{0}, otherFaults{0};
 	bool completed = false;
 	bool abandoned = false;
+	bool keepWarm = false; //!< The preparer requested warming; the block lock guards this policy.
 	std::atomic<bool> lost{false}; //!< A save could not commit this copy; its readers refuse the capture.
 	const std::shared_ptr<ArmGate> gate;
 	Copy(size_t bytes, size_t pageBytes, std::shared_ptr<ArmGate> gate = {}, bool reserveOnly = false) :
@@ -245,7 +255,14 @@ struct CheckpointPagePool::Block {
 	std::vector<std::shared_ptr<Copy>> copies;
 	std::vector<PageState> states;
 	std::vector<uint64_t> digests; // Each written page's bytes at the last cooling pass; only the settler reads them.
-	explicit Block(size_t bytes, size_t slotBytes = 0) : live(bytes), slotBytes(slotBytes ? slotBytes : bytes), states(bytes / pageBytes, PageState::Open) {}
+	std::vector<unsigned char> hotCopyRuns; // Copy runs containing Hot pages at their last cooling pass.
+	explicit Block(size_t bytes, size_t slotBytes = 0) : live(bytes), slotBytes(slotBytes ? slotBytes : bytes), states(bytes / pageBytes, PageState::Open),
+	    hotCopyRuns((bytes + Pages::c_RunBytes - 1) / Pages::c_RunBytes, 0) {}
+	// The caller holds the block lock. A warm or begun boundary never gives a copy run back here.
+	void RetainColdCopy(Copy& copy, size_t firstRun, size_t endRun) noexcept {
+		if (!copy.gate || !copy.Waiting() || copy.keepWarm) return;
+		for (size_t run = firstRun; run < endRun; ++run) copy.pages.RetainRun(run, hotCopyRuns[run] != 0, pageBytes);
+	}
 	~Block() { PageWriteFence::UnwatchCopies(this); }
 	bool Watch() {
 		const auto keepWritable = [](void*, uintptr_t, size_t) noexcept { return true; };
@@ -253,9 +270,18 @@ struct CheckpointPagePool::Block {
 	}
 	void Prepare(const std::shared_ptr<Copy>& copy) {
 		if (!Watch()) throw std::runtime_error("could not prepare native checkpoint page watches");
-		Locked guard(lock);
-		std::erase_if(copies, [](const auto& value) { return value->completed; });
-		copies.push_back(copy);
+		{
+			Locked guard(lock);
+			std::erase_if(copies, [](const auto& value) { return value->completed; });
+			copies.push_back(copy);
+		}
+		// A replacement preparation inherits only the last pass's Hot runs, a bounded piece at a time.
+		constexpr size_t chunkRuns = 64;
+		for (size_t first = 0; copy->gate && first < hotCopyRuns.size(); first += chunkRuns) {
+			SaverThreads::YieldToGame();
+			Locked guard(lock);
+			RetainColdCopy(*copy, first, std::min(first + chunkRuns, hotCopyRuns.size()));
+		}
 	}
 	void Arm(const std::shared_ptr<Copy>& copy) {
 		Locked guard(lock);
@@ -434,9 +460,8 @@ struct CheckpointPagePool::Block {
 				digests[first + index] = digest;
 				any |= still[index] != 0;
 			}
-			if (!any) continue;
 			Locked guard(lock);
-			for (size_t index = 0; index < count;) {
+			for (size_t index = 0; any && index < count;) {
 				const auto unchanged = [&](size_t at) { return still[at] && states[first + at] == PageState::Hot; };
 				if (!unchanged(index)) { ++index; continue; }
 				size_t end = index + 1;
@@ -447,6 +472,14 @@ struct CheckpointPagePool::Block {
 				}
 				index = end;
 			}
+			const size_t firstRun = first * pageBytes / Pages::c_RunBytes;
+			const size_t endRun = ((first + count) * pageBytes + Pages::c_RunBytes - 1) / Pages::c_RunBytes;
+			for (size_t run = firstRun; run < endRun; ++run) {
+				const size_t begin = run * Pages::c_RunBytes / pageBytes;
+				const size_t end = std::min((run + 1) * Pages::c_RunBytes / pageBytes, states.size());
+				hotCopyRuns[run] = std::find(states.begin() + begin, states.begin() + end, PageState::Hot) != states.begin() + end;
+			}
+			for (const auto& copy: copies) RetainColdCopy(*copy, firstRun, endRun);
 		}
 		return cooled;
 	}
@@ -827,6 +860,7 @@ void CheckpointPagePool::Snapshot::WarmShadow() const {
 		for (size_t first = 0; first < part.copy->saved.size(); first += runPages) {
 			Locked guard(part.block->lock);
 			if (!part.copy->Waiting()) throw std::logic_error("native checkpoint shadow warming after its boundary");
+			part.copy->keepWarm = true;
 			// An inventory boundary writes only the pages written since the last one; the saver fills the rest itself.
 			const size_t end = std::min(first + runPages, part.copy->saved.size()), pageBytes = part.block->pageBytes;
 			for (size_t page = first; page < end; ++page) {
@@ -840,8 +874,17 @@ void CheckpointPagePool::Snapshot::WarmShadow() const {
 
 void CheckpointPagePool::Snapshot::CoolShadow() const noexcept {
 	for (const auto& part: m_Parts) {
-		Locked guard(part.block->lock);
-		if (part.copy->Waiting()) part.copy->pages.Decommit();
+		{
+			Locked guard(part.block->lock);
+			if (!part.copy->Waiting()) continue;
+			part.copy->keepWarm = false;
+		}
+		constexpr size_t chunkRuns = 64;
+		for (size_t first = 0; first < part.block->hotCopyRuns.size(); first += chunkRuns) {
+			try { SaverThreads::YieldToGame(); } catch (...) {}
+			Locked guard(part.block->lock);
+			part.block->RetainColdCopy(*part.copy, first, std::min(first + chunkRuns, part.block->hotCopyRuns.size()));
+		}
 	}
 }
 
@@ -897,6 +940,69 @@ std::string CheckpointPagePool::SelfTestMismatch() {
 		prepared->Cancel();
 		if (before >= 0 && grown > static_cast<int64_t>(c_Bytes / 4))
 			return std::format("a prepared inventory committed {} MB for its {} MB of storage before any page was written", grown >> 20, c_Bytes >> 20);
+	}
+	{
+		// An idle plan keeps exactly the copy runs left Hot by cooling, then gives them back when they cool.
+		// Use a private block so no other inventory or background pass can decide this regression's result.
+		const size_t pageBytes = PageWriteFence::SystemPageBytes();
+		const size_t regionBytes = std::max(Pages::c_RunBytes, 16 * pageBytes);
+		auto block = std::make_shared<Block>(3 * regionBytes);
+		auto prepared = std::make_shared<Snapshot>();
+		prepared->m_ArmGate = std::make_shared<ArmGate>();
+		auto copy = std::make_shared<Copy>(block->live.bytes, pageBytes, prepared->m_ArmGate, true);
+		prepared->m_Parts.push_back({block, copy});
+		prepared->m_Ranges.push_back({reinterpret_cast<uintptr_t>(block->live.data), block->live.bytes});
+		prepared->Index();
+		block->Prepare(copy);
+		block->Settle(block->states.size());
+		for (size_t page = 0; page < block->states.size(); ++page)
+			*reinterpret_cast<uint64_t*>(block->live.data + page * pageBytes) = 11 + page;
+		block->Cool(); // Prime every page's digest.
+		block->Cool(); // No writes: every run is cold.
+		const size_t noRun = copy->pages.runs.size();
+		const auto keptExactly = [&](size_t wanted) {
+			if (copy->pages.committedBytes != (wanted == noRun ? 0 : Pages::c_RunBytes)) return false;
+			for (size_t run = 0; run < copy->pages.runs.size(); ++run) {
+				if ((copy->pages.runs[run] != 0) != (run == wanted)) return false;
+#ifdef _WIN32
+				MEMORY_BASIC_INFORMATION memory{};
+				if (!VirtualQuery(copy->pages.data + run * Pages::c_RunBytes, &memory, sizeof(memory)) ||
+				    memory.State != (run == wanted ? MEM_COMMIT : MEM_RESERVE) || memory.RegionSize < Pages::c_RunBytes) return false;
+#endif
+			}
+			return true;
+		};
+		if (!keptExactly(noRun)) return "cold inventory retained a copy run after its pages stopped changing";
+		auto* first = reinterpret_cast<uint64_t*>(block->live.data);
+		auto* second = reinterpret_cast<uint64_t*>(block->live.data + regionBytes);
+		auto* third = reinterpret_cast<uint64_t*>(block->live.data + 2 * regionBytes);
+		const uint64_t thirdValue = *third;
+		*first = 41;
+		block->Cool();
+		if (!keptExactly(0)) return "a cold preparation did not retain exactly the last cooling pass's Hot copy run";
+		block->Cool();
+		if (!keptExactly(noRun)) return "a no-longer-Hot copy run stayed committed";
+		*second = 53;
+		block->Cool();
+		const size_t secondRun = regionBytes / Pages::c_RunBytes;
+		if (!keptExactly(secondRun)) return "cold copy retention kept an older Hot run or omitted the new one";
+		prepared->WarmShadow();
+		block->Cool();
+		if (!keptExactly(secondRun)) return "cooling gave back a copy run while its preparation was warming";
+		prepared->CoolShadow();
+		if (!keptExactly(noRun)) return "ending a warm kept runs absent from the last cooling pass";
+		*first = 47;
+		block->Cool();
+		prepared->Arm();
+		*first = 59; *second = 61; *third = 67;
+		prepared->CoolShadow();
+		block->Cool();
+		for (const auto [source, expected]: {std::pair{first, uint64_t{47}}, std::pair{second, uint64_t{53}}, std::pair{third, thirdValue}}) {
+			uint64_t value = 0;
+			if (!prepared->Read(source, &value, sizeof(value)) || value != expected)
+				return "Hot-run retention or cooling changed an armed capture's values";
+		}
+		System::PrintDiagnosticLine("[cow-checkpoint] PASS cold_preparation_retains_only_latest_hot_runs");
 	}
 	{
 		Allocation owned(4096, true);

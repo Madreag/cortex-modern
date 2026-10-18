@@ -23,6 +23,8 @@
 #include <string_view>
 #include "LuaThreadCodec.h"
 #include "CheckpointImage.h"
+#include "AutosaveStore.h"
+#include "SaveGameArchive.h"
 #include "CheckpointCast.h"
 #include "ScenarioRunner.h"
 #include "SoundSimulation.h"
@@ -2751,9 +2753,25 @@ function Graph.prepare(text, reuseHeld)
 	return problems
 end
 
-function Graph.prepareRoots()
+-- Direct graph restores also create native trees; finish their menus before roots or borrowed values use them.
+function Graph.prepareMenus()
 	local problems = {}
 	if not preparedGraph then return { "no script graph was prepared" } end
+	if preparedGraph.menusReady then return problems end
+	for _, entry in ipairs(preparedGraph.graph.order) do
+		local object = entry.copy and preparedGraph.objects[entry.id]
+		if object then
+			local ok, message = _ScriptGraphNativeMenus(object)
+			if not ok then problems[#problems + 1] = message end
+		end
+	end
+	preparedGraph.menusReady = #problems == 0
+	return problems
+end
+
+function Graph.prepareRoots()
+	local problems = Graph.prepareMenus()
+	if #problems > 0 then return problems end
 	for _, root in ipairs(preparedGraph.graph.roots) do
 		local ok, message = _ScriptGraphAdoptRoot(tonumber(root.uid))
 		if not ok then problems[#problems + 1] = message end
@@ -2768,6 +2786,8 @@ function Graph.clearPrepared() preparedGraph = nil end
 function Graph.deserialize(text, reuseHeld, adoptRoots)
 	if not preparedGraph or preparedGraph.text ~= text then Graph.prepare(text, reuseHeld) end
 	local graph, objects, problems = preparedGraph.graph, preparedGraph.objects, preparedGraph.problems
+	for _, message in ipairs(Graph.prepareMenus()) do problems[#problems + 1] = message end
+	if #problems > 0 then preparedGraph = nil; return {}, problems end
 	if adoptRoots and not preparedGraph.rootsReady then
 		for _, message in ipairs(Graph.prepareRoots()) do problems[#problems + 1] = message end
 	end
@@ -3385,6 +3405,13 @@ a.aSoundTop.shared = a.shared
 a.mo = CreateAHuman("Green Dummy", "Base.rte")
 a.mo.Pos = Vector(640, 480)
 a.mo:SetSpritePixelIndex(1, 1, 0, 19, -1, false)
+-- This actor stays Lua-owned. Its native copy and complete device menu are created by Graph.prepare itself.
+a.mo:AddInventoryItem(CreateHDFirearm("Constructor", "Base.rte"))
+a.mo:EquipFirearm(true)
+a.deviceSlice = a.mo.PieMenu:GetFirstPieSliceByPresetName("Constructor Options").SubPieMenu:GetFirstPieSliceByPresetName("Constructor Order Construction")
+a.deviceSliceAlias = a.deviceSlice
+a.deviceSliceEnabled = not a.deviceSlice.Enabled
+a.deviceSlice.Enabled = a.deviceSliceEnabled
 a.primitiveLine = LinePrimitive(2, Vector(3.25, 7.5), Vector(51, 63), 3.75, 47)
 a.primitiveLineAlias = a.primitiveLine
 a.primitiveText = TextPrimitive(1, Vector(15, 19), "native graph 42", true, 1, 0.375)
@@ -3633,7 +3660,16 @@ if type(ra.sound) == "userdata" then
 	check("entity_copy_storage_independent", a.sound.Volume == 4, a.sound.Volume)
 	check("entity_copy_has_sounds", ra.sound:HasAnySounds() and a.sound:HasAnySounds())
 end
+)lua"
+    R"lua(
 check("owned_entity_identity", ra.mo ~= nil and ra.mo.UniqueID == a.mo.UniqueID and not rawequal(ra.mo, a.mo))
+local restoredDeviceSlice = ra.mo.PieMenu:GetFirstPieSliceByPresetName("Constructor Options").SubPieMenu:GetFirstPieSliceByPresetName("Constructor Order Construction")
+check("owned_actor_device_slice_value_and_alias", restoredDeviceSlice ~= nil and restoredDeviceSlice.Enabled == ra.deviceSliceEnabled and rawequal(ra.deviceSlice, ra.deviceSliceAlias))
+if restoredDeviceSlice and ra.deviceSlice then
+	ra.deviceSlice.Enabled = not ra.deviceSliceEnabled
+	check("owned_actor_device_slice_targets_restored_menu", restoredDeviceSlice.Enabled == not ra.deviceSliceEnabled)
+	ra.deviceSlice.Enabled = ra.deviceSliceEnabled
+end
 check("owned_primitive_alias", rawequal(ra.primitiveLine, ra.primitiveLineAlias))
 check("owned_primitive_state", _ScriptGraphNativeSave(ra.primitiveLine) == ra.primitiveStates[1] and _ScriptGraphNativeSave(ra.primitiveText) == ra.primitiveStates[2] and _ScriptGraphNativeSave(ra.primitiveBitmap) == ra.primitiveStates[3] and _ScriptGraphNativeSave(ra.primitiveFile) == ra.primitiveStates[4])
 check("owned_sprite_pixel_state", ra.mo:GetSpritePixelIndex(1, 1, 0) == 19 and a.mo:GetSpritePixelIndex(1, 1, 0) == 19)
@@ -4566,7 +4602,12 @@ struct RTE::LuaScriptGraphNativeCaptureData {
 	}
 	/// Makes the known-objects copy and lookup on this thread, before any worker asks.
 	void PreTouch() const { Known(nullptr); }
-	void BuildOwners() const { Owners(); }
+	void BuildOwners() const {
+		Owners();
+		// Build this from the boundary's actor/menu trees before reading the saver's actor copies. Those copies
+		// carry their menus as serialized text, not m_PieMenu, but Lua still names the slices in the original menu tree.
+		PieSliceOwner(nullptr);
+	}
 	bool HasOwnerIndex() const { return m_OwnersReady.load(std::memory_order_acquire); }
 	std::pair<size_t, size_t> DirectOwnerCounts() const { return {m_DirectVectors.size(), m_DirectControllers.size()}; }
 	bool SpecialOwner(const void* address) const {
@@ -4646,18 +4687,24 @@ struct RTE::LuaScriptGraphNativeCaptureData {
 	void* UnreadSlice(const void* slice) const {
 		std::lock_guard lock(m_UnreadMutex);
 		// A binding can hand a stand-in back to the copy; it is already the slice's.
-		if (m_UnreadOriginals.contains(slice)) return const_cast<void*>(slice);
+		if (m_SliceSources.contains(slice)) return const_cast<void*>(slice);
 		if (const auto found = m_UnreadByOriginal.find(slice); found != m_UnreadByOriginal.end()) return found->second;
 		void* standIn = &m_UnreadStandIns.emplace_back();
 		m_UnreadByOriginal.emplace(slice, standIn);
-		m_UnreadOriginals.emplace(standIn, slice);
+		m_SliceSources.emplace(standIn, slice);
 		return standIn;
 	}
-	/// The slice a handle names: a stand-in's slice, else the handle's original address.
+	/// Remembers a slice copied after the read scope's reverse index was built, just as for Vector fields below.
+	void* NoteSliceCopy(void* copy, const void* source) const {
+		std::lock_guard lock(m_UnreadMutex);
+		m_SliceSources.emplace(copy, CheckpointNativeStorage::Original(source));
+		return copy;
+	}
+	/// The slice a handle names: a stand-in's or world copy's source, else the handle's original address.
 	const void* SliceSource(const void* address) const {
 		{
 			std::lock_guard lock(m_UnreadMutex);
-			if (const auto found = m_UnreadOriginals.find(address); found != m_UnreadOriginals.end()) return found->second;
+			if (const auto found = m_SliceSources.find(address); found != m_SliceSources.end()) return found->second;
 		}
 		return CheckpointNativeStorage::Original(address);
 	}
@@ -4880,7 +4927,7 @@ private:
 	mutable std::mutex m_UnreadMutex;
 	mutable std::deque<UnreadStandIn> m_UnreadStandIns;
 	mutable std::unordered_map<const void*, void*> m_UnreadByOriginal;
-	mutable std::unordered_map<const void*, const void*> m_UnreadOriginals;
+	mutable std::unordered_map<const void*, const void*> m_SliceSources;
 	mutable std::mutex m_VectorSourcesMutex;
 	mutable std::unordered_map<const void*, const void*> m_VectorSources;
 };
@@ -7009,10 +7056,57 @@ _CaptureWindow.menuHolderUID = holder.UniqueID
 	for (void* block: takenBlocks) CheckpointNativeStorage::Deallocate(block);
 	const bool deadMenuCopied = deadMenuCaptured && deadMenuProblems.empty();
 	if (!deadMenuCopied) for (const std::string& problem: deadMenuProblems) std::cout << "[capture-window-selftest] gone actor's pie menu: " << problem << std::endl;
-	lua.RunScriptString("if _CaptureWindow then MovableMan:RemoveActor(_CaptureWindow.dropper); if _CaptureWindow.taker then MovableMan:RemoveActor(_CaptureWindow.taker) end end; _CaptureWindow = nil; collectgarbage()");
-	const bool passed = recordAnswers && goneFreedAtFence && reusedInWindow && goneCarried && retainedAtFence && takenInWindow && vectorCarried && liveAtFence && freedInWindow &&
+	// The restore cases run last: restoring the master graph changes its owned native wrappers, whereas the earlier
+	// allocator cases deliberately collect and reuse their memory. Each assertion still runs against its own fixture.
+	const bool livePlanted = lua.RunScriptString(R"lua(
+_CaptureWindow.liveHolder, _CaptureWindow.liveSlice = _CaptureWindow.holding(980)
+_CaptureWindow.liveAlias = _CaptureWindow.liveSlice
+assert(_CaptureWindow.liveSlice ~= nil)
+)lua") == 0;
+	// Keep a device's cached slice alive through the actual world saver, including a second save. The actor's saver copy
+	// carries its menu as text, so a lazy owner walk through that copy cannot find this still-live actor-owned slice.
+	int liveCaptures = 0, liveRestores = 0;
+	if (livePlanted) for (int pass = 0; pass < 2; ++pass) {
+		std::vector<std::string> problems;
+		if (!capture([] {}, [] {}, problems)) {
+			for (const std::string& problem: problems) std::cout << "[capture-window-selftest] live device slice: " << problem << std::endl;
+			continue;
+		}
+		++liveCaptures;
+		try {
+			const auto saved = AutosaveStore::Find("aaaaaaaa-0000-0000-0000-000000000002", static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
+			if (!saved) throw std::runtime_error("the live-slice capture was not published");
+			SaveGameArchive archive(saved->path.string());
+			std::string ini, graph, line;
+			archive.ReadEntry("Save.ini", ini);
+			std::istringstream lines(ini);
+			constexpr std::string_view prefix = "LuaStateGraph = 0|";
+			while (std::getline(lines, line)) {
+				const auto start = line.find_first_not_of("\t ");
+				if (start == std::string::npos || line.compare(start, prefix.size(), prefix) != 0) continue;
+				if (!line.empty() && line.back() == '\r') line.pop_back();
+				graph = base64_decode(line.substr(start + prefix.size()));
+				break;
+			}
+			if (graph.empty() || !lua.RestoreScriptGraph(graph, problems) || !problems.empty()) throw std::runtime_error("the published graph could not be restored");
+			if (lua.RunScriptString(R"lua(
+local options = _CaptureWindow.liveHolder.PieMenu:GetFirstPieSliceByPresetName("Constructor Options")
+local slice = options.SubPieMenu:GetFirstPieSliceByPresetName("Constructor Order Construction")
+assert(_ScriptGraphNativeAddress(_CaptureWindow.liveSlice) == _ScriptGraphNativeAddress(slice), "the live device slice changed owner or identity")
+assert(rawequal(_CaptureWindow.liveSlice, _CaptureWindow.liveAlias), "the cached device slice alias split")
+local enabled = slice.Enabled
+_CaptureWindow.liveSlice.Enabled = not enabled
+assert(slice.Enabled == not enabled, "the cached device slice stopped aliasing its menu")
+_CaptureWindow.liveSlice.Enabled = enabled
+)lua") == 0) ++liveRestores;
+		} catch (const std::exception& error) {
+			std::cout << "[capture-window-selftest] live device restore: " << error.what() << std::endl;
+		}
+	}
+	lua.RunScriptString("if _CaptureWindow then MovableMan:RemoveActor(_CaptureWindow.dropper); if _CaptureWindow.taker then MovableMan:RemoveActor(_CaptureWindow.taker) end; if _CaptureWindow.liveHolder then MovableMan:RemoveActor(_CaptureWindow.liveHolder) end end; _CaptureWindow = nil; collectgarbage()");
+	const bool passed = liveCaptures == 2 && liveRestores == 2 && recordAnswers && goneFreedAtFence && reusedInWindow && goneCarried && retainedAtFence && takenInWindow && vectorCarried && liveAtFence && freedInWindow &&
 	                    unreachedRefused && menuAtFence && menuMemoryTaken && deadMenuCopied;
-	std::cout << "[capture-window-selftest] record_answers_as_of_fence=" << recordAnswers << " planted=" << planted << " freed_at_fence=" << goneFreedAtFence << " reused_in_window=" << reusedInWindow
+	std::cout << "[capture-window-selftest] live_device_captures=" << liveCaptures << " live_device_restores=" << liveRestores << " record_answers_as_of_fence=" << recordAnswers << " planted=" << planted << " freed_at_fence=" << goneFreedAtFence << " reused_in_window=" << reusedInWindow
 	          << " freed_slice_carried=" << goneCarried << " retained_at_fence=" << retainedAtFence << " retained_taken_in_window=" << takenInWindow << " gone_vector_carried=" << vectorCarried
 	          << " live_at_fence=" << liveAtFence << " freed_in_window=" << freedInWindow << " unreached_refused_by_name=" << unreachedRefused
 	          << " menu_at_fence=" << menuAtFence << " menu_memory_taken=" << menuMemoryTaken << " gone_actor_menu_copied=" << deadMenuCopied << std::endl;
@@ -7414,6 +7508,30 @@ static int ScriptGraphNativeResolve(lua_State* L) {
 	return 1;
 }
 
+static void RestoreCopiedActorMenus(MovableObject* object) {
+	if (auto* actor = dynamic_cast<Actor*>(object)) {
+		actor->RestoreCompletePieMenuCheckpoint();
+		for (MovableObject* item: *actor->GetInventory()) RestoreCopiedActorMenus(item);
+	}
+	if (auto* craft = dynamic_cast<ACraft*>(object)) {
+		for (MovableObject* item: craft->GetCollectedInventory()) RestoreCopiedActorMenus(item);
+	}
+}
+
+static int ScriptGraphNativeMenus(lua_State* L) {
+	try {
+		if (auto* object = dynamic_cast<MovableObject*>(ScriptGraphSerializable(luabind::detail::is_class_object(L, 1)))) {
+			RestoreCopiedActorMenus(object);
+		}
+		lua_pushboolean(L, true);
+		return 1;
+	} catch (const std::exception& error) {
+		lua_pushboolean(L, false);
+		lua_pushstring(L, error.what());
+		return 2;
+	}
+}
+
 static int ScriptGraphPrimitiveResolve(lua_State* L) {
 	auto* rep = luabind::detail::is_class_object(L, 1);
 	lua_pushboolean(L, !rep || !rep->crep() || !ClassDerivesFrom(rep->crep(), "GraphicalPrimitive") || static_cast<GraphicalPrimitive*>(rep->ptr())->ResolveCheckpointReferences());
@@ -7804,6 +7922,8 @@ void LuaStateWrapper::LoadScriptGraphHelper() {
 		lua_setglobal(m_State, "_ScriptGraphDeadReference");
 		lua_pushcfunction(m_State, ScriptGraphNativeResolve);
 		lua_setglobal(m_State, "_ScriptGraphNativeResolve");
+		lua_pushcfunction(m_State, ScriptGraphNativeMenus);
+		lua_setglobal(m_State, "_ScriptGraphNativeMenus");
 		lua_pushlightuserdata(m_State, this);
 		lua_pushcclosure(m_State, ScriptGraphAdoptRoot, 1);
 		lua_setglobal(m_State, "_ScriptGraphAdoptRoot");
@@ -8828,7 +8948,12 @@ bool LuaStateWrapper::CapturePreparedScriptGraphs(const CheckpointLua::Boundary&
 	const CheckpointHeldMemory::WalkScope held(boundary.HeldMemory());
 	LuaScriptGraphNativeCaptureScope lookups;
 	lookups.Current()->captureThread = captureThread;
-	LuaScriptGraphNativeCaptureScope::BuildOwners(lookups.Current());
+	{
+		// Manager reconstruction has already put actor copies in the caller's roots, with their menus held as writer
+		// fields. Resolve identities in the complete boundary trees before worker-created copies enter the graph.
+		CheckpointNativeStorage::ReadScope fence(boundary.NativeViews());
+		LuaScriptGraphNativeCaptureScope::BuildOwners(lookups.Current());
+	}
 	const auto known = g_MovableMan.SnapshotKnownObjects();
 	graphs.resize(states.size()); scopes.resize(states.size());
 	const auto origin = RTE::SteadyClock::now();
@@ -8887,7 +9012,9 @@ bool LuaStateWrapper::CapturePreparedScriptGraphs(const CheckpointLua::Boundary&
 					// which the copy carries and the serializer skips; it is never read.
 					if (!owned && bindings.DerivesFrom(type, "Activity") && !LuaScriptGraphNativeCaptureScope::Current()->LiveActivity(entity)) return nullptr;
 					try {
-						return reinterpret_cast<char*>(snapshot->Object(entity)) - *offset;
+						void* result = reinterpret_cast<char*>(snapshot->Object(entity)) - *offset;
+						if (bindings.DerivesFrom(type, "PieSlice")) return LuaScriptGraphNativeCaptureScope::Current()->NoteSliceCopy(result, pointer);
+						return result;
 					} catch (const UnsupportedCheckpointNative& error) {
 						throw UnsupportedCheckpointNative(std::string(error.what()) + ", held by Lua as " + bindings.Class(type)->name());
 					}
@@ -8951,6 +9078,13 @@ bool LuaStateWrapper::CapturePreparedScriptGraphs(const CheckpointLua::Boundary&
 			lua_getglobal(state, "_ScriptGraphCallbacks"); lua_pushvalue(state, -2); lua_setfield(state, -2, "async"); lua_pop(state, 2);
 			part.callbacksUs = std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - callbacksStarted).count();
 			part.callbacksCpu = CheckpointThreadCpuUnits() - callbacksCpu;
+			// Lua-owned native copies were made after this state's initial read index. Give every one its original
+			// identity before descriptor calls push borrowed owners or NativeSave asks the snapshot for that object.
+			// Otherwise a live owner looks unknown and a copy of an already-frozen Actor loses its complete menu.
+			auto nativeRoots = snapshot->ReadValues();
+			const auto nativeViews = CheckpointNativeStorage::CurrentViews();
+			nativeRoots.insert(nativeRoots.end(), nativeViews.roots.begin(), nativeViews.roots.end());
+			CheckpointNativeStorage::ReadScope nativeIdentities({true, nativeViews.pages, std::move(nativeRoots), nativeViews.privateValues, nativeViews.owner});
 			lua_getglobal(state, "_ScriptGraph"); lua_getfield(state, -1, "serialize");
 			lua_pushvalue(state, -3); lua_pushnumber(state, static_cast<lua_Number>(ScriptGraphBirthHorizon(heap)));
 			std::unordered_set<const MovableObject*> carried;
@@ -11354,6 +11488,12 @@ bool LuaStateWrapper::RunScriptGraphSelfTest() {
 	{
 		const bool exact = CheckpointLua::HeapOwner::RunPreparedSelfTest() && CheckpointLua::HeapOwner::RunReusedOwnerSelfTest() && CheckpointLua::HeapOwner::RunPreparationLifetimeSelfTest();
 		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " prepared_lua_pages_freeze_without_allocation_reject_growth_and_survive_source_death" << std::endl;
+		checkpointValues = exact && checkpointValues;
+	}
+	{
+		std::string detail;
+		const bool exact = CheckpointLua::HeapOwner::RunPreparationHandoffSelfTest(detail);
+		std::cout << "[script-graph-selftest] " << (exact ? "PASS" : "FAIL") << " prepared_lua_inventory_waits_for_only_the_active_warm_commit " << detail << std::endl;
 		checkpointValues = exact && checkpointValues;
 	}
 	{
@@ -16028,6 +16168,20 @@ thread_local LuaStateWrapper* s_luaStateOverride = nullptr;
 // to another thread and the override is the only state this thread may take.
 thread_local bool s_luaStateParallelTask = false;
 std::atomic<uint64_t> s_ScriptStatesTakenFromASpawner{0};
+
+LuaMan::ScopedThreadLuaStateOverride::ScopedThreadLuaStateOverride() noexcept :
+	m_Previous(s_luaStateOverride), m_WasParallel(s_luaStateParallelTask) {
+}
+
+LuaMan::ScopedThreadLuaStateOverride::ScopedThreadLuaStateOverride(LuaStateWrapper* state, bool parallelStateTask) noexcept : ScopedThreadLuaStateOverride() {
+	s_luaStateOverride = state;
+	s_luaStateParallelTask = state != nullptr && parallelStateTask;
+}
+
+LuaMan::ScopedThreadLuaStateOverride::~ScopedThreadLuaStateOverride() {
+	s_luaStateOverride = m_Previous;
+	s_luaStateParallelTask = m_WasParallel;
+}
 
 LuaStateWrapper* LuaMan::GetThreadLuaStateOverride() const {
 	return s_luaStateOverride;

@@ -788,6 +788,19 @@ namespace RTE {
 		/// @param parallelStateTask Whether this thread is one of the per-state tasks running in parallel.
 		void SetThreadLuaStateOverride(LuaStateWrapper* luaState, bool parallelStateTask = false);
 
+		/// Restores both parts of this thread's script context, including during exception unwinding.
+		class ScopedThreadLuaStateOverride {
+		public:
+			ScopedThreadLuaStateOverride() noexcept;
+			explicit ScopedThreadLuaStateOverride(LuaStateWrapper* state, bool parallelStateTask = false) noexcept;
+			~ScopedThreadLuaStateOverride();
+			ScopedThreadLuaStateOverride(const ScopedThreadLuaStateOverride&) = delete;
+			ScopedThreadLuaStateOverride& operator=(const ScopedThreadLuaStateOverride&) = delete;
+		private:
+			LuaStateWrapper* m_Previous;
+			bool m_WasParallel;
+		};
+
 		/// Gets the current thread lua state that is running.
 		/// @return The current lua state that is running.
 		LuaStateWrapper* GetThreadCurrentLuaState() const;
