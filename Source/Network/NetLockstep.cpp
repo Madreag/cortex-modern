@@ -7215,8 +7215,9 @@ namespace RTE {
 		}
 		if (!missing.empty()) m_Stats.lastMissingPeers = DescribeMissingPeers();
 		m_ConsumerWaitMissing = missing;
-		// A wait past the bound names what it waits on, once: a stall is a defect to be found, not a number.
-		if (elapsed >= 100 && m_DescribedWaitFrame != frame) {
+		// Name the blocking evidence at the actual match bound; a detector may stop before a later diagnostic threshold.
+		const uint64_t boundMs = static_cast<uint64_t>(std::ceil(m_Config.slowPlayerBoundTicks * m_Config.simTickMs));
+		if (elapsed >= boundMs && m_DescribedWaitFrame != frame) {
 			m_DescribedWaitFrame = frame;
 			DiagnosticLine() << "[net-frame-wait] frame=" << frame << " waiting_ms=" << elapsed << " next=" << m_Stats.nextFrame << " missing=" << DescribeMissingPeers()
 			          << " blocked=" << m_AdvanceBlock << " local_sent_through=" << (m_LastQueuedTargetFrame == UINT64_MAX ? -1 : static_cast<int64_t>(m_LastQueuedTargetFrame))
@@ -7224,12 +7225,20 @@ namespace RTE {
 			if (UsesPeerFrameGroups()) {
 				DiagnosticLine detail;
 				detail << "[net-frame-wait-inputs] local=" << static_cast<int>(m_Config.localPeerId) << " frame=" << frame << " members=" << m_FrameGroupMembers;
+				if (const auto sent = m_PeerInputSentAtMs.find(frame); sent != m_PeerInputSentAtMs.end()) detail << " input_sent_ms=" << sent->second;
+				detail << " now_ms=" << nowMs << " catching_up=" << PeerFrameCatchUpActive();
+				for (const auto& [peer, applied]: m_PeerAppliedThrough) {
+					const auto observed = m_PeerAppliedAtMs.find(peer);
+					detail << " clock=" << static_cast<int>(peer) << ":" << applied << "@"
+					       << (observed == m_PeerAppliedAtMs.end() ? 0 : observed->second);
+				}
 				const auto sources = m_PeerSourceInputs.find(frame);
 				const auto rejected = m_PeerRejectedInputs.find(frame);
 				detail << " rejected=" << (rejected == m_PeerRejectedInputs.end() ? 0 : rejected->second);
 				for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
 					const bool present = peer == m_Config.localPeerId ? m_LocalFrames.contains(frame) : remote != m_RemoteFrames.end() && remote->second.contains(peer);
-					detail << " seat=" << static_cast<int>(peer) << ":" << present << "/" << (sources != m_PeerSourceInputs.end() && sources->second.contains(peer)) << "/" << PeerInputAccepted(frame, peer);
+					detail << " seat=" << static_cast<int>(peer) << ":" << present << "/" << (sources != m_PeerSourceInputs.end() && sources->second.contains(peer)) << "/" << PeerInputAccepted(frame, peer)
+					    << "/voters=" << PeerInputVoters(frame, peer);
 					if (const auto receipts = m_PeerInputReceipts.find(peer); receipts != m_PeerInputReceipts.end())
 						for (const auto& [voter, through]: receipts->second) detail << "," << static_cast<int>(voter) << "=" << through;
 				}
