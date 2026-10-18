@@ -7788,8 +7788,15 @@ namespace RTE {
 		// A second prune has the same floor; a transient delete failure still needs a retry.
 		tail.PruneJournalBefore(NetWorldFrameLog::c_JournalSegmentFrames + 1);
 		const auto deadline = RTE::SteadyClock::now() + std::chrono::seconds(5);
-		while (std::filesystem::exists(path) && RTE::SteadyClock::now() < deadline) std::this_thread::sleep_for(std::chrono::milliseconds(20));
-		if (std::filesystem::exists(path) || settle().files != 1) return Fail("F8: the failed segment deletion was never retried after the disk allowed it");
+		std::error_code queryError;
+		const auto certainlyAbsent = [&] {
+			// Windows may deny a status query while the writer's successful delete is still pending.
+			// An error is not absence: keep polling, and require an error-free result within the same deadline.
+			const bool present = std::filesystem::exists(path, queryError);
+			return !queryError && !present;
+		};
+		while (!certainlyAbsent() && RTE::SteadyClock::now() < deadline) std::this_thread::sleep_for(std::chrono::milliseconds(20));
+		if (!certainlyAbsent() || settle().files != 1) return Fail("F8: the failed segment deletion was never retried after the disk allowed it: " + queryError.message());
 		std::cout << "[net-world-join-selftest] PASS journal_delete_is_retried_and_counted" << std::endl;
 		return 0;
 	}
