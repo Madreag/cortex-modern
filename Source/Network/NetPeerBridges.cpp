@@ -457,8 +457,7 @@ namespace RTE {
 		    }));
 		const bool cooperativeAhead = proposal.members.size() == 1 &&
 		    PeerGroupHasAuthority(proposal.connectedMask | SeatBit(proposal.members.front()), proposal.frame);
-		const bool localDeadline = m_ConsumerWaitingFrame && *m_ConsumerWaitingFrame <= frame && nowMs >= m_ConsumerWaitStartMs &&
-		    nowMs - m_ConsumerWaitStartMs + static_cast<uint64_t>(std::ceil(m_Config.simTickMs / 2)) >= feedBoundMs;
+		const bool localDeadline = PeerConsumerHoldDue(frame, nowMs);
 		// Newer arrivals cannot extend the consumer's deadline for an older missing input.
 		const bool heldAhead = (otherVoter || cooperativeAhead) && feeding && (ownYield || !localDeadline);
 		if (heldAhead) {
@@ -515,20 +514,9 @@ namespace RTE {
 				if (wire && wire->IsPeerPingMeasured(route)) rtt = std::max<uint64_t>(rtt, wire->GetPeerPingMs(route));
 				agreementMs = std::max(agreementMs, rtt + static_cast<uint64_t>(std::ceil(m_Config.simTickMs / 2)));
 			}
-			// Votes spend the buffered runway, so a healthy relay round trip fits inside the consumer's bound.
-			if (m_PeerPaceStartMs && frame >= m_PeerPaceStartFrame) {
-				double dueMs = *m_PeerPaceStartMs + (frame - m_PeerPaceStartFrame) * m_Config.simTickMs;
-					// The current displayed slot includes pauses and startup synchronization.
-				if (m_PeerConsumerAtMs && m_LastCompletedSimulationTick && frame > *m_LastCompletedSimulationTick)
-						dueMs = *m_PeerConsumerAtMs + (frame - *m_LastCompletedSimulationTick) * m_Config.simTickMs;
-				// A suspended machine's old display slot is not a fresh observation of another sender's absence.
-				if (m_FirstMissingFrame == frame) dueMs = std::max(dueMs, static_cast<double>(m_FirstMissingMs));
-				// Catch-up can ask for this tick before its original pacing slot.
-				// Its actual consumer wait still has the same three-tick bound.
-				if (m_ConsumerWaitingFrame == frame) dueMs = std::min(dueMs, static_cast<double>(m_ConsumerWaitStartMs));
-				if (nowMs + agreementMs < dueMs + boundMs) return false;
-			} else if (m_ConsumerWaitingFrame != frame || nowMs < m_ConsumerWaitStartMs ||
-			    nowMs - m_ConsumerWaitStartMs < boundMs - std::min(boundMs, agreementMs)) return false;
+			// Proposal, reciprocal-input loss and local certification spend the same displayed deadline.
+			const auto deadline = PeerInputDeadlineMs(frame);
+			if (!deadline || nowMs + agreementMs < *deadline) return false;
 		}
 		const uint32_t proposers = proposal.preparedFrame == 1 ? m_FrameGroupMembers : proposal.connectedMask;
 		if (proposers == 0) return false;
@@ -646,11 +634,7 @@ namespace RTE {
 			if ((voters & required) != required) {
 				// Each survivor installs its own hold at the bound. The other survivors' signatures can still be in flight on a
 				// healthy long link; waiting a second round trip here would make their controls pay for the missing machine.
-				if (frame != m_Stats.nextFrame || !m_ConsumerWaitingFrame || *m_ConsumerWaitingFrame > frame ||
-				    nowMs < m_ConsumerWaitStartMs || m_Config.simTickMs <= 0) return;
-				const auto boundMs = static_cast<uint64_t>(std::ceil(m_Config.slowPlayerBoundTicks * m_Config.simTickMs));
-				const auto reserveMs = static_cast<uint64_t>(std::ceil(m_Config.simTickMs / 2));
-				if (nowMs - m_ConsumerWaitStartMs + reserveMs < boundMs) return;
+				if (frame != m_Stats.nextFrame || !PeerConsumerHoldDue(frame, nowMs)) return;
 			}
 		} else if ((voters & required) != required || (proposal.preparedFrame == 3 ? !PeerAdminCertificateValid(proposal, voters) : !PeerGroupHasAuthority(voters, frame))) return;
 		auto certificate = proposal;

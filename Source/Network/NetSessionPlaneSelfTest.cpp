@@ -3122,6 +3122,8 @@ namespace RTE {
 				    phased.postReturnWait[id - 1] > 50 || peer.GetStats().peers.at(1).rejoins != 1 ||
 				    (id != 1 && (phased.blackoutGap[id - 1] > 50 || phased.preFaultPaceLeadMs[id - 1] < 60))) {
 					error = "phased relay return failed: peer=" + std::to_string(id) + " blackout_gap_ms=" + std::to_string(phased.blackoutGap[id - 1]) +
+					    " pre_fault_pace_lead_ms=" + std::to_string(phased.preFaultPaceLeadMs[id - 1]) +
+					    " return_ms=" + std::to_string(phased.returnedAt[id - 1] ? phased.returnedAt[id - 1] - phased.hub.faultEnd : 0) +
 					    " post_return_wait_ms=" + std::to_string(phased.postReturnWait[id - 1]) + " returns=" + std::to_string(peer.GetStats().peers.at(1).rejoins); return false;
 				}
 				DiagnosticLine() << "[net-session-plane-selftest] relay-phased peer=" << static_cast<int>(id) << " blackout_gap_ms=" << phased.blackoutGap[id - 1]

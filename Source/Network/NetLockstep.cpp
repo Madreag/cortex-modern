@@ -3787,16 +3787,39 @@ namespace RTE {
 		return dial != probes.end() && dial->second.answered && dial->second.connection != c_InvalidNetPeerId;
 	}
 
+	std::optional<double> NetLockstepCoordinator::PeerInputDeadlineMs(uint64_t frame) const {
+		if (m_Config.simTickMs <= 0) return std::nullopt;
+		std::optional<double> due;
+		if (m_PeerPaceStartMs && frame >= m_PeerPaceStartFrame)
+			due = *m_PeerPaceStartMs + (frame - m_PeerPaceStartFrame) * m_Config.simTickMs;
+		// The bound limits the displayed gap. The ordinary interval before this missing tick is already part of that gap;
+		// adding it again gives a three-tick bound four ticks. Future buffered frames retain their intervening slots.
+		if (m_PeerConsumerAtMs && m_LastCompletedSimulationTick && frame > *m_LastCompletedSimulationTick)
+			due = *m_PeerConsumerAtMs + (frame - *m_LastCompletedSimulationTick - 1) * m_Config.simTickMs;
+		// Our own suspended interval is not evidence that a remote sender was late. Its shifted observation remains the floor.
+		if (due && m_FirstMissingFrame == frame) *due = std::max(*due, static_cast<double>(m_FirstMissingMs));
+		// A catching-up consumer can need a frame before its original pacing slot.
+		if (m_ConsumerWaitingFrame == frame)
+			due = due ? std::min(*due, static_cast<double>(m_ConsumerWaitStartMs)) : m_ConsumerWaitStartMs;
+		if (due) *due += std::ceil(m_Config.slowPlayerBoundTicks * m_Config.simTickMs);
+		return due;
+	}
+
+	bool NetLockstepCoordinator::PeerConsumerHoldDue(uint64_t frame, uint64_t nowMs) const {
+		if (!m_ConsumerWaitingFrame || *m_ConsumerWaitingFrame > frame || nowMs < m_ConsumerWaitStartMs || m_Config.simTickMs <= 0) return false;
+		const auto deadline = PeerInputDeadlineMs(frame);
+		const uint64_t displayed = m_LastCompletedSimulationTick.value_or(m_Config.startFrame - 1);
+		const double reserve = displayed < m_Stats.effectiveStartFrame + m_Config.slowPlayerBoundTicks ? 0 : std::ceil(m_Config.simTickMs / 2);
+		return deadline && nowMs + reserve >= *deadline;
+	}
+
 	bool NetLockstepCoordinator::PeerLinkLostBeforeOwnInput(uint8_t peer, uint64_t frame) const {
 		// A one-way path can keep supplying inputs while never accepting ours. At the same consumer deadline it belongs outside
 		// this local continuation, even when the transport still has a route. No transport fault classification is involved.
 		const auto sources = m_PeerSourceInputs.find(frame);
-		const bool deadline = m_ConsumerWaitingFrame && *m_ConsumerWaitingFrame <= frame && m_TimingNowMs >= m_ConsumerWaitStartMs && m_Config.simTickMs > 0 &&
-		    m_TimingNowMs - m_ConsumerWaitStartMs + static_cast<uint64_t>(std::ceil(m_Config.simTickMs / 2)) >=
-		    static_cast<uint64_t>(std::ceil(m_Config.slowPlayerBoundTicks * m_Config.simTickMs));
 		return peer != m_Config.localPeerId && sources != m_PeerSourceInputs.end() && sources->second.contains(peer) &&
 		    frame >= EffectiveStartOf(peer) && !IsSeatReclaimGap(peer, frame) && (PeerInputVoters(frame, m_Config.localPeerId) & (1U << (peer - 1))) == 0 &&
-		    (deadline || !HasPeerFrameRoute(peer));
+		    (PeerConsumerHoldDue(frame, m_TimingNowMs) || !HasPeerFrameRoute(peer));
 	}
 
 	void NetLockstepCoordinator::NotePeerRoundEnd(uint8_t peer, uint64_t frame, uint64_t nowMs, bool closedLink, bool completedRound) {

@@ -1,0 +1,382 @@
+{
+  "topology": "single-box",
+  "proof": false,
+  "complete_gate": false,
+  "parent": "5b029b32460a2b222836c31280f816ba88a7dafe",
+  "launches": [
+    {
+      "collection": "consumer-hold-deadline-red",
+      "case": "consumer-hold-deadline",
+      "exe_sha256": "46255e33dfaa1563336450234d5631d30089e4c87c6338e9cb502a56a80e4f0f",
+      "visible_window": true,
+      "exit_code": 1,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "consumer-hold-deadline-red--consumer-hold-deadline--stdout.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        },
+        {
+          "path": "consumer-hold-deadline-red--consumer-hold-deadline--stderr.log.gz",
+          "original_sha256": "5cc5addf4dd2e26221f6c34cc9fbe2e80abec2e2d3b7c575522a0e60c76160bd",
+          "portable_sha256": "5cc5addf4dd2e26221f6c34cc9fbe2e80abec2e2d3b7c575522a0e60c76160bd",
+          "compressed_sha256": "c286fd508e3df3ad658bd3645bc730d366fe6798b8979effe35e123d672b3121"
+        }
+      ]
+    },
+    {
+      "collection": "consumer-hold-deadline-green",
+      "case": "consumer-hold-deadline",
+      "exe_sha256": "69e2b9eda0fbbe39350be22645df56ddef17ad0aebabebdbfabd4496c4d51c69",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "consumer-hold-deadline-green--consumer-hold-deadline--stdout.log.gz",
+          "original_sha256": "5972771c179c674b313254e82a8ba98c3d5bde96a161d8f9a62ecaba057ba424",
+          "portable_sha256": "5972771c179c674b313254e82a8ba98c3d5bde96a161d8f9a62ecaba057ba424",
+          "compressed_sha256": "db66d408f523945670cb4fab0a7ea8e77b133d320dff14caccfe25e296284fa4"
+        },
+        {
+          "path": "consumer-hold-deadline-green--consumer-hold-deadline--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "consumer-hold-deadline-green",
+      "case": "direct-hold-scope",
+      "exe_sha256": "69e2b9eda0fbbe39350be22645df56ddef17ad0aebabebdbfabd4496c4d51c69",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "consumer-hold-deadline-green--direct-hold-scope--stdout.log.gz",
+          "original_sha256": "1ebb57ed8c7dd1dc3bfcb6aa4ec4ccebaad89f57a279666356c951ecba5eef5c",
+          "portable_sha256": "1ebb57ed8c7dd1dc3bfcb6aa4ec4ccebaad89f57a279666356c951ecba5eef5c",
+          "compressed_sha256": "0a6e55f744d76628bdf149e59b892e7afe4ae0ad5515b545584b6389594952c3"
+        },
+        {
+          "path": "consumer-hold-deadline-green--direct-hold-scope--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "consumer-hold-deadline-green",
+      "case": "owner-hitch-two-internet",
+      "exe_sha256": "69e2b9eda0fbbe39350be22645df56ddef17ad0aebabebdbfabd4496c4d51c69",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "consumer-hold-deadline-green--owner-hitch-two-internet--stdout.log.gz",
+          "original_sha256": "6978db7d6903dacf70225b8524c6b0520cb5fb15bd5cd82954b379561e18d5d9",
+          "portable_sha256": "6978db7d6903dacf70225b8524c6b0520cb5fb15bd5cd82954b379561e18d5d9",
+          "compressed_sha256": "ccd59cf09f0f41bec05cfb676c4fa5a064ba0160beaf27e251a47ad4f188c0c2"
+        },
+        {
+          "path": "consumer-hold-deadline-green--owner-hitch-two-internet--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "consumer-hold-deadline-focused",
+      "case": "joiner_catching_up_at_102_percent_returns_four_seats_over_100ms",
+      "exe_sha256": "69e2b9eda0fbbe39350be22645df56ddef17ad0aebabebdbfabd4496c4d51c69",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "consumer-hold-deadline-focused--joiner_catching_up_at_102_percent_returns_four_seats_over_100ms--stdout.log.gz",
+          "original_sha256": "ddbcc67423a2783c9769637acebe60015df6b05556cbcf0125d78a40e476a17a",
+          "portable_sha256": "ddbcc67423a2783c9769637acebe60015df6b05556cbcf0125d78a40e476a17a",
+          "compressed_sha256": "b8f93423ac1eb5544544ed0a038102c3f53c248747345692cffd8e0affef2c6a"
+        },
+        {
+          "path": "consumer-hold-deadline-focused--joiner_catching_up_at_102_percent_returns_four_seats_over_100ms--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "consumer-hold-deadline-focused",
+      "case": "relay_link_blackout_return",
+      "exe_sha256": "69e2b9eda0fbbe39350be22645df56ddef17ad0aebabebdbfabd4496c4d51c69",
+      "visible_window": true,
+      "exit_code": 1,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "consumer-hold-deadline-focused--relay_link_blackout_return--stdout.log.gz",
+          "original_sha256": "fa73e7fcd7ee07698184f91560c6add08b50837362c44d35211d4d29c903f96b",
+          "portable_sha256": "fa73e7fcd7ee07698184f91560c6add08b50837362c44d35211d4d29c903f96b",
+          "compressed_sha256": "45757db722ef42dba03ce7e8f5f07ab863a66213863afd50ae397a2874d41755"
+        },
+        {
+          "path": "consumer-hold-deadline-focused--relay_link_blackout_return--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "consumer-hold-deadline-focused",
+      "case": "steady_rtt_250ms_120s",
+      "exe_sha256": "69e2b9eda0fbbe39350be22645df56ddef17ad0aebabebdbfabd4496c4d51c69",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "consumer-hold-deadline-focused--steady_rtt_250ms_120s--stdout.log.gz",
+          "original_sha256": "134900cdb90c6eab7deeb35bb387f1b489b95e7b3b12ac03d39bd0333d667f82",
+          "portable_sha256": "134900cdb90c6eab7deeb35bb387f1b489b95e7b3b12ac03d39bd0333d667f82",
+          "compressed_sha256": "72f87a0fd3501810ff9aba9f6351fe50beccc2c6f7e6c2f64d424cb0ac180e0d"
+        },
+        {
+          "path": "consumer-hold-deadline-focused--steady_rtt_250ms_120s--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "consumer-hold-inventory",
+      "case": "net-input-acceptance-selftest",
+      "exe_sha256": "4cc91f77c10ad41e4b68023da37d74a71a7f093aa1e2ed42e7064db136060c5d",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "consumer-hold-inventory--net-input-acceptance-selftest--stdout.log.gz",
+          "original_sha256": "b13fa02a42dfcb2c4d9ec3e5d9b52cd2d46e89975f7af02cda07ce086dfb5b70",
+          "portable_sha256": "b13fa02a42dfcb2c4d9ec3e5d9b52cd2d46e89975f7af02cda07ce086dfb5b70",
+          "compressed_sha256": "72ca1682fb18156d7121c749d01bd558f9fb3010a3ee7758eb088ce5655a0485"
+        },
+        {
+          "path": "consumer-hold-inventory--net-input-acceptance-selftest--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "consumer-hold-inventory",
+      "case": "net-lockstep-release-paths-selftest",
+      "exe_sha256": "4cc91f77c10ad41e4b68023da37d74a71a7f093aa1e2ed42e7064db136060c5d",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "consumer-hold-inventory--net-lockstep-release-paths-selftest--stdout.log.gz",
+          "original_sha256": "5ae0feeec8cd1d78147b26bdc602fb629d7ef5c43831a1ddab9e4d6b28a0eedd",
+          "portable_sha256": "5ae0feeec8cd1d78147b26bdc602fb629d7ef5c43831a1ddab9e4d6b28a0eedd",
+          "compressed_sha256": "e0c204696a3102e312a1e3200a33b7a166be9a530ca3755a3f4bbcfaafcfe21e"
+        },
+        {
+          "path": "consumer-hold-inventory--net-lockstep-release-paths-selftest--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "consumer-hold-inventory",
+      "case": "net-lockstep-released-claims-selftest",
+      "exe_sha256": "4cc91f77c10ad41e4b68023da37d74a71a7f093aa1e2ed42e7064db136060c5d",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "consumer-hold-inventory--net-lockstep-released-claims-selftest--stdout.log.gz",
+          "original_sha256": "2e2bfb9254d5d29a47757b9149c9b9106415be6b2f2d6c36816506f030b81eed",
+          "portable_sha256": "2e2bfb9254d5d29a47757b9149c9b9106415be6b2f2d6c36816506f030b81eed",
+          "compressed_sha256": "adf6be0247b02a267c0e42b9c5464066d1985519b41d3283b7dde183e25b82d7"
+        },
+        {
+          "path": "consumer-hold-inventory--net-lockstep-released-claims-selftest--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "consumer-hold-inventory",
+      "case": "net-lockstep-seat-admission-selftest",
+      "exe_sha256": "4cc91f77c10ad41e4b68023da37d74a71a7f093aa1e2ed42e7064db136060c5d",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "consumer-hold-inventory--net-lockstep-seat-admission-selftest--stdout.log.gz",
+          "original_sha256": "69ffe43cb3ad9c5b87d343fbeca503232ca2a7e5a9313a4b6bd95ea3ad78cb8d",
+          "portable_sha256": "69ffe43cb3ad9c5b87d343fbeca503232ca2a7e5a9313a4b6bd95ea3ad78cb8d",
+          "compressed_sha256": "d284e13013df2612d4fa22b6500b1bc702e45b5d64b5eb569e14d8bc441f3111"
+        },
+        {
+          "path": "consumer-hold-inventory--net-lockstep-seat-admission-selftest--stderr.log.gz",
+          "original_sha256": "cdfb410fcfddd9cb38ded3026ab526009cc6963764a502124e62671d2e4bf418",
+          "portable_sha256": "cdfb410fcfddd9cb38ded3026ab526009cc6963764a502124e62671d2e4bf418",
+          "compressed_sha256": "ceb9b8f3a99e40382f5f1d00a5ccb2f1bb86e62d4b3f710f244f0d04432815aa"
+        }
+      ]
+    },
+    {
+      "collection": "consumer-hold-inventory",
+      "case": "net-lockstep-seat-succession-selftest",
+      "exe_sha256": "4cc91f77c10ad41e4b68023da37d74a71a7f093aa1e2ed42e7064db136060c5d",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "consumer-hold-inventory--net-lockstep-seat-succession-selftest--stdout.log.gz",
+          "original_sha256": "cce51e7c6705e154e742363136c9dcffc2a588a966ca8fc7a7ff554e9c0e8218",
+          "portable_sha256": "cce51e7c6705e154e742363136c9dcffc2a588a966ca8fc7a7ff554e9c0e8218",
+          "compressed_sha256": "cc11e7316e5141bfb606cac9aef141912b0743e3e550b6405349a768199a845b"
+        },
+        {
+          "path": "consumer-hold-inventory--net-lockstep-seat-succession-selftest--stderr.log.gz",
+          "original_sha256": "1b9cdb329977e83fffb7bb05f3536e6776cfdec626143b2b80b03e6c6223f369",
+          "portable_sha256": "1b9cdb329977e83fffb7bb05f3536e6776cfdec626143b2b80b03e6c6223f369",
+          "compressed_sha256": "2ec6fa5bb7e2254c37bd1dc03eb599c32e20aebbeccd67d0994ffdd592a214ae"
+        }
+      ]
+    },
+    {
+      "collection": "consumer-hold-inventory",
+      "case": "net-lockstep-selftest",
+      "exe_sha256": "4cc91f77c10ad41e4b68023da37d74a71a7f093aa1e2ed42e7064db136060c5d",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "consumer-hold-inventory--net-lockstep-selftest--stdout.log.gz",
+          "original_sha256": "6d8a9978bc761a5cedc6e03c14c733acf97f21ad184fb3636a2e52fe0ca094f8",
+          "portable_sha256": "6d8a9978bc761a5cedc6e03c14c733acf97f21ad184fb3636a2e52fe0ca094f8",
+          "compressed_sha256": "63b26152329215eea78c86946d80e7cbf14cef8bd4fa624735379b190c1ffbc1"
+        },
+        {
+          "path": "consumer-hold-inventory--net-lockstep-selftest--stderr.log.gz",
+          "original_sha256": "bfdc29fdfcf5b37842f01c5f7984efc1e426e23802e96de04ab4862ddf5fc6b1",
+          "portable_sha256": "bfdc29fdfcf5b37842f01c5f7984efc1e426e23802e96de04ab4862ddf5fc6b1",
+          "compressed_sha256": "6c817c1615e7669051461a53cbf38cffb663b4a0cf0b5e6f350c95fd3d247506"
+        }
+      ]
+    },
+    {
+      "collection": "consumer-hold-inventory",
+      "case": "net-rejoin-matrix-selftest",
+      "exe_sha256": "4cc91f77c10ad41e4b68023da37d74a71a7f093aa1e2ed42e7064db136060c5d",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "consumer-hold-inventory--net-rejoin-matrix-selftest--stdout.log.gz",
+          "original_sha256": "d0deee67c28e4458eb2c4db7bb9035df11f1eda4a8e3353a0465dcb85edefdc5",
+          "portable_sha256": "d0deee67c28e4458eb2c4db7bb9035df11f1eda4a8e3353a0465dcb85edefdc5",
+          "compressed_sha256": "249ccdf8eb13abb8d68f3ae153429f037e36ed5017ae4dbbdc1ec712389125cf"
+        },
+        {
+          "path": "consumer-hold-inventory--net-rejoin-matrix-selftest--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "consumer-hold-inventory",
+      "case": "net-session-plane-hold-schedules-selftest",
+      "exe_sha256": "4cc91f77c10ad41e4b68023da37d74a71a7f093aa1e2ed42e7064db136060c5d",
+      "visible_window": true,
+      "exit_code": 1,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "consumer-hold-inventory--net-session-plane-hold-schedules-selftest--stdout.log.gz",
+          "original_sha256": "95581e4159eb77e425098e521ef4c131e9895636d3548f37163e451765221508",
+          "portable_sha256": "95581e4159eb77e425098e521ef4c131e9895636d3548f37163e451765221508",
+          "compressed_sha256": "4885bdbbf4270c826b8f076658703287476ef312090dea377a022eef1c0ab216"
+        },
+        {
+          "path": "consumer-hold-inventory--net-session-plane-hold-schedules-selftest--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "consumer-hold-inventory",
+      "case": "net-session-plane-selftest",
+      "exe_sha256": "4cc91f77c10ad41e4b68023da37d74a71a7f093aa1e2ed42e7064db136060c5d",
+      "visible_window": true,
+      "exit_code": 1,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "consumer-hold-inventory--net-session-plane-selftest--stdout.log.gz",
+          "original_sha256": "d55a62f400c793c8172f7c2820ce1ca0b067eeb01023f9409d84b4ec4fac824b",
+          "portable_sha256": "d55a62f400c793c8172f7c2820ce1ca0b067eeb01023f9409d84b4ec4fac824b",
+          "compressed_sha256": "54254c635b5e13ce0c51aeed7a7c768fc3fa183889b8f013de8829ed97a6f4c0"
+        },
+        {
+          "path": "consumer-hold-inventory--net-session-plane-selftest--stderr.log.gz",
+          "original_sha256": "e297e3bbe435723304639d20623a81dd7a93a3e092edee35061d9c4c9800e00c",
+          "portable_sha256": "e297e3bbe435723304639d20623a81dd7a93a3e092edee35061d9c4c9800e00c",
+          "compressed_sha256": "79798acc13dd7e0c97d3ca3c84168ac85fae44f89abae45f86f9e3d94b5e1610"
+        }
+      ]
+    },
+    {
+      "collection": "consumer-hold-inventory",
+      "case": "net-world-join-selftest",
+      "exe_sha256": "4cc91f77c10ad41e4b68023da37d74a71a7f093aa1e2ed42e7064db136060c5d",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "consumer-hold-inventory--net-world-join-selftest--stdout.log.gz",
+          "original_sha256": "1d892dd2a61e217e512af6876a0213a1c5a4f2695847f2253bfac25c77ce6b7f",
+          "portable_sha256": "1d892dd2a61e217e512af6876a0213a1c5a4f2695847f2253bfac25c77ce6b7f",
+          "compressed_sha256": "21591c66b248f73e44b9fd16e85e19484681e50a1eb4e6f14d736c633b5ec1e1"
+        },
+        {
+          "path": "consumer-hold-inventory--net-world-join-selftest--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    }
+  ]
+}
