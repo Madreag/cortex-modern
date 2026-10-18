@@ -592,7 +592,12 @@ namespace RTE {
 				if (agreed.preparedFrame == 3 && agreed.completeFrom > m_Config.migrationGeneration) {
 					NoteSuperseded(agreed.completeFrom);
 					if (PeerAdminCertificateValid(agreed, voters) && 2 * std::popcount(voters) >= static_cast<int>(m_Config.peerCount)) m_PeerAdminFrameMembers = voters;
-				} else if (agreed.connectedMask == message.voterMask && !PeerGroupHasAuthority(voters, agreed.frame)) CheckPeerFrameTie(agreed.frame, voters, nowMs);
+				} else if (agreed.connectedMask == message.voterMask) {
+					// A local hold can be signed before its other survivors answer. Its signers are evidence for the hold,
+					// not a different playing half: only the certificate's actual continuing group can name that split.
+					const uint32_t playing = agreed.preparedFrame == 0 ? agreed.connectedMask : voters;
+					if (!PeerGroupHasAuthority(playing, agreed.frame)) CheckPeerFrameTie(agreed.frame, playing, nowMs);
+				}
 				if (agreed.preparedFrame == 1) {
 					size_t offset = NetHash32{}.size();
 					for (uint8_t member: agreed.members) {

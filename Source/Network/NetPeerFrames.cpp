@@ -247,7 +247,13 @@ namespace RTE {
 			asked.members = request.members; asked.queryOnly = request.queryOnly;
 			if (asked == request) request = *m_PeerFrameTie;
 		}
-		if (!m_PeerFrameTie || *m_PeerFrameTie != request) { m_PeerFrameTie = request; m_PeerFrameTieSinceMs = nowMs; }
+		if (!m_PeerFrameTie || *m_PeerFrameTie != request) {
+			if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) DiagnosticLine() << "[net-peer-tie-question] local=" << unsigned(m_Config.localPeerId)
+			    << " frame=" << frame << " split=" << split << " members=" << voting << " owners=" << owners << " query_only=" << request.queryOnly
+			    << " generation=" << request.generation << " host=" << request.host << " superseding=" << m_CertifiedSupersedingGeneration
+			    << " next=" << m_Stats.nextFrame << " displayed=" << m_LastCompletedSimulationTick.value_or(0) << " now_ms=" << nowMs << std::endl;
+			m_PeerFrameTie = request; m_PeerFrameTieSinceMs = nowMs;
+		}
 		// Preserve the pre-hold electorate. Once the local hold is installed its absent seats no longer vote, but the outstanding
 		// directory question still refers to the original split and must keep being polled while the survivors play.
 		auto [question, inserted] = m_PeerSplitArbitrations.try_emplace(split, PeerSplitArbitration{request, owners, {}});

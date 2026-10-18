@@ -260,15 +260,26 @@ namespace RTE {
 			}
 			// `exchangeMs` is this seat's HTTP exchange now, `reachable` whether its request reaches the directory at all.
 			void Poll(uint64_t nowMs, uint32_t exchangeMs, bool reachable, uint8_t seat, Directory& directory) {
+				const auto frameTie = [&](const NetFrameTieRequest& sent) {
+					const auto answer = directory.FrameTie(seat, sent);
+					if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS") && answer.status != 200) {
+						uint32_t members = 0; for (uint16_t member: sent.members) if (member > 0 && member <= 4) members |= 1U << (member - 1);
+						DiagnosticLine() << "[session-plane-directory-refusal] seat=" << unsigned(seat) << " frame=" << sent.frame
+						    << " request_generation=" << sent.generation << " request_host=" << sent.host << " query_only=" << sent.queryOnly
+						    << " members=" << members << " current_generation=" << directory.generation << " current_host=" << directory.host
+						    << " status=" << answer.status << " now_ms=" << nowMs << std::endl;
+					}
+					return answer;
+				};
 				for (auto& retired: retiredTies) if (!retired.arrived && nowMs >= retired.arriveMs) {
 					retired.arrived = true;
-					if (reachable) retired.answer = directory.FrameTie(seat, retired.sent);
+					if (reachable) retired.answer = frameTie(retired.sent);
 				}
 				std::erase_if(retiredTies, [nowMs](const auto& retired) { return nowMs >= retired.doneMs; });
 				for (auto* exchange: {&tie, &checkIn}) if (*exchange && !(*exchange)->arrived && nowMs >= (*exchange)->arriveMs) {
 					(*exchange)->arrived = true;
 					// The directory acts on a request that reaches it even when the asker has stopped waiting for the answer.
-					if (reachable) { (*exchange)->answer = exchange == &tie ? directory.FrameTie(seat, (*exchange)->sent) : directory.CheckIn(seat); }
+					if (reachable) { (*exchange)->answer = exchange == &tie ? frameTie((*exchange)->sent) : directory.CheckIn(seat); }
 					else (*exchange)->delivered = false;
 				}
 				if (request && reply.state != NetFrameTieReply::State::Decided) {
@@ -1348,6 +1359,9 @@ namespace RTE {
 					NetLockstepConfig config; config.sessionId = match.sessionId; config.matchConfig = match;
 					config.localPeerId = peer; config.peerCount = row.seats; config.roundId = peer == 1 ? roundId : 0;
 					config.startFrame = 1; config.inputDelayFrames = match.peerInputDelayFrames[peer - 1]; config.timeoutMs = 60000;
+					// FLAGGED fixture departure: Main/NetMatchRunner publish activity startup before agreeing the cold round.
+					// Starting each seat on its last individual handshake can put a client ahead of the host's pace reference.
+					config.requirePublishedStart = true;
 					config.frameLane = NetTransportLane::InputUnreliable; config.substituteSlowPeers = match.slowPlayerPolicy == NetSlowPlayerPolicy::Substitute; config.adaptiveInputDelay = true;
 					config.slowPlayerBoundTicks = c_TestBoundTicks; config.simTickMs = c_TestTickMs; config.relayToOtherPeers = peer == 1;
 					config.migrationKey.fill(0x39);
@@ -1359,6 +1373,7 @@ namespace RTE {
 					if (row.rosterStage) peers[peer - 1]->SetRosterReader([this] { return &agreedRoster; });
 					if (!peers[peer - 1]->Start(*wires[peer - 1], config, &error)) return false;
 					peers[peer - 1]->DeferStopsToTickBoundary();
+					peers[peer - 1]->NoteLocalStartPark(0); // This simulated activity has no loading work to measure.
 				}
 				return true;
 			}
@@ -1816,6 +1831,8 @@ namespace RTE {
 			auto config = fixture.peers[seat - 1]->GetConfig();
 			// The image's seat state and the committed tail go through the same replay coordinator as a real private return.
 			auto replayConfig = config;
+			// FLAGGED fixture departure: an image joins an already published round, as NetMatchRunner's world-join path does.
+			replayConfig.requirePublishedStart = false;
 			replayConfig.roundId = fixture.peers[donor - 1]->GetRoundId(); replayConfig.startFrame = replay.applied + 1;
 			// As the service's image metadata does, seed the authority at the capture, not the losing reader's authority.
 			// Otherwise the first tail record invents a handover and changes the image's already committed holds and prefix.
@@ -2182,6 +2199,12 @@ namespace RTE {
 			Fixture donors;
 			if (!donors.Start(donorRow, error)) return false;
 			while (donors.hub.now < 500) if (!donors.Step(error)) return false;
+			for (const auto& peer: donors.peers) {
+				const auto start = peer->GetAgreedStartRecord();
+				if (!start || start->publishedPeerMask != 7 || start->heldPeerMask != 0) {
+					error = "fixture cold start: the production published-start protocol did not agree every human seat before play"; return false;
+				}
+			}
 			donors.hub.now = donors.hub.faultAt + 100;
 			if (donors.ImageDonorCanAnswer(1) || !donors.ImageDonorCanAnswer(2)) {
 				error = "fixture image donor: a hung process cannot serve its image while a running survivor can"; return false;

@@ -1457,6 +1457,76 @@ namespace RTE {
 			return true;
 		}
 
+		static bool TailHoldSignersAreNotAnotherPlayingHalf(std::string* error) {
+			for (unsigned role = 0; role < 3; ++role) {
+				Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
+				peer.m_Config.localPeerId = peer.m_Config.authorityPeerId = 1;
+				peer.m_Config.peerCount = peer.m_Config.matchConfig.peerCount = 4;
+				peer.m_Config.matchConfig.players.push_back({4, 3, false, "Fourth"});
+				peer.m_Config.peerFrameGroups = true; peer.m_MigrationPhase = NetHostMigrationPhase::None;
+				peer.m_RoundConfigHash = NetMatchConfigUtil::HashConfig(peer.m_Config.matchConfig);
+				peer.m_RemotePeerIds = {2, 3, 4}; peer.m_RemoteTransports = {{2, 42}, {3, 43}, {4, 44}};
+				peer.m_Stats.nextFrame = 355; peer.m_LastCompletedSimulationTick = 354;
+				peer.m_FrameGroupMembers = 6; peer.m_FrameGroupChanges = {{1, 15}, {330, 7}, {355, 6}};
+				peer.m_PeerFrameHolds[1][355] = peer.m_PeerFrameHolds[4][230] = true;
+				peer.m_PeerBridges[1] = {355, 355, true, {}, {}, 6};
+				peer.m_PeerFrameTieWinners[330] = 6;
+				std::optional<NetFrameTieRequest> asked;
+				peer.m_Config.frameTieReferee = [&](const NetFrameTieRequest& request) { asked = request; return NetFrameTieReply{}; };
+				const auto append32 = [](std::vector<uint8_t>& bytes, uint32_t value) {
+					for (unsigned shift = 0; shift < 32; shift += 8) bytes.push_back(static_cast<uint8_t>(value >> shift));
+				};
+				const auto appendPacket = [&](std::vector<uint8_t>& bytes, const NetHostMigrationMessage& packet) {
+					std::vector<uint8_t> encoded;
+					if (!NetHostMigrationCodec::Encode(packet, peer.m_Config.migrationKey, encoded)) return false;
+					append32(bytes, static_cast<uint32_t>(encoded.size())); bytes.insert(bytes.end(), encoded.begin(), encoded.end()); return true;
+				};
+				const uint32_t group = role == 1 ? 2 : 6;
+				auto hold = peer.PeerFrameMessage(NetHostMigrationMessageType::PeerBridge);
+				hold.senderPeerId = hold.successorPeerId = 2; hold.frame = hold.boundary = 355;
+				hold.preparedFrame = 0; hold.connectedMask = group; hold.voterMask = 2; hold.members = {1};
+				const auto prefix = peer.PeerFramePrefix(354); hold.bytes.assign(prefix.begin(), prefix.end()); hold.totalBytes = hold.bytes.size();
+				auto certificate = hold; certificate.type = NetHostMigrationMessageType::PeerBridgeCommit; certificate.bytes = {1};
+				if (!appendPacket(certificate.bytes, hold)) return false;
+				if (role == 2) certificate.bytes.back() ^= 1;
+				certificate.totalBytes = certificate.bytes.size();
+				NetHostMigrationMessage decoded; uint32_t signers = 0;
+				if (peer.DecodePeerBridgeCertificate(certificate, decoded, signers) != (role != 2)) {
+					*error = "tail hold detector did not distinguish the authentic local hold from its forged signature"; return false;
+				}
+				NetLockstepReadyFrame ready; ready.frame = 355; ready.localPeerId = 2; ready.authorityPeerId = ready.updateAuthorityPeerId = 1;
+				std::vector<uint8_t> record;
+				if (!peer.EncodeMigrationFrame(ready, record)) return false;
+				const auto prepared = peer.PeerFramePrefix(355), digest = peer.CommittedFramePrefix(ready);
+				auto tail = peer.PeerFrameMessage(NetHostMigrationMessageType::PeerTail);
+				tail.senderPeerId = tail.successorPeerId = 2; tail.frame = tail.appliedFrame = 355; tail.voterMask = group;
+				tail.bytes.assign(prefix.begin(), prefix.end()); tail.bytes.insert(tail.bytes.end(), prepared.begin(), prepared.end());
+				append32(tail.bytes, static_cast<uint32_t>(record.size())); tail.bytes.insert(tail.bytes.end(), record.begin(), record.end());
+				tail.bytes.push_back(1);
+				if (!appendPacket(tail.bytes, certificate)) return false;
+				tail.bytes.push_back(static_cast<uint8_t>(std::popcount(group)));
+				for (uint8_t signer: {2, 3}) if (group & (1U << (signer - 1))) {
+					auto witness = peer.PeerFrameMessage(NetHostMigrationMessageType::PeerReceipt);
+					witness.senderPeerId = witness.successorPeerId = signer; witness.preparedFrame = UINT64_MAX;
+					witness.frame = witness.appliedFrame = 355; witness.voterMask = group;
+					witness.bytes.assign(digest.begin(), digest.end()); witness.bytes.insert(witness.bytes.end(), prepared.begin(), prepared.end());
+					witness.totalBytes = witness.bytes.size();
+					if (!appendPacket(tail.bytes, witness)) return false;
+				}
+				tail.totalBytes = tail.bytes.size();
+				std::vector<uint8_t> encoded; NetHostMigrationMessage authenticated;
+				if (!NetHostMigrationCodec::Encode(tail, peer.m_Config.migrationKey, encoded) ||
+				    !NetHostMigrationCodec::Decode(encoded, peer.m_Config.migrationKey, authenticated) || !peer.HandlePeerFrameMessage(authenticated, 26101)) return false;
+				if (role == 1 ? !asked || !asked->queryOnly || asked->members != std::vector<uint16_t>{2} : asked.has_value()) {
+					*error = "a tail hold's signer mask invented another split, or a genuine playing half lost its referee query: role=" + std::to_string(role); return false;
+				}
+				if (peer.m_PeerAppliedThrough.contains(2) != (role != 2)) {
+					*error = "the tail hold detector did not read the authentic packet or admitted its forged proof"; return false;
+				}
+			}
+			return true;
+		}
+
 		static bool NeutralSeatOnlyQueriesTheReferee(std::string* error) {
 			for (uint8_t local: {2, 4}) {
 				Wire wire; NetLockstepCoordinator peer;
@@ -31081,6 +31151,12 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS foreign_history_keeps_an_active_continuation\n[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "tail-hold-query") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::TailHoldSignersAreNotAnotherPlayingHalf(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS tail_hold_signers_are_not_another_playing_half\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "remote-input-receipt-group") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::RemoteInputReceiptsFormTheLocalHoldGroup(&error)) return fail(error);
@@ -31410,6 +31486,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::DirectHistoriesChooseAtHeal, "direct_heal_uses_committed_histories_and_human_seats");
 		row(&SessionPlaneRecoveryTest::DirectHoldScope, "a_foreign_local_hold_requires_the_readers_healed_history");
 		row(&SessionPlaneRecoveryTest::ForeignHistoryKeepsAnActiveContinuation, "foreign_history_keeps_an_active_continuation");
+		row(&SessionPlaneRecoveryTest::TailHoldSignersAreNotAnotherPlayingHalf, "tail_hold_signers_are_not_another_playing_half");
 
 		row(&SessionPlaneRecoveryTest::ConcurrentReturnMembership, "a_later_return_keeps_the_earlier_scheduled_return");
 		row(&SessionPlaneRecoveryTest::ReturnKeepsOtherSeatHeld, "a_return_cannot_return_another_held_seat");
