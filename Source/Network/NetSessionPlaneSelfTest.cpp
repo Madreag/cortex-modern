@@ -2582,10 +2582,16 @@ namespace RTE {
 			(void)fixture.peers[donor - 1]->SendReturnerTheRoundFrom(seat, activation);
 			const uint64_t observationAt = fixture.hub.now;
 			// FLAGGED fixture departure: a newly injected own-machine fault belongs to the next hold, not this return's healthy observation.
+			// FLAGGED fixture departure: a survivor split off before the activation plays its own continuation, which never took this
+			// return; its view of the seat is that half's, ruled at its heal. Every seat playing at the activation is still checked.
+			const uint32_t playingAtActivation = s_FrameMembers(*fixture.peers[donor - 1], activation);
 			for (const uint64_t until = observationAt + 1000; fixture.hub.now <= until && !fixture.OwnMachineTrouble(seat);) {
 				for (uint8_t peer: survivors)
-					if (fixture.peers[peer - 1]->HasHeldAISeat(seat) || Bridges(*fixture.peers[peer - 1]).contains(seat))
-						co_return fail("the image return was held again during its healthy observation");
+					if ((playingAtActivation & (1U << (peer - 1))) != 0 && (fixture.peers[peer - 1]->HasHeldAISeat(seat) || Bridges(*fixture.peers[peer - 1]).contains(seat)))
+						co_return fail("the image return was held again during its healthy observation: observer=" + std::to_string(peer) +
+						    " playing_at_activation=" + std::to_string((s_FrameMembers(*fixture.peers[donor - 1], activation) & (1U << (peer - 1))) != 0) +
+						    " observer_members=" + std::to_string(s_FrameMembers(*fixture.peers[peer - 1], fixture.worlds[peer - 1].applied + 1)) +
+						    " observer_applied=" + std::to_string(fixture.worlds[peer - 1].applied) + " activation=" + std::to_string(activation) + " now_ms=" + std::to_string(fixture.hub.now));
 				co_await std::suspend_always{};
 				if (!fixture.CheckBound(error)) co_return false;
 			}
