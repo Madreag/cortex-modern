@@ -421,7 +421,14 @@ namespace RTE {
 				m_PeerBridgeVotes[{message.frame, DecisionKind(message)}].try_emplace(message.senderPeerId, message);
 				return true;
 			}
-			if (!ValidatePeerBridge(message) && !CoSignsOwnHold(message)) return true;
+			if (!ValidatePeerBridge(message) && !CoSignsOwnHold(message)) {
+				if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) DiagnosticLine() << "[net-peer-vote-refused] local=" << static_cast<int>(m_Config.localPeerId)
+				    << " sender=" << static_cast<int>(message.senderPeerId) << " frame=" << message.frame << " boundary=" << message.boundary
+				    << " kind=" << static_cast<int>(DecisionKind(message)) << " next=" << m_Stats.nextFrame << " start=" << m_Config.startFrame
+				    << " applied_boundary=" << m_MigrationHistory.contains(message.boundary) << " replay_boundary=" << m_PeerReplayAppliedPrefixes.contains(message.boundary)
+				    << " now_ms=" << nowMs << std::endl;
+				return true;
+			}
 			heard();
 			auto& votes = m_PeerBridgeVotes[{message.frame, DecisionKind(message)}];
 			const auto own = votes.find(m_Config.localPeerId);

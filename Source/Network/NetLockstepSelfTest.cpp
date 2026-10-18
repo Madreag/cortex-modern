@@ -1637,6 +1637,107 @@ namespace RTE {
 			return true;
 		}
 
+		static bool ReplayedPrefixesValidateConcurrentReturns(std::string* error) {
+			for (unsigned role = 0; role < 11; ++role) {
+				Wire wire, replayWire; NetLockstepCoordinator peer, replay; Configure(peer, wire); Configure(replay, replayWire);
+				peer.m_Config.peerFrameGroups = peer.m_Config.joinsRunningRound = true;
+				peer.m_Config.startFrame = 475; peer.m_MigrationPhase = NetHostMigrationPhase::None;
+				peer.m_State = NetLockstepState::WaitingForStart; peer.m_Stats.nextFrame = 475; peer.m_LastCompletedSimulationTick.reset();
+				peer.m_FrameGroupMembers = 3; peer.m_FrameGroupChanges = {{1, 7}, {350, 3}};
+				peer.m_PeerBridges[3] = {350, 350, true, {}, {}, 1}; peer.m_PeerFrameHolds[3][350] = true; peer.m_AiHeldSeats[3] = 350;
+				replay.m_Playback = role != 4; replay.m_LastCompletedSimulationTick = role == 6 ? 409 : role == 7 ? 475 : 410;
+				if (role == 1) ++replay.m_Config.sessionId;
+				if (role == 2) --replay.m_RoundId;
+				if (role == 3) replay.m_RoundConfigHash[0] ^= 1;
+				if (role == 10) replay.m_Config.localPeerId = 1;
+				const uint64_t boundary = role == 7 ? 475 : 410;
+				NetLockstepReadyFrame ready; ready.frame = boundary; ready.localPeerId = 2; ready.authorityPeerId = ready.updateAuthorityPeerId = 1;
+				const auto prefix = replay.CommittedFramePrefix(ready);
+				replay.m_PeerReplayAppliedPrefixes[boundary] = prefix;
+				peer.m_AwaitingReplayedSeatState = true;
+				peer.AdoptReplayedFramePrefixes(replay, role == 5 ? 409 : boundary);
+				if (!peer.m_AwaitingReplayedSeatState) { *error = "prefix adoption ended private seat-state replay"; return false; }
+				auto vote = peer.PeerFrameMessage(NetHostMigrationMessageType::PeerBridge);
+				vote.frame = 488; vote.boundary = boundary; vote.preparedFrame = 1; vote.members = {3}; vote.connectedMask = 7;
+				vote.bytes.assign(prefix.begin(), prefix.end()); if (role == 8) vote.bytes[0] ^= 1;
+				const auto append = [](std::vector<uint8_t>& bytes, uint32_t value) {
+					for (unsigned shift = 0; shift < 32; shift += 8) bytes.push_back(static_cast<uint8_t>(value >> shift));
+				};
+				append(vote.bytes, 13); append(vote.bytes, 30); append(vote.bytes, 2); vote.totalBytes = vote.bytes.size();
+				if (role == 9 && !peer.ValidatePeerBridge(vote)) { *error = "a completed replay prefix could not validate a required concurrent-return vote"; return false; }
+				auto certificate = vote; certificate.type = NetHostMigrationMessageType::PeerBridgeCommit; certificate.voterMask = 3; certificate.bytes = {2};
+				for (uint8_t voter: {1, 2}) {
+					vote.senderPeerId = voter; vote.voterMask = 1U << (voter - 1);
+					std::vector<uint8_t> signedVote;
+					if (!NetHostMigrationCodec::Encode(vote, peer.m_Config.migrationKey, signedVote)) return false;
+					append(certificate.bytes, signedVote.size()); certificate.bytes.insert(certificate.bytes.end(), signedVote.begin(), signedVote.end());
+				}
+				certificate.totalBytes = certificate.bytes.size(); peer.InstallPeerBridge(certificate, 1000);
+				const bool expected = role == 0 || role == 9;
+				if (peer.m_PeerBridgeCertificates.contains({488, 1}) != expected || peer.m_Stats.nextFrame != 475 || peer.m_LastCompletedSimulationTick) {
+					*error = "a concurrent return did not validate exactly its completed same-round replay prefix: role=" + std::to_string(role); return false;
+				}
+				if (expected) {
+					NetLockstepStart start; start.sessionId = peer.m_Config.sessionId; start.roundId = 77; start.localPeerId = 3;
+					start.startFrame = 488; start.inputDelayFrames = 13; start.peerCount = 3;
+					start.controllerFrameVersion = ControllerFrame::c_Version; start.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+					start.scenario = peer.m_Config.scenario; start.ownershipPolicy = peer.m_Config.ownershipPolicy;
+					peer.HandleStart(start, 1001, 43);
+					if (peer.IsFailed() || !peer.m_RemoteStartsReceived.contains(3)) { *error = "a certified concurrent member start failed during private startup"; return false; }
+				}
+			}
+			return true;
+		}
+
+		static bool ReplayedReturnRestoresFrameGroup(std::string* error) {
+			for (unsigned role = 0; role < 4; ++role) {
+				Wire wire, replayWire; NetLockstepCoordinator peer, replay; Configure(peer, wire); Configure(replay, replayWire);
+				peer.m_Config.peerFrameGroups = peer.m_Config.joinsRunningRound = true;
+				peer.m_Config.startFrame = 488; peer.m_Config.seatStateThroughFrame = 410;
+				peer.m_MigrationPhase = NetHostMigrationPhase::None; peer.m_LastCompletedSimulationTick.reset(); peer.m_Stats.nextFrame = 488;
+				peer.m_FrameGroupMembers = 6; peer.m_FrameGroupChanges = {{1, 7}, {385, 6}, {488, 6}};
+				peer.m_PeerBridges[1] = {385, 385, true, {}, {}, 6}; peer.m_PeerFrameHolds[1][385] = true;
+				peer.m_AiHeldSeats[1] = peer.m_PeerLeaveFrames[1] = 385; peer.m_SeatTransitions[1][385] = NetLockstepCoordinator::SeatTransition::Held;
+				peer.m_MigrationHistory[384] = {1, 2, 3}; const auto preceding = peer.PeerAppliedFramePrefix(384);
+				replay.m_Playback = true; replay.m_LastCompletedSimulationTick = 487;
+				const uint64_t returned = role == 2 ? 600 : 475;
+				replay.m_ReclaimTransactions[1] = {1, 0, returned * 8 + 1, 2, returned, 4, returned + 8};
+				if (role == 1) {
+					peer.m_AiHeldSeats[1] = 480; peer.m_HoldTransactions[1] = {1, 0, 480 * 8 + 1, 2, 480};
+					peer.m_PeerBridges[1].fromFrame = peer.m_PeerBridges[1].aiFrame = 480;
+					peer.m_PeerFrameHolds[1][480] = true; peer.m_SeatTransitions[1][480] = NetLockstepCoordinator::SeatTransition::Held;
+				}
+				if (role == 3) {
+					peer.m_ReclaimTransactions[1] = {1, 0, 500 * 8 + 1, 3, 500, 4, 508};
+					peer.m_PeerBridges[1].returnFrame = 500; peer.m_PeerFrameHolds[1][500] = false; peer.m_FrameGroupChanges[500] = 7;
+				}
+				peer.AdoptReplayedSeatTransitions(replay, 487);
+				const bool restored = role == 0;
+				if (peer.PeerFrameMembersAt(488) != (restored ? 7U : 6U) || peer.m_FrameGroupMembers != (restored ? 7U : 6U) ||
+				    peer.IsSeatUnderAI(1, 488) == restored || peer.PeerAppliedFramePrefix(384) != preceding || peer.m_Stats.nextFrame != 488 || peer.m_LastCompletedSimulationTick ||
+				    (restored && (peer.m_PeerBridges.at(1).returnFrame != 475 || peer.PeerHeldSeatsAt(488) != 0 ||
+				                  peer.m_PeerAdmissions.at(1).frame != 475 || peer.m_Config.initialPeerStartTerms.at(1) != std::pair<uint64_t, uint16_t>{475, 4}))) {
+					*error = "a replayed return did not restore exactly its live frame-group membership: role=" + std::to_string(role); return false;
+				}
+			}
+			for (bool future: {false, true}) {
+				Wire wire, replayWire; NetLockstepCoordinator peer, replay; Configure(peer, wire); Configure(replay, replayWire);
+				peer.m_Config.peerFrameGroups = peer.m_Config.joinsRunningRound = true;
+				peer.m_Config.startFrame = 488; peer.m_Config.seatStateThroughFrame = 410;
+				peer.m_MigrationPhase = NetHostMigrationPhase::None; peer.m_LastCompletedSimulationTick.reset(); peer.m_Stats.nextFrame = 488;
+				peer.m_FrameGroupMembers = 7; peer.m_FrameGroupChanges = {{1, 7}, {488, 7}};
+				const uint64_t cutoff = future ? 500 : 475;
+				replay.m_Playback = true; replay.m_LastCompletedSimulationTick = 487;
+				replay.m_HoldTransactions[1] = {1, 0, cutoff * 8 + 1, 1, cutoff}; replay.m_AiHeldSeats[1] = cutoff;
+				peer.AdoptReplayedSeatTransitions(replay, 487);
+				if (peer.PeerFrameMembersAt(488) != (future ? 7U : 6U) || peer.m_FrameGroupMembers != (future ? 7U : 6U) ||
+				    peer.IsSeatUnderAI(1, 488) == future || (!future && (!peer.m_PeerBridges.contains(1) || peer.PeerHeldSeatsAt(488) != 1))) {
+					*error = "a replayed hold did not restore exactly its live frame-group membership"; return false;
+				}
+			}
+			return true;
+		}
+
 		static bool ReturnMemberStarts(std::string* error) {
 			Wire wire; NetLockstepCoordinator peer;
 			Configure(peer, wire);
@@ -31867,6 +31968,18 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "replay-prefix-handoff") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::ReplayedPrefixesValidateConcurrentReturns(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS replayed_prefixes_validate_concurrent_returns\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
+			if (std::string_view(selectedCase) == "replay-return-group") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::ReplayedReturnRestoresFrameGroup(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS replayed_return_restores_frame_group\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "removal-retry") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::RemovalNoticeRetries(&error)) return fail(error);
@@ -32108,6 +32221,8 @@ namespace {
 		row(&SessionPlaneRecoveryTest::FutureRemovalKeepsPastAuthority, "a_future_removal_keeps_the_past_directory_decision");
 		row(&SessionPlaneRecoveryTest::ReturnStartAdmission, "a_return_start_uses_its_certified_admission");
 		row(&SessionPlaneRecoveryTest::ReturnMemberStarts, "a_return_keeps_each_authenticated_members_start");
+		row(&SessionPlaneRecoveryTest::ReplayedPrefixesValidateConcurrentReturns, "replayed_prefixes_validate_concurrent_returns");
+		row(&SessionPlaneRecoveryTest::ReplayedReturnRestoresFrameGroup, "replayed_return_restores_frame_group");
 		row(&SessionPlaneRecoveryTest::WaitingMeshPublishesOwnStart, "waiting_mesh_publishes_its_own_start");
 		row(&SessionPlaneRecoveryTest::NeutralReplayStopsAtThePlayingClock, "neutral_replay_stops_at_the_playing_clock");
 		row(&SessionPlaneRecoveryTest::StoppedContinuationHasNoStartHandshake, "stopped_continuation_has_no_start_handshake");

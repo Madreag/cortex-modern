@@ -6819,7 +6819,7 @@ static std::string ResyncSaveName() {
 				m_Runner->ConfigureWorldJoinSeats(std::move(holds), std::move(leaves));
 			}
 			if (!m_Runner->IsWorldJoinLockstepStarting()) {
-				m_Runner->StartWorldJoinLockstep(*wire, *m_Session, *m_Coordinator, m_WorldCatchUp.activationTick, m_WorldCatchUp.appliedThrough, &error);
+				m_Runner->StartWorldJoinLockstep(*wire, *m_Session, *m_Coordinator, m_WorldCatchUp.activationTick, m_WorldCatchUp.appliedThrough, &error, m_CatchUpCoordinator.get());
 				// The round's start reads the wire the catch-up reads: the tail it takes goes on to the catch-up, not to a lobby that has ended.
 				AttachCoordinatorSessionSink();
 			} else {
@@ -6828,7 +6828,7 @@ static std::string ResyncSaveName() {
 						m_Coordinator->InjectEvent(*it, NetLockstepNowMs()); m_CatchUpWireBytes -= it->bytes.size(); it = m_CatchUpWirePackets.erase(it);
 					} else ++it;
 				}
-				m_Runner->PumpWorldJoinLockstepStart(*m_Coordinator, m_WorldCatchUp.appliedThrough, &error);
+				m_Runner->PumpWorldJoinLockstepStart(*m_Coordinator, m_WorldCatchUp.appliedThrough, &error, m_CatchUpCoordinator.get());
 			}
 			if (!error.empty()) { m_PrivateJoinError = error; m_ErrorText = error; }
 		}

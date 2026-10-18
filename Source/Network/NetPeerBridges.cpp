@@ -213,7 +213,8 @@ namespace RTE {
 		    proposal.frame - m_Stats.nextFrame > NetLockstepCodec::c_MaxFutureFrameSkew)) return false;
 		const uint64_t prefixFrame = ahead ? proposal.boundary : proposal.frame - 1;
 		const NetHash32 prefix = proposal.frame == m_Config.startFrame ? NetHash32{} : ahead ? PeerAppliedFramePrefix(prefixFrame) : PeerFramePrefix(prefixFrame);
-		if (proposal.frame != m_Config.startFrame && !m_MigrationHistory.contains(prefixFrame)) return false;
+		if (proposal.frame != m_Config.startFrame && !m_MigrationHistory.contains(prefixFrame) &&
+		    !(prefixFrame < m_Config.startFrame && m_PeerReplayAppliedPrefixes.contains(prefixFrame))) return false;
 		if (!std::equal(prefix.begin(), prefix.end(), proposal.bytes.begin())) return false;
 		if (proposal.preparedFrame == 1) {
 			for (const auto& [key, votes]: m_PeerBridgeVotes) if (key.second == 4 && key.first >= proposal.frame && key.first >= m_Stats.nextFrame && votes.contains(m_Config.localPeerId)) return false;
@@ -260,7 +261,7 @@ namespace RTE {
 		if (PeerBridgeHasInputConflict(withOwnVote)) return false;
 		if (proposal.frame != m_Config.startFrame) {
 			const uint64_t boundary = ahead ? proposal.boundary : proposal.frame - 1;
-			if (!m_MigrationHistory.contains(boundary)) return false;
+			if (!m_MigrationHistory.contains(boundary) && !(boundary < m_Config.startFrame && m_PeerReplayAppliedPrefixes.contains(boundary))) return false;
 			const auto prefix = ahead ? PeerAppliedFramePrefix(boundary) : PeerFramePrefix(boundary);
 			if (!std::equal(prefix.begin(), prefix.end(), proposal.bytes.begin())) return false;
 		}

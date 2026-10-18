@@ -6248,10 +6248,25 @@ namespace RTE {
 		return until;
 	}
 
+	void NetLockstepCoordinator::AdoptReplayedFramePrefixes(const NetLockstepCoordinator& replay, uint64_t throughFrame) {
+		NET_PLANE_CHECK();
+		NetLockstepPlane::Check(&replay, "AdoptReplayedFramePrefixes (the replay)");
+		if (!UsesPeerFrameGroups() || !m_Config.joinsRunningRound || m_Playback || !replay.m_Playback ||
+		    m_Config.sessionId != replay.m_Config.sessionId || m_RoundId != replay.m_RoundId || m_RoundConfigHash != replay.m_RoundConfigHash ||
+		    m_Config.localPeerId != replay.m_Config.localPeerId || !replay.m_LastCompletedSimulationTick || m_Config.startFrame == 0) return;
+		const uint64_t through = std::min({throughFrame, *replay.m_LastCompletedSimulationTick, m_Config.startFrame - 1});
+		for (const auto& [frame, prefix]: replay.m_PeerReplayAppliedPrefixes) {
+			if (frame > through) break;
+			m_PeerReplayAppliedPrefixes.try_emplace(frame, prefix);
+		}
+		while (m_PeerReplayAppliedPrefixes.size() > NetHostMigrationCodec::c_PeerHistoryFrames) m_PeerReplayAppliedPrefixes.erase(m_PeerReplayAppliedPrefixes.begin());
+	}
+
 	void NetLockstepCoordinator::AdoptReplayedSeatTransitions(const NetLockstepCoordinator& replay, uint64_t throughFrame) {
 		NET_PLANE_CHECK();
 		// The replay's own maps are read here too.
 		NetLockstepPlane::Check(&replay, "AdoptReplayedSeatTransitions (the replay)");
+		AdoptReplayedFramePrefixes(replay, throughFrame);
 		// Scripted switches at the return still read the preceding hold.
 		for (const auto& [peer, transitions]: replay.m_SeatTransitions) {
 			for (const auto& [frame, state]: transitions) {
@@ -6292,6 +6307,14 @@ namespace RTE {
 				if (peer != GetHostPeerId()) m_PeerLeaveFrames[peer] = held->second.cutoffFrame;
 				m_DroppedSeatResolutions[peer] = NetLockstepHoldResolution::Substituted;
 				DropRecordedHeldSeat(peer);
+				if (UsesPeerFrameGroups()) {
+					PeerBridge bridge; bridge.fromFrame = bridge.aiFrame = held->second.cutoffFrame; bridge.committedHold = true;
+					m_PeerBridges[peer] = std::move(bridge);
+					m_PeerFrameHolds[peer][held->second.cutoffFrame] = true;
+					const uint64_t first = std::max(m_Config.startFrame, held->second.cutoffFrame);
+					m_FrameGroupChanges[first] = PeerFrameMembersAt(first) & ~(1U << (peer - 1));
+					m_FrameGroupMembers = PeerFrameMembersAt(m_Stats.nextFrame);
+				}
 				m_Config.peerIncarnations[peer] = std::max(m_Config.peerIncarnations[peer], held->second.seatIncarnation);
 				DiagnosticLine() << "[net-lockstep] took peer " << static_cast<int>(peer) << "'s hold at " << held->second.cutoffFrame << " from the replayed tail" << std::endl;
 			}
@@ -7611,6 +7634,16 @@ namespace RTE {
 		m_SlowMachineHolds.erase(peer);
 		m_RemovedPeers.erase(peer);
 		m_PeerOwnershipChanges[peer][reclaim.applyFrame] = true;
+		if (UsesPeerFrameGroups()) {
+			// A replayed return restores mesh participation as well as the seat's controller.
+			if (const auto held = m_PeerBridges.find(peer); held != m_PeerBridges.end()) held->second.returnFrame = reclaim.applyFrame;
+			m_PeerFrameHolds[peer][reclaim.applyFrame] = false;
+			const uint64_t first = std::max(m_Config.startFrame, reclaim.applyFrame);
+			m_FrameGroupChanges[first] = PeerFrameMembersAt(first) | (1U << (peer - 1));
+			m_FrameGroupMembers = PeerFrameMembersAt(m_Stats.nextFrame);
+			m_PeerAdmissions[peer] = {reclaim.applyFrame, reclaim.delayFrames};
+			m_Config.initialPeerStartTerms[peer] = {reclaim.applyFrame, reclaim.delayFrames};
+		}
 		m_PeerLeaveFrames.erase(peer); m_PeerFrameWaivers.erase(peer);
 		m_DroppedSeats.erase(peer); m_LeftSeatsHeld.erase(peer); m_DroppedAtMs.erase(peer);
 		m_DroppedSeatResolutions[peer] = NetLockstepHoldResolution::Reclaimed;

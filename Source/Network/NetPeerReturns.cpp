@@ -25,7 +25,8 @@ namespace RTE {
 	}
 
 	NetHash32 NetLockstepCoordinator::PeerAppliedFramePrefix(uint64_t frame) const {
-		if (m_Playback) if (const auto applied = m_PeerReplayAppliedPrefixes.find(frame); applied != m_PeerReplayAppliedPrefixes.end()) return applied->second;
+		if (m_Playback || frame < m_Config.startFrame)
+			if (const auto applied = m_PeerReplayAppliedPrefixes.find(frame); applied != m_PeerReplayAppliedPrefixes.end()) return applied->second;
 		const auto kept = m_MigrationHistory.find(frame);
 		if (kept == m_MigrationHistory.end()) return {};
 		NetLockstepReadyFrame ready;

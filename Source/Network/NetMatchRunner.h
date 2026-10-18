@@ -201,10 +201,10 @@ namespace RTE {
 			m_WorldJoinHolds = std::move(holds);
 			m_WorldJoinLeaves = std::move(leaves);
 		}
-		bool StartWorldJoinLockstep(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, uint64_t startFrame, uint64_t updateTick, std::string* error = nullptr);
+		bool StartWorldJoinLockstep(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, uint64_t startFrame, uint64_t updateTick, std::string* error = nullptr, const NetLockstepCoordinator* replay = nullptr);
 		/// One tick of a starting joiner's handshake. Returns whether the coordinator is running; a
 		/// false with an error set is the start giving up.
-		bool PumpWorldJoinLockstepStart(NetLockstepCoordinator& coordinator, uint64_t updateTick, std::string* error = nullptr);
+		bool PumpWorldJoinLockstepStart(NetLockstepCoordinator& coordinator, uint64_t updateTick, std::string* error = nullptr, const NetLockstepCoordinator* replay = nullptr);
 		/// Drops a joiner's lockstep start whose activation the host has taken back; the round it follows goes on.
 		void CancelWorldJoinLockstepStart() { if (m_WorldJoinStarting) { m_WorldJoinStarting = false; m_State = NetMatchRuntimeState::Running; } }
 		/// Whether a joiner's lockstep start is mid-handshake and wants its tick this pump.

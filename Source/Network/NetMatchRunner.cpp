@@ -1123,7 +1123,7 @@ namespace RTE {
 		return snapshot;
 	}
 
-	bool NetMatchRunner::StartWorldJoinLockstep(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, uint64_t startFrame, uint64_t updateTick, std::string* error) {
+	bool NetMatchRunner::StartWorldJoinLockstep(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, uint64_t startFrame, uint64_t updateTick, std::string* error, const NetLockstepCoordinator* replay) {
 		m_Lobby.SetStartFrame(startFrame);
 		m_Config.startFrame = startFrame;
 		m_State = NetMatchRuntimeState::LockstepStarting;
@@ -1134,10 +1134,11 @@ namespace RTE {
 		if (!StartLockstep(transport, session, coordinator, m_Config, error)) {
 			return false;
 		}
-		return PumpWorldJoinLockstepStart(coordinator, updateTick, error);
+		return PumpWorldJoinLockstepStart(coordinator, updateTick, error, replay);
 	}
 
-	bool NetMatchRunner::PumpWorldJoinLockstepStart(NetLockstepCoordinator& coordinator, uint64_t updateTick, std::string* error) {
+	bool NetMatchRunner::PumpWorldJoinLockstepStart(NetLockstepCoordinator& coordinator, uint64_t updateTick, std::string* error, const NetLockstepCoordinator* replay) {
+		if (replay) coordinator.AdoptReplayedFramePrefixes(*replay, updateTick);
 		if (!IsWorldJoinLockstepStarting()) {
 			return m_State == NetMatchRuntimeState::Running;
 		}

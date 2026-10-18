@@ -38,6 +38,7 @@
 #include <bit>
 #include <chrono>
 #include <condition_variable>
+#include <coroutine>
 #include <cmath>
 #include <cstdlib>
 #include <deque>
@@ -74,6 +75,38 @@ namespace RTE {
 		std::function<std::pair<INetTransport*, NetPeerId>(const NetLockstepCoordinator&, uint8_t)> s_ReturnRoute;
 		std::once_flag s_FixtureObservers;
 		struct Fixture;
+		struct ImageReturnTask {
+			struct promise_type;
+			using Handle = std::coroutine_handle<promise_type>;
+			struct promise_type {
+				bool succeeded = false;
+				std::exception_ptr exception;
+				ImageReturnTask get_return_object() { return ImageReturnTask(Handle::from_promise(*this)); }
+				std::suspend_always initial_suspend() noexcept { return {}; }
+				std::suspend_always final_suspend() noexcept { return {}; }
+				void return_value(bool value) { succeeded = value; }
+				void unhandled_exception() { exception = std::current_exception(); }
+			};
+			Handle handle{};
+			ImageReturnTask() = default;
+			explicit ImageReturnTask(Handle value): handle(value) {}
+			ImageReturnTask(const ImageReturnTask&) = delete;
+			ImageReturnTask& operator=(const ImageReturnTask&) = delete;
+			ImageReturnTask(ImageReturnTask&& other) noexcept: handle(std::exchange(other.handle, {})) {}
+			ImageReturnTask& operator=(ImageReturnTask&& other) noexcept {
+				if (this == &other) return *this;
+				if (handle) handle.destroy();
+				handle = std::exchange(other.handle, {}); return *this;
+			}
+			~ImageReturnTask() { if (handle) handle.destroy(); }
+			bool Done() const { return !handle || handle.done(); }
+			bool Resume() {
+				if (!Done()) handle.resume();
+				if (handle && handle.promise().exception) std::rethrow_exception(handle.promise().exception);
+				return !Done() || !handle || handle.promise().succeeded;
+			}
+		};
+		ImageReturnTask ReadImageReturn(Fixture& fixture, uint8_t seat, uint8_t donor, std::string& error);
 		bool ReturnThroughImage(Fixture& fixture, uint8_t seat, uint8_t donor, std::string& error);
 		struct Case {
 			const char* name;
@@ -1450,6 +1483,7 @@ namespace RTE {
 			struct InputSplitCause { uint8_t human, held, sender, receiver; uint64_t faultAt, observedAt; };
 			std::vector<InputSplitCause> inputSplitCauses;
 			std::vector<bool> waitPlaying, imageReading, imageNeeded, imageWithoutHeadroom;
+			std::vector<ImageReturnTask> imageTasks;
 			std::vector<bool> splitParticipant;
 			std::vector<uint32_t> observedSplit;
 			std::vector<uint64_t> playingMaxWait, lostAt, lostFrame, imageReturns;
@@ -1550,6 +1584,8 @@ namespace RTE {
 				return donors;
 			}
 			bool RecoverImages(std::string& error) {
+				// FLAGGED fixture departure: independent private returners advance on the same shared tick.
+				for (auto& task: imageTasks) if (!task.Done() && !task.Resume()) return false;
 				for (uint8_t seat = 1; seat <= hub.row.seats; ++seat) {
 					if (!imageNeeded[seat - 1] || imageReading[seat - 1] || OwnMachineTrouble(seat)) continue;
 					bool connected = true;
@@ -1565,13 +1601,22 @@ namespace RTE {
 						if (donor == seat || !(ruling & (1U << (donor - 1))) || !ImageDonorCanAnswer(donor) ||
 						    !peers[donor - 1]->HasHeldAISeat(seat) || !(s_FrameMembers(*peers[donor - 1], worlds[donor - 1].applied + 1) & (1U << (donor - 1)))) continue;
 						if (!ImageDonorCanAnswer(ImageReturnProposer(donor))) continue;
-						if (!ReturnThroughImage(*this, seat, donor, error)) return false;
+						imageTasks[seat - 1] = ReadImageReturn(*this, seat, donor, error);
+						if (!imageTasks[seat - 1].Resume()) return false;
 						break;
 					}
 				}
 				return true;
 			}
+			bool FinishImageReturns(std::string& error) {
+				while (std::any_of(imageTasks.begin(), imageTasks.end(), [](const ImageReturnTask& task) { return !task.Done(); }))
+					if (!Step(error) || !CheckBound(error) || !RecoverImages(error)) return false;
+				return CheckImageOutcomes(error);
+			}
 			bool CheckImageOutcomes(std::string& error) const {
+				if (std::any_of(imageTasks.begin(), imageTasks.end(), [](const ImageReturnTask& task) { return !task.Done(); })) {
+					error = "authority ruling image return: round ended before the private return and its healthy observation finished"; return false;
+				}
 				for (uint8_t seat = 1; seat <= hub.row.seats; ++seat) {
 					if (imageNeeded[seat - 1] && !imageWithoutHeadroom[seat - 1]) {
 						error = "authority ruling: peer " + std::to_string(seat) + " stopped but never completed its private image return"; return false;
@@ -1711,6 +1756,7 @@ namespace RTE {
 				frameMembers.assign(row.seats, {0}); frameAuthors.assign(row.seats, {0}); installedBoundaries.resize(row.seats); discardedHistories.resize(row.seats);
 				waitPlaying.resize(row.seats); playingMaxWait.resize(row.seats); imageReading.resize(row.seats); imageNeeded.resize(row.seats);
 				imageWithoutHeadroom.resize(row.seats); splitDecisions.resize(row.seats);
+				imageTasks.clear(); imageTasks.resize(row.seats);
 				splitParticipant.resize(row.seats); observedSplit.resize(row.seats);
 				lostAt.resize(row.seats); lostFrame.resize(row.seats); imageReturns.resize(row.seats); decisionsRead.resize(row.seats);
 				firstDisplayedAt.resize(row.seats); startupFinishAt.resize(row.seats); preFaultPaceLeadMs.resize(row.seats);
@@ -1859,6 +1905,7 @@ namespace RTE {
 					}
 					hashedThrough = 0; sharedDigests.clear(); roundStartMs = hub.now;
 					compared = {}; splitFrom = {}; inputSplits = {}; inputSplitCauses.clear(); sawSplit = splitHistories = false;
+					imageTasks.clear(); imageTasks.resize(hub.row.seats);
 					directRuling = 0;
 					std::fill(lostAt.begin(), lostAt.end(), 0); std::fill(lostFrame.begin(), lostFrame.end(), 0);
 					std::fill(imageAt.begin(), imageAt.end(), 0); std::fill(imageReturns.begin(), imageReturns.end(), 0);
@@ -2117,7 +2164,7 @@ namespace RTE {
 				while (hub.now <= end) if (!Step(error) || !CheckBound(error) || !RecoverImages(error)) return false;
 				if (row.refaultPercent && !hub.refaultEnd) { error = "the subject never came back, so its second slowdown never began"; return false; }
 				while (hub.refaultEnd && hub.now <= hub.refaultEnd + c_TestReturnAllowanceMs + 4000) if (!Step(error) || !CheckBound(error) || !RecoverImages(error)) return false;
-				if (!CheckImageOutcomes(error)) return false;
+				if (!FinishImageReturns(error)) return false;
 				if (row.hung && row.subject == 1 && row.gapMs > 15000)
 					for (uint8_t seat = 2; seat <= row.seats; ++seat) if (firstAdminChangeMs[seat - 1] == UINT64_MAX) {
 						error = "authority ruling: a hung host outlasted the hold window without roster administration migrating"; return false;
@@ -2207,9 +2254,9 @@ namespace RTE {
 		// What a scheduled round got wrong: the property it broke (history, bound, return, or one of the round's rules), the shape of the
 		// failure as a word the driver groups by, and what the round showed.
 		// The same private image/replay/reclaim path for an absent peer and for every player on a losing half.
-		bool ReturnThroughImage(Fixture& fixture, uint8_t seat, uint8_t donor, std::string& error) {
+		ImageReturnTask ReadImageReturn(Fixture& fixture, uint8_t seat, uint8_t donor, std::string& error) {
 			const auto fail = [&](const std::string& detail) { error = "authority ruling image return: " + detail; return false; };
-			if (const auto twice = fixture.TwoReturnFrames(); !twice.empty()) return fail(twice);
+			if (const auto twice = fixture.TwoReturnFrames(); !twice.empty()) co_return fail(twice);
 			const uint8_t seats = fixture.hub.row.seats;
 			uint8_t proposer = donor;
 			const uint32_t rttMs = static_cast<uint32_t>(2 * fixture.hub.Delay(seat, donor));
@@ -2221,25 +2268,25 @@ namespace RTE {
 			for (uint8_t peer = 1; peer <= seats; ++peer) if (peer != seat && (members & (1U << (peer - 1)))) {
 				survivors.push_back(peer); untouched[peer] = fixture.worlds[peer - 1].hashes;
 			}
-			if (survivors.empty() || !fixture.peers[donor - 1]->HasHeldAISeat(seat)) return fail("the donor has no installed hold and playing group for this returner");
+			if (survivors.empty() || !fixture.peers[donor - 1]->HasHeldAISeat(seat)) co_return fail("the donor has no installed hold and playing group for this returner");
 			fixture.imageReading[seat - 1] = true;
 			fixture.FinishWait(seat, fixture.worlds[seat - 1].applied + 1);
 			for (auto* wire: fixture.hub.wires) if (wire->owner == seat) wire->keepReturnCertificates = wire->keepImageTail = true;
 			uint64_t common = fixture.worlds[donor - 1].applied;
 			for (uint8_t peer: survivors) common = std::min(common, fixture.worlds[peer - 1].applied);
 			const uint64_t base = common - common % 60;
-			if (!base) return fail("the playing seats did not commit an image capture");
+			if (!base) co_return fail("the playing seats did not commit an image capture");
 			if (!fixture.committed[donor - 1].contains(base))
-				return fail("fixture retained no committed capture record at frame " + std::to_string(base) +
+				co_return fail("fixture retained no committed capture record at frame " + std::to_string(base) +
 				            "; capture_frames=" + std::to_string(fixture.hub.row.captureFrames) + "; the image-return property could not be checked");
 			World replay; replay.sharedDigests = &fixture.sharedDigests;
 			// The image is the host's state at a named capture every playing seat already committed.
 			for (const auto& [tick, ready]: fixture.committed[donor - 1]) {
 				if (tick > base) break;
-				if (!replay.Apply(ready, error)) return false;
+				if (!replay.Apply(ready, error)) co_return false;
 			}
 			for (uint8_t peer: survivors)
-				if (fixture.worlds[peer - 1].hashes.at(base) != replay.hashes.at(base)) return fail("the image capture already has different playing-seat histories");
+				if (fixture.worlds[peer - 1].hashes.at(base) != replay.hashes.at(base)) co_return fail("the image capture already has different playing-seat histories");
 			DiagnosticLine() << "[session-plane-image] seed=0 seats=" << static_cast<unsigned>(seats) << " rtt_ms=" << rttMs
 			                 << " capture=" << base << " playing_committed_through=" << common << std::endl;
 			auto config = fixture.peers[seat - 1]->GetConfig();
@@ -2273,22 +2320,22 @@ namespace RTE {
 			// A losing branch must not import its former seat transitions into the ruling image. An in-place nonsplit reader can.
 			const bool discardedBranch = fixture.lostAt[seat - 1] || (!fixture.hub.row.internet && fixture.sawSplit);
 			if (discardedBranch ? !replayCoordinator.StartReplay(replayWire, replayConfig, &error) :
-			    !replayCoordinator.StartCatchUpReplay(replayWire, replayConfig, *fixture.peers[seat - 1], &error)) return false;
+			    !replayCoordinator.StartCatchUpReplay(replayWire, replayConfig, *fixture.peers[seat - 1], &error)) co_return false;
 			NetWorldJoinHost join;
 			if (config.matchConfig.persistentWorld) {
 				// FLAGGED fixture departure: a persistent held seat uses the world's credentialed bootstrap, as the service does.
 				NetWorldIdentity identity{config.matchConfig.worldId, config.matchConfig.worldBoot, round};
-				if (!join.Configure(config.matchConfig, identity, &error) || !join.Membership().Hold(seat, seat - 1, "Returner", &error)) return false;
+				if (!join.Configure(config.matchConfig, identity, &error) || !join.Membership().Hold(seat, seat - 1, "Returner", &error)) co_return false;
 				join.NoteReclaimHolds({seat});
-				if (!join.BeginJoin(12, seat - 1, "Returner", fixture.hub.now, &error, true, seat)) return false;
+				if (!join.BeginJoin(12, seat - 1, "Returner", fixture.hub.now, &error, true, seat)) co_return false;
 			} else if (!join.ConfigureMatchRejoins(config.matchConfig, round, c_TestTickMs, &error) ||
-			           !join.BeginRejoin(12, seat - 1, seat, incarnation, "Returner", fixture.hub.now, &error)) return false;
+			           !join.BeginRejoin(12, seat - 1, seat, incarnation, "Returner", fixture.hub.now, &error)) co_return false;
 			NetWorldCheckpointImage image; image.round = round; image.tick = replay.applied;
 			if (config.matchConfig.persistentWorld) { image.worldId = config.matchConfig.worldId; image.boot = config.matchConfig.worldBoot; }
 			else image.privateSessionId = config.sessionId;
 			image.bytes = 8; image.checkpointConfig = "fixture world"; image.sideState = "fixture seats";
 			join.PublishImage(image);
-			if (!join.NoteTransferComplete(12, 8, &error)) return false;
+			if (!join.NoteTransferComplete(12, 8, &error)) co_return false;
 			join.NoteRejoinLinkFit(12, true); join.NoteTailLinkRtt(12, rttMs);
 			uint64_t tailRecorded = base;
 			std::map<uint64_t, NetLockstepFrame> receivedTail;
@@ -2347,6 +2394,7 @@ namespace RTE {
 				config.peerIncarnations[seat] = incarnation; config.seatStateThroughFrame = replay.applied;
 				fixture.peers[seat - 1] = std::make_unique<NetLockstepCoordinator>();
 				if (!fixture.peers[seat - 1]->Start(*fixture.wires[seat - 1], config, &error)) return false;
+				fixture.peers[seat - 1]->AdoptReplayedFramePrefixes(replayCoordinator, replay.applied);
 				fixture.peers[seat - 1]->DeferStopsToTickBoundary();
 				liveStarted = true;
 				return true;
@@ -2360,22 +2408,23 @@ namespace RTE {
 				// fixture link. The reader below can consume only records delivered after that link's delay and loss.
 				for (auto next = fixture.committed[donor - 1].upper_bound(tailRecorded); next != fixture.committed[donor - 1].end(); ++next) {
 					auto record = PackWorldJoinReadyFrame(next->second); record.roundId = round;
-					if (!join.Tail().Append(record, &error)) return fail(error);
+					if (!join.Tail().Append(record, &error)) co_return fail(error);
 					tailRecorded = next->first;
 				}
 				const auto [tailWire, tailRoute] = fixture.ImageReturnRoute(donor, seat);
-				if (!tailWire || tailRoute == c_InvalidNetPeerId) return fail("the image donor lost its authenticated return route");
+				if (!tailWire || tailRoute == c_InvalidNetPeerId) co_return fail("the image donor lost its authenticated return route");
 				for (unsigned datagram = 0; datagram < 32; ++datagram) {
 					std::vector<uint8_t> packed, bytes; bool large = false;
 					const bool whole = join.NextTailDatagram(12, fixture.hub.now, packed, &large);
 					if (!whole && !(large && join.NextTailChunk(12, packed))) break;
-					if (!NetLobbyProtocol::Encode({MakeWorldTailChunk(round, packed)}, bytes)) return fail("the native image-tail chunk did not encode");
+					if (!NetLobbyProtocol::Encode({MakeWorldTailChunk(round, packed)}, bytes)) co_return fail("the native image-tail chunk did not encode");
 					if (!tailWire->Send(tailRoute, whole ? NetTransportLane::BulkUnreliable : NetTransportLane::ControlReliable, bytes)) {
 						join.NoteTailDatagramRefused(12); break;
 					}
 					if (!whole) { join.NoteTailChunkSent(12, packed.size()); break; }
 				}
-				if (!fixture.Step(error) || !fixture.CheckBound(error)) return false;
+				co_await std::suspend_always{};
+				if (!fixture.CheckBound(error)) co_return false;
 				if (!liveStarted && fixture.peers[seat - 1]->IsStopped()) {
 					for (auto* wire: fixture.hub.wires) if (wire->owner == seat) {
 						wire->keepReturnCertificates = true;
@@ -2385,7 +2434,7 @@ namespace RTE {
 				for (auto* wire: fixture.hub.wires) if (wire->owner == seat) {
 					while (!wire->receivedImageTail.empty()) {
 						const auto delivery = std::move(wire->receivedImageTail.front()); wire->receivedImageTail.pop_front();
-						if (!ReadImageTail(delivery, donor, round, replay.applied, partialTail, receivedTail, error)) return fail(error);
+						if (!ReadImageTail(delivery, donor, round, replay.applied, partialTail, receivedTail, error)) co_return fail(error);
 					}
 				}
 				double capacity = fixture.hub.schedule ? fixture.hub.schedule->CapacityPercent(seat, fixture.hub.now) / 100.0 :
@@ -2403,12 +2452,13 @@ namespace RTE {
 					const auto& recorded = next->second;
 					if (!replayCoordinator.QueueReplayFrame(recorded.targetFrame, recorded.frames, recorded.commands, &error,
 					                                      recorded.observations, recorded.valueObservations, recorded.senderPeerId,
-					                                      recorded.replayUpdateAuthorityPeerId)) return false;
+					                                      recorded.replayUpdateAuthorityPeerId)) co_return false;
 					replayCoordinator.Tick(fixture.hub.now);
 					NetLockstepReadyFrame ready;
-					if (!replayCoordinator.PopReadyFrame(ready)) return fail("the private coordinator did not consume the next committed frame");
-					if (!replay.Apply(ready, error)) return false;
+					if (!replayCoordinator.PopReadyFrame(ready)) co_return fail("the private coordinator did not consume the next committed frame");
+					if (!replay.Apply(ready, error)) co_return false;
 					replayCoordinator.FinishSimulationTick(ready.frame);
+					if (liveStarted) fixture.peers[seat - 1]->AdoptReplayedFramePrefixes(replayCoordinator, replay.applied);
 					receivedTail.erase(next);
 					credit -= 1; ++work;
 					// FLAGGED fixture departure: a private replay reports the same work cost as its supplied machine capacity.
@@ -2423,13 +2473,13 @@ namespace RTE {
 				}
 				while (!reports.empty() && reports.front().arrival <= fixture.hub.now) {
 					const auto report = reports.front(); reports.pop_front();
-					if (!join.NoteRejoinCapacity(12, report.work, report.workUs, 0)) return fail("the private replay published invalid cumulative work");
+					if (!join.NoteRejoinCapacity(12, report.work, report.workUs, 0)) co_return fail("the private replay published invalid cumulative work");
 					if (join.FindSession(12)->headroom.Ratio() > maximumReplayCapacity + 1e-6)
-						return fail("the private replay claimed more capacity than its supplied tick budget: reported=" +
+						co_return fail("the private replay claimed more capacity than its supplied tick budget: reported=" +
 						    std::to_string(join.FindSession(12)->headroom.Ratio()) + " supplied=" + std::to_string(maximumReplayCapacity));
 					uint64_t announced = 0;
 					if (!join.NoteCatchUpProgress(12, report.applied, report.ticks, report.elapsed,
-					                            fixture.worlds[donor - 1].applied, &announced, &error)) return false;
+					                            fixture.worlds[donor - 1].applied, &announced, &error)) co_return false;
 					if (announced) activation = announced;
 					join.NoteCatchUpClock(12, fixture.hub.now);
 					join.AcknowledgeTailDatagrams(12, fixture.hub.now);
@@ -2442,7 +2492,7 @@ namespace RTE {
 					// Flagged fixture correction: the service carries the measured private-reader trail into the
 					// temporary activation gap. Dropping it asks for input before that reader can produce it.
 					const auto* session = join.FindSession(12);
-					if (!session || session->activationTick != activation) return fail("the image activation lost its measured session");
+					if (!session || session->activationTick != activation) co_return fail("the image activation lost its measured session");
 					proposer = fixture.ImageReturnProposer(donor);
 					auto& coordinator = *fixture.peers[proposer - 1];
 					// FLAGGED fixture departure: a refused proposal remains private and retries, as the service does.
@@ -2470,19 +2520,19 @@ namespace RTE {
 					}
 				}
 				// As in the service, the live connection handshakes ahead of the return while the private replay finishes E-1.
-				if (agreed && !liveStarted && !startLive()) return false;
+				if (agreed && !liveStarted && !startLive()) co_return false;
 				if (liveStarted && replay.applied + 1 == activation && fixture.peers[seat - 1]->IsRunning()) break;
 			}
 			if (!activation && fixture.hub.schedule && recoveryPercent <= 100) {
 				// The driver's original capacity property gives a machine with no surplus no finite catch-up deadline.
 				// It stays a private reader under the AI; every survivor is still checked on every step, with no wait exemption.
 				fixture.imageWithoutHeadroom[seat - 1] = true;
-				return fixture.CheckBound(error);
+				co_return fixture.CheckBound(error);
 			}
-			if (!agreed || replay.applied + 1 != activation) return fail("the private replay did not reach an activation every survivor certified: donor=" +
+			if (!agreed || replay.applied + 1 != activation) co_return fail("the private replay did not reach an activation every survivor certified: donor=" +
 			    std::to_string(donor) + " activation=" + std::to_string(activation) + " replay=" + std::to_string(replay.applied) + " agreed=" + std::to_string(agreed) + s_WaitState(*fixture.peers[donor - 1]));
-			if (!liveStarted) return fail("the returning seat could not adopt its received return certificate: " + (lastRefusal.empty() ? "none received" : lastRefusal));
-			if (!fixture.peers[seat - 1]->IsRunning()) return fail("the returning seat did not finish its live handshake before activation: state=" +
+			if (!liveStarted) co_return fail("the returning seat could not adopt its received return certificate: " + (lastRefusal.empty() ? "none received" : lastRefusal));
+			if (!fixture.peers[seat - 1]->IsRunning()) co_return fail("the returning seat did not finish its live handshake before activation: state=" +
 			    std::to_string(static_cast<int>(fixture.peers[seat - 1]->GetState())) + " starts_received=" + std::to_string(fixture.peers[seat - 1]->GetStats().startPacketsReceived) + s_WaitState(*fixture.peers[seat - 1]));
 			fixture.peers[seat - 1]->AdoptReplayedSeatTransitions(replayCoordinator, activation - 1);
 			fixture.discardedHistories[seat - 1].push_back(fixture.worlds[seat - 1].hashes);
@@ -2503,24 +2553,32 @@ namespace RTE {
 			for (const uint64_t until = observationAt + 1000; fixture.hub.now <= until && !fixture.OwnMachineTrouble(seat);) {
 				for (uint8_t peer: survivors)
 					if (fixture.peers[peer - 1]->HasHeldAISeat(seat) || Bridges(*fixture.peers[peer - 1]).contains(seat))
-						return fail("the image return was held again during its healthy observation");
-				if (!fixture.Step(error) || !fixture.CheckBound(error)) return false;
+						co_return fail("the image return was held again during its healthy observation");
+				co_await std::suspend_always{};
+				if (!fixture.CheckBound(error)) co_return false;
 			}
 			for (uint8_t peer: survivors) {
 				const bool playing = (s_FrameMembers(*fixture.peers[donor - 1], activation) & (1U << (peer - 1))) != 0;
 				if (playing && (!fixture.peers[peer - 1]->IsRunning() || fixture.peers[peer - 1]->HasHeldAISeat(seat) || Bridges(*fixture.peers[peer - 1]).contains(seat)))
-					return fail("the image return was held again after its certified activation: observer=" + std::to_string(peer) +
+					co_return fail("the image return was held again after its certified activation: observer=" + std::to_string(peer) +
 					            " returner_state=" + std::to_string(static_cast<int>(fixture.peers[seat - 1]->GetState())) +
 					            " starts_received=" + std::to_string(fixture.peers[seat - 1]->GetStats().startPacketsReceived));
 				for (const auto& [frame, hash]: untouched.at(peer))
-					if (fixture.worlds[peer - 1].hashes.at(frame) != hash) return fail("the ruling half rewrote displayed history during a private image return");
+					if (fixture.worlds[peer - 1].hashes.at(frame) != hash) co_return fail("the ruling half rewrote displayed history during a private image return");
 			}
-			if (!fixture.CompareHistories(error) || !fixture.CheckBound(error)) return false;
+			if (!fixture.CompareHistories(error) || !fixture.CheckBound(error)) co_return false;
 			DiagnosticLine() << "[session-plane-image] authority_contract=local_hold_async_split returner=" << unsigned(seat)
 			                 << " donor=" << unsigned(donor) << " activation=" << activation << " winner_history_untouched=1"
 			                 << " healthy_observation_ms=" << fixture.hub.now - observationAt << " new_own_fault=" << fixture.OwnMachineTrouble(seat) << std::endl;
+			co_return true;
+		}
+		bool ReturnThroughImage(Fixture& fixture, uint8_t seat, uint8_t donor, std::string& error) {
+			auto task = ReadImageReturn(fixture, seat, donor, error);
+			if (!task.Resume()) return false;
+			while (!task.Done()) if (!fixture.Step(error) || !fixture.CheckBound(error) || !task.Resume()) return false;
 			return true;
 		}
+
 		bool CheckImageActivation(uint8_t seats, uint32_t rttMs, std::string& error) {
 			Case row{"image_activation"}; row.seats = seats; row.subject = 2; row.gapMs = 60000; row.frozen = row.internet = row.captureFrames = true;
 			row.rttMs = row.otherRttMs = rttMs; row.checkpointEveryFrames = 60;
@@ -2571,7 +2629,7 @@ namespace RTE {
 				}
 				if (!fixture.RecoverImages(error)) return false;
 			}
-			if (!fixture.CheckImageOutcomes(error)) return false;
+			if (!fixture.FinishImageReturns(error)) return false;
 			bool lost = false;
 			for (uint8_t seat = 1; seat <= row.seats; ++seat) {
 				const size_t index = seat - 1;
@@ -3247,7 +3305,7 @@ namespace RTE {
 			if (!fixture.Start(row, error)) return failed(error);
 			while (hub.now <= schedule.endMs && !fixture.roundOver)
 				if (!fixture.Step(error) || !fixture.CheckBound(error) || !fixture.RecoverImages(error)) return failed(error + " at " + std::to_string(hub.now) + " ms");
-			if (!fixture.CheckImageOutcomes(error)) return failed(error);
+			if (!fixture.FinishImageReturns(error)) return failed(error);
 			const uint64_t end = hub.now;
 			for (uint8_t seat = 1; seat <= schedule.seats; ++seat) {
 				if (fixture.heldSince[seat] != UINT64_MAX) fixture.heldSpans[seat].push_back({fixture.heldSince[seat], UINT64_MAX});
