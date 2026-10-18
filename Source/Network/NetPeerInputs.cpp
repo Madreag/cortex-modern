@@ -144,6 +144,25 @@ namespace RTE {
 		return false;
 	}
 
+	uint32_t NetLockstepCoordinator::PeerInputReceiptGroup(uint64_t frame) const {
+		const uint32_t members = PeerFrameMembersAt(frame), local = SeatBit(m_Config.localPeerId);
+		uint32_t voting = members;
+		PeerVotingOwners(voting, frame);
+		const auto sources = m_PeerSourceInputs.find(frame);
+		if ((voting & local) == 0 || sources == m_PeerSourceInputs.end() || !sources->second.contains(m_Config.localPeerId)) return members;
+		uint32_t group = voting & PeerInputVoters(frame, m_Config.localPeerId);
+		// Keep the supplied sender whose acceptance blocks this frame, and the readers that accepted it. An observer outside
+		// that group cannot veto its local hold by acknowledging a different input. The stable seat order resolves overlapping
+		// receipt sets locally; it selects no winning history. The heal or directory still arbitrates any continuations.
+		for (uint8_t owner = 1; owner <= m_Config.peerCount; ++owner) {
+			if ((group & SeatBit(owner)) == 0 || !sources->second.contains(owner) || PeerInputAccepted(frame, owner)) continue;
+			// Possession of this authenticated source is our own receipt even while its cumulative publication catches up.
+			group &= PeerInputVoters(frame, owner) | local;
+		}
+		// Neutral returning seats do not owe input receipts before their certified gap ends.
+		return group | (members & ~voting);
+	}
+
 	uint32_t NetLockstepCoordinator::PeerInputVoters(uint64_t frame, uint8_t owner) const {
 		const uint32_t retained = PeerRetainedSeatsAt(frame);
 		if ((retained & SeatBit(owner)) == 0) return 0;

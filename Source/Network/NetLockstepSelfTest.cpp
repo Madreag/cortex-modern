@@ -145,6 +145,48 @@ namespace RTE {
 			bool Send(NetPeerId, NetTransportLane lane, const std::vector<uint8_t>&, std::string* = nullptr, bool* = nullptr) override { lanes.push_back(lane); return true; }
 		};
 
+		static bool RemoteInputReceiptsFormTheLocalHoldGroup(std::string* error) {
+			for (bool complete: {false, true}) {
+				Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
+				peer.m_Config.peerCount = peer.m_Config.matchConfig.peerCount = 4;
+				peer.m_Config.matchConfig.players.push_back({4, 3, false, "Fourth"});
+				peer.m_Config.matchConfig.successorOrder = {2, 3, 4};
+				peer.m_Config.peerFrameGroups = peer.m_Config.substituteSlowPeers = true;
+				peer.m_Config.slowPlayerBoundTicks = 3;
+				peer.m_Config.frameTieReferee = [](const NetFrameTieRequest&) { NetFrameTieReply reply; reply.state = NetFrameTieReply::State::Waiting; return reply; };
+				peer.m_RoundConfigHash = NetMatchConfigUtil::HashConfig(peer.m_Config.matchConfig);
+				peer.m_MigrationPhase = NetHostMigrationPhase::None;
+				peer.m_FrameGroupMembers = 15; peer.m_FrameGroupChanges = {{1, 15}};
+				peer.m_RemotePeerIds = {1, 3, 4}; peer.m_RemoteTransports = {{1, 41}, {3, 43}, {4, 44}};
+				peer.m_Stats.nextFrame = 349; peer.m_LastCompletedSimulationTick = 348;
+				peer.m_MigrationHistory[348] = {1, 2, 3};
+				peer.m_PeerPaceStartFrame = 348; peer.m_PeerPaceStartMs = peer.m_PeerConsumerAtMs = 1000;
+				peer.m_FirstMissingFrame = 349; peer.m_FirstMissingMs = 984;
+				peer.m_ConsumerWaitingFrame = 349; peer.m_ConsumerWaitStartMs = 1015;
+				for (uint8_t owner = 1; owner <= 4; ++owner) {
+					ControllerFrame controls; controls.actorUniqueID = 1000 + owner;
+					NetLockstepFrame input; input.senderPeerId = owner; input.roundId = 77; input.targetFrame = 349; input.frames = {controls};
+					peer.m_PeerSourceInputs[349][owner] = input;
+					if (owner == 2) peer.m_LocalFrames[349] = input.frames; else peer.m_RemoteFrames[349][owner] = input.frames;
+					for (uint8_t reader = 1; reader <= 4; ++reader) peer.m_PeerInputReceipts[owner][reader] = owner == 1 && reader > 2 && !complete ? 349 : 350;
+				}
+				if (!peer.PeerInputAccepted(349, 2) || peer.PeerInputAccepted(349, 1) != complete) {
+					*error = "remote receipt detector did not isolate the other sender's missing acceptance"; return false;
+				}
+				peer.m_TimingNowMs = 1030;
+				if (peer.ProposePeerBridge(349, 1030)) { *error = "another sender's receipt formed an early hold"; return false; }
+				peer.m_TimingNowMs = 1041;
+				const bool held = peer.ProposePeerBridge(349, 1041);
+				if (complete) {
+					if (held || peer.m_PeerBridgeCertificates.contains({349, 0})) { *error = "complete input acceptance held a healthy member"; return false; }
+				} else if (!held || peer.m_FrameGroupMembers != 3 || peer.IsSeatUnderAI(1, 349) ||
+				    !peer.IsSeatUnderAI(3, 349) || !peer.IsSeatUnderAI(4, 349)) {
+					*error = "the local input's complete receipts hid another required sender's missing quorum at the consumer bound"; return false;
+				}
+			}
+			return true;
+		}
+
 		static bool ConsumerHoldDeadlineIncludesTheDisplayedSlot(std::string* error) {
 			for (bool receiptOnly: {false, true}) {
 				Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
@@ -30827,6 +30869,12 @@ namespace {
 		};
 		static const char* selectedCase = std::getenv("CC_TEST_LOCKSTEP_SELFTEST_CASE");
 		if (selectedCase) {
+			if (std::string_view(selectedCase) == "remote-input-receipt-group") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::RemoteInputReceiptsFormTheLocalHoldGroup(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS remote_input_receipts_form_the_local_hold_group\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "consumer-hold-deadline") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::ConsumerHoldDeadlineIncludesTheDisplayedSlot(&error)) return fail(error);
@@ -31142,6 +31190,7 @@ namespace {
 		row(&NetSessionPlaneSelfTest::CheckHeldHostControllers, "a_held_host_preserves_controller_disable_before_its_return_arrives");
 		row(&SessionPlaneRecoveryTest::LinkDelay, "input_delay_follows_the_measured_link");
 		row(&SessionPlaneRecoveryTest::ConsumerHoldDeadlineIncludesTheDisplayedSlot, "consumer_hold_deadline_includes_the_displayed_slot");
+		row(&SessionPlaneRecoveryTest::RemoteInputReceiptsFormTheLocalHoldGroup, "remote_input_receipts_form_the_local_hold_group");
 		row(&SessionPlaneRecoveryTest::MissingOrZeroLinkNeverUsesReceipts, "missing_or_zero_rtt_never_uses_machine_receipts");
 		row(&SessionPlaneRecoveryTest::LinkSizingInEveryMode, "every_mode_sizes_live_and_return_from_the_link");
 		row(&SessionPlaneRecoveryTest::LinkRiseHasNoResizeCooldown, "link_rise_has_no_resize_cooldown");

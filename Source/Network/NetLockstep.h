@@ -1660,7 +1660,7 @@ namespace RTE {
 		bool HasPeerFrameRoute(uint8_t peer) const;
 		std::optional<double> PeerInputDeadlineMs(uint64_t frame) const;
 		bool PeerConsumerHoldDue(uint64_t frame, uint64_t nowMs) const;
-		bool PeerLinkLostBeforeOwnInput(uint8_t peer, uint64_t frame) const;
+		bool PeerMissingInputReceipt(uint8_t peer, uint64_t frame) const;
 		std::pair<INetTransport*, NetPeerId> PeerFrameRoute(uint8_t peer) const;
 		void NotePeerRoundEnd(uint8_t peer, uint64_t frame, uint64_t nowMs, bool closedLink, bool completedRound = false);
 		void AdjudicatePeerRoundEnds(uint64_t nowMs);
@@ -1683,6 +1683,7 @@ namespace RTE {
 		bool PeerFrameBlackout(uint64_t nowMs);
 		bool PeerInputAccepted(uint64_t frame, uint8_t owner = 0) const;
 		uint32_t PeerInputVoters(uint64_t frame, uint8_t owner) const;
+		uint32_t PeerInputReceiptGroup(uint64_t frame) const;
 		/// Whether voters decide for the group at a frame (the next one to prepare by default): a majority of the seats that vote there,
 		/// or on a tie the half the round's tie rule names.
 		bool PeerGroupHasAuthority(uint32_t voters, uint64_t frame = UINT64_MAX) const;

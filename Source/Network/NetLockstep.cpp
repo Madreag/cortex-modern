@@ -3813,13 +3813,14 @@ namespace RTE {
 		return deadline && nowMs + reserve >= *deadline;
 	}
 
-	bool NetLockstepCoordinator::PeerLinkLostBeforeOwnInput(uint8_t peer, uint64_t frame) const {
-		// A one-way path can keep supplying inputs while never accepting ours. At the same consumer deadline it belongs outside
-		// this local continuation, even when the transport still has a route. No transport fault classification is involved.
+	bool NetLockstepCoordinator::PeerMissingInputReceipt(uint8_t peer, uint64_t frame) const {
+		// Every required sender needs acceptance within this continuation. Complete receipts for just our own input cannot
+		// make another sender's missing quorum wait for the directory. This uses input evidence, never a transport classifier.
 		const auto sources = m_PeerSourceInputs.find(frame);
 		return peer != m_Config.localPeerId && sources != m_PeerSourceInputs.end() && sources->second.contains(peer) &&
-		    frame >= EffectiveStartOf(peer) && !IsSeatReclaimGap(peer, frame) && (PeerInputVoters(frame, m_Config.localPeerId) & (1U << (peer - 1))) == 0 &&
-		    (PeerConsumerHoldDue(frame, m_TimingNowMs) || !HasPeerFrameRoute(peer));
+		    frame >= EffectiveStartOf(peer) && !IsSeatReclaimGap(peer, frame) &&
+		    ((PeerConsumerHoldDue(frame, m_TimingNowMs) && (PeerInputReceiptGroup(frame) & (1U << (peer - 1))) == 0) ||
+		     (!HasPeerFrameRoute(peer) && (PeerInputVoters(frame, m_Config.localPeerId) & (1U << (peer - 1))) == 0));
 	}
 
 	void NetLockstepCoordinator::NotePeerRoundEnd(uint8_t peer, uint64_t frame, uint64_t nowMs, bool closedLink, bool completedRound) {
