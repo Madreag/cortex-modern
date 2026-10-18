@@ -5449,6 +5449,7 @@ namespace RTE {
 		m_RemoteStartsReceived.clear();
 		m_PeersPlayedThisRound.clear();
 		m_RemoteStarts.clear();
+		m_PrivateStarts.clear();
 		m_LastStartAnswerMs.clear();
 		m_ResendFrames.clear();
 		m_RecoveryOutgoing.clear();
@@ -6344,7 +6345,18 @@ namespace RTE {
 		for (const auto& [revision, decision]: replay.m_TimingDecisions) if (decision.committed) knowTaken(revision, decision.proposal);
 		for (const auto& [revision, proposal]: replay.m_SettledTimings) knowTaken(revision, proposal);
 		while (m_SettledTimings.size() > 64) m_SettledTimings.erase(m_SettledTimings.begin());
-		m_AwaitingReplayedSeatState = false;
+		const uint64_t replayedThrough = std::min(throughFrame, replay.m_LastCompletedSimulationTick.value_or(0));
+		if (m_Config.startFrame == 0 || replayedThrough >= m_Config.startFrame - 1) m_AwaitingReplayedSeatState = false;
+		if (!m_AwaitingReplayedSeatState && !IsLocalPrivateReaderAt(GetResumeFrame())) {
+			auto starts = std::move(m_PrivateStarts); m_PrivateStarts.clear();
+			for (const auto& [peer, pending]: starts) {
+				if (IsFailed() || IsStopped()) break;
+				const uint8_t previous = m_AuthenticatedPeerMessage;
+				m_AuthenticatedPeerMessage = pending.authenticatedPeer;
+				HandleStart(pending.start, std::max(m_TimingNowMs, pending.receivedMs), pending.transport);
+				m_AuthenticatedPeerMessage = previous;
+			}
+		}
 	}
 
 	void NetLockstepCoordinator::NoteReturningLink(uint8_t peerId, NetPeerId transportPeerId, uint64_t nowMs) {
@@ -12203,7 +12215,7 @@ namespace RTE {
 			if (!m_RelayHost && sender == GetHostPeerId() && LockstepPeerOfTransport(fromTransport) == sender) NoteAuthorityHeard(nowMs);
 		}
 		std::visit(Overloaded{
-			[&](const NetLockstepStart& start) { HandleStart(start, nowMs, fromTransport); },
+			[&](const NetLockstepStart& start) { ++m_Stats.startPacketsReceived; HandleStart(start, nowMs, fromTransport); },
 			[&](const NetLockstepFrame& frame) { HandleFrame(frame, nowMs, fromTransport); },
 			[&](const NetLockstepAck& ack) { HandleAck(ack, fromTransport); },
 			[&](const NetLockstepStop& stop) { HandleStop(stop, nowMs, fromTransport); },
@@ -12235,7 +12247,6 @@ namespace RTE {
 	}
 
 	void NetLockstepCoordinator::HandleStart(const NetLockstepStart& start, uint64_t nowMs, NetPeerId fromTransport) {
-		++m_Stats.startPacketsReceived;
 		// Our own start, forwarded back to us: a relay that still holds a stale transport for this seat sends
 		// it where it came from. It carries nothing we do not know and it is not a broken build.
 		if (start.localPeerId == m_Config.localPeerId) {
@@ -12348,10 +12359,24 @@ namespace RTE {
 				}
 			}
 			if (!StartMatchesConfig(start)) {
+				auto known = start;
+				const auto admission = m_PeerAdmissions.find(start.localPeerId);
+				known.startFrame = admission == m_PeerAdmissions.end() ? m_Config.startFrame : admission->second.frame;
+				known.inputDelayFrames = admission == m_PeerAdmissions.end() ? MemberStartDelay(known) : admission->second.delay;
+				// A private reader cannot validate a future member's terms until replay supplies its admission.
+				if (UsesPeerFrameGroups() && (m_AwaitingReplayedSeatState || IsLocalPrivateReaderAt(GetResumeFrame())) &&
+				    start.startFrame > known.startFrame && StartMatchesConfig(known)) {
+					const auto pending = m_PrivateStarts.find(start.localPeerId);
+					if (pending == m_PrivateStarts.end() || pending->second.start.startFrame <= start.startFrame)
+						m_PrivateStarts[start.localPeerId] = {start, fromTransport, m_AuthenticatedPeerMessage, nowMs};
+					return;
+				}
 				Fail(NetLockstepStopReason::ProtocolError, m_Stats.nextFrame, "lockstep start mismatch (" + DescribeStartMismatch(start) + ")");
 				return;
 			}
 		}
+		if (const auto pending = m_PrivateStarts.find(start.localPeerId); pending != m_PrivateStarts.end() && pending->second.start.startFrame <= start.startFrame)
+			m_PrivateStarts.erase(pending);
 		if (m_RoundId == 0 && start.roundId != 0) {
 			m_RoundId = start.roundId;
 			m_ObservationDecodeTables.roundId = m_RoundId;

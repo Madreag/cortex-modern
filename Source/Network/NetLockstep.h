@@ -2260,6 +2260,13 @@ namespace RTE {
 		std::map<uint8_t, NetPeerId> m_RemoteTransports; //!< Lockstep peerId -> transport id for each remote.
 		std::set<uint8_t> m_RemoteStartsReceived; //!< Remotes whose matching Start we've accepted; run when all present.
 		std::map<uint8_t, NetLockstepStart> m_RemoteStarts; //!< Each accepted start, re-sent when a peer repeats its own.
+		struct PrivateStart {
+			NetLockstepStart start;
+			NetPeerId transport;
+			uint8_t authenticatedPeer;
+			uint64_t receivedMs;
+		};
+		std::map<uint8_t, PrivateStart> m_PrivateStarts; //!< Future member terms await this reader's replayed admissions.
 		std::set<uint8_t> m_PeersPlayedThisRound; //!< Remotes whose frames this round took; they are not still forming it.
 		std::map<uint8_t, uint64_t> m_PeerLeaveFrames; //!< Cleanly-left peers -> the first frame WITHOUT their data.
 		std::map<uint8_t, uint64_t> m_RefusedHoldFrames; //!< The frame each seat's last refused hold was asked at, so a refusal is named once.
