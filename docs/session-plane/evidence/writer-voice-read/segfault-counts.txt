@@ -1,0 +1,5 @@
+fx46-auto-d1-b/host/stderr.log:0
+fx46-auto-d1-c/host/stderr.log:0
+fx46-base-d6-b/host/stderr.log:1
+fx46-audio-d6/host/stderr.log:0
+fx46-base-d6/host/stderr.log:1

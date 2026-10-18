@@ -1,0 +1,3 @@
+[net-lockstep-selftest] FAIL world_admission_ahead_owes_no_input: the admitted seat was held before its admission frame 1244 held=1 bound=none next=1242
+[net-lockstep-selftest] world_admission_ahead activation=1244 next=1242 silence_before_admission_ms=6210 bound=3
+[net-lockstep-selftest] PASS world_admission_ahead_owes_no_input

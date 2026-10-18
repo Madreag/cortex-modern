@@ -1,0 +1,12 @@
+Host segfault on the checkpoint writer thread while taking a returning seat's private base (run fx46-base-d6-b,
+binary 727c0cd5, source 6be1431d4's parent tree). Symbolized with addr2line from the process's own mapping
+(base 0x56a76c077000), innermost last:
+std::thread state -> CheckpointLua::BoundaryQueue<ActivityMan::PreparedAutosave::Header>::Work(std::stop_token)
+ActivityMan::PreparedAutosave::Complete(Header const&, CheckpointLua::Boundary const&)
+MovableMan::RebuildCheckpointValues(CheckpointNativeSnapshot&) const
+CheckpointNativeSnapshot::Object<Actor> -> Make<AHuman> -> AHuman(AHuman const&, snapshot) -> Actor(...) -> MOSRotating(...)
+CheckpointNativeSnapshot::Object<Attachable> -> Make<Arm> -> Arm(Arm const&, snapshot)
+CheckpointNativeSnapshot::Object<HeldDevice> -> Make<HDFirearm> -> HDFirearm(HDFirearm const&, snapshot)
+CheckpointNativeSnapshot::Object<SoundContainer> -> Make<SoundContainer> -> SoundContainer(SoundContainer const&, snapshot)
+AudioMan::IsPredictedVoice(int) const   <- reads the live m_PlayingVoices map from the writer thread
+Segmentation fault (Signal sent by the kernel)

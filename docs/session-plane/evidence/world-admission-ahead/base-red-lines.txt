@@ -1,0 +1,5 @@
+[net-lockstep] propose hold peer=3 next_frame=3231 played=0 first_missing_ms=11257 now=55055 own_park=268 peer_park=0 ready=0 heard_through=0 accepted_through=0 last_progress_ms=0 last_heard_ms=0 cause=disconnect
+[net-world] activation agreed peer=3 at=3271 admission
+[lockstep] dropped a start claiming peer 3 from the wrong transport: from=2 bound=none frame=3271
+[lockstep] dropped a start claiming peer 3 from the wrong transport: from=2 bound=none frame=3271
+dropped_start_lines=585
