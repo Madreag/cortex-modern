@@ -2019,6 +2019,53 @@ namespace RTE {
 			return true;
 		}
 
+		// A private image return carries no member's start terms: its config is the image's, with its own certified return only.
+		static bool ImageReturnTakesRetainedMemberStarts(std::string* error) {
+			Wire wire; NetLockstepCoordinator peer;
+			Configure(peer, wire);
+			peer.m_Config.peerFrameGroups = peer.m_Config.joinsRunningRound = true;
+			peer.m_Config.startFrame = 546;
+			peer.m_Config.inputDelayFrames = 13; peer.m_Config.peerInputDelayFrames = {{1, 7}, {2, 13}, {3, 7}};
+			peer.m_Config.initialPeerStartTerms = {{2, {546, 13}}};
+			peer.m_Config.initialSeatReclaims[2] = {2, 1, 546 * 8 + 2, 2, 546, 13, 570};
+			peer.m_MigrationPhase = NetHostMigrationPhase::None;
+			peer.ResetRoundState();
+			peer.m_State = NetLockstepState::WaitingForStart;
+			peer.m_Stats.nextFrame = 546;
+			const auto startOf = [&](uint8_t member, uint64_t round = 77) {
+				NetLockstepStart start;
+				start.sessionId = peer.m_Config.sessionId; start.roundId = round; start.localPeerId = member;
+				start.startFrame = 1; start.inputDelayFrames = 7; start.peerCount = 3;
+				start.controllerFrameVersion = ControllerFrame::c_Version; start.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+				start.scenario = peer.m_Config.scenario; start.ownershipPolicy = peer.m_Config.ownershipPolicy;
+				return start;
+			};
+			const auto deliver = [&](NetLockstepStart start, uint8_t source) {
+				auto message = peer.PeerFrameMessage(NetHostMigrationMessageType::PeerControl);
+				message.senderPeerId = source;
+				if (!NetLockstepCodec::Encode({start}, message.bytes)) return false;
+				message.totalBytes = message.bytes.size();
+				std::vector<uint8_t> signedMessage; NetHostMigrationMessage authenticated;
+				return NetHostMigrationCodec::Encode(message, peer.m_Config.migrationKey, signedMessage) &&
+				    NetHostMigrationCodec::Decode(signedMessage, peer.m_Config.migrationKey, authenticated) && peer.HandlePeerFrameMessage(authenticated, 8400);
+			};
+			if (!deliver(startOf(3), 1) || peer.m_RemoteStartsReceived.contains(3) || peer.m_Config.initialPeerStartTerms.contains(3)) {
+				*error = "a relayed identity gave a member start terms"; return false;
+			}
+			if (!deliver(startOf(1, 78), 1) || peer.m_RemoteStartsReceived.contains(1) || peer.m_Config.initialPeerStartTerms.contains(1)) {
+				*error = "another round's start gave the host start terms"; return false;
+			}
+			// The host's start alone lets the round run; a member's start that follows it is still its own retained start.
+			if (!deliver(startOf(1), 1) || !deliver(startOf(3), 3) || !peer.m_RemoteStartsReceived.contains(1) || !peer.m_RemoteStartsReceived.contains(3) || !peer.IsRunning()) {
+				*error = "an image return did not take its members' authenticated retained starts: running=" + std::to_string(peer.IsRunning()) +
+				    " host=" + std::to_string(peer.m_RemoteStartsReceived.contains(1)) + " third=" + std::to_string(peer.m_RemoteStartsReceived.contains(3)) + " " + peer.m_Stats.timeoutReason; return false;
+			}
+			if (peer.m_Config.initialPeerStartTerms.at(1) != std::pair<uint64_t, uint16_t>{1, 7} || peer.m_Config.initialPeerStartTerms.at(2) != std::pair<uint64_t, uint16_t>{546, 13}) {
+				*error = "an image return recorded other start terms than the members' own"; return false;
+			}
+			return true;
+		}
+
 		static bool FutureRemovalKeepsPastAuthority(std::string* error) {
 			Wire wire;
 			NetLockstepCoordinator peer;
@@ -32396,6 +32443,13 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "image-return-member-starts") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::ImageReturnTakesRetainedMemberStarts(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS an_image_return_takes_its_members_retained_starts" << std::endl;
+				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "return-member-starts") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::ReturnMemberStarts(&error)) return fail(error);
@@ -32670,6 +32724,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::FutureRemovalKeepsPastAuthority, "a_future_removal_keeps_the_past_directory_decision");
 		row(&SessionPlaneRecoveryTest::ReturnStartAdmission, "a_return_start_uses_its_certified_admission");
 		row(&SessionPlaneRecoveryTest::ReturnMemberStarts, "a_return_keeps_each_authenticated_members_start");
+		row(&SessionPlaneRecoveryTest::ImageReturnTakesRetainedMemberStarts, "an_image_return_takes_its_members_retained_starts");
 		row(&SessionPlaneRecoveryTest::ReturnPrefixUsesActivationVoters, "a_return_prefix_uses_its_activation_voters");
 		row(&SessionPlaneRecoveryTest::ReplayedPrefixesValidateConcurrentReturns, "replayed_prefixes_validate_concurrent_returns");
 		row(&SessionPlaneRecoveryTest::ReplayedReturnRestoresFrameGroup, "replayed_return_restores_frame_group");

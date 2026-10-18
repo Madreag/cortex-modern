@@ -12297,6 +12297,15 @@ namespace RTE {
 			NameStaleStart(start, "another round's start: round " + std::to_string(start.roundId) + " for " + std::to_string(m_RoundId));
 			return;
 		}
+		// A member's own authenticated start names its retained terms. A seat whose image carried no terms for that member takes them
+		// from it; terms the image did carry are history, and the checks below still hold every start to them.
+		if (m_Config.joinsRunningRound && UsesPeerFrameGroups() && (m_State == NetLockstepState::WaitingForStart || IsRunning()) && m_AuthenticatedPeerMessage == start.localPeerId &&
+		    start.localPeerId != m_Config.localPeerId && IsKnownRemotePeer(start.localPeerId) && m_RoundId != 0 && start.roundId == m_RoundId &&
+		    start.startFrame < m_Config.startFrame && start.inputDelayFrames <= NetLockstepCodec::c_MaxInputDelayFrames &&
+		    !m_Config.initialPeerStartTerms.contains(start.localPeerId) && !m_ReclaimTransactions.contains(start.localPeerId)) {
+			m_Config.initialPeerStartTerms[start.localPeerId] = {start.startFrame, start.inputDelayFrames};
+			m_PeerAdmissions[start.localPeerId] = {start.startFrame, start.inputDelayFrames};
+		}
 		// A seat joining the running round starts at its own admission; the start the host began the round with names
 		// a frame before it, and once this seat has its round that start is a straggler, never a mismatch.
 		if (m_Config.joinsRunningRound && start.localPeerId == GetHostPeerId() && start.startFrame < m_Config.startFrame &&
