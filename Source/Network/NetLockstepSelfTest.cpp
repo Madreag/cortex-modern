@@ -230,7 +230,7 @@ namespace RTE {
 			if (!deadline || std::abs(*deadline - 2050) > 1e-6 || parked.m_Stats.ownParksExcluded != 1) {
 				*error = "an actual own pause did not shift the displayed and pacing clocks together"; return false;
 			}
-			for (unsigned role = 0; role < 3; ++role) {
+			for (unsigned role = 0; role < 4; ++role) {
 				Wire neutralWire; NetLockstepCoordinator peer; Configure(peer, neutralWire);
 				peer.m_Config.peerFrameGroups = peer.m_Config.substituteSlowPeers = true;
 				peer.m_Config.slowPlayerBoundTicks = 3; peer.m_MigrationPhase = NetHostMigrationPhase::None;
@@ -244,18 +244,27 @@ namespace RTE {
 				peer.m_PeerSourceInputs[351][3] = {3, 351};
 				peer.m_PeerInputReceipts[3] = {{1, 352}, {2, 352}, {3, 352}};
 				if (role != 1) {
-					const uint64_t activation = role == 0 ? 340 : 370;
+					const uint64_t activation = role == 2 ? 370 : 340;
 					peer.m_PeerBridges[2] = {320, 320, true, activation, {}, 7};
 					peer.m_ReclaimTransactions[2] = {2, 1, 802, 2, activation, 7, 420};
 					peer.m_PeerFrameHolds[2] = {{320, true}, {activation, false}};
 					peer.m_FrameGroupChanges = {{1, 7}, {320, 5}, {activation, 7}};
 					if (role == 2) peer.m_FrameGroupMembers = 5;
 				}
+				if (role == 3) {
+					// The neutral local seat owes no own sample, but another supplied sender still needs the missing host's receipt.
+					peer.m_PeerSourceInputs[351][1] = {1, 351};
+					peer.m_PeerInputReceipts[1] = {{1, 352}, {2, 352}, {3, 352}};
+					peer.m_PeerInputReceipts[3] = {{1, 351}, {2, 352}, {3, 352}};
+					if (peer.PeerInputReceiptGroup(351) != 6) {
+						*error = "a neutral participant skipped the supplied sender's missing host receipt"; return false;
+					}
+				}
 				peer.m_TimingNowMs = 1030;
 				if (peer.ProposePeerBridge(351, 1030)) { *error = "a neutral return held another peer before its displayed deadline"; return false; }
 				peer.m_TimingNowMs = 1041;
 				const bool held = peer.ProposePeerBridge(351, 1041);
-				if (held != (role == 0) || (held && (!peer.IsSeatUnderAI(1, 351) || peer.IsSeatUnderAI(3, 351)))) {
+				if (held != (role == 0 || role == 3) || (held && (!peer.IsSeatUnderAI(1, 351) || peer.IsSeatUnderAI(3, 351)))) {
 					*error = "a participating neutral return needs no own human input to hold another missing sender, while a private reader does"; return false;
 				}
 			}
