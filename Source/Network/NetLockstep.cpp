@@ -11008,6 +11008,9 @@ namespace RTE {
 		if (frame < EffectiveStartOf(peerId) || IsSeatReclaimGap(peerId, frame)) {
 			return false;
 		}
+		if (UsesPeerFrameGroups() && IsSeatUnderAI(peerId, frame)) {
+			return false;
+		}
 		const auto waiverIt = m_PeerFrameWaivers.find(peerId);
 		if (waiverIt != m_PeerFrameWaivers.end() && frame >= waiverIt->second) {
 			return false;

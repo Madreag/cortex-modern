@@ -316,6 +316,43 @@ namespace RTE {
 			return true;
 		}
 
+		static bool HeldPeerFrameSeatsOweNoInput(std::string* error) {
+			for (bool peerFramed: {true, false}) for (uint8_t held: {1, 3}) {
+				Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
+				peer.m_Config.peerFrameGroups = peerFramed;
+				peer.m_Config.substituteSlowPeers = true;
+				peer.m_MigrationPhase = NetHostMigrationPhase::None;
+				peer.m_PeerEffectiveStart = {{1, 1}, {2, 1}, {3, 1}};
+				peer.m_FrameGroupMembers = 7 & ~(1U << (held - 1));
+				peer.m_FrameGroupChanges = {{1, 7}, {100, peer.m_FrameGroupMembers}, {180, 7}};
+				peer.m_AiHeldSeats[held] = 100;
+				peer.m_SeatTransitions[held] = {{100, NetLockstepCoordinator::SeatTransition::Held}, {180, NetLockstepCoordinator::SeatTransition::Back}};
+				peer.m_PeerBridges[held] = {100, 100, true, 180, {}, peer.m_FrameGroupMembers};
+				peer.m_PeerFrameHolds[held] = {{100, true}, {180, false}};
+				peer.m_ReclaimTransactions[held] = {held, 1, 180 * 8 + held, 1, 180, 5, 190};
+				if (held != 1) peer.m_PeerLeaveFrames[held] = 100;
+				for (uint64_t frame: {99, 100, 179, 180, 190, 191}) {
+					const bool neutral = frame >= 180 && frame <= 190;
+					const bool underAI = frame >= 100 && frame < 180;
+					const bool required = !neutral && (!underAI || (!peerFramed && held == 1));
+					if (peer.IsSeatUnderAI(held, frame) != underAI || peer.IsRemoteRequiredForFrame(held, frame) != required ||
+					    (underAI && peer.CommitsRemoteInput(held, frame))) {
+						*error = "a held peer-frame seat still owes input, or a live/legacy host requirement changed: peer_framed=" +
+						    std::to_string(peerFramed) + " seat=" + std::to_string(held) + " frame=" + std::to_string(frame); return false;
+					}
+				}
+				peer.m_PeerBridges[held] = {200, 200, true, {}, {}, peer.m_FrameGroupMembers};
+				peer.m_PeerFrameHolds[held][200] = true;
+				peer.m_SeatTransitions[held][200] = NetLockstepCoordinator::SeatTransition::Held;
+				peer.m_AiHeldSeats[held] = 200; peer.m_ReclaimTransactions.erase(held);
+				if (held != 1) peer.m_PeerLeaveFrames[held] = 200;
+				if (!peer.IsSeatUnderAI(held, 200) || peer.IsRemoteRequiredForFrame(held, 200) != (!peerFramed && held == 1)) {
+					*error = "a later hold borrowed the earlier return's input requirement"; return false;
+				}
+			}
+			return true;
+		}
+
 		static bool DirectHistoriesChooseAtHeal(std::string* error) {
 			struct Arm { uint32_t own, remote; uint8_t local; bool loses; bool continued = true, cpuPair = false, granted = false, zero = false; uint32_t initial = 0; };
 			const std::vector<Arm> arms = {
@@ -31473,6 +31510,12 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS concurrent_voluntary_holds_keep_both_owners\n[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "held-input-requirement") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::HeldPeerFrameSeatsOweNoInput(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS held_peer_frame_seats_owe_no_input\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "direct-hold-scope") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::DirectHoldScope(&error)) return fail(error);
@@ -31795,6 +31838,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::LinkDelay, "input_delay_follows_the_measured_link");
 		row(&SessionPlaneRecoveryTest::ConsumerHoldDeadlineIncludesTheDisplayedSlot, "consumer_hold_deadline_includes_the_displayed_slot");
 		row(&SessionPlaneRecoveryTest::ConcurrentVoluntaryHoldsKeepBothOwners, "concurrent_voluntary_holds_keep_both_owners");
+		row(&SessionPlaneRecoveryTest::HeldPeerFrameSeatsOweNoInput, "held_peer_frame_seats_owe_no_input");
 		row(&SessionPlaneRecoveryTest::LegacyCombatHoldUsesItsInputDeadline, "legacy_combat_hold_uses_its_input_deadline");
 		row(&SessionPlaneRecoveryTest::RemoteInputReceiptsFormTheLocalHoldGroup, "remote_input_receipts_form_the_local_hold_group");
 		row(&SessionPlaneRecoveryTest::MissingOrZeroLinkNeverUsesReceipts, "missing_or_zero_rtt_never_uses_machine_receipts");
