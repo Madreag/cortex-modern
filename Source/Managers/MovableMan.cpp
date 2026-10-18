@@ -107,7 +107,103 @@ extern "C" {
 
 using namespace RTE;
 
+namespace RTE {
+	// The private exception-capture fault build calls this from the pool wrapper's catch. A task still throws a real
+	// bad_alloc; only the captured pointer is made empty, so the update consumes the wrapper's actual fallback future.
+	thread_local bool t_PoolUpdateEmptyCapture = false;
+	std::atomic<unsigned> s_PoolUpdateEmptyCaptures{0};
+	std::exception_ptr CapturePoolUpdateFailureForTest() noexcept {
+		if (std::exchange(t_PoolUpdateEmptyCapture, false)) {
+			s_PoolUpdateEmptyCaptures.fetch_add(1, std::memory_order_relaxed);
+			return {};
+		}
+		return std::current_exception();
+	}
+}
+
 namespace {
+	struct PoolUpdateProbe {
+		std::atomic<bool> active{false};
+		bool empty = false;
+		std::atomic<unsigned> entered{0}, completed{0}, thrown{0}, observed{0}, continued{0};
+	} s_PoolUpdateProbe;
+
+	class PoolUpdateTaskProbe {
+	public:
+		PoolUpdateTaskProbe() : m_Active(s_PoolUpdateProbe.active.load(std::memory_order_acquire)) {
+			if (m_Active) s_PoolUpdateProbe.entered.fetch_add(1, std::memory_order_relaxed);
+		}
+		~PoolUpdateTaskProbe() { if (m_Active) s_PoolUpdateProbe.completed.fetch_add(1, std::memory_order_relaxed); }
+		void FailIfRequested(size_t index, size_t count) const {
+			if (!m_Active) return;
+			// An early future fails while the last worker is still borrowing the update's captures.
+			if (index + 1 == count) std::this_thread::sleep_for(std::chrono::milliseconds(60));
+			if (index == 0 || index == count / 2) {
+				s_PoolUpdateProbe.thrown.fetch_add(1, std::memory_order_relaxed);
+				t_PoolUpdateEmptyCapture = s_PoolUpdateProbe.empty;
+				throw std::bad_alloc{};
+			}
+		}
+	private:
+		bool m_Active;
+	};
+}
+
+namespace {
+	// Observe every task before propagating its first failure: throwing out of a batch must not leave a worker using
+	// the caller's captures, nor let the rest of a partially updated tick proceed as though the batch succeeded.
+	const std::exception_ptr s_UncapturedPoolFailure = std::make_exception_ptr(std::bad_exception{});
+	void FinishPoolTasks(BS::multi_future<void>& tasks, std::exception_ptr failure = {}) {
+		for (size_t index = 0; index < tasks.size(); ++index) {
+			if (!tasks[index].valid()) continue;
+			try { tasks[index].get(); }
+			catch (...) {
+				if (s_PoolUpdateProbe.active.load(std::memory_order_relaxed)) s_PoolUpdateProbe.observed.fetch_add(1, std::memory_order_relaxed);
+				if (!failure) {
+					failure = std::current_exception();
+					if (!failure) failure = s_UncapturedPoolFailure;
+				}
+			}
+		}
+		if (failure) std::rethrow_exception(failure);
+	}
+
+	template <typename Work>
+	BS::multi_future<void> SubmitPoolTasks(size_t count, Work&& work, size_t blocks = 0, void (*releaseBeforeDrain)() = nullptr) {
+		auto& pool = g_ThreadMan.GetPriorityThreadPool();
+		if (count == 0) return {};
+		BS::blocks ranges(size_t{0}, count, blocks ? blocks : pool.get_thread_count());
+		BS::multi_future<void> tasks(ranges.get_num_blocks());
+		try {
+			for (size_t index = 0; index < tasks.size(); ++index) tasks[index] = pool.submit(work, ranges.start(index), ranges.end(index));
+		}
+		catch (...) {
+			// Keep the futures already submitted if allocation fails partway through the batch. Drain them while every
+			// borrowed capture still lives, preserving the submission failure and observing every task's failure too.
+			auto failure = std::current_exception();
+			if (!failure) failure = s_UncapturedPoolFailure;
+			if (releaseBeforeDrain) releaseBeforeDrain();
+			FinishPoolTasks(tasks, std::move(failure));
+		}
+		return tasks;
+	}
+
+	template <typename Work>
+	void RunStateTasks(size_t count, Work&& work) {
+		auto tasks = SubmitPoolTasks(count, std::forward<Work>(work), count);
+		FinishPoolTasks(tasks);
+	}
+
+	class ScopedAIActor {
+	public:
+		explicit ScopedAIActor(Actor* actor) noexcept : m_Previous(g_CurrentAIActor) { g_CurrentAIActor = actor; }
+		~ScopedAIActor() { g_CurrentAIActor = m_Previous; }
+		ScopedAIActor(const ScopedAIActor&) = delete;
+		ScopedAIActor& operator=(const ScopedAIActor&) = delete;
+	private:
+		Actor* m_Previous;
+	};
+
 	using json = nlohmann::json;
 
 	// Test lever: CC_TEST_SEE_RAY_HOLD=1 holds the see-ray workers until the sim thread reaches the pass's join, the latest they may run.
@@ -127,6 +223,12 @@ namespace {
 		std::vector<std::pair<long, size_t>> traced; //!< Under the shared trace, each actor's unique ID and the end of its rays.
 	};
 	SeeRayPass s_SeeRayPass;
+	void DiscardSeeRayPass() {
+		auto& pass = s_SeeRayPass;
+		pass.pending = false;
+		pass.rays.clear(); pass.traces.clear(); pass.traced.clear();
+		for (BITMAP*& fog: pass.fog) { if (fog) destroy_bitmap(fog); fog = nullptr; }
+	}
 
 	size_t CountTraceValue(const BITMAP* bitmap, int value) {
 		size_t count = 0;
@@ -4145,7 +4247,8 @@ void MovableMan::TraceFog(const char* where) const {
 
 void MovableMan::WaitForActorsSeeTask(const char* caller) {
 	s_SeeRaysReleased.store(true, std::memory_order_release);
-	m_ActorsSeeFuture.wait();
+	try { FinishPoolTasks(m_ActorsSeeFuture); }
+	catch (...) { DiscardSeeRayPass(); throw; }
 	SeeRayPass& pass = s_SeeRayPass;
 	if (!pass.pending) return;
 	if (LuaMan::SharedTraceEnabled()) {
@@ -6230,6 +6333,7 @@ static void ForgetActivitySlots(MovableObject* object) {
 }
 
 void MovableMan::RunThreadedSyncedUpdatePass(bool globalMoidOrder) {
+	LuaMan::ScopedThreadLuaStateOverride context;
 	const std::string syncedUpdate = "SyncedUpdate"; // avoid string reconstruction
 	m_SyncedPassSkippedDeadEntries = 0;
 	// DeleteEntity frees an object where the script stands (LuaAdapters.cpp), so a SyncedUpdate can
@@ -7802,32 +7906,31 @@ void MovableMan::Update() {
 
 		const std::string threadedUpdate = "ThreadedUpdate"; // avoid string reconstruction
 
-		g_LuaMan.SetThreadLuaStateOverride(&g_LuaMan.GetMasterScriptState());
-		for (MovableObject* mo: SortedRegisteredMOs(g_LuaMan.GetMasterScriptState())) {
-			if (ValidMO(mo->GetRootParent())) {
-				mo->RunScriptedFunctionInAppropriateScripts(threadedUpdate, false, false, {}, {}, {});
+		{
+			LuaMan::ScopedThreadLuaStateOverride stateOverride(&g_LuaMan.GetMasterScriptState());
+			for (MovableObject* mo: SortedRegisteredMOs(g_LuaMan.GetMasterScriptState())) {
+				if (ValidMO(mo->GetRootParent())) {
+					mo->RunScriptedFunctionInAppropriateScripts(threadedUpdate, false, false, {}, {}, {});
+				}
 			}
 		}
-		g_LuaMan.SetThreadLuaStateOverride(nullptr);
 
 		LuaStatesArray& luaStates = g_LuaMan.GetThreadedScriptStates();
 		// One Lua state per task; the assert below requires it regardless of pool size.
-		g_ThreadMan.GetPriorityThreadPool().parallelize_loop(luaStates.size(),
-		                                                     [&](int start, int end) {
-			                                                     RTEAssert(start + 1 == end, "Threaded script state being updated across multiple threads!");
-			                                                     LuaStateWrapper& luaState = luaStates[start];
-			                                                     g_LuaMan.SetThreadLuaStateOverride(&luaState, true);
+		RunStateTasks(luaStates.size(), [&](int start, int end) {
+			RTEAssert(start + 1 == end, "Threaded script state being updated across multiple threads!");
+			LuaStateWrapper& luaState = luaStates[start];
+			LuaMan::ScopedThreadLuaStateOverride stateOverride(&luaState, true);
+			PoolUpdateTaskProbe probe;
+			probe.FailIfRequested(static_cast<size_t>(start), luaStates.size());
 
-			                                                     for (MovableObject* mo: SortedRegisteredMOs(luaState)) {
-				                                                     if (ValidMO(mo->GetRootParent())) {
-					                                                     mo->RunScriptedFunctionInAppropriateScripts(threadedUpdate, false, false, {}, {}, {});
-				                                                     }
-			                                                     }
-
-			                                                     g_LuaMan.SetThreadLuaStateOverride(nullptr);
-		                                                     },
-		                                                     luaStates.size())
-		    .wait();
+			for (MovableObject* mo: SortedRegisteredMOs(luaState)) {
+				if (ValidMO(mo->GetRootParent())) {
+					mo->RunScriptedFunctionInAppropriateScripts(threadedUpdate, false, false, {}, {}, {});
+				}
+			}
+		});
+		if (s_PoolUpdateProbe.active.load(std::memory_order_relaxed)) s_PoolUpdateProbe.continued.fetch_add(1, std::memory_order_relaxed);
 	}
 
 	{
@@ -7835,13 +7938,14 @@ void MovableMan::Update() {
 
 		// The serial, global-MOID channel for script-driven shared-state mutation;
 		// scripts opt in via RequestSyncedUpdate. See Data/Modding/threaded-determinism.md.
-		g_LuaMan.SetThreadLuaStateOverride(&g_LuaMan.GetMasterScriptState());
-		for (MovableObject* mo: SortedRegisteredMOs(g_LuaMan.GetMasterScriptState())) {
-			if (ValidMO(mo->GetRootParent())) {
-				mo->RunScriptedFunctionInAppropriateScripts("SyncedUpdate", false, false, {}, {}, {});
+		{
+			LuaMan::ScopedThreadLuaStateOverride stateOverride(&g_LuaMan.GetMasterScriptState());
+			for (MovableObject* mo: SortedRegisteredMOs(g_LuaMan.GetMasterScriptState())) {
+				if (ValidMO(mo->GetRootParent())) {
+					mo->RunScriptedFunctionInAppropriateScripts("SyncedUpdate", false, false, {}, {}, {});
+				}
 			}
 		}
-		g_LuaMan.SetThreadLuaStateOverride(nullptr);
 		RunThreadedSyncedUpdatePass(true);
 	}
 	g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::ScriptsUpdate);
@@ -8115,16 +8219,22 @@ void MovableMan::Update() {
 	}
 	const bool visualize = g_SceneMan.DrawsRayCastVisualizations();
 	if (SeeRayHoldLever()) s_SeeRaysReleased.store(false, std::memory_order_release);
-	m_ActorsSeeFuture = g_ThreadMan.GetPriorityThreadPool().parallelize_loop(pass.rays.size(), [&pass, visualize](int start, int end) {
-		ZoneScopedN("Actors See");
-		HoldSeeRayWorker();
-		// Vision reads the frozen terrain copy so concurrent carving can't race the see-ray reads.
-		SceneMan::ScopedTerrainCopyRead terrainCopyScope;
-		for (int ray = start; ray < end; ++ray) {
-			const SeeRay& seeRay = pass.rays[ray];
-			if (BITMAP* fog = pass.fog[seeRay.team]) g_SceneMan.TraceSeeRay(seeRay, fog, pass.fogScale[seeRay.team], visualize, pass.traces[ray]);
-		}
-	});
+	try {
+		m_ActorsSeeFuture = SubmitPoolTasks(pass.rays.size(), [&pass, visualize](int start, int end) {
+			ZoneScopedN("Actors See");
+			HoldSeeRayWorker();
+			// Vision reads the frozen terrain copy so concurrent carving can't race the see-ray reads.
+			SceneMan::ScopedTerrainCopyRead terrainCopyScope;
+			for (int ray = start; ray < end; ++ray) {
+				const SeeRay& seeRay = pass.rays[ray];
+				if (BITMAP* fog = pass.fog[seeRay.team]) g_SceneMan.TraceSeeRay(seeRay, fog, pass.fogScale[seeRay.team], visualize, pass.traces[ray]);
+			}
+		}, 0, [] { s_SeeRaysReleased.store(true, std::memory_order_release); });
+	} catch (...) {
+		s_SeeRaysReleased.store(true, std::memory_order_release);
+		DiscardSeeRayPass();
+		throw;
+	}
 
 	// GC kicked off from Main after LateUpdateGlobalScripts, when no more Lua runs on main this tick.
 
@@ -8138,6 +8248,50 @@ void MovableMan::Update() {
 			CheckpointMembershipValues().m_ActorRoster[team].sort(MOXPosComparison());
 		}
 	}
+}
+
+bool MovableMan::RunPoolUpdateSelfTest() {
+	// Match the next real update's precondition: Main has already queued this tick's draw.
+	CompleteQueuedMOIDDrawings();
+	auto& probe = s_PoolUpdateProbe;
+	const size_t states = g_LuaMan.GetThreadedScriptStates().size();
+	probe.empty = std::getenv("CC_TEST_POOL_EMPTY_CAPTURE") != nullptr;
+	probe.entered = probe.completed = probe.thrown = probe.observed = probe.continued = 0;
+	s_PoolUpdateEmptyCaptures = 0;
+	LuaStateWrapper* previous = g_LuaMan.GetThreadLuaStateOverride();
+	bool badAlloc = false, fallback = false, unexpected = false;
+	probe.active.store(true, std::memory_order_release);
+	try { Update(); }
+	catch (const std::bad_alloc&) { badAlloc = true; }
+	catch (const std::bad_exception&) { fallback = true; }
+	catch (...) { unexpected = true; }
+	probe.active.store(false, std::memory_order_release);
+	// The failing baseline continues far enough to launch seeing rays; finish those before checking every worker's TLS.
+	WaitForActorsSeeTask("pool-update-selftest");
+	auto& pool = g_ThreadMan.GetPriorityThreadPool();
+	const size_t workers = pool.get_thread_count();
+	std::atomic<size_t> arrived{0};
+	std::vector<std::future<bool>> contexts;
+	contexts.reserve(workers);
+	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+	for (size_t index = 0; index < workers; ++index) contexts.push_back(pool.submit([&] {
+		arrived.fetch_add(1, std::memory_order_acq_rel);
+		while (arrived.load(std::memory_order_acquire) < workers && std::chrono::steady_clock::now() < deadline) std::this_thread::yield();
+		return arrived.load(std::memory_order_acquire) == workers &&
+		       g_LuaMan.GetThreadLuaStateOverride() == nullptr && g_CurrentAIActor == nullptr;
+	}));
+	bool clean = true;
+	for (auto& context: contexts) clean = context.get() && clean;
+	const bool expected = probe.empty ? fallback && !badAlloc && s_PoolUpdateEmptyCaptures == 2 : badAlloc && !fallback && s_PoolUpdateEmptyCaptures == 0;
+	const bool passed = states >= 2 && expected && !unexpected && probe.entered == states && probe.completed == states &&
+	                    probe.thrown == 2 && probe.observed == 2 && probe.continued == 0 && clean && arrived == workers &&
+	                    g_LuaMan.GetThreadLuaStateOverride() == previous;
+	std::cout << "[pool-update-selftest] " << (passed ? "PASS" : "FAIL") << " empty_capture=" << probe.empty
+	          << " bad_alloc=" << badAlloc << " fallback=" << fallback << " unexpected=" << unexpected << " states=" << states
+	          << " entered=" << probe.entered << " completed=" << probe.completed << " thrown=" << probe.thrown
+	          << " observed=" << probe.observed << " continued=" << probe.continued << " clean_workers=" << clean
+	          << " workers=" << workers << " checked_workers=" << arrived << " empty_pointers=" << s_PoolUpdateEmptyCaptures << std::endl;
+	return passed;
 }
 
 void MovableMan::Travel() {
@@ -8215,7 +8369,7 @@ void MovableMan::UpdateStage(MovableObject* mo, bool actor) {
 void MovableMan::PreviewScriptStage(const MovableObject* root) {
 	auto bound = LuaMan::PreviewBindingsUnder(root);
 	if (bound.empty()) return;
-	LuaStateWrapper* const previousOverride = g_LuaMan.GetThreadLuaStateOverride();
+	LuaMan::ScopedThreadLuaStateOverride context;
 	LuaStateWrapper* const master = &g_LuaMan.GetMasterScriptState();
 	// A script may destroy an object of the tree, so each one is looked up again before it runs.
 	const auto live = [](MovableObject* mo, LuaStateWrapper* state) { return state->GetPendingRegisteredMOs().contains(mo); };
@@ -8242,7 +8396,6 @@ void MovableMan::PreviewScriptStage(const MovableObject* root) {
 		entry.object->RunScriptedFunctionInAppropriateScripts("SyncedUpdate", false, false, {}, {}, {});
 		if (live(entry.object, state)) entry.object->ResetRequestedSyncedUpdateFlag();
 	}
-	g_LuaMan.SetThreadLuaStateOverride(previousOverride);
 }
 
 void MovableMan::PostUpdateStage(MovableObject* mo) {
@@ -8480,41 +8633,36 @@ void MovableMan::UpdateControllers() {
 		};
 		// Scripts initialize here, at one deterministic point on the sim thread on every peer, so a
 		// freshly added actor keeps its first AI pass and every peer numbers its sound scopes alike.
-		g_LuaMan.SetThreadLuaStateOverride(&g_LuaMan.GetMasterScriptState());
-		for (Actor* actor: CheckpointActorValues().m_Actors) {
-			actor->InitializeObjectScriptsIfNeeded();
-		}
-		// The shared hooks' sound writes land here, after the last shared script of the tick and before
-		// the first AI one, so everything the drain finds afterwards was written by an AI pass.
-		g_AudioMan.SettleSharedSoundWrites();
-		// Check the script state first: only its own pass needs to ask the network plane who produces this actor.
-		for (Actor* actor: CheckpointActorValues().m_Actors) {
-			if (actor->GetLuaState() == &g_LuaMan.GetMasterScriptState() && actor->ObjectScriptsInitialized() && isLocalControllerActor(actor) && actor->GetController()->ShouldUpdateAIThisFrame()) {
-				// Mark the running AI actor so its Equip* mutators defer the mutation to the post-pass drain.
-				g_CurrentAIActor = actor;
-				actor->RunScriptedFunctionInAppropriateScripts("ThreadedUpdateAI", false, true, {}, {}, {});
-				g_CurrentAIActor = nullptr;
+		{
+			LuaMan::ScopedThreadLuaStateOverride stateOverride(&g_LuaMan.GetMasterScriptState());
+			for (Actor* actor: CheckpointActorValues().m_Actors) {
+				actor->InitializeObjectScriptsIfNeeded();
+			}
+			// The shared hooks' sound writes land here, after the last shared script of the tick and before
+			// the first AI one, so everything the drain finds afterwards was written by an AI pass.
+			g_AudioMan.SettleSharedSoundWrites();
+			// Check the script state first: only its own pass needs to ask the network plane who produces this actor.
+			for (Actor* actor: CheckpointActorValues().m_Actors) {
+				if (actor->GetLuaState() == &g_LuaMan.GetMasterScriptState() && actor->ObjectScriptsInitialized() && isLocalControllerActor(actor) && actor->GetController()->ShouldUpdateAIThisFrame()) {
+					// Mark the running AI actor so its Equip* mutators defer the mutation to the post-pass drain.
+					ScopedAIActor actorContext(actor);
+					actor->RunScriptedFunctionInAppropriateScripts("ThreadedUpdateAI", false, true, {}, {}, {});
+				}
 			}
 		}
-		g_LuaMan.SetThreadLuaStateOverride(nullptr);
 
 		LuaStatesArray& luaStates = g_LuaMan.GetThreadedScriptStates();
-		g_ThreadMan.GetPriorityThreadPool().parallelize_loop(luaStates.size(),
-		                                                     [&](int start, int end) {
-			                                                     RTEAssert(start + 1 == end, "Threaded script state being updated across multiple threads!");
-			                                                     LuaStateWrapper& luaState = luaStates[start];
-			                                                     g_LuaMan.SetThreadLuaStateOverride(&luaState, true);
-			                                                     for (Actor* actor: CheckpointActorValues().m_Actors) {
-				                                                     if (actor->GetLuaState() == &luaState && actor->ObjectScriptsInitialized() && isLocalControllerActor(actor) && actor->GetController()->ShouldUpdateAIThisFrame()) {
-					                                                     g_CurrentAIActor = actor;
-					                                                     actor->RunScriptedFunctionInAppropriateScripts("ThreadedUpdateAI", false, true, {}, {}, {});
-					                                                     g_CurrentAIActor = nullptr;
-				                                                     }
-			                                                     }
-			                                                     g_LuaMan.SetThreadLuaStateOverride(nullptr);
-		                                                     },
-		                                                     luaStates.size())
-		    .wait();
+		RunStateTasks(luaStates.size(), [&](int start, int end) {
+			RTEAssert(start + 1 == end, "Threaded script state being updated across multiple threads!");
+			LuaStateWrapper& luaState = luaStates[start];
+			LuaMan::ScopedThreadLuaStateOverride stateOverride(&luaState, true);
+			for (Actor* actor: CheckpointActorValues().m_Actors) {
+				if (actor->GetLuaState() == &luaState && actor->ObjectScriptsInitialized() && isLocalControllerActor(actor) && actor->GetController()->ShouldUpdateAIThisFrame()) {
+					ScopedAIActor actorContext(actor);
+					actor->RunScriptedFunctionInAppropriateScripts("ThreadedUpdateAI", false, true, {}, {}, {});
+				}
+			}
+		});
 
 		drainDeferredEquips();
 		drainDeferredWaypoints();
@@ -8526,11 +8674,8 @@ void MovableMan::UpdateControllers() {
 		// The serial UpdateAI pass mutates directly outside lockstep; under it the calls defer like the threaded ones.
 		for (Actor* actor: CheckpointActorValues().m_Actors) {
 			if (isLocalControllerActor(actor) && actor->ObjectScriptsInitialized() && actor->GetController()->ShouldUpdateAIThisFrame()) {
-				if (lockstepActive) {
-					g_CurrentAIActor = actor;
-				}
+				ScopedAIActor actorContext(lockstepActive ? actor : g_CurrentAIActor);
 				actor->RunScriptedFunctionInAppropriateScripts("UpdateAI", false, true, {}, {}, {});
-				g_CurrentAIActor = nullptr;
 			}
 		}
 		if (lockstepActive) {
@@ -8789,7 +8934,7 @@ void MovableMan::StartMOIDDrawTask() {
 
 void MovableMan::CompleteQueuedMOIDDrawings() {
 	if (m_DrawMOIDsTask.valid()) {
-		m_DrawMOIDsTask.wait();
+		m_DrawMOIDsTask.get();
 	}
 }
 

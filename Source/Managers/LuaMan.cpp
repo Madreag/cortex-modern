@@ -16102,6 +16102,20 @@ thread_local LuaStateWrapper* s_luaStateOverride = nullptr;
 thread_local bool s_luaStateParallelTask = false;
 std::atomic<uint64_t> s_ScriptStatesTakenFromASpawner{0};
 
+LuaMan::ScopedThreadLuaStateOverride::ScopedThreadLuaStateOverride() noexcept :
+	m_Previous(s_luaStateOverride), m_WasParallel(s_luaStateParallelTask) {
+}
+
+LuaMan::ScopedThreadLuaStateOverride::ScopedThreadLuaStateOverride(LuaStateWrapper* state, bool parallelStateTask) noexcept : ScopedThreadLuaStateOverride() {
+	s_luaStateOverride = state;
+	s_luaStateParallelTask = state != nullptr && parallelStateTask;
+}
+
+LuaMan::ScopedThreadLuaStateOverride::~ScopedThreadLuaStateOverride() {
+	s_luaStateOverride = m_Previous;
+	s_luaStateParallelTask = m_WasParallel;
+}
+
 LuaStateWrapper* LuaMan::GetThreadLuaStateOverride() const {
 	return s_luaStateOverride;
 }
