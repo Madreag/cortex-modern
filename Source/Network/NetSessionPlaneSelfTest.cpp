@@ -1155,6 +1155,16 @@ namespace RTE {
 				}
 				return winner;
 			}
+			bool ImageDonorCanAnswer(uint8_t donor) const {
+				// FLAGGED fixture departure: Running describes the coordinator, not whether its process can serve bytes.
+				// A hung process keeps its queued socket traffic but cannot answer an image request until it resumes.
+				return peers[donor - 1]->IsRunning() && !hub.ProcessHung(donor);
+			}
+			uint8_t ImageReturnProposer(uint8_t donor) const {
+				// FLAGGED fixture departure: the image source can be any donor; only the first playing survivor proposes reclaim.
+				const uint32_t members = s_FrameMembers(*peers[donor - 1], peers[donor - 1]->GetStats().nextFrame);
+				return members ? static_cast<uint8_t>(std::countr_zero(members) + 1) : donor;
+			}
 			bool RecoverImages(std::string& error) {
 				for (uint8_t seat = 1; seat <= hub.row.seats; ++seat) {
 					if (!imageNeeded[seat - 1] || imageReading[seat - 1] || OwnMachineTrouble(seat)) continue;
@@ -1168,8 +1178,9 @@ namespace RTE {
 							if (answer.atMs == lostAt[seat - 1]) for (uint16_t member: answer.reply.members) ruling |= 1U << (member - 1);
 					} else if (!hub.row.internet && sawSplit && directRuling) ruling = directRuling;
 					for (uint8_t donor = 1; donor <= hub.row.seats; ++donor) {
-						if (donor == seat || !(ruling & (1U << (donor - 1))) || !peers[donor - 1]->IsRunning() ||
+						if (donor == seat || !(ruling & (1U << (donor - 1))) || !ImageDonorCanAnswer(donor) ||
 						    !peers[donor - 1]->HasHeldAISeat(seat) || !(s_FrameMembers(*peers[donor - 1], worlds[donor - 1].applied + 1) & (1U << (donor - 1)))) continue;
+						if (!ImageDonorCanAnswer(ImageReturnProposer(donor))) continue;
 						if (!ReturnThroughImage(*this, seat, donor, error)) return false;
 						break;
 					}
@@ -1575,6 +1586,13 @@ namespace RTE {
 						frameAuthors[id - 1].push_back(id);
 						if (hub.row.captureFrames) committed[id - 1][ready.frame] = ready;
 						peer.FinishSimulationTick(ready.frame); credits[id - 1] -= 1;
+						if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) {
+							const char* watched = std::getenv("CC_TEST_LOCKSTEP_OBSERVE_TARGET");
+							const uint64_t target = watched ? std::strtoull(watched, nullptr, 10) : UINT64_MAX;
+							if (ready.frame <= 3 || (watched && ready.frame <= target && target - ready.frame <= 16))
+								DiagnosticLine() << "[session-plane-display-clock] local=" << unsigned(id) << " frame=" << ready.frame
+								    << " now_ms=" << hub.now << " acceleration=" << CatchingUp(peer) << " next=" << peer.GetStats().nextFrame << std::endl;
+						}
 						// What the tick cost this machine, as the engine reports it: a light tick, or a slow machine's whole share of its rate.
 						// A scheduled machine reports its own capacity: a fast one a light tick, one with little headroom its share of the tick.
 						peer.NoteLocalTickCost(ready.frame, slowed ? c_TestTickMs * 100.0 / ratePercent : scheduled && capacity < 300 ? c_TestTickMs * 100.0 / capacity : 1.0);
@@ -1764,6 +1782,7 @@ namespace RTE {
 			const auto fail = [&](const std::string& detail) { error = "authority ruling image return: " + detail; return false; };
 			if (const auto twice = fixture.TwoReturnFrames(); !twice.empty()) return fail(twice);
 			const uint8_t seats = fixture.hub.row.seats;
+			uint8_t proposer = donor;
 			const uint32_t rttMs = static_cast<uint32_t>(2 * fixture.hub.Delay(seat, donor));
 			const uint64_t round = fixture.peers[donor - 1]->GetRoundId();
 			const uint32_t incarnation = fixture.peers[donor - 1]->GetConfig().peerIncarnations.at(seat) + 1;
@@ -1933,13 +1952,16 @@ namespace RTE {
 					// temporary activation gap. Dropping it asks for input before that reader can produce it.
 					const auto* session = join.FindSession(12);
 					if (!session || session->activationTick != activation) return fail("the image activation lost its measured session");
-					if (!fixture.peers[donor - 1]->SchedulePeerReclaim(seat, s_ReturnTransport(*fixture.peers[donor - 1], seat), incarnation, activation, &error, session->activationTrailFrames)) return false;
+					proposer = fixture.ImageReturnProposer(donor);
+					if (!fixture.peers[proposer - 1]->SchedulePeerReclaim(seat, s_ReturnTransport(*fixture.peers[proposer - 1], seat), incarnation, activation, &error, session->activationTrailFrames))
+						return fail(error + " donor=" + std::to_string(donor) + " proposer=" + std::to_string(proposer) +
+						    " activation=" + std::to_string(activation) + " now_ms=" + std::to_string(fixture.hub.now) + s_WaitState(*fixture.peers[proposer - 1]));
 					DiagnosticLine() << "[session-plane-image-reclaim] returner=" << unsigned(seat) << " activation=" << activation
 					                 << " trail=" << session->activationTrailFrames << std::endl;
 					proposed = true;
 				}
 				if (proposed && !agreed) {
-					agreed = fixture.peers[donor - 1]->HasAgreedSeatReclaim(seat, activation);
+					agreed = fixture.peers[proposer - 1]->HasAgreedSeatReclaim(seat, activation);
 					for (uint8_t peer: survivors) agreed &= fixture.peers[peer - 1]->HasAgreedSeatReclaim(seat, activation);
 					if (agreed) {
 						join.MarkActivationProposed(12);
@@ -2155,6 +2177,20 @@ namespace RTE {
 			const auto queuedEvents = socket.PollEvents();
 			if (queuedEvents.size() != 1 || queuedEvents.front().type != NetTransportEventType::PacketReceived || queuedEvents.front().bytes != queuedPacket) {
 				error = "fixture discarded an incoming packet instead of leaving it in the hung process's socket"; return false;
+			}
+			Case donorRow{"oracle_donor_availability"}; donorRow.seats = 3; donorRow.subject = 1; donorRow.gapMs = 8000; donorRow.hung = true;
+			Fixture donors;
+			if (!donors.Start(donorRow, error)) return false;
+			while (donors.hub.now < 500) if (!donors.Step(error)) return false;
+			donors.hub.now = donors.hub.faultAt + 100;
+			if (donors.ImageDonorCanAnswer(1) || !donors.ImageDonorCanAnswer(2)) {
+				error = "fixture image donor: a hung process cannot serve its image while a running survivor can"; return false;
+			}
+			if (donors.ImageReturnProposer(3) != 1) {
+				error = "fixture image donor and reclaim proposer are distinct roles: seat3's image still needs seat1's playing-group proposal"; return false;
+			}
+			if (s_ReturnTransport(*donors.peers[1], 3) == c_InvalidNetPeerId) {
+				error = "fixture reclaim transport: the playing successor's authenticated mesh route is not its old primary host route"; return false;
 			}
 			Fixture fixture; fixture.hub.row.seats = 2; fixture.hub.row.internet = true;
 			fixture.worlds.resize(2); fixture.frameMembers = {{0, 1}, {0, 2}}; fixture.frameAuthors = {{0, 1}, {0, 2}};
@@ -3355,8 +3391,8 @@ namespace RTE {
 			s_HeldSeats = [](const NetLockstepCoordinator& peer, uint64_t frame) { return peer.PeerHeldSeatsAt(frame); };
 			s_HoldBoundaries = [](const NetLockstepCoordinator& peer) -> const HoldBoundaries& { return peer.m_PeerFrameHolds; };
 			s_ReturnTransport = [](const NetLockstepCoordinator& peer, uint8_t seat) {
-				const auto found = peer.m_RemoteTransports.find(seat);
-				return found == peer.m_RemoteTransports.end() ? c_InvalidNetPeerId : found->second;
+				// FLAGGED fixture departure: a surviving mesh proposer can own a listener/dial route outside the old host star.
+				return peer.PeerFrameRoute(seat).second;
 			};
 		});
 		Case row{"owner_hitch"};
@@ -3423,8 +3459,8 @@ namespace RTE {
 			s_HeldSeats = [](const NetLockstepCoordinator& peer, uint64_t frame) { return peer.PeerHeldSeatsAt(frame); };
 			s_HoldBoundaries = [](const NetLockstepCoordinator& peer) -> const HoldBoundaries& { return peer.m_PeerFrameHolds; };
 			s_ReturnTransport = [](const NetLockstepCoordinator& peer, uint8_t seat) {
-				const auto found = peer.m_RemoteTransports.find(seat);
-				return found == peer.m_RemoteTransports.end() ? c_InvalidNetPeerId : found->second;
+				// FLAGGED fixture departure: a surviving mesh proposer can own a listener/dial route outside the old host star.
+				return peer.PeerFrameRoute(seat).second;
 			};
 		});
 		if (arm == 10) { std::string why; const bool passed = CheckPlacementCombatReturn(why); if (!passed && error) *error = why; return passed; }
@@ -3499,8 +3535,8 @@ namespace RTE {
 			s_HeldSeats = [](const NetLockstepCoordinator& peer, uint64_t frame) { return peer.PeerHeldSeatsAt(frame); };
 			s_HoldBoundaries = [](const NetLockstepCoordinator& peer) -> const HoldBoundaries& { return peer.m_PeerFrameHolds; };
 			s_ReturnTransport = [](const NetLockstepCoordinator& peer, uint8_t seat) {
-				const auto found = peer.m_RemoteTransports.find(seat);
-				return found == peer.m_RemoteTransports.end() ? c_InvalidNetPeerId : found->second;
+				// FLAGGED fixture departure: a surviving mesh proposer can own a listener/dial route outside the old host star.
+				return peer.PeerFrameRoute(seat).second;
 			};
 		});
 		Hub hub;
@@ -4227,8 +4263,8 @@ namespace RTE {
 			s_HeldSeats = [](const NetLockstepCoordinator& peer, uint64_t frame) { return peer.PeerHeldSeatsAt(frame); };
 			s_HoldBoundaries = [](const NetLockstepCoordinator& peer) -> const HoldBoundaries& { return peer.m_PeerFrameHolds; };
 			s_ReturnTransport = [](const NetLockstepCoordinator& peer, uint8_t seat) {
-				const auto found = peer.m_RemoteTransports.find(seat);
-				return found == peer.m_RemoteTransports.end() ? c_InvalidNetPeerId : found->second;
+				// FLAGGED fixture departure: a surviving mesh proposer can own a listener/dial route outside the old host star.
+				return peer.PeerFrameRoute(seat).second;
 			};
 		});
 		if (!TimerMan::IsConstructed()) TimerMan::Construct();
