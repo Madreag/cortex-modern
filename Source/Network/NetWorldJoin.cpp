@@ -2439,7 +2439,9 @@ namespace RTE {
 		// received report's cursor also trails by its incoming half-trip, during which the reader kept playing.
 		// A genuinely closing reader instead keeps the future activation its measured rate reaches below.
 		if (provesHeadroom && (session->tailLinkRttMs != 0 || session->tailAckRttMs > 0)) {
-			const double lagMs = std::max<double>(session->tailLinkRttMs, session->tailAckRttMs);
+			// A tail acknowledgement includes replay work and report batching. When the transport measured this link,
+			// only that round trip explains the report's incoming transit; machine time cannot excuse producer phase lag.
+			const double lagMs = session->tailLinkRttMs != 0 ? session->tailLinkRttMs : session->tailAckRttMs;
 			const uint64_t reportTransit = m_SimTickMs > 0 ? static_cast<uint64_t>(std::floor(lagMs / (2 * m_SimTickMs))) : 0;
 			const bool closing = session->closingMeasured && session->closingRate > 0.1;
 			if (behind > reportTransit + m_Config.slowPlayerBoundTicks && !closing) return wait("trail-open", "its first input would reach the round past its bound");

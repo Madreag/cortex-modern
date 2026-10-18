@@ -70,6 +70,7 @@ namespace RTE {
 		std::function<const HoldBoundaries&(const NetLockstepCoordinator&)> s_HoldBoundaries;
 		std::function<std::string(const NetLockstepCoordinator&)> s_WaitState;
 		std::function<NetPeerId(const NetLockstepCoordinator&, uint8_t)> s_ReturnTransport;
+		std::function<std::pair<INetTransport*, NetPeerId>(const NetLockstepCoordinator&, uint8_t)> s_ReturnRoute;
 		std::once_flag s_FixtureObservers;
 		struct Fixture;
 		bool ReturnThroughImage(Fixture& fixture, uint8_t seat, uint8_t donor, std::string& error);
@@ -650,6 +651,9 @@ namespace RTE {
 			std::vector<Event> events;
 			bool keepReturnCertificates = false;
 			std::map<uint64_t, NetHostMigrationMessage> receivedReturnCertificates;
+			bool keepImageTail = false;
+			struct ImageTailDelivery { uint8_t donor; NetTransportLane lane; NetLobbyStateChunk chunk; };
+			std::deque<ImageTailDelivery> receivedImageTail;
 			bool TraceFaultObservation() const {
 				return std::getenv("CC_TEST_DIRECT_FAULT_OBSERVATIONS") && owner == 2 && hub.now >= hub.faultAt && hub.now <= hub.faultAt + 100;
 			}
@@ -834,6 +838,11 @@ namespace RTE {
 				}
 #endif
 				if (hub.countInputs && owner == 1) CountInputTicks(bytes, lane);
+				if (other->owner == hub.row.subject && !NetHostMigrationCodec::LooksLikePacket(bytes)) {
+					const auto lobby = NetLobbyProtocol::Decode(bytes);
+					if (lobby.ok) if (const auto* chunk = std::get_if<NetLobbyStateChunk>(&lobby.message.payload);
+					    chunk && chunk->transferId == c_NetWorldTailTransferId) ++hub.tailsSentBy[owner];
+				}
 				// A return is placed past every input its proposer has sent: no voter can have prepared that far.
 				if (peekInto(decision) && decision.senderPeerId == owner) {
 					if (decision.type == NetHostMigrationMessageType::PeerInput) hub.inputSentThrough[owner] = std::max(hub.inputSentThrough[owner], decision.frame);
@@ -922,6 +931,17 @@ namespace RTE {
 						++pending; continue;
 					}
 					if (event.crossesFault || !hub.Split(connections.contains(event.value.peerId) ? connections.at(event.value.peerId).first->owner : owner, owner)) {
+						// FLAGGED fixture departure: the private image service consumes its transported world-tail chunks before
+						// the live coordinator polls this link. A donor's in-memory record is never a received replay frame.
+						if (keepImageTail && event.value.type == NetTransportEventType::PacketReceived) {
+							const auto lobby = NetLobbyProtocol::Decode(event.value.bytes);
+							if (lobby.ok) if (const auto* chunk = std::get_if<NetLobbyStateChunk>(&lobby.message.payload);
+							    chunk && chunk->transferId == c_NetWorldTailTransferId) {
+								if (const auto route = connections.find(event.value.peerId); route != connections.end())
+									receivedImageTail.push_back({route->second.first->owner, event.value.lane, *chunk});
+								continue;
+							}
+						}
 						// The real image service keeps certificates received on this seat's link while its private reader runs.
 						if (keepReturnCertificates && event.value.type == NetTransportEventType::PacketReceived && NetHostMigrationCodec::LooksLikePacket(event.value.bytes)) {
 							NetHash32 key; key.fill(0x39);
@@ -960,6 +980,37 @@ namespace RTE {
 			}
 #endif
 		};
+		bool ReadImageTail(const Wire::ImageTailDelivery& delivery, uint8_t donor, uint64_t round, uint64_t applied,
+		                   std::vector<uint8_t>& partial, std::map<uint64_t, NetLockstepFrame>& received, std::string& error) {
+			uint64_t packetRound = 0;
+			if (delivery.donor != donor || !ParseWorldTailChunkRound(delivery.chunk, packetRound) || packetRound != round) {
+				error = "image tail arrived from another donor or round"; return false;
+			}
+			const bool stream = delivery.lane == NetTransportLane::ControlReliable;
+			std::vector<uint8_t> packed(delivery.chunk.bytes.begin() + c_NetWorldTailRoundBytes, delivery.chunk.bytes.end());
+			if (stream) {
+				if (partial.size() + packed.size() > 32ULL * 1024 * 1024) { error = "image tail exceeded the native receive bound"; return false; }
+				partial.insert(partial.end(), packed.begin(), packed.end()); packed.swap(partial);
+			}
+			size_t offset = 0;
+			while (offset + 4 <= packed.size()) {
+				uint32_t size = 0;
+				for (unsigned shift = 0; shift < 32; shift += 8) size |= uint32_t(packed[offset + shift / 8]) << shift;
+				if (!size || size > 2 * NetLockstepCodec::c_MaxPeerCount * NetLockstepCodec::c_MaxRecoveryInputBytes) {
+					error = "image tail has an invalid native record length"; return false;
+				}
+				if (size > packed.size() - offset - 4) break;
+				offset += 4;
+				NetLockstepFrame frame;
+				if (!DecodeCommittedJoinFrame({packed.begin() + offset, packed.begin() + offset + size}, frame, &error)) return false;
+				if (frame.roundId != round) { error = "image tail record belongs to another round"; return false; }
+				if (frame.targetFrame > applied) received.try_emplace(frame.targetFrame, std::move(frame));
+				offset += size;
+			}
+			if (!stream && offset != packed.size()) { error = "image tail datagram ends inside a record"; return false; }
+			if (stream) partial.assign(packed.begin() + offset, packed.end());
+			return true;
+		}
 		using WorldDigestCache = std::map<uint64_t, std::pair<std::string, NetHash32>>;
 		struct World {
 			WorldDigestCache* sharedDigests = nullptr;
@@ -1176,6 +1227,14 @@ namespace RTE {
 				const uint32_t members = s_FrameMembers(*peers[donor - 1], peers[donor - 1]->GetStats().nextFrame);
 				return members ? static_cast<uint8_t>(std::countr_zero(members) + 1) : donor;
 			}
+			std::vector<uint8_t> ImageReturnDonors() const {
+				// FLAGGED fixture departure: a case that requires another donor must actually request that donor first.
+				// Eligibility, ruling membership and the native tail-traffic assertion still decide whether it succeeds.
+				std::vector<uint8_t> donors;
+				if (hub.row.donorSeat && hub.row.donorSeat <= hub.row.seats) donors.push_back(hub.row.donorSeat);
+				for (uint8_t donor = 1; donor <= hub.row.seats; ++donor) if (donor != hub.row.donorSeat) donors.push_back(donor);
+				return donors;
+			}
 			bool RecoverImages(std::string& error) {
 				for (uint8_t seat = 1; seat <= hub.row.seats; ++seat) {
 					if (!imageNeeded[seat - 1] || imageReading[seat - 1] || OwnMachineTrouble(seat)) continue;
@@ -1188,7 +1247,7 @@ namespace RTE {
 						for (const auto& answer: hub.directoryClients.at(seat).consumed)
 							if (answer.atMs == lostAt[seat - 1]) for (uint16_t member: answer.reply.members) ruling |= 1U << (member - 1);
 					} else if (!hub.row.internet && sawSplit && directRuling) ruling = directRuling;
-					for (uint8_t donor = 1; donor <= hub.row.seats; ++donor) {
+					for (uint8_t donor: ImageReturnDonors()) {
 						if (donor == seat || !(ruling & (1U << (donor - 1))) || !ImageDonorCanAnswer(donor) ||
 						    !peers[donor - 1]->HasHeldAISeat(seat) || !(s_FrameMembers(*peers[donor - 1], worlds[donor - 1].applied + 1) & (1U << (donor - 1)))) continue;
 						if (!ImageDonorCanAnswer(ImageReturnProposer(donor))) continue;
@@ -1810,7 +1869,7 @@ namespace RTE {
 			if (survivors.empty() || !fixture.peers[donor - 1]->HasHeldAISeat(seat)) return fail("the donor has no installed hold and playing group for this returner");
 			fixture.imageReading[seat - 1] = true;
 			fixture.FinishWait(seat, fixture.worlds[seat - 1].applied + 1);
-			for (auto* wire: fixture.hub.wires) if (wire->owner == seat) wire->keepReturnCertificates = true;
+			for (auto* wire: fixture.hub.wires) if (wire->owner == seat) wire->keepReturnCertificates = wire->keepImageTail = true;
 			uint64_t common = fixture.worlds[donor - 1].applied;
 			for (uint8_t peer: survivors) common = std::min(common, fixture.worlds[peer - 1].applied);
 			const uint64_t base = common - common % 60;
@@ -1867,6 +1926,9 @@ namespace RTE {
 			join.PublishImage(image);
 			if (!join.NoteTransferComplete(12, 8, &error)) return false;
 			join.NoteRejoinLinkFit(12, true); join.NoteTailLinkRtt(12, rttMs);
+			uint64_t tailRecorded = base;
+			std::map<uint64_t, NetLockstepFrame> receivedTail;
+			std::vector<uint8_t> partialTail;
 			uint64_t activation = 0, reported = replay.applied, reportAt = fixture.hub.now, work = 0;
 			struct ReplayReport { uint64_t arrival, applied, ticks, elapsed, work; };
 			std::deque<ReplayReport> reports;
@@ -1919,11 +1981,36 @@ namespace RTE {
 			    fixture.hub.row.catchUpPercent ? fixture.hub.row.catchUpPercent : c_TestCatchUpRate * 100;
 			const uint64_t replayBudget = 12000 + (recoveryPercent > 100 && recoveryPercent < 300 ? 100000 / (recoveryPercent - 100) : 0);
 			for (const uint64_t until = fixture.hub.now + replayBudget; fixture.hub.now < until;) {
+				// FLAGGED fixture departure: use the production image-tail log, datagrams and codecs on the donor's real
+				// fixture link. The reader below can consume only records delivered after that link's delay and loss.
+				for (auto next = fixture.committed[donor - 1].upper_bound(tailRecorded); next != fixture.committed[donor - 1].end(); ++next) {
+					auto record = PackWorldJoinReadyFrame(next->second); record.roundId = round;
+					if (!join.Tail().Append(record, &error)) return fail(error);
+					tailRecorded = next->first;
+				}
+				const auto [tailWire, tailRoute] = s_ReturnRoute(*fixture.peers[donor - 1], seat);
+				if (!tailWire || tailRoute == c_InvalidNetPeerId) return fail("the image donor lost its authenticated return route");
+				for (unsigned datagram = 0; datagram < 32; ++datagram) {
+					std::vector<uint8_t> packed, bytes; bool large = false;
+					const bool whole = join.NextTailDatagram(12, fixture.hub.now, packed, &large);
+					if (!whole && !(large && join.NextTailChunk(12, packed))) break;
+					if (!NetLobbyProtocol::Encode({MakeWorldTailChunk(round, packed)}, bytes)) return fail("the native image-tail chunk did not encode");
+					if (!tailWire->Send(tailRoute, whole ? NetTransportLane::BulkUnreliable : NetTransportLane::ControlReliable, bytes)) {
+						join.NoteTailDatagramRefused(12); break;
+					}
+					if (!whole) { join.NoteTailChunkSent(12, packed.size()); break; }
+				}
 				if (!fixture.Step(error) || !fixture.CheckBound(error)) return false;
 				if (!liveStarted && fixture.peers[seat - 1]->IsStopped()) {
 					for (auto* wire: fixture.hub.wires) if (wire->owner == seat) {
 						wire->keepReturnCertificates = true;
 						(void)wire->PollEvents();
+					}
+				}
+				for (auto* wire: fixture.hub.wires) if (wire->owner == seat) {
+					while (!wire->receivedImageTail.empty()) {
+						const auto delivery = std::move(wire->receivedImageTail.front()); wire->receivedImageTail.pop_front();
+						if (!ReadImageTail(delivery, donor, round, replay.applied, partialTail, receivedTail, error)) return fail(error);
 					}
 				}
 				double capacity = fixture.hub.schedule ? fixture.hub.schedule->CapacityPercent(seat, fixture.hub.now) / 100.0 :
@@ -1934,9 +2021,9 @@ namespace RTE {
 				}
 				credit = std::min(6.0, credit + fixture.hub.row.stepMs * capacity / c_TestTickMs);
 				while (credit >= 1 && (!activation || replay.applied + 1 < activation)) {
-					const auto next = fixture.committed[donor - 1].find(replay.applied + 1);
-					if (next == fixture.committed[donor - 1].end()) break;
-					const auto recorded = PackWorldJoinReadyFrame(next->second);
+					const auto next = receivedTail.find(replay.applied + 1);
+					if (next == receivedTail.end()) break;
+					const auto& recorded = next->second;
 					if (!replayCoordinator.QueueReplayFrame(recorded.targetFrame, recorded.frames, recorded.commands, &error,
 					                                      recorded.observations, recorded.valueObservations, recorded.senderPeerId,
 					                                      recorded.replayUpdateAuthorityPeerId)) return false;
@@ -1945,6 +2032,7 @@ namespace RTE {
 					if (!replayCoordinator.PopReadyFrame(ready)) return fail("the private coordinator did not consume the next committed frame");
 					if (!replay.Apply(ready, error)) return false;
 					replayCoordinator.FinishSimulationTick(ready.frame);
+					receivedTail.erase(next);
 					credit -= 1; ++work;
 				}
 				if (!activation && fixture.hub.now >= reportAt + 100) {
@@ -1960,6 +2048,7 @@ namespace RTE {
 					if (!join.NoteCatchUpProgress(12, report.applied, report.ticks, report.elapsed,
 					                            fixture.worlds[donor - 1].applied, &activation, &error)) return false;
 					join.NoteCatchUpClock(12, fixture.hub.now);
+					join.AcknowledgeTailDatagrams(12, fixture.hub.now);
 					if (reportsRead++ < 3) DiagnosticLine() << "[session-plane-image-report] returner=" << unsigned(seat)
 					    << " arrival_ms=" << fixture.hub.now << " transit_ms=" << fixture.hub.Delay(seat, donor)
 					    << " applied=" << report.applied << " horizon=" << fixture.worlds[donor - 1].applied << std::endl;
@@ -2214,6 +2303,43 @@ namespace RTE {
 			}
 			if (s_ReturnTransport(*donors.peers[1], 3) == c_InvalidNetPeerId) {
 				error = "fixture reclaim transport: the playing successor's authenticated mesh route is not its old primary host route"; return false;
+			}
+			if (donors.ImageReturnDonors() != std::vector<uint8_t>{1, 2, 3}) {
+				error = "fixture changed the default image donor order"; return false;
+			}
+			donors.hub.row.donorSeat = 3;
+			if (donors.ImageReturnDonors() != std::vector<uint8_t>{3, 1, 2}) {
+				error = "fixture requires donor3's actual tail traffic but never selects its configured image donor"; return false;
+			}
+			// A private replay sees the production committed-frame format only after its donor's transport delivers it.
+			Hub imageLink; imageLink.row.seats = imageLink.row.subject = 2; imageLink.row.rttMs = imageLink.row.otherRttMs = 100;
+			Wire imageDonor(imageLink, 1), imageReader(imageLink, 2);
+			imageDonor.connections[42] = {&imageReader, 43}; imageReader.connections[43] = {&imageDonor, 42}; imageReader.keepImageTail = true;
+			NetLockstepFrame imageFrame; imageFrame.senderPeerId = 1; imageFrame.roundId = 77; imageFrame.targetFrame = 11;
+			ControllerFrame imageInput; imageInput.actorUniqueID = 73; imageInput.analogMoveX = 9; imageFrame.frames = {imageInput};
+			std::vector<uint8_t> record, packed, imageBytes;
+			if (!EncodeCommittedJoinFrame(imageFrame, record, &error)) return false;
+			for (unsigned shift = 0; shift < 32; shift += 8) packed.push_back(static_cast<uint8_t>(record.size() >> shift));
+			packed.insert(packed.end(), record.begin(), record.end());
+			const auto chunk = MakeWorldTailChunk(77, packed);
+			if (!NetLobbyProtocol::Encode({chunk}, imageBytes) || !imageDonor.Send(42, NetTransportLane::BulkUnreliable, imageBytes, &error)) return false;
+			imageLink.now = 49; (void)imageReader.PollEvents();
+			if (!imageReader.receivedImageTail.empty()) { error = "fixture image tail arrived before its link transit"; return false; }
+			imageLink.now = 50; (void)imageReader.PollEvents();
+			std::vector<uint8_t> partial; std::map<uint64_t, NetLockstepFrame> received;
+			if (imageReader.receivedImageTail.size() != 1 || !ReadImageTail(imageReader.receivedImageTail.front(), 1, 77, 10, partial, received, error) ||
+			    received.size() != 1 || received.at(11).frames.size() != 1 ||
+			    ControllerFrameCodec::Encode(received.at(11).frames.front()) != ControllerFrameCodec::Encode(imageInput) || imageLink.tailsSentBy[1] != 1) {
+				error = "fixture image replay did not consume its exact transported donor record"; return false;
+			}
+			std::string refusedTail;
+			if (ReadImageTail(imageReader.receivedImageTail.front(), 2, 77, 10, partial, received, refusedTail) ||
+			    ReadImageTail(imageReader.receivedImageTail.front(), 1, 78, 10, partial, received, refusedTail)) {
+				error = "fixture image replay accepted another donor or round"; return false;
+			}
+			auto truncated = chunk; truncated.bytes.pop_back();
+			if (ReadImageTail({1, NetTransportLane::BulkUnreliable, truncated}, 1, 77, 10, partial, received, refusedTail)) {
+				error = "fixture image replay accepted a truncated datagram record"; return false;
 			}
 			Fixture fixture; fixture.hub.row.seats = 2; fixture.hub.row.internet = true;
 			fixture.worlds.resize(2); fixture.frameMembers = {{0, 1}, {0, 2}}; fixture.frameAuthors = {{0, 1}, {0, 2}};
@@ -3413,6 +3539,7 @@ namespace RTE {
 			};
 			s_HeldSeats = [](const NetLockstepCoordinator& peer, uint64_t frame) { return peer.PeerHeldSeatsAt(frame); };
 			s_HoldBoundaries = [](const NetLockstepCoordinator& peer) -> const HoldBoundaries& { return peer.m_PeerFrameHolds; };
+			s_ReturnRoute = [](const NetLockstepCoordinator& peer, uint8_t seat) { return peer.PeerFrameRoute(seat); };
 			s_ReturnTransport = [](const NetLockstepCoordinator& peer, uint8_t seat) {
 				// FLAGGED fixture departure: a surviving mesh proposer can own a listener/dial route outside the old host star.
 				return peer.PeerFrameRoute(seat).second;
@@ -3481,6 +3608,7 @@ namespace RTE {
 			};
 			s_HeldSeats = [](const NetLockstepCoordinator& peer, uint64_t frame) { return peer.PeerHeldSeatsAt(frame); };
 			s_HoldBoundaries = [](const NetLockstepCoordinator& peer) -> const HoldBoundaries& { return peer.m_PeerFrameHolds; };
+			s_ReturnRoute = [](const NetLockstepCoordinator& peer, uint8_t seat) { return peer.PeerFrameRoute(seat); };
 			s_ReturnTransport = [](const NetLockstepCoordinator& peer, uint8_t seat) {
 				// FLAGGED fixture departure: a surviving mesh proposer can own a listener/dial route outside the old host star.
 				return peer.PeerFrameRoute(seat).second;
@@ -3557,6 +3685,7 @@ namespace RTE {
 			};
 			s_HeldSeats = [](const NetLockstepCoordinator& peer, uint64_t frame) { return peer.PeerHeldSeatsAt(frame); };
 			s_HoldBoundaries = [](const NetLockstepCoordinator& peer) -> const HoldBoundaries& { return peer.m_PeerFrameHolds; };
+			s_ReturnRoute = [](const NetLockstepCoordinator& peer, uint8_t seat) { return peer.PeerFrameRoute(seat); };
 			s_ReturnTransport = [](const NetLockstepCoordinator& peer, uint8_t seat) {
 				// FLAGGED fixture departure: a surviving mesh proposer can own a listener/dial route outside the old host star.
 				return peer.PeerFrameRoute(seat).second;
@@ -4285,6 +4414,7 @@ namespace RTE {
 			};
 			s_HeldSeats = [](const NetLockstepCoordinator& peer, uint64_t frame) { return peer.PeerHeldSeatsAt(frame); };
 			s_HoldBoundaries = [](const NetLockstepCoordinator& peer) -> const HoldBoundaries& { return peer.m_PeerFrameHolds; };
+			s_ReturnRoute = [](const NetLockstepCoordinator& peer, uint8_t seat) { return peer.PeerFrameRoute(seat); };
 			s_ReturnTransport = [](const NetLockstepCoordinator& peer, uint8_t seat) {
 				// FLAGGED fixture departure: a surviving mesh proposer can own a listener/dial route outside the old host star.
 				return peer.PeerFrameRoute(seat).second;

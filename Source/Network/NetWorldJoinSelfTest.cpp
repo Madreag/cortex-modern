@@ -4664,7 +4664,7 @@ namespace RTE {
 	/// never activated and is told why once.
 	int TestActivationFollowsTheMeasuredTrail() {
 		const auto config = NetMatchConfigUtil::MakeDefault(0x9A53);
-		struct Case { const char* name; uint64_t behind; uint64_t advance; bool activates; uint64_t minTrail; const char* reason; uint64_t workUs = 1000000; uint32_t rttMs = 0; };
+		struct Case { const char* name; uint64_t behind; uint64_t advance; bool activates; uint64_t minTrail; const char* reason; uint64_t workUs = 1000000; uint32_t rttMs = 0, ackMs = 0; };
 		const Case cases[] = {
 			{"round-pace-past-the-lead", 90, 30, true, 60, nullptr},
 			{"gaining-inside-the-lead", 40, 42, true, 0, nullptr},
@@ -4683,6 +4683,9 @@ namespace RTE {
 			{"200ms-inside-first-input-runway", 8, 30, true, 8, nullptr, 1000000, 200},
 			{"250ms-outside-first-input-runway", 18, 30, false, 0, "first input", 1000000, 250},
 			{"250ms-inside-first-input-runway", 10, 30, true, 10, nullptr, 1000000, 250},
+			// A real tail acknowledgement also waits for replay and report batching. It cannot replace a measured link RTT.
+			{"20ms-link-with-200ms-replay-ack", 6, 30, false, 0, "first input", 1000000, 20, 200},
+			{"100ms-link-with-300ms-replay-ack", 9, 30, false, 0, "first input", 1000000, 100, 300},
 		};
 		for (const Case& test: cases) {
 			NetWorldJoinHost host;
@@ -4697,13 +4700,19 @@ namespace RTE {
 			host.NoteRejoinLinkFit(42, true);
 			host.NoteTailLinkRtt(42, test.rttMs);
 			if (!host.NoteRejoinCapacity(42, 240, test.workUs, 0)) return Fail("the compute headroom sample was refused");
+			if (test.ackMs) {
+				std::vector<uint8_t> sent;
+				if (!host.NextTailDatagram(42, 1000, sent)) return Fail("the delayed-replay-ack detector sent no actual tail datagram");
+			}
 			uint64_t activation = 0, applied = 500, round = 500 + test.behind;
 			if (!host.NoteCatchUpProgress(42, applied, 0, 1, round, &activation, &error)) return Fail(error);
 			for (int report = 0; report < 6 && activation == 0; ++report) {
 				applied += test.advance; round += 30;
 				if (!host.NoteCatchUpProgress(42, applied, test.advance, 500, round, &activation, &error)) return Fail(error);
+				if (test.ackMs) host.AcknowledgeTailDatagrams(42, 1000 + test.ackMs);
 			}
 			const NetWorldJoinSession* session = host.FindSession(42);
+			if (test.ackMs && (!session || session->tailAckRttMs != test.ackMs)) return Fail("the delayed tail acknowledgement was not measured");
 			const std::string gate = session && session->catchUpGate ? session->catchUpGate : "none";
 			const std::string reason = session && session->activationHeldReason ? session->activationHeldReason : "none";
 			if (test.activates && (activation < round + c_NetWorldActivationLeadFrames || !session || session->activationTrailFrames < test.minTrail)) {
