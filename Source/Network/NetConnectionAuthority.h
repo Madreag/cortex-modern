@@ -173,6 +173,7 @@ namespace RTE {
 		void PollBootstrap(uint64_t steadyMs);
 		void PollHostChange(uint64_t steadyMs, uint64_t unixSeconds);
 		void PollFrameTie(uint64_t steadyMs, uint64_t unixSeconds);
+		std::optional<size_t> NextFrameTie(uint64_t steadyMs);
 		std::string SignedSeatRequest(const std::string& operation, uint64_t unixSeconds, const NetHostChangeRequest* change = nullptr, const NetFrameTieRequest* tie = nullptr);
 		void ObserveNetwork(uint64_t steadyMs, uint64_t unixSeconds);
 
@@ -199,13 +200,18 @@ namespace RTE {
 		std::string m_HostChangeToken;
 		std::unique_ptr<NetHttpClient> m_FrameTie;
 		std::vector<std::unique_ptr<NetHttpClient>> m_RetiredFrameTies;
-		std::optional<NetFrameTieRequest> m_FrameTieRequest;
+		struct FrameTieOperation {
+			NetFrameTieRequest request;
+			NetFrameTieReply reply{NetFrameTieReply::State::Waiting};
+			NetDirectoryRetry retry;
+			uint64_t nextMs = 0;
+			std::optional<uint64_t> boundStartMs;
+			bool checkedIn = false, finalQuerySent = false;
+		};
+		std::vector<FrameTieOperation> m_FrameTieQuestions;
+		std::optional<size_t> m_ActiveFrameTie;
+		size_t m_NextFrameTieQuestion = 0;
 		std::optional<NetHash32> m_ListedMatchHash;
-		NetFrameTieReply m_FrameTieReply;
-		bool m_FrameTieCheckedIn = false;
-		std::optional<uint64_t> m_FrameTieBoundStartMs;
-		bool m_FrameTieFinalQuerySent = false;
-		uint64_t m_NextFrameTie = 0;
 		uint64_t m_FrameTieSentMs = 0; //!< When the request in flight left.
 		uint64_t m_FrameTieExchangeMs = 0; //!< The longest recent tie exchange, decaying; sizes the next one's timeout.
 		bool m_FrameTieSentCheckIn = false; //!< The request in flight is a check-in, not a query.
@@ -213,7 +219,7 @@ namespace RTE {
 		uint64_t m_NextHostChange = 0;
 		uint64_t m_NextCheckIn = 0, m_NextBootstrap = 0, m_CheckIns = 0;
 		uint64_t m_NextNetworkProbe = 0, m_LastWallSeconds = 0;
-		NetDirectoryRetry m_IssueRetry, m_RemoveRetry, m_CheckInRetry, m_BootstrapRetry, m_HostChangeRetry, m_FrameTieRetry;
+		NetDirectoryRetry m_IssueRetry, m_RemoveRetry, m_CheckInRetry, m_BootstrapRetry, m_HostChangeRetry;
 		uint64_t m_NextSeatRequestMs = 0, m_LastUpdateMs = 0;
 		std::deque<uint64_t> m_SeatRequests;
 		uint64_t FailedReply(const NetHttpClient::Response& response, NetDirectoryRetry& retry, uint64_t nowMs, const char* path);

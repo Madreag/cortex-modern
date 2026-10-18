@@ -341,7 +341,7 @@ namespace RTE {
 			auto expectedTie = tie;
 			auto expectedChange = change;
 			expectedTie.configHash.fill(byte); expectedChange.configHash.fill(byte);
-			return authority.m_FrameTieRequest == expectedTie && authority.m_HostChangeRequest == expectedChange;
+			return authority.m_FrameTieQuestions.back().request == expectedTie && authority.m_HostChangeRequest == expectedChange;
 		};
 		if (!queuedAs(0x22)) { *error = "a joiner's recovery named its round configuration instead of the listed match"; return false; }
 		authority.m_Host->row.matchConfigHash = std::string(64, '3');
@@ -357,21 +357,47 @@ namespace RTE {
 		authority.m_LocalLease->directorySessionId = authority.DirectorySessionId();
 		if (!queuedAs(0x11)) { *error = "a new directory session inherited the old match identity"; return false; }
 		// The decided split is the same answer when the other half describes it, including a read after healing.
-		authority.m_FrameTieReply.state = NetFrameTieReply::State::Decided;
-		authority.m_FrameTieReply.members = {1};
+		authority.m_FrameTieQuestions.back().reply = {NetFrameTieReply::State::Decided, {1}};
 		auto otherHalf = tie; otherHalf.members = {0}; otherHalf.queryOnly = true;
 		const auto decided = authority.QueryFrameTie(otherHalf);
 		if (decided.state != NetFrameTieReply::State::Decided || decided.members != std::vector<uint16_t>{1}) {
 			*error = "a read of the same decided split lost its answer when the half changed"; return false;
 		}
 		// A failed exchange can still be in flight when an authenticated peer proves the link has recovered.
-		authority.m_FrameTieReply = {};
+		authority.m_FrameTieQuestions.back().reply = {};
 		authority.m_FrameTie = std::make_unique<NetHttpClient>();
-		authority.m_FrameTieRetry.nextMs = authority.m_NextFrameTie = 2000;
+		authority.m_ActiveFrameTie = authority.m_FrameTieQuestions.size() - 1;
+		authority.m_FrameTieQuestions.back().retry.nextMs = authority.m_FrameTieQuestions.back().nextMs = 2000;
 		authority.QueryFrameTie(otherHalf);
-		if (authority.m_FrameTie || authority.m_RetiredFrameTies.size() != 1 || authority.m_FrameTieRequest != otherHalf || authority.m_NextFrameTie != 0) {
+		if (authority.m_FrameTie || authority.m_RetiredFrameTies.size() != 1 || authority.m_FrameTieQuestions.back().request != otherHalf || authority.m_FrameTieQuestions.back().nextMs != 0) {
 			*error = "a healed seat waited on its failed check-in before asking for the committed decision"; return false;
 		}
+		authority.m_FrameTieQuestions.back().reply = {NetFrameTieReply::State::Decided, {1}};
+		auto nested = otherHalf; ++nested.frame; nested.queryOnly = false; nested.members = {1};
+		if (authority.QueryFrameTie(nested).state != NetFrameTieReply::State::Waiting ||
+		    authority.QueryFrameTie(otherHalf).state != NetFrameTieReply::State::Decided) {
+			*error = "a later split discarded the earlier split's authenticated answer"; return false;
+		}
+		auto unrecorded = nested; ++unrecorded.frame; unrecorded.queryOnly = true;
+		authority.QueryFrameTie(unrecorded);
+		const auto first = authority.NextFrameTie(100), second = authority.NextFrameTie(100);
+		if (!first || !second || *first == *second || authority.m_FrameTieQuestions[*first].request != nested ||
+		    authority.m_FrameTieQuestions[*second].request != unrecorded) {
+			*error = "a waiting split query starved a different split's eligible check-in"; return false;
+		}
+		authority.m_FrameTieQuestions[*first].retry.nextMs = 200;
+		if (authority.NextFrameTie(100) != second || authority.NextFrameTie(200) != first) {
+			*error = "split scheduling discarded a deferred retry or ignored its backoff"; return false;
+		}
+		authority.m_FrameTie = std::make_unique<NetHttpClient>(); authority.m_ActiveFrameTie = first;
+		authority.m_TieRequests.push_back(100);
+		auto rematch = nested; ++rematch.roundId;
+		if (authority.QueryFrameTie(rematch).state != NetFrameTieReply::State::Waiting || authority.m_FrameTie ||
+		    authority.m_RetiredFrameTies.size() != 2 || authority.m_FrameTieQuestions.size() != 1 ||
+		    authority.m_FrameTieQuestions.front().request != rematch || authority.m_TieRequests.size() != 1) {
+			*error = "a rematch kept the previous round's questions or reset its request allowance"; return false;
+		}
+		std::cout << "[net-directory-selftest] PASS concurrent_frame_ties_keep_their_answers" << std::endl;
 		std::cout << "[net-directory-selftest] PASS recovered_frame_tie_reads_its_decision" << std::endl;
 		std::cout << "[net-directory-selftest] PASS recovery_uses_listed_match" << std::endl;
 		return true;

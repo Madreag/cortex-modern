@@ -245,7 +245,17 @@ namespace RTE {
 		// Each requester follows NetConnectionAuthority's asynchronous tie and routine check-in policies.
 		struct DirectoryClient {
 			struct Exchange { NetFrameTieRequest sent; uint64_t arriveMs = 0, doneMs = 0; bool arrived = false, delivered = false; Directory::Answer answer; };
-			std::optional<NetFrameTieRequest> request;
+			struct TieQuestion {
+				NetFrameTieRequest request;
+				NetFrameTieReply reply{NetFrameTieReply::State::Waiting};
+				NetDirectoryRetry retry;
+				uint64_t nextMs = 0;
+				std::optional<uint64_t> boundStartMs;
+				bool checkedIn = false, finalQuerySent = false;
+			};
+			std::vector<TieQuestion> questions;
+			std::optional<size_t> activeTie;
+			size_t nextQuestion = 0;
 			std::optional<Exchange> tie, checkIn;
 			struct HostExchange { NetHostChangeRequest sent; uint64_t arriveMs, doneMs; bool arrived, delivered; Directory::HostAnswer answer; };
 			std::optional<HostExchange> hostChange;
@@ -254,18 +264,15 @@ namespace RTE {
 			uint64_t nextHostMs = 0;
 			NetDirectoryRetry hostRetry;
 			std::vector<Exchange> retiredTies;
-			NetFrameTieReply reply;
 			struct Decision { NetFrameTieRequest request; NetFrameTieReply reply; uint64_t atMs = 0; };
 			std::vector<Decision> consumed;
-			bool checkedIn = false, finalQuerySent = false;
-			std::optional<uint64_t> boundStartMs;
-			uint64_t nextTieMs = 0, nextCheckInMs = 0, nextSeatRequestMs = 0;
-			NetDirectoryRetry tieRetry, checkInRetry;
+			uint64_t nextCheckInMs = 0, nextSeatRequestMs = 0;
+			NetDirectoryRetry checkInRetry;
 			std::deque<uint64_t> seatRequests, tieRequests;
 			uint64_t sentMs = 0, exchangeEstimateMs = 0, generalUntilMs = 0;
 			bool sentCheckIn = false;
 			// The row's evidence of the product's answers: the questions asked, those answered Waiting, and those decided.
-			uint64_t questions = 0, waitingAnswers = 0, decidedAnswers = 0, tieRequestCount = 0, firstQuestionMs = UINT64_MAX, firstDecidedMs = UINT64_MAX;
+			uint64_t questionsAsked = 0, waitingAnswers = 0, decidedAnswers = 0, tieRequestCount = 0, firstQuestionMs = UINT64_MAX, firstDecidedMs = UINT64_MAX;
 			// A seat checks in every 5.1 s from its lobby on, so its round starts with this minute's allowance spent up to `phaseMs` ago; a
 			// rematch's round keeps the requests the seat has spent since.
 			bool started = false;
@@ -283,35 +290,52 @@ namespace RTE {
 				while (!tieRequests.empty() && nowMs >= tieRequests.front() && nowMs - tieRequests.front() >= 60100) tieRequests.pop_front();
 				return nowMs >= generalUntilMs && tieRequests.size() < 30;
 			}
+			size_t QuestionIndex(const NetFrameTieRequest& asked) {
+				for (size_t index = 0; index < questions.size(); ++index) {
+					auto identity = questions[index].request; identity.members = asked.members; identity.queryOnly = asked.queryOnly;
+					if (identity == asked) return index;
+				}
+				questions.push_back(TieQuestion{asked});
+				return questions.size() - 1;
+			}
+			TieQuestion& Question(const NetFrameTieRequest& asked) { return questions[QuestionIndex(asked)]; }
+			std::optional<size_t> NextQuestion(uint64_t nowMs) {
+				for (size_t offset = 0; offset < questions.size(); ++offset) {
+					const size_t index = (nextQuestion + offset) % questions.size();
+					const auto& question = questions[index];
+					if (question.reply.state == NetFrameTieReply::State::Decided || nowMs < question.nextMs || nowMs < question.retry.nextMs) continue;
+					nextQuestion = (index + 1) % questions.size();
+					return index;
+				}
+				return {};
+			}
 			NetFrameTieReply Query(const NetFrameTieRequest& asked, uint64_t nowMs) {
-				const auto decided = [&] {
+				++questionsAsked; firstQuestionMs = std::min(firstQuestionMs, nowMs);
+				if (!questions.empty() && (questions.front().request.roundId != asked.roundId || questions.front().request.configHash != asked.configHash)) {
+					if (tie) {
+						if (retiredTies.size() >= 16) return {};
+						retiredTies.push_back(std::move(*tie)); tie.reset();
+					}
+					questions.clear(); activeTie.reset(); nextQuestion = 0;
+				}
+				const size_t index = QuestionIndex(asked);
+				auto& question = questions[index];
+				if (question.reply.state != NetFrameTieReply::State::Decided && asked.queryOnly && !question.request.queryOnly) {
+					if (activeTie == index && tie) {
+						if (retiredTies.size() >= 16) return {};
+						retiredTies.push_back(std::move(*tie)); tie.reset(); activeTie.reset();
+					}
+					question = TieQuestion{asked};
+				}
+				const auto& reply = question.reply;
+				if (reply.state == NetFrameTieReply::State::Decided) {
 					++decidedAnswers; firstDecidedMs = std::min(firstDecidedMs, nowMs);
 					if (consumed.empty() || consumed.back().request != asked || consumed.back().reply.members != reply.members)
 						consumed.push_back({asked, reply, nowMs});
-					return reply;
-				};
-				++questions; firstQuestionMs = std::min(firstQuestionMs, nowMs);
-				if (!request || *request != asked) {
-					if (request && reply.state == NetFrameTieReply::State::Decided) {
-						auto decided = *request; decided.members = asked.members; decided.queryOnly = asked.queryOnly;
-						if (decided == asked) {
-							++decidedAnswers; firstDecidedMs = std::min(firstDecidedMs, nowMs);
-							if (consumed.empty() || consumed.back().request != asked) consumed.push_back({asked, reply, nowMs});
-							return reply;
-						}
-					}
-					if (tie && !(asked.queryOnly && request && !request->queryOnly)) { ++waitingAnswers; return {NetFrameTieReply::State::Waiting}; }
-					if (retiredTies.size() >= 16) return {};
-					if (tie) { retiredTies.push_back(std::move(*tie)); tie.reset(); }
-					if (asked.queryOnly && request && !request->queryOnly) { tieRetry = {}; nextTieMs = 0; }
-					request = asked; nextTieMs = std::max(nextTieMs, tieRetry.nextMs);
-					checkedIn = false; boundStartMs.reset(); finalQuerySent = false;
-					reply = {}; reply.state = NetFrameTieReply::State::Waiting;
-				}
-				if (reply.state == NetFrameTieReply::State::Decided) return decided();
-				else if (reply.state == NetFrameTieReply::State::Waiting) ++waitingAnswers;
+				} else if (reply.state == NetFrameTieReply::State::Waiting) ++waitingAnswers;
 				return reply;
 			}
+
 			NetHostChangeReply QueryHost(const NetHostChangeRequest& asked) {
 				if (!hostRequest || *hostRequest != asked) {
 					if (hostChange) return {NetHostChangeReply::State::Waiting};
@@ -362,47 +386,47 @@ namespace RTE {
 					if (reachable) { (*exchange)->answer = exchange == &tie ? frameTie((*exchange)->sent) : directory.CheckIn(seat, nowMs); }
 					else (*exchange)->delivered = false;
 				}
-				if (request && reply.state != NetFrameTieReply::State::Decided) {
-					if (tie && nowMs >= tie->doneMs) {
-						const auto answer = tie->delivered ? tie->answer : Directory::Answer{};
-						tie.reset(); nextTieMs = nowMs + 50; reply = {};
-						const uint64_t exchanged = nowMs - sentMs;
-						const bool valid = answer.status == 200 && (!answer.decided || (!answer.members.empty() && answer.members.size() < request->owners.size() &&
-						    std::is_sorted(answer.members.begin(), answer.members.end()) && std::adjacent_find(answer.members.begin(), answer.members.end()) == answer.members.end() &&
-						    std::includes(request->owners.begin(), request->owners.end(), answer.members.begin(), answer.members.end())));
-						if (valid) {
-							if (!checkedIn) boundStartMs = nowMs;
-							checkedIn = true; reply.state = NetFrameTieReply::State::Waiting;
-							if (answer.decided) { reply.state = NetFrameTieReply::State::Decided; reply.members = answer.members; }
-							tieRetry.Succeeded();
-							exchangeEstimateMs = std::max(exchanged, exchangeEstimateMs - exchangeEstimateMs / 4);
-							if (finalQuerySent) nextTieMs = nowMs + 250;
-						} else if (answer.status == 0 && sentCheckIn) { exchangeEstimateMs = std::max(exchangeEstimateMs, exchanged); finalQuerySent = false; }
-						else {
-							nextTieMs = tieRetry.Failed(nowMs, answer.status, "", std::to_string(answer.retryAfterSeconds), "frame-tie");
-							if (answer.status == 429) generalUntilMs = std::max(generalUntilMs, nextTieMs);
-							finalQuerySent = false;
-						}
-					}
-					if (!tie && reply.state != NetFrameTieReply::State::Decided) {
-						const bool finalQuery = boundStartMs && nowMs >= *boundStartMs + c_NetFrameTieDeadlineMs;
-						if (nowMs >= nextTieMs && nowMs >= tieRetry.nextMs && CanTieRequest(nowMs)) {
-							auto sent = *request; sent.queryOnly = sent.queryOnly || checkedIn || finalQuery;
-							const uint64_t timeoutMs = std::clamp<uint64_t>(2 * exchangeEstimateMs, c_NetFrameTieHttpTimeoutMs, 2000);
-							const bool answered = reachable && exchangeMs <= timeoutMs;
-							tie = Exchange{sent, nowMs + exchangeMs / 2, nowMs + (answered ? exchangeMs : timeoutMs), false, answered, {}};
-							finalQuerySent = finalQuerySent || finalQuery; ++tieRequestCount;
-							tieRequests.push_back(nowMs); sentMs = nowMs; sentCheckIn = !sent.queryOnly;
-						}
+				if (tie && nowMs >= tie->doneMs) {
+					auto& question = questions.at(*activeTie);
+					const auto answer = tie->delivered ? tie->answer : Directory::Answer{};
+					tie.reset(); activeTie.reset(); question.nextMs = nowMs + 50; question.reply = {};
+					const uint64_t exchanged = nowMs - sentMs;
+					const bool valid = answer.status == 200 && (!answer.decided || (!answer.members.empty() && answer.members.size() < question.request.owners.size() &&
+					    std::is_sorted(answer.members.begin(), answer.members.end()) && std::adjacent_find(answer.members.begin(), answer.members.end()) == answer.members.end() &&
+					    std::includes(question.request.owners.begin(), question.request.owners.end(), answer.members.begin(), answer.members.end())));
+					if (valid) {
+						if (!question.checkedIn) question.boundStartMs = nowMs;
+						question.checkedIn = true; question.reply.state = NetFrameTieReply::State::Waiting;
+						if (answer.decided) { question.reply.state = NetFrameTieReply::State::Decided; question.reply.members = answer.members; }
+						question.retry.Succeeded();
+						exchangeEstimateMs = std::max(exchanged, exchangeEstimateMs - exchangeEstimateMs / 4);
+						if (question.finalQuerySent) question.nextMs = nowMs + 250;
+					} else if (answer.status == 0 && sentCheckIn) { exchangeEstimateMs = std::max(exchangeEstimateMs, exchanged); question.finalQuerySent = false; }
+					else {
+						question.nextMs = question.retry.Failed(nowMs, answer.status, "", std::to_string(answer.retryAfterSeconds), "frame-tie");
+						if (answer.status == 429) generalUntilMs = std::max(generalUntilMs, question.nextMs);
+						question.finalQuerySent = false;
 					}
 				}
+				if (!tie && CanTieRequest(nowMs)) if (const auto selected = NextQuestion(nowMs)) {
+					auto& question = questions[*selected];
+					const bool finalQuery = question.boundStartMs && nowMs >= *question.boundStartMs + c_NetFrameTieDeadlineMs;
+					auto sent = question.request; sent.queryOnly = sent.queryOnly || question.checkedIn || finalQuery;
+					const uint64_t timeoutMs = std::clamp<uint64_t>(2 * exchangeEstimateMs, c_NetFrameTieHttpTimeoutMs, 2000);
+					const bool answered = reachable && exchangeMs <= timeoutMs;
+					tie = Exchange{sent, nowMs + exchangeMs / 2, nowMs + (answered ? exchangeMs : timeoutMs), false, answered, {}};
+					activeTie = selected;
+					question.finalQuerySent = question.finalQuerySent || finalQuery; ++tieRequestCount;
+					tieRequests.push_back(nowMs); sentMs = nowMs; sentCheckIn = !sent.queryOnly;
+				}
+
 				if (checkIn) {
 					if (nowMs < checkIn->doneMs) return;
 					const auto answer = checkIn->delivered ? checkIn->answer : Directory::Answer{};
 					const bool ok = answer.status == 200;
 					checkIn.reset(); nextCheckInMs = nowMs + 5000;
 					// The directory answers again: a tie request backing off from its silence asks at once.
-					if (ok) { checkInRetry.Succeeded(); tieRetry = {}; } else {
+					if (ok) { checkInRetry.Succeeded(); for (auto& question: questions) question.retry = {}; } else {
 						nextCheckInMs = checkInRetry.Failed(nowMs, answer.status, "", std::to_string(answer.retryAfterSeconds), "seat-check-in");
 						if (answer.status == 429) generalUntilMs = std::max(generalUntilMs, nextCheckInMs);
 					}
@@ -424,13 +448,13 @@ namespace RTE {
 			first.Poll(60050, 100, true, 1, directory);
 			if (first.Query(request, 60050).state != NetFrameTieReply::State::Waiting) return fail("outward request supplied an answer before its reply arrived");
 			auto later = request; ++later.frame;
-			if (first.Query(later, 60050).state != NetFrameTieReply::State::Waiting || first.request != request) return fail("new question replaced an in-flight request");
+			if (first.Query(later, 60050).state != NetFrameTieReply::State::Waiting || (!first.tie || first.tie->sent != request)) return fail("new question replaced an in-flight request");
 			first.Poll(60100, 100, true, 1, directory);
-			if (first.Query(request, 60100).state != NetFrameTieReply::State::Decided || first.reply.members != std::vector<uint16_t>{1}) return fail("completed exchange lost its decided half");
+			if (first.Query(request, 60100).state != NetFrameTieReply::State::Decided || first.Question(request).reply.members != std::vector<uint16_t>{1}) return fail("completed exchange lost its decided half");
 			auto opposite = request; opposite.members = {2};
 			if (second.Query(opposite, 60100).state != NetFrameTieReply::State::Waiting) return fail("another requester received an answer without its own exchange");
 			second.Poll(60100, 100, true, 2, directory); second.Poll(60150, 100, true, 2, directory); second.Poll(60200, 100, true, 2, directory);
-			if (second.Query(opposite, 60200).state != NetFrameTieReply::State::Decided || second.reply.members != first.reply.members) return fail("second check-in rewrote a decided split");
+			if (second.Query(opposite, 60200).state != NetFrameTieReply::State::Decided || second.Question(opposite).reply.members != first.Question(request).reply.members) return fail("second check-in rewrote a decided split");
 			auto wrong = request; wrong.owners = {1, 3}; wrong.members = {1};
 			if (directory.FrameTie(1, wrong).status != 409) return fail("decided split accepted different owners");
 			wrong = request; wrong.members = {1, 2};
@@ -451,12 +475,12 @@ namespace RTE {
 			if (allowance.CanTieRequest(120099) || !allowance.CanTieRequest(120100)) return fail("tie allowance did not retain its delivery margin");
 			DirectoryClient timeout; timeout.StartRound(60000, 1000); timeout.Query(later, 60000);
 			timeout.Poll(60000, 300, true, 1, directory); timeout.Poll(60150, 300, true, 1, directory); timeout.Poll(60250, 300, true, 1, directory);
-			if (timeout.tieRetry.nextMs || timeout.exchangeEstimateMs != 250 || timeout.nextTieMs != 60300) return fail("timed-out check-in entered failure backoff");
+			if (timeout.Question(later).retry.nextMs || timeout.exchangeEstimateMs != 250 || timeout.Question(later).nextMs != 60300) return fail("timed-out check-in entered failure backoff");
 			timeout.Poll(60300, 300, true, 1, directory); timeout.Poll(60450, 300, true, 1, directory); timeout.Poll(60600, 300, true, 1, directory);
 			if (timeout.Query(later, 60600).state != NetFrameTieReply::State::Decided || timeout.tieRequestCount != 2) return fail("adaptive timeout did not receive the retried check-in");
 			DirectoryClient refused; refused.StartRound(60000, 1000); refused.Query(wrong, 60000);
 			refused.Poll(60000, 100, true, 1, directory); refused.Poll(60050, 100, true, 1, directory); refused.Poll(60100, 100, true, 1, directory);
-			if (refused.reply.state == NetFrameTieReply::State::Decided || refused.tieRetry.nextMs != 61100) return fail("refused check-in supplied authority or skipped backoff");
+			if (refused.Question(wrong).reply.state == NetFrameTieReply::State::Decided || refused.Question(wrong).retry.nextMs != 61100) return fail("refused check-in supplied authority or skipped backoff");
 			Directory administration; administration.retained = {1, 2, 3};
 			administration.CheckIn(1, 20000); administration.CheckIn(3, 20000);
 			NetHostChangeRequest hostRequest; hostRequest.roundId = 1; hostRequest.appliedFrame = 100; hostRequest.preparedFrame = 102;
@@ -493,10 +517,10 @@ namespace RTE {
 				DirectoryClient observer, decider; observer.StartRound(60000, 1000); decider.StartRound(60000, 1000);
 				auto query = request; query.queryOnly = true; observer.Query(query, 60000);
 				for (uint64_t now = 60000; now <= 61500; now += 50) observer.Poll(now, 100, true, 1, directory);
-				if (!observer.finalQuerySent || observer.reply.state == NetFrameTieReply::State::Decided) return fail("the missing split did not stay undecided through its final query");
+				if (!observer.Question(query).finalQuerySent || observer.Question(query).reply.state == NetFrameTieReply::State::Decided) return fail("the missing split did not stay undecided through its final query");
 				auto own = request; own.members = {2}; decider.Query(own, 61500);
 				for (uint64_t now = 61500; now <= 62000; now += 50) { decider.Poll(now, 100, true, 2, directory); observer.Poll(now, 100, true, 1, directory); }
-				if (observer.Query(query, 62000).state != NetFrameTieReply::State::Decided || observer.tieRequestCount < 9 || observer.reply.members != std::vector<uint16_t>{2}) return fail("a deciding check-in after the final query was never learned");
+				if (observer.Query(query, 62000).state != NetFrameTieReply::State::Decided || observer.tieRequestCount < 9 || observer.Question(query).reply.members != std::vector<uint16_t>{2}) return fail("a deciding check-in after the final query was never learned");
 				return true;
 			}
 			if (shape == "refusals") {
@@ -520,32 +544,48 @@ namespace RTE {
 			DirectoryClient client; client.nextCheckInMs = 60000;
 			if (shape == "healed-query") {
 				client.Query(request, 60000); client.Poll(60000, 240, true, 1, directory);
-				client.tieRetry.nextMs = 65000; client.nextTieMs = 65000;
+				client.Question(request).retry.nextMs = 65000; client.Question(request).nextMs = 65000;
 				auto query = request; query.queryOnly = true;
-				if (client.Query(query, 60020).state != NetFrameTieReply::State::Waiting || client.tie || client.retiredTies.size() != 1 || client.tieRetry.nextMs)
+				if (client.Query(query, 60020).state != NetFrameTieReply::State::Waiting || client.tie || client.retiredTies.size() != 1 || client.Question(request).retry.nextMs)
 					return fail("the recovered link waited for the old check-in or its backoff before querying");
 				for (uint64_t now = 60020; now <= 60320; now += 10) client.Poll(now, 100, true, 1, directory);
-				if (client.Query(query, 60320).state != NetFrameTieReply::State::Decided || !client.retiredTies.empty() || client.reply.members != std::vector<uint16_t>{1})
+				if (client.Query(query, 60320).state != NetFrameTieReply::State::Decided || !client.retiredTies.empty() || client.Question(request).reply.members != std::vector<uint16_t>{1})
 					return fail("retiring the old exchange lost its recorded check-in or bypassed the query's round trip");
 				query.members = {2};
 				if (client.Query(query, 60320).state != NetFrameTieReply::State::Decided || client.tie)
 					return fail("the same decided split was re-asked merely because the caller named the other half");
 				return true;
 			}
+			if (shape == "waiting-question") {
+				auto query = request; query.queryOnly = true;
+				client.Query(query, 60000); client.Poll(60000, 100, true, 1, directory);
+				auto later = request; ++later.frame;
+				client.Query(later, 60050);
+				for (uint64_t now = 60050; now <= 60400; now += 50) client.Poll(now, 100, true, 1, directory);
+				if (client.Query(query, 60400).state != NetFrameTieReply::State::Waiting ||
+				    client.Query(later, 60400).state != NetFrameTieReply::State::Decided ||
+				    client.Question(query).boundStartMs != 60100 || directory.ties.size() != 1)
+					return fail("an unrecorded split query starved a later check-in or lost its own wait clock");
+				auto checkIn = request; checkIn.members = {2};
+				if (!directory.FrameTie(2, checkIn).decided) return fail("the other half's legitimate check-in was refused");
+				for (uint64_t now = 60450; now <= 61000; now += 50) client.Poll(now, 100, true, 1, directory);
+				if (client.Query(query, 61000).members != std::vector<uint16_t>{2} || client.Query(later, 61000).members != std::vector<uint16_t>{1})
+					return fail("a delayed ruling displaced the later split's different authenticated answer");
+				return true;
+			}
 			if (shape == "two-questions") {
 				client.Query(request, 60000); client.Poll(60000, 100, true, 1, directory);
 				auto other = request; ++other.frame;
-				if (client.Query(other, 60050).state != NetFrameTieReply::State::Waiting || client.request != request)
+				if (client.Query(other, 60050).state != NetFrameTieReply::State::Waiting || (!client.tie || client.tie->sent != request))
 					return fail("a second split replaced the exchange still in flight");
 				for (uint64_t now: {60050ULL, 60100ULL}) client.Poll(now, 100, true, 1, directory);
 				if (client.Query(request, 60100).state != NetFrameTieReply::State::Decided) return fail("the older split lost its completed answer");
 				if (client.Query(other, 60100).state != NetFrameTieReply::State::Waiting) return fail("the new split inherited the old split's answer");
 				for (uint64_t now: {60150ULL, 60200ULL, 60250ULL}) client.Poll(now, 100, true, 1, directory);
 				if (client.Query(other, 60250).state != NetFrameTieReply::State::Decided) return fail("the second split did not complete its own exchange");
-				if (client.Query(request, 60250).state != NetFrameTieReply::State::Waiting) return fail("switching back supplied a retired answer without an exchange");
-				for (uint64_t now: {60300ULL, 60350ULL, 60400ULL}) client.Poll(now, 100, true, 1, directory);
-				if (client.Query(request, 60400).state != NetFrameTieReply::State::Decided || directory.ties.size() != 2 || client.tieRequestCount != 3)
-					return fail("two split questions did not retain separate directory decisions and three client exchanges");
+				// FLAGGED departure: each split retains its authenticated reply across later questions.
+				if (client.Query(request, 60250).state != NetFrameTieReply::State::Decided || directory.ties.size() != 2 || client.tieRequestCount != 2 || client.tie)
+					return fail("two split questions did not retain separate authenticated answers after their own exchanges");
 				return true;
 			}
 			if (shape == "throttle") { directory.checkInStatus = 429; directory.retryAfterSeconds = 2; }
@@ -557,7 +597,7 @@ namespace RTE {
 				if (client.tie) return fail("a tie bypassed its install's shared throttle");
 				directory.checkInStatus = 200;
 			} else {
-				if (client.reply.state == NetFrameTieReply::State::Decided || client.tieRetry.nextMs != 61100) return fail("a full directory record supplied authority or skipped its service backoff");
+				if (client.Question(request).reply.state == NetFrameTieReply::State::Decided || client.Question(request).retry.nextMs != 61100) return fail("a full directory record supplied authority or skipped its service backoff");
 				directory.tieStatus = directory.checkInStatus = 200;
 			}
 			const uint64_t retry = shape == "throttle" ? 62100 : 61100;
@@ -1945,8 +1985,8 @@ namespace RTE {
 			std::string RefereeEvidence() const {
 				std::string text;
 				for (const auto& [seat, client]: hub.directoryClients) {
-					if (!client.questions) continue;
-					text += " referee_seat" + std::to_string(seat) + "=asked:" + std::to_string(client.questions) + ",waiting:" + std::to_string(client.waitingAnswers) +
+					if (!client.questionsAsked) continue;
+					text += " referee_seat" + std::to_string(seat) + "=asked:" + std::to_string(client.questionsAsked) + ",waiting:" + std::to_string(client.waitingAnswers) +
 					        ",decided:" + std::to_string(client.decidedAnswers) + ",requests:" + std::to_string(client.tieRequestCount) + ",first_decided_ms:" +
 					        (client.firstDecidedMs == UINT64_MAX ? std::string("never") : std::to_string(client.firstDecidedMs - client.firstQuestionMs));
 				}
@@ -5126,6 +5166,7 @@ namespace RTE {
 		    {"directory_refuses_stale_host_hash_generation_and_removed_owners", "refusals"},
 		    {"directory_general_429_blocks_both_request_allowances", "throttle"},
 		    {"directory_two_split_questions_wait_for_their_own_replies", "two-questions"},
+		    {"directory_waiting_query_does_not_starve_a_later_check_in", "waiting-question"},
 		    {"directory_healed_link_queries_before_the_old_exchange_times_out", "healed-query"},
 		    {"directory_full_record_503_retries_without_frame_authority", "storage"}}) {
 			if (selected && std::string_view(selected) != name) continue;
