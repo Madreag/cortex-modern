@@ -3281,6 +3281,8 @@ std::string AudioMan::CheckpointVoiceMapSelfTestMismatch(const std::function<std
 	CheckpointNativeStorage::AllocationScope allocations(true);
 	auto& live = g_AudioMan;
 	live.PrepareCheckpointValues();
+	// As an autosave's preparation does: voices started before this point, by earlier tests too, move into checkpoint storage.
+	OwnCheckpointStorage(live.m_PlayingVoices);
 	constexpr int first = std::numeric_limits<int>::max() - 4096;
 	constexpr int count = 256;
 	struct Cleanup {
