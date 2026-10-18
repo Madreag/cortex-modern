@@ -2171,18 +2171,20 @@ namespace RTE {
 					receivedTail.erase(next);
 					credit -= 1; ++work;
 				}
-				if (!activation && fixture.hub.now >= reportAt + 100) {
+				if (fixture.hub.now >= reportAt + 100) {
 					// Flagged fixture correction: production receives this cursor after its link transit. Comparing
 					// an instantaneous callback to a transported report invents an extra half-trip of producer lag.
 					reports.push_back({fixture.hub.now + fixture.hub.Delay(seat, donor), replay.applied, replay.applied - reported,
 					                   fixture.hub.now - reportAt, work});
 					reported = replay.applied; reportAt = fixture.hub.now;
 				}
-				while (!activation && !reports.empty() && reports.front().arrival <= fixture.hub.now) {
+				while (!reports.empty() && reports.front().arrival <= fixture.hub.now) {
 					const auto report = reports.front(); reports.pop_front();
 					(void)join.NoteRejoinCapacity(12, report.work, report.work * 1000, 0);
+					uint64_t announced = 0;
 					if (!join.NoteCatchUpProgress(12, report.applied, report.ticks, report.elapsed,
-					                            fixture.worlds[donor - 1].applied, &activation, &error)) return false;
+					                            fixture.worlds[donor - 1].applied, &announced, &error)) return false;
+					if (announced) activation = announced;
 					join.NoteCatchUpClock(12, fixture.hub.now);
 					join.AcknowledgeTailDatagrams(12, fixture.hub.now);
 					if (reportsRead++ < 3) DiagnosticLine() << "[session-plane-image-report] returner=" << unsigned(seat)
@@ -2195,12 +2197,18 @@ namespace RTE {
 					const auto* session = join.FindSession(12);
 					if (!session || session->activationTick != activation) return fail("the image activation lost its measured session");
 					proposer = fixture.ImageReturnProposer(donor);
-					if (!fixture.peers[proposer - 1]->SchedulePeerReclaim(seat, s_ReturnTransport(*fixture.peers[proposer - 1], seat), incarnation, activation, &error, session->activationTrailFrames))
-						return fail(error + " donor=" + std::to_string(donor) + " proposer=" + std::to_string(proposer) +
-						    " activation=" + std::to_string(activation) + " now_ms=" + std::to_string(fixture.hub.now) + s_WaitState(*fixture.peers[proposer - 1]));
+					auto& coordinator = *fixture.peers[proposer - 1];
+					// FLAGGED fixture departure: a refused proposal remains private and retries, as the service does.
+					std::string refusal;
+					if (!coordinator.SchedulePeerReclaim(seat, s_ReturnTransport(coordinator, seat), incarnation, activation, &refusal, session->activationTrailFrames)) {
+						if (lastRefusal != refusal) DiagnosticLine() << "[session-plane-image-proposal] waits=" << refusal << std::endl;
+						lastRefusal = refusal;
+						continue;
+					}
 					DiagnosticLine() << "[session-plane-image-reclaim] returner=" << unsigned(seat) << " activation=" << activation
 					                 << " trail=" << session->activationTrailFrames << std::endl;
 					proposed = true;
+					join.MarkActivationProposed(12);
 				}
 				if (proposed && !agreed) {
 					agreed = fixture.peers[proposer - 1]->HasAgreedSeatReclaim(seat, activation);
@@ -2210,7 +2218,6 @@ namespace RTE {
 						if (peer != seat && (playing & (1U << (peer - 1))) && !fixture.peers[proposer - 1]->IsSeatReclaimGap(peer, activation))
 							agreed &= fixture.peers[peer - 1]->HasAgreedSeatReclaim(seat, activation);
 					if (agreed) {
-						join.MarkActivationProposed(12);
 						fixture.peers[donor - 1]->NoteReturnerCatchingUp(seat, fixture.hub.now);
 						(void)fixture.peers[donor - 1]->SendReturnerTheRoundFrom(seat, activation);
 					}
