@@ -1,0 +1,214 @@
+{
+  "exe_sha256": "1b5c07e631e140bb5ad199fe94c3f13808672a2c610faf91b57f25ebf4573877",
+  "repo": "<REPO>",
+  "passed": 8,
+  "total": 10,
+  "quiet_rows": [],
+  "sanitizer": null,
+  "complete": true,
+  "running": null,
+  "results": {
+    "net-lockstep": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 3,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "1b5c07e631e140bb5ad199fe94c3f13808672a2c610faf91b57f25ebf4573877",
+      "row_elapsed_s": 45.4118384589965,
+      "start_load": [
+        0.94189453125,
+        0.90478515625,
+        0.9453125
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-session-plane": {
+      "pass": false,
+      "exit_code": 1,
+      "timed_out": false,
+      "pass_lines": 0,
+      "fail_lines": [
+        "[net-session-plane-selftest] FAIL",
+        "[net-session-plane-selftest] FAIL",
+        "[net-session-plane-selftest] FAIL"
+      ],
+      "fatal": [
+        "[net-session-plane-selftest] FAIL relay_link_blackout_return: seed=0 phased relay return failed: peer=2 blackout_gap_ms=37 pre_fault_pace_lead_ms=33 return_ms=4079 post_return_wait_ms=0 returns=1",
+        "[net-session-plane-selftest] FAIL four_seats_held_joiner_catches_up_then_runs_at_round_rate_over_200ms: seed=0 authority ruling image return: the private replay did not reach an activation every survivor certified: donor=1 activation=0 replay=2319 agreed=0 next=2327 blocked=own-input-acceptance consumer=none wait_since=6085 members=13 local_held=0 granted=none hold_certificate=0 start=2:1/required=0/held=0 start=3:1/required=0/held=0 start=4:1/required=0/held=0",
+        "[net-session-plane-selftest] FAIL four_seats_held_joiner_catches_up_then_runs_at_round_rate_over_250ms: seed=0 authority ruling image return: the private return needs an authoritative group and a future frame donor=1 proposer=1 activation=757 now_ms=7877 next=444 blocked=own-input-acceptance consumer=none wait_since=6118 members=13 local_held=0 granted=none hold_certificate=0 start=2:1/required=0/held=0 start=3:1/required=0/held=0 start=4:1/required=0/held=0"
+      ],
+      "reason": "exit_code=1",
+      "binary": "1b5c07e631e140bb5ad199fe94c3f13808672a2c610faf91b57f25ebf4573877",
+      "fixed_failure_report": {
+        "path": "<REPO>/reviews/mac/reader-link-inventory/net-session-plane-selftest/fixed-failure-groups.txt",
+        "binary": "1b5c07e631e140bb5ad199fe94c3f13808672a2c610faf91b57f25ebf4573877",
+        "digest": "e1b46b738224506d67a9db9a1654180b326d9a484be991288b0c65d0389e97f1",
+        "suite_root": "<REPO>/reviews/mac/reader-link-inventory",
+        "saved_cases_ran": 108
+      },
+      "row_elapsed_s": 198.31544562499766,
+      "start_load": [
+        1.02001953125,
+        0.931640625,
+        0.951171875
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-session-plane-hold-schedules": {
+      "pass": false,
+      "exit_code": 1,
+      "timed_out": false,
+      "pass_lines": 0,
+      "fail_lines": [
+        "[net-session-plane-selftest] FAIL",
+        "[net-session-plane-selftest] FAIL",
+        "[net-session-plane-selftest] FAIL"
+      ],
+      "fatal": [
+        "[net-session-plane-selftest] FAIL random_hold_schedules shape=three_direct_seats_282ms_jitter_40ms_seat3_slow_75pc_200ms_back_at_100pc_host_late_400ms_more_200ms_back_at_105pc_survivor_waits_seed_114 group=bound:survivor_waits:3:direct seeds=114,197 property=bound kind=survivor_waits minimize_runs=60 repeats=1: authority ruling: playing peer 2 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory; now_ms=6156 applied=329 next=330 blocked=own-input-acceptance consumer=330 wait_since=6105 members=3 local_held=0 granted=none hold_certificate=1 start=1:1/required=0/held=0 start=3:1/required=0/held=0 at 6156 ms",
+        "[net-session-plane-selftest] FAIL random_hold_schedules group=bound:survivor_waits:3:internet seeds=62,80: reproduced by fixed row three_seats_returned_joiner_meets_a_host_autosave_every_10s",
+        "[net-session-plane-selftest] FAIL random_hold_schedules shape=four_direct_seats_297ms_jitter_10ms_loss_90pc_host_survivor_waits_seed_106 group=bound:survivor_waits:4:direct seeds=106 property=bound kind=survivor_waits minimize_runs=44 repeats=1: authority ruling: playing peer 1 waited 51ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory; now_ms=4556 applied=224 next=225 blocked=remote-input consumer=225 wait_since=4505 members=15 local_held=0 granted=none hold_certificate=0 start=2:1/required=0/held=0 start=3:1/required=0/held=0 start=4:1/required=0/held=0 at 4556 ms"
+      ],
+      "reason": "exit_code=1",
+      "binary": "1b5c07e631e140bb5ad199fe94c3f13808672a2c610faf91b57f25ebf4573877",
+      "schedule_summary": "[net-session-plane-selftest] random_hold_schedules schedules=200 ran=200 seeds=1..200",
+      "fixed_failure_report": {
+        "path": "<REPO>/reviews/mac/reader-link-inventory/net-session-plane-selftest/fixed-failure-groups.txt",
+        "binary": "1b5c07e631e140bb5ad199fe94c3f13808672a2c610faf91b57f25ebf4573877",
+        "digest": "e1b46b738224506d67a9db9a1654180b326d9a484be991288b0c65d0389e97f1",
+        "suite_root": "<REPO>/reviews/mac/reader-link-inventory",
+        "saved_cases_ran": 108
+      },
+      "row_elapsed_s": 201.04442366700096,
+      "start_load": [
+        2.025390625,
+        1.36181640625,
+        1.1162109375
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-input-acceptance": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "1b5c07e631e140bb5ad199fe94c3f13808672a2c610faf91b57f25ebf4573877",
+      "row_elapsed_s": 1.7507384159980575,
+      "start_load": [
+        1.54833984375,
+        1.47900390625,
+        1.21337890625
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-lockstep-released-claims": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "1b5c07e631e140bb5ad199fe94c3f13808672a2c610faf91b57f25ebf4573877",
+      "row_elapsed_s": 1.7604915409974637,
+      "start_load": [
+        1.54833984375,
+        1.47900390625,
+        1.21337890625
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-lockstep-release-paths": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "1b5c07e631e140bb5ad199fe94c3f13808672a2c610faf91b57f25ebf4573877",
+      "row_elapsed_s": 3.0411289170006057,
+      "start_load": [
+        1.54833984375,
+        1.47900390625,
+        1.21337890625
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-lockstep-seat-succession": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "1b5c07e631e140bb5ad199fe94c3f13808672a2c610faf91b57f25ebf4573877",
+      "row_elapsed_s": 18.052357334003318,
+      "start_load": [
+        1.50439453125,
+        1.470703125,
+        1.2119140625
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-lockstep-seat-admission": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "1b5c07e631e140bb5ad199fe94c3f13808672a2c610faf91b57f25ebf4573877",
+      "row_elapsed_s": 11.70431520800048,
+      "start_load": [
+        1.70556640625,
+        1.51953125,
+        1.2353515625
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-world-join": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "1b5c07e631e140bb5ad199fe94c3f13808672a2c610faf91b57f25ebf4573877",
+      "row_elapsed_s": 11.563229625004169,
+      "start_load": [
+        1.5966796875,
+        1.501953125,
+        1.232421875
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-rejoin-matrix": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "1b5c07e631e140bb5ad199fe94c3f13808672a2c610faf91b57f25ebf4573877",
+      "row_elapsed_s": 23.89132662499469,
+      "start_load": [
+        1.35107421875,
+        1.45166015625,
+        1.2177734375
+      ],
+      "topology": "single-box: not proof"
+    }
+  },
+  "topology": "single-box: not proof"
+}

@@ -600,6 +600,32 @@ namespace RTE {
 			return true;
 		}
 
+		static bool ReaderLinksContributeToInputRunway(std::string* error) {
+			for (unsigned arm = 0; arm < 3; ++arm) {
+				DelayWire wire; wire.rtt = 100;
+				NetLockstepCoordinator peer; ConfigureDelay(peer, wire, 0, 1);
+				peer.m_Config.peerCount = peer.m_Config.matchConfig.peerCount = 3;
+				peer.m_Config.matchConfig.players.push_back({3, 2, false, "Third"});
+				peer.m_Config.matchConfig.successorOrder = {2, 3};
+				peer.m_Config.matchConfig.peerInputDelayFrames.push_back(1); peer.m_Config.peerInputDelayFrames[3] = 1;
+				peer.m_RemotePeerIds = {2, 3}; peer.m_RemoteTransports = {{2, 42}, {3, 43}};
+				peer.m_FrameGroupMembers = 7; peer.m_FrameGroupChanges = {{1, 7}};
+				peer.m_Stats.peers[2].pingMs = 200; peer.m_Stats.peers[2].jitterMs = 17;
+				peer.m_Stats.peers[2].pingMeasured = arm != 1;
+				if (arm == 2) {
+					peer.m_PeerBridges[2] = {4400, 4400, true, std::nullopt, {}, 5};
+					peer.m_PeerFrameHolds[2][4400] = true;
+					peer.m_FrameGroupMembers = 5; peer.m_FrameGroupChanges[4400] = 5;
+				}
+				SampleDelay(peer, 1000);
+				const uint16_t expected = arm == 0 ? 13 : 7;
+				if (DelayProposal(peer) != expected || peer.m_Stats.peers[1].pingMs != 100 || peer.m_Stats.peers[1].jitterMs != 17) {
+					*error = "the sender omitted a measured reader link, used an unmeasured/held report, or fed the group runway back into its local link metric: arm=" + std::to_string(arm); return false;
+				}
+			}
+			return true;
+		}
+
 		static bool LinkRiseHasNoResizeCooldown(std::string* error) {
 			for (unsigned mode = 0; mode != 4; ++mode) {
 				DelayWire wire; wire.rtt = 200;
@@ -31312,6 +31338,12 @@ namespace {
 		};
 		static const char* selectedCase = std::getenv("CC_TEST_LOCKSTEP_SELFTEST_CASE");
 		if (selectedCase) {
+			if (std::string_view(selectedCase) == "reader-link-runway") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::ReaderLinksContributeToInputRunway(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS reader_links_contribute_to_input_runway\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "held-record-prefix") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::HeldRecordPrefix(&error)) return fail(error);
@@ -31684,6 +31716,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::RemoteInputReceiptsFormTheLocalHoldGroup, "remote_input_receipts_form_the_local_hold_group");
 		row(&SessionPlaneRecoveryTest::MissingOrZeroLinkNeverUsesReceipts, "missing_or_zero_rtt_never_uses_machine_receipts");
 		row(&SessionPlaneRecoveryTest::LinkSizingInEveryMode, "every_mode_sizes_live_and_return_from_the_link");
+		row(&SessionPlaneRecoveryTest::ReaderLinksContributeToInputRunway, "reader_links_contribute_to_input_runway");
 		row(&SessionPlaneRecoveryTest::LinkRiseHasNoResizeCooldown, "link_rise_has_no_resize_cooldown");
 		row(&SessionPlaneRecoveryTest::LinkFallNeedsFiveMeasuredSeconds, "link_fall_requires_five_continuous_measured_seconds");
 		row(&SessionPlaneRecoveryTest::DirectHistoriesChooseAtHeal, "direct_heal_uses_committed_histories_and_human_seats");

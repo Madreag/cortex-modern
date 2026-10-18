@@ -1,0 +1,426 @@
+{
+  "topology": "single-box",
+  "proof": false,
+  "complete_gate": false,
+  "parent": "4ae23d3c743cbd444f045a9db46432e73940606a",
+  "launches": [
+    {
+      "collection": "reader-link-red",
+      "case": "reader-link-runway",
+      "exe_sha256": "57ea4c7f3a8840dc27c2ecb037ef2af93e62e3c86262009f0c1ff11883bb7efa",
+      "visible_window": true,
+      "exit_code": 1,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "reader-link-red--reader-link-runway--stdout.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        },
+        {
+          "path": "reader-link-red--reader-link-runway--stderr.log.gz",
+          "original_sha256": "d195aef9cca8b69ef0936b68a7a9cae06b2bda4e60bfc0f0b4c70dac30252c4b",
+          "portable_sha256": "d195aef9cca8b69ef0936b68a7a9cae06b2bda4e60bfc0f0b4c70dac30252c4b",
+          "compressed_sha256": "9915568bd50c171461748c3b5bd19660778c96e6e4cb2b94567123be87821060"
+        }
+      ]
+    },
+    {
+      "collection": "reader-link-native-candidate",
+      "case": "consumer-hold-deadline",
+      "exe_sha256": "1b5c07e631e140bb5ad199fe94c3f13808672a2c610faf91b57f25ebf4573877",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "reader-link-native-candidate--consumer-hold-deadline--stdout.log.gz",
+          "original_sha256": "a2bc87e07b3eebed3d51ea671ecce43d60357eda56a8cb7b01443bddcce13196",
+          "portable_sha256": "a2bc87e07b3eebed3d51ea671ecce43d60357eda56a8cb7b01443bddcce13196",
+          "compressed_sha256": "781612fa01bcff74817f6c7b0a7d73af7ab9f31daebdfd256ef9371d531452e6"
+        },
+        {
+          "path": "reader-link-native-candidate--consumer-hold-deadline--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "reader-link-native-candidate",
+      "case": "link-every-mode",
+      "exe_sha256": "1b5c07e631e140bb5ad199fe94c3f13808672a2c610faf91b57f25ebf4573877",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "reader-link-native-candidate--link-every-mode--stdout.log.gz",
+          "original_sha256": "ebcf8fb7b98862f5dc5d02117cbc17cc292397524b361fe43c2d072477d20b51",
+          "portable_sha256": "ebcf8fb7b98862f5dc5d02117cbc17cc292397524b361fe43c2d072477d20b51",
+          "compressed_sha256": "0eaada751876e006319c335437f763b4b4eac07c45e22ac3b80433f13b3f38e7"
+        },
+        {
+          "path": "reader-link-native-candidate--link-every-mode--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "reader-link-native-candidate",
+      "case": "link-five-second-fall",
+      "exe_sha256": "1b5c07e631e140bb5ad199fe94c3f13808672a2c610faf91b57f25ebf4573877",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "reader-link-native-candidate--link-five-second-fall--stdout.log.gz",
+          "original_sha256": "c77805d77ae3ef6834ce92f5d33b008a47ee593af08e8ca90584f1df04302738",
+          "portable_sha256": "c77805d77ae3ef6834ce92f5d33b008a47ee593af08e8ca90584f1df04302738",
+          "compressed_sha256": "11fffb66034523326a5317f42032b631608fead2464d041dccd732077fdb499e"
+        },
+        {
+          "path": "reader-link-native-candidate--link-five-second-fall--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "reader-link-native-candidate",
+      "case": "link-immediate-rise",
+      "exe_sha256": "1b5c07e631e140bb5ad199fe94c3f13808672a2c610faf91b57f25ebf4573877",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "reader-link-native-candidate--link-immediate-rise--stdout.log.gz",
+          "original_sha256": "c4dbce9ac5150c265b3816cba44bf0f222fb9ca406b07e55d9d846ffd8f8c70c",
+          "portable_sha256": "c4dbce9ac5150c265b3816cba44bf0f222fb9ca406b07e55d9d846ffd8f8c70c",
+          "compressed_sha256": "3bc1d6f576f5309bafca58bfcd06674aa2e83e0376be709eddf22c2d2c4f464a"
+        },
+        {
+          "path": "reader-link-native-candidate--link-immediate-rise--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "reader-link-native-candidate",
+      "case": "link-measurement-presence",
+      "exe_sha256": "1b5c07e631e140bb5ad199fe94c3f13808672a2c610faf91b57f25ebf4573877",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "reader-link-native-candidate--link-measurement-presence--stdout.log.gz",
+          "original_sha256": "e93d68cae8c57ddb7fc200a900d0e52704c9a79480fa23f51fe432d5158e834c",
+          "portable_sha256": "e93d68cae8c57ddb7fc200a900d0e52704c9a79480fa23f51fe432d5158e834c",
+          "compressed_sha256": "430250d0c1ba8de31c7d197e692a42d9a8dbeefdb6e019a5bbacf91b73d30a79"
+        },
+        {
+          "path": "reader-link-native-candidate--link-measurement-presence--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "reader-link-native-candidate",
+      "case": "reader-link-runway",
+      "exe_sha256": "1b5c07e631e140bb5ad199fe94c3f13808672a2c610faf91b57f25ebf4573877",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "reader-link-native-candidate--reader-link-runway--stdout.log.gz",
+          "original_sha256": "aab62977df8f55e3812e00c9625ca218e3066345dcb2095b04b6062cee1d2f67",
+          "portable_sha256": "aab62977df8f55e3812e00c9625ca218e3066345dcb2095b04b6062cee1d2f67",
+          "compressed_sha256": "3bf0eba57e23386496b073103be951747cadfc47b9b1d16e5cee97459b84fced"
+        },
+        {
+          "path": "reader-link-native-candidate--reader-link-runway--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "reader-link-native-candidate",
+      "case": "remote-input-receipt-group",
+      "exe_sha256": "1b5c07e631e140bb5ad199fe94c3f13808672a2c610faf91b57f25ebf4573877",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "reader-link-native-candidate--remote-input-receipt-group--stdout.log.gz",
+          "original_sha256": "afab1c143893aa6147bbe92a86abe689c5a3b7526fe1d961e4b2e83e6d5e243e",
+          "portable_sha256": "afab1c143893aa6147bbe92a86abe689c5a3b7526fe1d961e4b2e83e6d5e243e",
+          "compressed_sha256": "883d8341490d67462c1f4c21cc70375e31b7a03fc1ebd6def6783c29a662e26c"
+        },
+        {
+          "path": "reader-link-native-candidate--remote-input-receipt-group--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "reader-link-original-candidate",
+      "case": "joiner_catching_up_at_102_percent_returns_from_another_donor",
+      "exe_sha256": "1b5c07e631e140bb5ad199fe94c3f13808672a2c610faf91b57f25ebf4573877",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "reader-link-original-candidate--joiner_catching_up_at_102_percent_returns_from_another_donor--stdout.log.gz",
+          "original_sha256": "268e039093a60628cda47150e9aec5faf944c2ff95b8baa84cc5c56a35f41498",
+          "portable_sha256": "268e039093a60628cda47150e9aec5faf944c2ff95b8baa84cc5c56a35f41498",
+          "compressed_sha256": "7b4ebef68d363333974229b5a957fd841bc80e114f719e718775b18ef09d2ad1"
+        },
+        {
+          "path": "reader-link-original-candidate--joiner_catching_up_at_102_percent_returns_from_another_donor--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "reader-link-inventory",
+      "case": "net-input-acceptance-selftest",
+      "exe_sha256": "1b5c07e631e140bb5ad199fe94c3f13808672a2c610faf91b57f25ebf4573877",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "reader-link-inventory--net-input-acceptance-selftest--stdout.log.gz",
+          "original_sha256": "55143586372294f62d6e6023d6d84c610f93c505f391600be1e78173f811e5af",
+          "portable_sha256": "55143586372294f62d6e6023d6d84c610f93c505f391600be1e78173f811e5af",
+          "compressed_sha256": "d49661348a93cdcc38c420bc9f1fd43ef94aa030c60d325315525b33c758c138"
+        },
+        {
+          "path": "reader-link-inventory--net-input-acceptance-selftest--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "reader-link-inventory",
+      "case": "net-lockstep-release-paths-selftest",
+      "exe_sha256": "1b5c07e631e140bb5ad199fe94c3f13808672a2c610faf91b57f25ebf4573877",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "reader-link-inventory--net-lockstep-release-paths-selftest--stdout.log.gz",
+          "original_sha256": "06bb99fff40e9c860988bd8cc6f99e09dcf354f3ee567a55d73137448d917642",
+          "portable_sha256": "06bb99fff40e9c860988bd8cc6f99e09dcf354f3ee567a55d73137448d917642",
+          "compressed_sha256": "8ba18bec282272754044942e1a037257db43d6016271c7b1feedc4861caa14a4"
+        },
+        {
+          "path": "reader-link-inventory--net-lockstep-release-paths-selftest--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "reader-link-inventory",
+      "case": "net-lockstep-released-claims-selftest",
+      "exe_sha256": "1b5c07e631e140bb5ad199fe94c3f13808672a2c610faf91b57f25ebf4573877",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "reader-link-inventory--net-lockstep-released-claims-selftest--stdout.log.gz",
+          "original_sha256": "03c0b7f25c0e678de2f33d2c72e6432af537722cf867ac080efffd37828d05a5",
+          "portable_sha256": "03c0b7f25c0e678de2f33d2c72e6432af537722cf867ac080efffd37828d05a5",
+          "compressed_sha256": "02fdda01de1afe675049421bf6a646bd1e88fd640917707b36ab4852d2ab2654"
+        },
+        {
+          "path": "reader-link-inventory--net-lockstep-released-claims-selftest--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "reader-link-inventory",
+      "case": "net-lockstep-seat-admission-selftest",
+      "exe_sha256": "1b5c07e631e140bb5ad199fe94c3f13808672a2c610faf91b57f25ebf4573877",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "reader-link-inventory--net-lockstep-seat-admission-selftest--stdout.log.gz",
+          "original_sha256": "0af9bc5ed701e95fde689b8bfe34535c0b2300f489acb10fde871efa6d256999",
+          "portable_sha256": "0af9bc5ed701e95fde689b8bfe34535c0b2300f489acb10fde871efa6d256999",
+          "compressed_sha256": "fd594703c75e21ce1cf315e907c6a52ca636b30f0159db87b764401be77fc18d"
+        },
+        {
+          "path": "reader-link-inventory--net-lockstep-seat-admission-selftest--stderr.log.gz",
+          "original_sha256": "684702ee8c728067c0441d03d0637d1a05bb01ae696dcd77d06402ed25334e5f",
+          "portable_sha256": "684702ee8c728067c0441d03d0637d1a05bb01ae696dcd77d06402ed25334e5f",
+          "compressed_sha256": "c9643c5b9dae5e75a7257bf5a3939440fe9166c4aafd6caf3fd057543fd3992e"
+        }
+      ]
+    },
+    {
+      "collection": "reader-link-inventory",
+      "case": "net-lockstep-seat-succession-selftest",
+      "exe_sha256": "1b5c07e631e140bb5ad199fe94c3f13808672a2c610faf91b57f25ebf4573877",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "reader-link-inventory--net-lockstep-seat-succession-selftest--stdout.log.gz",
+          "original_sha256": "26a5e69393b3e03e753fea7347842dfc825c67751010d572eca45e001c0be73b",
+          "portable_sha256": "26a5e69393b3e03e753fea7347842dfc825c67751010d572eca45e001c0be73b",
+          "compressed_sha256": "aa14e131e149cb127204a2ed320b714e52737cd8e03d9dcffe4e85b191796012"
+        },
+        {
+          "path": "reader-link-inventory--net-lockstep-seat-succession-selftest--stderr.log.gz",
+          "original_sha256": "8a851c70b88452175ae4576a37912d38e5912cd633f47682d2cd8f346057fec4",
+          "portable_sha256": "8a851c70b88452175ae4576a37912d38e5912cd633f47682d2cd8f346057fec4",
+          "compressed_sha256": "61c8eae3c7f9c7b0394e1b7b8eef5e43adfdace39548ad0e9c110f2fb7e1abd6"
+        }
+      ]
+    },
+    {
+      "collection": "reader-link-inventory",
+      "case": "net-lockstep-selftest",
+      "exe_sha256": "1b5c07e631e140bb5ad199fe94c3f13808672a2c610faf91b57f25ebf4573877",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "reader-link-inventory--net-lockstep-selftest--stdout.log.gz",
+          "original_sha256": "d9ba9e2bf80456a20e07450bb0bdb1748faf3e8a141c7194846cbfacac2cd8ee",
+          "portable_sha256": "d9ba9e2bf80456a20e07450bb0bdb1748faf3e8a141c7194846cbfacac2cd8ee",
+          "compressed_sha256": "8e40b9fbe7ec3e3cefa7aa6c881fee6119e538da3ec236d784a5f9338a4adf69"
+        },
+        {
+          "path": "reader-link-inventory--net-lockstep-selftest--stderr.log.gz",
+          "original_sha256": "bfdc29fdfcf5b37842f01c5f7984efc1e426e23802e96de04ab4862ddf5fc6b1",
+          "portable_sha256": "bfdc29fdfcf5b37842f01c5f7984efc1e426e23802e96de04ab4862ddf5fc6b1",
+          "compressed_sha256": "6c817c1615e7669051461a53cbf38cffb663b4a0cf0b5e6f350c95fd3d247506"
+        }
+      ]
+    },
+    {
+      "collection": "reader-link-inventory",
+      "case": "net-rejoin-matrix-selftest",
+      "exe_sha256": "1b5c07e631e140bb5ad199fe94c3f13808672a2c610faf91b57f25ebf4573877",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "reader-link-inventory--net-rejoin-matrix-selftest--stdout.log.gz",
+          "original_sha256": "2aed74d9aba342ae567b929147262da8c5bba3f615722433494824b9c5f9dcac",
+          "portable_sha256": "2aed74d9aba342ae567b929147262da8c5bba3f615722433494824b9c5f9dcac",
+          "compressed_sha256": "487e841f7533c543e34e65131cc9f0a5ca32b89ed913fecf933f8398810c4e6f"
+        },
+        {
+          "path": "reader-link-inventory--net-rejoin-matrix-selftest--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "reader-link-inventory",
+      "case": "net-session-plane-hold-schedules-selftest",
+      "exe_sha256": "1b5c07e631e140bb5ad199fe94c3f13808672a2c610faf91b57f25ebf4573877",
+      "visible_window": true,
+      "exit_code": 1,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "reader-link-inventory--net-session-plane-hold-schedules-selftest--stdout.log.gz",
+          "original_sha256": "d8b95a2cba3fd91448fb472c17135fcbf9c6661591551d2977273fa5fbc0b965",
+          "portable_sha256": "d8b95a2cba3fd91448fb472c17135fcbf9c6661591551d2977273fa5fbc0b965",
+          "compressed_sha256": "0c7aedb9efc0d7d23b540924624f3bc96e30f5d47721ecef19db2a05516cbbcc"
+        },
+        {
+          "path": "reader-link-inventory--net-session-plane-hold-schedules-selftest--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "reader-link-inventory",
+      "case": "net-session-plane-selftest",
+      "exe_sha256": "1b5c07e631e140bb5ad199fe94c3f13808672a2c610faf91b57f25ebf4573877",
+      "visible_window": true,
+      "exit_code": 1,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "reader-link-inventory--net-session-plane-selftest--stdout.log.gz",
+          "original_sha256": "e992df68315d00bd93cf7899889511f39fe44a4277216cbba2dc7ddd5c3f8a6a",
+          "portable_sha256": "e992df68315d00bd93cf7899889511f39fe44a4277216cbba2dc7ddd5c3f8a6a",
+          "compressed_sha256": "c1782f69026519dd30ff9f775e5a07449d007977471fca08fd2723f772281e89"
+        },
+        {
+          "path": "reader-link-inventory--net-session-plane-selftest--stderr.log.gz",
+          "original_sha256": "e297e3bbe435723304639d20623a81dd7a93a3e092edee35061d9c4c9800e00c",
+          "portable_sha256": "e297e3bbe435723304639d20623a81dd7a93a3e092edee35061d9c4c9800e00c",
+          "compressed_sha256": "79798acc13dd7e0c97d3ca3c84168ac85fae44f89abae45f86f9e3d94b5e1610"
+        }
+      ]
+    },
+    {
+      "collection": "reader-link-inventory",
+      "case": "net-world-join-selftest",
+      "exe_sha256": "1b5c07e631e140bb5ad199fe94c3f13808672a2c610faf91b57f25ebf4573877",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "reader-link-inventory--net-world-join-selftest--stdout.log.gz",
+          "original_sha256": "ac75c7a71e059efe0461987140dd9b2efe20e462db92a0a84ebe489cd31f54c6",
+          "portable_sha256": "ac75c7a71e059efe0461987140dd9b2efe20e462db92a0a84ebe489cd31f54c6",
+          "compressed_sha256": "01663c77dae1369a488036258ac8162413ffd0e4c737ce444924eec93b2ec166"
+        },
+        {
+          "path": "reader-link-inventory--net-world-join-selftest--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    }
+  ]
+}

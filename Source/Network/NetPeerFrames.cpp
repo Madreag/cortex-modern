@@ -670,10 +670,19 @@ namespace RTE {
 		const uint32_t rtt = transportMs;
 		auto& local = m_Stats.peers[m_Config.localPeerId];
 		local.pingMs = rtt; local.pingMeasured = transportsMeasured;
-		const uint16_t current = InputDelayAt(m_Config.localPeerId, m_Stats.nextFrame);
-		const uint16_t required = static_cast<uint16_t>(std::min<uint32_t>(NetLockstepCodec::c_MaxPeerInputDelayFrames,
+		const uint16_t localRequired = static_cast<uint16_t>(std::min<uint32_t>(NetLockstepCodec::c_MaxPeerInputDelayFrames,
 		    std::max<uint32_t>(m_Config.matchConfig.inputDelayFrames, bufferedFrames)));
-		local.jitterMs = static_cast<uint32_t>(std::ceil(required * m_Config.simTickMs)) - std::min<uint32_t>(rtt, static_cast<uint32_t>(std::ceil(required * m_Config.simTickMs)));
+		local.jitterMs = static_cast<uint32_t>(std::ceil(localRequired * m_Config.simTickMs)) - std::min<uint32_t>(rtt, static_cast<uint32_t>(std::ceil(localRequired * m_Config.simTickMs)));
+		uint32_t groupFrames = localRequired;
+		// Receipts and repaired input also cross the measured links between this sender's readers.
+		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
+			if (peer == m_Config.localPeerId || (m_FrameGroupMembers & SeatBit(peer)) == 0) continue;
+			const auto& link = m_Stats.peers[peer];
+			if (link.pingMeasured && link.pingMs != 0)
+				groupFrames = std::max<uint32_t>(groupFrames, static_cast<uint32_t>(std::floor((link.pingMs + link.jitterMs) / m_Config.simTickMs)));
+		}
+		const uint16_t current = InputDelayAt(m_Config.localPeerId, m_Stats.nextFrame);
+		const uint16_t required = static_cast<uint16_t>(std::min<uint32_t>(NetLockstepCodec::c_MaxPeerInputDelayFrames, groupFrames));
 		if (required > current) {
 			m_PeerDelayBelowSinceMs.erase(m_Config.localPeerId);
 			(void)ProposePeerInputDelay(m_Config.localPeerId, required, FutureTimingFrame());

@@ -1,0 +1,7 @@
+{
+  "path": "<REPO>/reviews/mac/reader-link-inventory/net-session-plane-selftest/fixed-failure-groups.txt",
+  "binary": "1b5c07e631e140bb5ad199fe94c3f13808672a2c610faf91b57f25ebf4573877",
+  "digest": "e1b46b738224506d67a9db9a1654180b326d9a484be991288b0c65d0389e97f1",
+  "suite_root": "<REPO>/reviews/mac/reader-link-inventory",
+  "saved_cases_ran": 108
+}
