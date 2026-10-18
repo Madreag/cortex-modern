@@ -385,7 +385,7 @@ namespace RTE {
 			const auto remote = m_RemoteFrames.find(frame);
 			const auto hostEnd = m_PeerRoundEnds.find(GetHostPeerId());
 			const bool hostDeclaredLeave = hostEnd != m_PeerRoundEnds.end() && !hostEnd->second.closedLink;
-			if (!PeerTieRefereed(frame) && m_Config.localPeerId != GetHostPeerId() &&
+			if (!WaitsForPlacement() && !PeerTieRefereed(frame) && m_Config.localPeerId != GetHostPeerId() &&
 			    !hostDeclaredLeave &&
 			    (PeerHeldSeatsAt(frame) & (uint32_t{1} << (GetHostPeerId() - 1))) == 0 &&
 			    IsRemoteRequiredForFrame(GetHostPeerId(), frame) &&
