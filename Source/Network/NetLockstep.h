@@ -748,7 +748,7 @@ namespace RTE {
 		static constexpr uint32_t c_Magic = 0x334C4343U;
 		/// Version 40 carries scene-load readiness; version 39 carries each seat's device class.
 		static constexpr uint16_t c_Version = 40;
-		static constexpr uint16_t c_AdmissionVersion = 51; //!< Private captures require the playing seats' authenticated agreement.
+		static constexpr uint16_t c_AdmissionVersion = 52; //!< Direct holds continue locally and arbitrate authenticated histories at the heal.
 		static constexpr uint16_t c_EditorPlacementVersion = 47;
 		static constexpr uint16_t c_HostAuthorityVersion = 49; //!< Committed handovers carry their tick and voting certificate.
 		static constexpr uint16_t c_WorldVersion = 39;
@@ -1838,7 +1838,10 @@ namespace RTE {
 		struct PeerSplitArbitration {
 			NetFrameTieRequest request;
 			uint32_t owners = 0;
-			uint64_t holdFrame = 0;
+			std::optional<uint64_t> holdFrame;
+			uint32_t historiesSeen = 0; //!< Direct heartbeat acknowledgement of independently committed continuations in this epoch.
+			std::optional<NetHostMigrationMessage> offeredHold; //!< Another continuation's local hold, not authority to suspend this one.
+			std::optional<uint64_t> readerHoldFrame; //!< The bilateral exchange confirmed no local continuation past this hold.
 		};
 		std::map<uint64_t, PeerSplitArbitration> m_PeerSplitArbitrations;
 		uint64_t m_TestBlackoutFrame = UINT64_MAX, m_TestBlackoutDurationMs = 0;

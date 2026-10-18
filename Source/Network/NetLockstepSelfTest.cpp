@@ -145,11 +145,11 @@ namespace RTE {
 		};
 
 		static bool DirectHistoriesChooseAtHeal(std::string* error) {
-			struct Arm { uint32_t own, remote; uint8_t local; bool loses; bool continued = true, cpuPair = false, granted = false; };
+			struct Arm { uint32_t own, remote; uint8_t local; bool loses; bool continued = true, cpuPair = false, granted = false, zero = false; };
 			const std::vector<Arm> arms = {
 			    {12, 3, 3, true}, {3, 12, 1, false}, {14, 1, 2, false}, {1, 14, 1, true},
 			    {4, 2, 3, true}, {2, 4, 2, false}, {12, 3, 3, false, false},
-			    {12, 3, 3, false, true, true}, {12, 3, 3, true, true, false, true}};
+			    {12, 3, 3, false, true, true}, {12, 3, 3, true, true, false, true}, {12, 3, 3, true, true, false, false, true}};
 			for (size_t index = 0; index < arms.size(); ++index) {
 				const auto& arm = arms[index];
 				Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
@@ -161,23 +161,30 @@ namespace RTE {
 				peer.m_RoundConfigHash = NetMatchConfigUtil::HashConfig(peer.m_Config.matchConfig);
 				peer.m_MigrationPhase = NetHostMigrationPhase::None;
 				peer.m_Stats.nextFrame = 201; peer.m_LastCompletedSimulationTick = peer.m_LastDeliveredFrame = 200;
-				peer.m_FrameGroupMembers = arm.own; peer.m_FrameGroupChanges = {{1, 15}, {100, arm.own}};
-				for (uint8_t seat = 1; seat <= 4; ++seat) if (!(arm.own & (1U << (seat - 1)))) peer.m_PeerFrameHolds[seat][100] = true;
-				NetFrameTieRequest request; request.frame = 1;
+				const uint64_t hold = arm.zero ? 0 : 100, epoch = arm.zero ? 0 : 1;
+				peer.m_Config.startFrame = epoch;
+				peer.m_FrameGroupMembers = arm.own; peer.m_FrameGroupChanges = {{epoch, 15}}; peer.m_FrameGroupChanges[hold] = arm.own;
+				for (uint8_t seat = 1; seat <= 4; ++seat) if (!(arm.own & (1U << (seat - 1)))) peer.m_PeerFrameHolds[seat][hold] = true;
+				NetFrameTieRequest request; request.frame = epoch;
 				for (uint8_t seat = 1; seat <= 4; ++seat) {
 					request.owners.push_back(seat);
 					if (arm.own & (1U << (seat - 1))) request.members.push_back(seat);
 				}
-				peer.m_PeerSplitArbitrations[1] = {request, 15, 100};
+				peer.m_PeerSplitArbitrations[epoch] = {request, 15, hold};
 				peer.PollPeerFrameTies(1000);
 				if (!peer.IsRunning() || !peer.m_PeerFrameTieWinners.empty()) { *error = "transport silence selected a direct continuation"; return false; }
 				auto heartbeat = peer.PeerFrameMessage(NetHostMigrationMessageType::PeerHeartbeat);
 				heartbeat.senderPeerId = heartbeat.successorPeerId = static_cast<uint8_t>(std::countr_zero(arm.remote) + 1);
-				heartbeat.connectedMask = arm.remote; heartbeat.frame = 1; heartbeat.boundary = 100;
-				heartbeat.appliedFrame = arm.continued ? 200 : 99; heartbeat.preparedFrame = heartbeat.appliedFrame;
+				heartbeat.connectedMask = arm.remote; heartbeat.frame = epoch; heartbeat.boundary = hold;
+				heartbeat.members.assign(request.owners.begin(), request.owners.end());
+				heartbeat.appliedFrame = arm.continued ? 200 : hold - 1; heartbeat.preparedFrame = heartbeat.appliedFrame;
 				heartbeat.rosterRevision = 17;
 				heartbeat.bytes.assign(40, 0); std::fill(heartbeat.bytes.begin() + 8, heartbeat.bytes.end(), 0x6a);
 				heartbeat.totalBytes = static_cast<uint32_t>(heartbeat.bytes.size());
+				// A one-way heartbeat is not a healed exchange: its sender must have received this branch's history too.
+				peer.CheckDirectPeerHistory(heartbeat, 1099);
+				if (!peer.IsRunning() || !peer.m_PeerFrameTieWinners.empty()) { *error = "a one-way history report selected a direct continuation"; return false; }
+				heartbeat.voterMask = 1U << (arm.local - 1);
 				if (arm.granted) peer.m_GrantedSimulationTick = 201;
 				std::vector<uint8_t> signedBytes; NetHostMigrationMessage authenticated;
 				if (!NetHostMigrationCodec::Encode(heartbeat, peer.m_Config.migrationKey, signedBytes) ||
@@ -191,6 +198,49 @@ namespace RTE {
 				}
 				if (peer.IsStopped() != arm.loses || (arm.loses && (peer.GetResumeFrame() != (arm.granted ? 202 : 201) || !peer.GetStats().timeoutReason.starts_with("PeerHeld:")))) {
 					*error = "direct heal chose the wrong continuation or stop boundary: arm=" + std::to_string(index) + " state=" + NetLockstepCoordinator::StateName(peer.GetState()); return false;
+				}
+			}
+			return true;
+		}
+
+		static bool DirectHoldScope(std::string* error) {
+			for (bool atBoundary: {false, true}) {
+				Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
+				peer.m_Config.peerFrameGroups = true; peer.m_Config.localPeerId = peer.m_Config.authorityPeerId = 1;
+				peer.m_Config.peerCount = peer.m_Config.matchConfig.peerCount = 2;
+				peer.m_Config.matchConfig.players.resize(2); peer.m_Config.matchConfig.successorOrder = {2};
+				peer.m_RoundConfigHash = NetMatchConfigUtil::HashConfig(peer.m_Config.matchConfig);
+				peer.m_RemotePeerIds = {2}; peer.m_RemoteTransports = {{2, 42}};
+				peer.m_MigrationPhase = NetHostMigrationPhase::None;
+				peer.m_FrameGroupMembers = 3; peer.m_FrameGroupChanges = {{1, 3}};
+				peer.m_Stats.nextFrame = 100; peer.m_LastCompletedSimulationTick = atBoundary ? 99 : 98;
+				peer.m_MigrationHistory[99] = {1, 2, 3};
+				auto vote = peer.PeerFrameMessage(NetHostMigrationMessageType::PeerBridge);
+				vote.senderPeerId = vote.successorPeerId = 2; vote.frame = vote.boundary = 100;
+				vote.preparedFrame = 0; vote.connectedMask = vote.voterMask = 2; vote.members = {1};
+				const auto prefix = peer.PeerFramePrefix(99); vote.bytes.assign(prefix.begin(), prefix.end()); vote.totalBytes = vote.bytes.size();
+				std::vector<uint8_t> signedVote;
+				if (!NetHostMigrationCodec::Encode(vote, peer.m_Config.migrationKey, signedVote)) { *error = "the foreign hold vote did not encode"; return false; }
+				auto certificate = vote; certificate.type = NetHostMigrationMessageType::PeerBridgeCommit; certificate.bytes = {1};
+				for (unsigned shift = 0; shift < 32; shift += 8) certificate.bytes.push_back(static_cast<uint8_t>(signedVote.size() >> shift));
+				certificate.bytes.insert(certificate.bytes.end(), signedVote.begin(), signedVote.end()); certificate.totalBytes = certificate.bytes.size();
+				peer.InstallPeerBridge(certificate, 1000);
+				if (!atBoundary) {
+					if (!peer.m_PeerBridges.contains(1)) { *error = "an unapplied reader could not adopt its ahead hold"; return false; }
+					continue;
+				}
+				if (peer.m_PeerBridges.contains(1) || peer.m_FrameGroupMembers != 3 || !peer.m_PendingPeerDecisions.empty()) {
+					*error = "a foreign local hold suspended or fenced an active owner"; return false;
+				}
+				auto history = peer.PeerFrameMessage(NetHostMigrationMessageType::PeerHeartbeat);
+				history.senderPeerId = 2; history.frame = 1; history.boundary = 100; history.appliedFrame = 150;
+				history.connectedMask = 2; history.members = {1, 2}; history.bytes.assign(40, 0x6a);
+				peer.CheckDirectPeerHistory(history, 1100);
+				if (peer.m_PeerBridges.contains(1) || !peer.IsRunning()) { *error = "a one-way report adopted an active owner's foreign hold"; return false; }
+				history.voterMask = 1;
+				peer.CheckDirectPeerHistory(history, 1200);
+				if (!peer.m_PeerBridges.contains(1) || peer.m_FrameGroupMembers != 2 || !peer.IsRunning()) {
+					*error = "a healed owner with no continuation could not adopt the sole committed history"; return false;
 				}
 			}
 			return true;
@@ -562,7 +612,11 @@ namespace RTE {
 			auto wrong = startOf(3); wrong.inputDelayFrames = 8;
 			if (peer.StartMatchesConfig(wrong)) { *error = "a returned process accepted a different member delay"; return false; }
 			if (!deliver(startOf(3), 1) || peer.m_RemoteStartsReceived.contains(3)) { *error = "a relayed identity bypassed the peer sender check"; return false; }
-			auto host = startOf(1); host.startFrame = 546;
+			// Mesh members advertise their actual retained starts, including the current administrator after a handover.
+			// The old contextual host reply hid the migrated administrator's missing handshake; no start may replace image history.
+			auto host = startOf(1);
+			auto contextual = host; contextual.startFrame = 546;
+			if (peer.StartMatchesConfig(contextual)) { *error = "a mesh host reply replaced its actual retained start with the reader's activation"; return false; }
 			if (!deliver(host, 1) || !deliver(startOf(3), 3) || !peer.m_RemoteStartsReceived.contains(1) || !peer.m_RemoteStartsReceived.contains(3) || !peer.IsRunning()) {
 				*error = "a returned process did not accept each authenticated member's retained start"; return false;
 			}
@@ -1224,6 +1278,29 @@ namespace RTE {
 			current.supportedLockstepCodecVersion = NetLockstepCodec::c_AdmissionVersion;
 			if (NetIdentity::HashDeterministicConfig(previous) == NetIdentity::HashDeterministicConfig(current)) {
 				*error = "capture control kept the older admission identity"; return false;
+			}
+			return true;
+		}
+
+		static bool DirectWireContract(std::string* error) {
+			NetHash32 key{}; key.fill(0x39);
+			NetHostMigrationMessage heartbeat;
+			heartbeat.type = NetHostMigrationMessageType::PeerHeartbeat;
+			heartbeat.sessionId = 1; heartbeat.roundId = 77; heartbeat.generation = 1;
+			heartbeat.senderPeerId = heartbeat.successorPeerId = 1; heartbeat.rosterRevision = 17;
+			std::vector<uint8_t> bytes; NetHostMigrationMessage decoded;
+			if (!NetHostMigrationCodec::Encode(heartbeat, key, bytes) || !NetHostMigrationCodec::Decode(bytes, key, decoded) || decoded.rosterRevision != 17) {
+				*error = "the direct heal roster revision did not round trip"; return false;
+			}
+			bytes[4] = 7; bytes[5] = 0;
+			uint8_t mac[32]{};
+			if (!GetNetAuthCrypto().HmacSha256(key.data(), key.size(), bytes.data(), bytes.size() - sizeof(mac), mac)) return false;
+			std::copy_n(mac, sizeof(mac), bytes.end() - sizeof(mac));
+			if (NetHostMigrationCodec::Decode(bytes, key, decoded)) { *error = "the old migration contract accepted direct heal history"; return false; }
+			NetIdentityDeterministicConfig previous; previous.supportedLockstepCodecVersion = 51;
+			auto current = previous; current.supportedLockstepCodecVersion = NetLockstepCodec::c_AdmissionVersion;
+			if (NetIdentity::HashDeterministicConfig(previous) == NetIdentity::HashDeterministicConfig(current)) {
+				*error = "direct heal kept the older admission identity"; return false;
 			}
 			return true;
 		}
@@ -30529,6 +30606,25 @@ namespace {
 		};
 		static const char* selectedCase = std::getenv("CC_TEST_LOCKSTEP_SELFTEST_CASE");
 		if (selectedCase) {
+			if (std::string_view(selectedCase) == "direct-hold-scope") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::DirectHoldScope(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS a_foreign_local_hold_requires_the_readers_healed_history\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
+			if (std::string_view(selectedCase) == "direct-wire-contract") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::DirectWireContract(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS direct_heal_has_a_distinct_wire_and_admission_contract\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
+			for (const auto& [name, arm]: std::array<std::pair<std::string_view, unsigned>, 5>{{{"direct-split-two-two", 5}, {"direct-split-lone", 6}, {"direct-split-human-majority", 7}, {"direct-split-one-way", 8}, {"direct-split-one-way-joiner", 9}}}) {
+				if (std::string_view(selectedCase) != name) continue;
+				std::string error;
+				if (!NetSessionPlaneSelfTest::CheckHostAdministration(arm, &error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS " << name << "\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "direct-heal-history") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::DirectHistoriesChooseAtHeal(&error)) return fail(error);
@@ -30759,6 +30855,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::LinkRiseHasNoResizeCooldown, "link_rise_has_no_resize_cooldown");
 		row(&SessionPlaneRecoveryTest::LinkFallNeedsFiveMeasuredSeconds, "link_fall_requires_five_continuous_measured_seconds");
 		row(&SessionPlaneRecoveryTest::DirectHistoriesChooseAtHeal, "direct_heal_uses_committed_histories_and_human_seats");
+		row(&SessionPlaneRecoveryTest::DirectHoldScope, "a_foreign_local_hold_requires_the_readers_healed_history");
 
 		row(&SessionPlaneRecoveryTest::ConcurrentReturnMembership, "a_later_return_keeps_the_earlier_scheduled_return");
 		row(&SessionPlaneRecoveryTest::ReturnKeepsOtherSeatHeld, "a_return_cannot_return_another_held_seat");
@@ -30777,6 +30874,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::HoldInvitation, "an_unsigned_hold_invitation_never_fences_an_input");
 		row(&SessionPlaneRecoveryTest::OwnAheadHoldFence, "a_seat_co_signs_and_fences_its_own_future_hold");
 		row(&SessionPlaneRecoveryTest::CaptureWireContract, "private_capture_has_a_distinct_wire_and_admission_contract");
+		row(&SessionPlaneRecoveryTest::DirectWireContract, "direct_heal_has_a_distinct_wire_and_admission_contract");
 		row(&SessionPlaneRecoveryTest::HeldHostBaseCapture, "held_host_names_a_private_base_through_the_playing_seats");
 		row(&SessionPlaneRecoveryTest::PendingDecisionsSurviveLocalTime, "pending_decisions_wait_for_authority_across_local_timeouts");
 		row(&SessionPlaneRecoveryTest::Boundary, "successor_refuses_unvalidated_boundary_before_publish");

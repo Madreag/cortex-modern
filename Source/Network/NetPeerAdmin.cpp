@@ -15,6 +15,9 @@ namespace RTE {
 		uint32_t live = 0;
 		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
 			if (peer == GetHostPeerId() || m_RemovedPeers.contains(peer) || IsSeatReleased(peer)) continue;
+			// Direct administration belongs to the mutually playing group, including a lone survivor. Incoming one-way traffic
+			// from a different held continuation neither adds its humans to this electorate nor prevents migration.
+			if (!MigrationUsesDirectory() && (PeerFrameMembersAt(m_Stats.nextFrame) & AdminBit(peer)) == 0) continue;
 			const uint64_t heard = LastAuthenticatedTraffic(peer);
 			if (peer == m_Config.localPeerId || (nowMs >= heard && nowMs - heard < c_NetHostLossSilenceMs)) live |= AdminBit(peer);
 		}

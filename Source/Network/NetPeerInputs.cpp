@@ -137,15 +137,9 @@ namespace RTE {
 			return owner != m_Config.localPeerId || m_PeerCommittedTail.contains(frame);
 		const uint32_t voters = PeerInputVoters(frame, owner);
 		if (PeerGroupHasAuthority(voters, frame)) return true;
-		// The missing process may have sent its last inputs before it stopped receiving ours. Waiting for its receipt would
-		// strand the consumer one or more frames before the missing-input hold. At the same local hold deadline, the playing
-		// branch can consume those already received inputs and fence the first absent one; a competing branch is arbitrated
-		// asynchronously. This permission is local to a waiting consumer, never a forged receipt or a roster certificate.
-		if (!m_ConsumerWaitingFrame || *m_ConsumerWaitingFrame > frame || m_TimingNowMs < m_ConsumerWaitStartMs || m_Config.simTickMs <= 0)
-			return false;
-		const uint64_t boundMs = static_cast<uint64_t>(std::ceil(m_Config.slowPlayerBoundTicks * m_Config.simTickMs));
-		const uint64_t pollReserveMs = static_cast<uint64_t>(std::ceil(m_Config.simTickMs / 2));
-		return m_TimingNowMs - m_ConsumerWaitStartMs + pollReserveMs >= boundMs && PeerGroupMayHold(voters, frame);
+		// The bounded hold forms a local group from mutual acceptance. Consuming an unacknowledged input here would leave
+		// overlapping human groups on a one-way path and let the foreign hold turn its active owner into a private reader.
+		return false;
 	}
 
 	uint32_t NetLockstepCoordinator::PeerInputVoters(uint64_t frame, uint8_t owner) const {

@@ -139,6 +139,7 @@ namespace RTE {
 	bool NetLockstepCoordinator::PeerBridgeHasInputConflict(const NetHostMigrationMessage& proposal) const {
 		if (proposal.preparedFrame != 0) return false;
 		for (uint8_t owner: proposal.members) {
+			if (PeerLinkLostBeforeOwnInput(owner, proposal.frame)) continue;
 			const auto receipts = m_PeerInputReceipts.find(owner);
 			if (receipts == m_PeerInputReceipts.end()) continue;
 			for (const auto& [peer, through]: receipts->second)
@@ -216,7 +217,7 @@ namespace RTE {
 			const bool neutral = IsSeatReclaimGap(peer, proposal.frame);
 			const auto ended = m_PeerRoundEnds.find(peer);
 			const bool departed = ended != m_PeerRoundEnds.end() && !ended->second.closedLink && proposal.frame >= ended->second.frame;
-			if (proposal.preparedFrame == 0 && (named & SeatBit(peer)) != 0 && (present || (neutral && !departed)) &&
+			if (proposal.preparedFrame == 0 && (named & SeatBit(peer)) != 0 && ((present && !PeerLinkLostBeforeOwnInput(peer, proposal.frame)) || (neutral && !departed)) &&
 			    !(proposal.senderPeerId == GetHostPeerId() && present && !neutral && !HasPeerFrameRoute(peer))) return false;
 			if (!ahead && (proposal.connectedMask & SeatBit(peer)) != 0 && proposal.frame >= EffectiveStartOf(peer) && !neutral && !present) return false;
 			// A hold agreed ahead of a seat the round already holds there has nothing to decide.
@@ -582,7 +583,7 @@ namespace RTE {
 				const auto ended = m_PeerRoundEnds.find(peer);
 				const bool declared = ended != m_PeerRoundEnds.end() && !ended->second.closedLink && frame >= ended->second.frame;
 				const bool sourcePresent = sources->second.contains(peer);
-				const char* cause = declared ? "declared_leave" : PeerLinkLostBeforeOwnInput(peer, frame) ? "link_closed" :
+				const char* cause = declared ? "declared_leave" : PeerLinkLostBeforeOwnInput(peer, frame) ? (HasPeerFrameRoute(peer) ? "receipt_missing" : "link_closed") :
 				    slowMachine ? "slow_machine_capacity" : sourcePresent ? "input_acceptance" : "input_missing";
 				const uint64_t heard = LastAuthenticatedTraffic(peer);
 				const uint64_t silence = nowMs >= heard ? nowMs - heard : 0;
@@ -725,6 +726,12 @@ namespace RTE {
 		};
 		NetHostMigrationMessage agreed; uint32_t voters = 0;
 		if (!DecodePeerBridgeCertificate(certificate, agreed, voters)) { refused("certificate"); return; }
+		if (agreed.preparedFrame == 0 && (agreed.connectedMask & SeatBit(m_Config.localPeerId)) == 0)
+			DiagnosticLine() << "[net-peer-foreign-hold] local=" << static_cast<int>(m_Config.localPeerId) << " frame=" << agreed.frame
+			    << " next=" << m_Stats.nextFrame << " displayed=" << m_LastCompletedSimulationTick.value_or(0)
+			    << " waiting=" << m_ConsumerWaitingFrame.value_or(UINT64_MAX) << " waiting_since=" << m_ConsumerWaitStartMs
+			    << " input_voters=" << PeerInputVoters(agreed.frame, m_Config.localPeerId) << " local_source=" << m_LocalFrames.contains(agreed.frame)
+			    << " now_ms=" << nowMs << std::endl;
 		if (agreed.preparedFrame == 1) {
 			if (ReturnCrossesDeparture(agreed, m_PeerOwnershipChanges)) { refused("owner changed"); return; }
 			for (uint8_t peer: agreed.members) if ((PeerRetainedSeatsAt(agreed.frame) & SeatBit(peer)) == 0) { refused("removed"); return; }
@@ -773,6 +780,18 @@ namespace RTE {
 		// A hold, rather than a normally in-flight input or receipt, opens the arbitration question. Asking earlier can assign a
 		// healthy startup gap a permanent winner and then reuse that unrelated answer when a machine actually stops.
 		if (agreed.preparedFrame == 0) CheckPeerFrameTie(certificate.frame, agreed.connectedMask, nowMs);
+		if (agreed.preparedFrame == 0 && !m_Config.frameTieReferee && (agreed.connectedMask & SeatBit(m_Config.localPeerId)) == 0 &&
+		    (voters & SeatBit(m_Config.localPeerId)) == 0 && (PeerFrameMembersAt(agreed.frame) & SeatBit(m_Config.localPeerId)) != 0 &&
+		    !IsSeatReclaimGap(m_Config.localPeerId, agreed.frame) && GetResumeFrame() >= agreed.frame) {
+			const auto arbitration = m_PeerSplitArbitrations.find(PeerSplitEpoch(agreed.frame));
+			if (arbitration == m_PeerSplitArbitrations.end() || arbitration->second.readerHoldFrame != agreed.frame) {
+				// A foreign local hold cannot suspend an active owner. Keep its history offer outside the frame's decision fence;
+				// this group still installs its own hold at the bound. Only the healed histories may make this peer a reader.
+				if (arbitration != m_PeerSplitArbitrations.end()) arbitration->second.offeredHold = certificate;
+				refused("foreign continuation");
+				return;
+			}
+		}
 		m_PeerBridgeCertificates.emplace(PeerDecisionKey{certificate.frame, DecisionKind(certificate)}, certificate);
 		if (agreed.preparedFrame == 4) {
 			NetHostMigrationMessage request;
@@ -801,7 +820,7 @@ namespace RTE {
 		}
 		if (agreed.preparedFrame == 0 && (agreed.connectedMask & SeatBit(m_Config.localPeerId)) != 0) {
 			const auto arbitration = m_PeerSplitArbitrations.find(PeerSplitEpoch(agreed.frame));
-			if (arbitration != m_PeerSplitArbitrations.end() && arbitration->second.holdFrame == 0)
+			if (arbitration != m_PeerSplitArbitrations.end() && !arbitration->second.holdFrame)
 				arbitration->second.holdFrame = agreed.frame;
 		}
 		m_FrameGroupChanges[agreed.frame] = agreed.connectedMask;

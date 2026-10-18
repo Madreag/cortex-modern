@@ -3788,10 +3788,15 @@ namespace RTE {
 	}
 
 	bool NetLockstepCoordinator::PeerLinkLostBeforeOwnInput(uint8_t peer, uint64_t frame) const {
-		// Its inputs sent an input delay ahead do not answer for the host's input it never took: the host holds the seat from here.
+		// A one-way path can keep supplying inputs while never accepting ours. At the same consumer deadline it belongs outside
+		// this local continuation, even when the transport still has a route. No transport fault classification is involved.
 		const auto sources = m_PeerSourceInputs.find(frame);
-		return m_Config.localPeerId == GetHostPeerId() && peer != m_Config.localPeerId && sources != m_PeerSourceInputs.end() && sources->second.contains(peer) &&
-		    frame >= EffectiveStartOf(peer) && !IsSeatReclaimGap(peer, frame) && (PeerInputVoters(frame, m_Config.localPeerId) & (1U << (peer - 1))) == 0 && !HasPeerFrameRoute(peer);
+		const bool deadline = m_ConsumerWaitingFrame && *m_ConsumerWaitingFrame <= frame && m_TimingNowMs >= m_ConsumerWaitStartMs && m_Config.simTickMs > 0 &&
+		    m_TimingNowMs - m_ConsumerWaitStartMs + static_cast<uint64_t>(std::ceil(m_Config.simTickMs / 2)) >=
+		    static_cast<uint64_t>(std::ceil(m_Config.slowPlayerBoundTicks * m_Config.simTickMs));
+		return peer != m_Config.localPeerId && sources != m_PeerSourceInputs.end() && sources->second.contains(peer) &&
+		    frame >= EffectiveStartOf(peer) && !IsSeatReclaimGap(peer, frame) && (PeerInputVoters(frame, m_Config.localPeerId) & (1U << (peer - 1))) == 0 &&
+		    (deadline || !HasPeerFrameRoute(peer));
 	}
 
 	void NetLockstepCoordinator::NotePeerRoundEnd(uint8_t peer, uint64_t frame, uint64_t nowMs, bool closedLink, bool completedRound) {
@@ -5568,13 +5573,14 @@ namespace RTE {
 		// A seat taken back before our first frame is a member from it: the start the host hands out for it names that frame.
 		// Its delay is the one the round runs at that frame, delay changes included, which is what the seat's own start carries.
 		if (m_Config.peerFrameGroups && m_Config.joinsRunningRound)
-			for (const auto& [peer, terms]: m_Config.initialPeerStartTerms) if (peer != GetHostPeerId()) m_PeerAdmissions[peer] = {terms.first, terms.second};
+			for (const auto& [peer, terms]: m_Config.initialPeerStartTerms) m_PeerAdmissions[peer] = {terms.first, terms.second};
 		for (const auto& [peer, reclaim]: m_ReclaimTransactions)
-			if (const auto known = m_Config.initialPeerStartTerms.find(peer); m_Config.peerFrameGroups && (!m_Config.joinsRunningRound || peer != GetHostPeerId()) && known != m_Config.initialPeerStartTerms.end() && known->second.first >= reclaim.activationFrame)
+			if (const auto known = m_Config.initialPeerStartTerms.find(peer); m_Config.peerFrameGroups && known != m_Config.initialPeerStartTerms.end() && known->second.first >= reclaim.activationFrame)
 				m_PeerAdmissions[peer] = {known->second.first, known->second.second};
 			else m_PeerAdmissions[peer] = reclaim.activationFrame < m_Config.startFrame ? PeerAdmission{m_Config.startFrame, InputDelayAt(peer, m_Config.startFrame)} :
 			    PeerAdmission{reclaim.activationFrame, reclaim.delayFrames};
-		if (m_Config.peerFrameGroups && m_Config.joinsRunningRound && GetHostPeerId() != m_Config.localPeerId)
+		if (m_Config.peerFrameGroups && m_Config.joinsRunningRound && GetHostPeerId() != m_Config.localPeerId &&
+		    !m_Config.initialPeerStartTerms.contains(GetHostPeerId()))
 			m_PeerAdmissions[GetHostPeerId()] = {m_Config.startFrame, InputDelayAt(GetHostPeerId(), m_Config.startFrame)};
 		// Our own return produces on the delay the host admitted it on, whatever the config this round started from last heard.
 		if (const auto own = m_ReclaimTransactions.find(m_Config.localPeerId); own != m_ReclaimTransactions.end() && own->second.activationFrame >= m_Config.startFrame &&
@@ -6155,6 +6161,10 @@ namespace RTE {
 
 	void NetLockstepCoordinator::NoteAuthorityHeard(uint64_t nowMs) {
 		NET_PLANE_CHECK();
+		// A direct host held outside this playing group can keep sending over a one-way path. Its local continuation's
+		// traffic is not a return to this one; the installed hold window still ends in local administration.
+		if (UsesPeerFrameGroups() && !m_Config.frameTieReferee && (m_FrameGroupMembers & (1U << (m_Config.localPeerId - 1))) != 0 &&
+		    (PeerHeldSeatsAt(m_Stats.nextFrame) & (1U << (GetHostPeerId() - 1))) != 0) return;
 		m_AuthorityLastHeardMs = std::max(m_AuthorityLastHeardMs, nowMs);
 		if (UsesPeerFrameGroups() && m_PeerAdminRequest && !m_PeerAdminOwnVote && !MigrationUsesDirectory() &&
 		    m_CertifiedSupersedingGeneration <= m_Config.migrationGeneration) {
@@ -12229,7 +12239,8 @@ namespace RTE {
 				if (peer == start.localPeerId || IsPeerGoneAtFrame(peer, start.startFrame)) continue;
 				NetLockstepStart member = start; member.localPeerId = peer; member.inputDelayFrames = InputDelayAt(peer, start.startFrame);
 				member.roundId = m_RoundId;
-				if (const auto known = m_Config.initialPeerStartTerms.find(peer); UsesPeerFrameGroups() && peer != GetHostPeerId() && known != m_Config.initialPeerStartTerms.end()) {
+				// Mesh starts retain the actual terms of every sender, including an administrator elected after the image began.
+				if (const auto known = m_Config.initialPeerStartTerms.find(peer); UsesPeerFrameGroups() && known != m_Config.initialPeerStartTerms.end()) {
 					member.startFrame = known->second.first; member.inputDelayFrames = known->second.second;
 				} else if (IsPersistentWorldRound() && peer != m_Config.localPeerId) {
 					const auto admission = m_PeerAdmissions.find(peer);

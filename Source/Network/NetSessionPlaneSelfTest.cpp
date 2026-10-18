@@ -34,6 +34,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <chrono>
 #include <condition_variable>
 #include <cmath>
@@ -96,6 +97,7 @@ namespace RTE {
 			uint64_t joinerInputsLostFirstMs = 0;
 			// Both halves install their own holds at the bound. A delivered referee answer selects only which half must image-return.
 			bool splitContract = false;
+			bool oneWaySubject = false, directMigration = false;
 			// The absent seat is gone past the donor's history and hands itself to a private image.
 			bool imageReturn = false;
 			// No proposal or certificate of the subject's own return reaches it: it learns the return from the committed tail alone.
@@ -557,7 +559,7 @@ namespace RTE {
 			bool LiveSplit(uint8_t a, uint8_t b) const {
 				if (a == b || ProcessHung(a) || ProcessHung(b)) return false;
 				if (schedule && (schedule->Left(a, now) || schedule->Left(b, now))) return false;
-				return Split(a, b) || (!schedule && DuringFault() &&
+				return Split(a, b) || Split(b, a) || (!schedule && DuringFault() &&
 				    ((row.blackout && (a == row.subject || b == row.subject)) || (row.inputHalvesLost && (a <= 2) != (b <= 2))));
 			}
 			bool Split(uint8_t a, uint8_t b) const {
@@ -567,6 +569,7 @@ namespace RTE {
 				if (!DuringFault() || row.frozen || row.blackout || row.slowPercent || row.inputsLost || row.inputHalvesLost || row.keepInputEvery || !row.gapMs) return false;
 				if (row.secondSubject && now >= faultAt + row.secondAfterMs && (a == row.secondSubject || b == row.secondSubject)) return true;
 				if (row.tie) return (a <= 2) != (b <= 2);
+				if (row.oneWaySubject) return a == row.subject;
 				return a == row.subject || b == row.subject;
 			}
 			uint64_t Delay(uint8_t a, uint8_t b) const {
@@ -898,7 +901,7 @@ namespace RTE {
 						if (pending != index) events[pending] = std::move(event);
 						++pending; continue;
 					}
-					if (event.crossesFault || !hub.Split(owner, connections.contains(event.value.peerId) ? connections.at(event.value.peerId).first->owner : owner)) {
+					if (event.crossesFault || !hub.Split(connections.contains(event.value.peerId) ? connections.at(event.value.peerId).first->owner : owner, owner)) {
 						// The real image service keeps certificates received on this seat's link while its private reader runs.
 						if (keepReturnCertificates && event.value.type == NetTransportEventType::PacketReceived && NetHostMigrationCodec::LooksLikePacket(event.value.bytes)) {
 							NetHash32 key; key.fill(0x39);
@@ -1065,6 +1068,7 @@ namespace RTE {
 			std::vector<size_t> decisionsRead;
 			std::vector<std::set<std::tuple<uint64_t, uint64_t, NetHash32, uint64_t>>> splitDecisions;
 			bool sawSplit = false, splitHistories = false;
+			uint32_t directRuling = 0; //!< Independently ranked committed groups at the heal, before processing its first packet.
 			std::function<void(NetLockstepCoordinator&, INetTransport&)> onFreeze;
 			std::function<void()> onThaw;
 			bool freezeStarted = false, thawed = false;
@@ -1123,6 +1127,21 @@ namespace RTE {
 					if (spell.seat == seat && spell.atMs <= hub.now && (spell.kind == Spell::Kind::Hung || spell.kind == Spell::Kind::Stopped || spell.kind == Spell::Kind::Slow)) return true;
 				return false;
 			}
+			uint32_t RankDirectHistories() const {
+				uint32_t humans = 0, winner = 0;
+				const auto& config = peers.front()->GetConfig().matchConfig;
+				for (const auto& player: config.players) if (!player.cpu && !(config.dedicated && player.peerId == config.hostPeerId)) humans |= 1U << (player.peerId - 1);
+				const uint32_t host = 1U << (config.hostPeerId - 1);
+				for (uint8_t seat = 1; seat <= hub.row.seats; ++seat) {
+					if (!worlds[seat - 1].applied || frameMembers[seat - 1].empty() || OwnMachineTrouble(seat)) continue;
+					const uint32_t group = frameMembers[seat - 1].back();
+					if (!(group & (1U << (seat - 1)))) continue;
+					const int votes = std::popcount(group & humans), most = std::popcount(winner & humans);
+					if (!winner || votes > most || (votes == most && ((group & host) > (winner & host) ||
+					    ((group & host) == (winner & host) && std::countr_zero(group) < std::countr_zero(winner))))) winner = group;
+				}
+				return winner;
+			}
 			bool RecoverImages(std::string& error) {
 				for (uint8_t seat = 1; seat <= hub.row.seats; ++seat) {
 					if (!imageNeeded[seat - 1] || imageReading[seat - 1] || OwnMachineTrouble(seat)) continue;
@@ -1130,11 +1149,11 @@ namespace RTE {
 					for (uint8_t other = 1; other <= hub.row.seats; ++other) connected &= !hub.LiveSplit(seat, other);
 					if (!connected) continue;
 					uint32_t ruling = (1U << hub.row.seats) - 1;
-					if (lostAt[seat - 1]) {
+					if (lostAt[seat - 1] && hub.row.internet) {
 						ruling = 0;
 						for (const auto& answer: hub.directoryClients.at(seat).consumed)
 							if (answer.atMs == lostAt[seat - 1]) for (uint16_t member: answer.reply.members) ruling |= 1U << (member - 1);
-					} else if (!hub.row.internet && sawSplit) ruling = 1; // Direct play's agreed host rules a link split.
+					} else if (!hub.row.internet && sawSplit && directRuling) ruling = directRuling;
 					for (uint8_t donor = 1; donor <= hub.row.seats; ++donor) {
 						if (donor == seat || !(ruling & (1U << (donor - 1))) || !peers[donor - 1]->IsRunning() ||
 						    !peers[donor - 1]->HasHeldAISeat(seat) || !(s_FrameMembers(*peers[donor - 1], worlds[donor - 1].applied + 1) & (1U << (donor - 1)))) continue;
@@ -1193,7 +1212,8 @@ namespace RTE {
 						const uint64_t separated = splitFrom[std::min(authorA, authorB)][std::max(authorA, authorB)];
 						// Only two genuinely separated, independently playing groups may have different displayed histories.
 						// Membership comes from each engine's installed state at that tick, never from this fault schedule.
-						if (hub.row.internet && separated && frame >= separated && l && r && !(l & r) &&
+						// The revised direct ruling permits both continuations too; equality within each group remains mandatory.
+						if (separated && frame >= separated && l && r && !(l & r) &&
 						    (l & (1U << (authorA - 1))) && (r & (1U << (authorB - 1)))) { splitHistories = true; continue; }
 						error = "histories differ at displayed frame " + std::to_string(frame) + ": peer " + std::to_string(a) + " members=" + std::to_string(l) +
 						    " peer " + std::to_string(b) + " members=" + std::to_string(r) + "; authority ruling requires equal history within a half and after image return" +
@@ -1368,6 +1388,7 @@ namespace RTE {
 					}
 					hashedThrough = 0; sharedDigests.clear(); roundStartMs = hub.now;
 					compared = {}; splitFrom = {}; sawSplit = splitHistories = false;
+					directRuling = 0;
 					std::fill(lostAt.begin(), lostAt.end(), 0); std::fill(lostFrame.begin(), lostFrame.end(), 0);
 					std::fill(imageAt.begin(), imageAt.end(), 0); std::fill(imageReturns.begin(), imageReturns.end(), 0);
 					std::fill(imageNeeded.begin(), imageNeeded.end(), false);
@@ -1393,6 +1414,8 @@ namespace RTE {
 					}
 					if (OwnMachineTrouble(seat)) splitParticipant[seat - 1] = false;
 				}
+				// Direct arbitration is defined only at the heal. The oracle ranks the actually committed groups, never transport silence.
+				if (!hub.row.internet && !scheduled && sawSplit && !hub.DuringFault() && !directRuling) directRuling = RankDirectHistories();
 				for (uint8_t id = 1; id <= hub.row.seats; ++id) if (!hung(id) && !gone(id)) hub.PollDirectory(id);
 				for (uint8_t id = 1; id <= hub.row.seats; ++id) {
 					if ((hub.now + id * 3) % hub.row.planeIntervalMs != 0) continue;
@@ -1413,7 +1436,9 @@ namespace RTE {
 					if (gone(id)) { leaverStopped |= peer.IsStopped(); continue; }
 					if (between) { waitAt[id - 1] = 0; continue; }
 					if (peer.IsFailed()) { error = "peer " + std::to_string(id) + " failed: " + peer.GetStats().timeoutReason; return false; }
-					if (!hub.row.repeatedAdministration && peer.GetHostPeerId() != 1 && (!hub.row.gapMs || hub.row.subject != 1 || hub.row.gapMs < 15000)) { error = "lag changed the lobby host"; return false; }
+					const bool directHostlessGroup = !hub.row.internet && sawSplit && (s_HeldSeats(peer, world.applied + 1) & 1U);
+					// The revised direct contract also migrates a hostless minority and a lone peer, on their own continuation.
+					if (!hub.row.repeatedAdministration && !directHostlessGroup && peer.GetHostPeerId() != 1 && (!hub.row.gapMs || hub.row.subject != 1 || hub.row.gapMs < 15000)) { error = "lag changed the lobby host"; return false; }
 					if (!hub.row.repeatedAdministration && peer.GetHostPeerId() != 1 && firstAdminChangeMs[id - 1] == UINT64_MAX) {
 						firstAdminChangeMs[id - 1] = hub.now;
 						if (hub.now + hub.Delay(1, id) < hub.faultAt + 15000) { error = "admin host changed before fifteen seconds of authenticated silence"; return false; }
@@ -1440,8 +1465,11 @@ namespace RTE {
 					}
 					if (peer.IsStopped()) {
 						// A losing half stops at its decision boundary. Its subsequent replay is private; survivors never stop for it.
-						const bool directLoser = !hub.row.internet && id != 1 && splitFrom[1][id];
+						const bool directLoser = !hub.row.internet && directRuling && !(directRuling & (1U << (id - 1)));
 						const bool imageStop = peer.GetStats().timeoutReason.starts_with("PeerHeld:");
+						if (imageStop && directLoser && !lostAt[id - 1]) {
+							lostAt[id - 1] = hub.now; lostFrame[id - 1] = peer.GetResumeFrame();
+						}
 						if (imageStop && (lostAt[id - 1] || directLoser || hub.row.imageReturn || HadMachineTrouble(id))) {
 							if (lostAt[id - 1] && (peer.GetResumeFrame() != lostFrame[id - 1] || world.applied + 1 != lostFrame[id - 1])) {
 								error = "authority ruling: losing peer " + std::to_string(id) + " stopped away from its engine decision frame " + std::to_string(lostFrame[id - 1]); return false;
@@ -1731,6 +1759,16 @@ namespace RTE {
 			// The image's seat state and the committed tail go through the same replay coordinator as a real private return.
 			auto replayConfig = config;
 			replayConfig.roundId = fixture.peers[donor - 1]->GetRoundId(); replayConfig.startFrame = replay.applied + 1;
+			// As the service's image metadata does, seed the authority at the capture, not the losing reader's authority.
+			// Otherwise the first tail record invents a handover and changes the image's already committed holds and prefix.
+			replayConfig.authorityPeerId = fixture.committed[donor - 1].at(base).authorityPeerId;
+			replayConfig.migrationGeneration = 0;
+			for (const auto& [tick, ready]: fixture.committed[donor - 1]) {
+				if (tick > base) break;
+				for (const auto* commands: {&ready.localCommands, &ready.remoteCommands}) for (const auto& command: *commands)
+					if (const auto* authority = std::get_if<NetGameHostAuthority>(&command.payload))
+						replayConfig.migrationGeneration = std::max(replayConfig.migrationGeneration, authority->generation);
+			}
 			replayConfig.peerFrameGroups = false; replayConfig.peerSessionLinks.reset();
 			replayConfig.originalRoundConfigHash = fixture.peers[donor - 1]->GetRoundConfigHash();
 			replayConfig.initialSeatHolds = fixture.peers[donor - 1]->HeldTransactions();
@@ -1760,6 +1798,12 @@ namespace RTE {
 			bool liveStarted = false;
 			std::string lastRefusal;
 			const auto startLive = [&] {
+				// The real service starts live play from the winning replay's configuration, including authority and every member's start terms.
+				config = replayCoordinator.GetConfig();
+				const auto& previous = fixture.peers[seat - 1]->GetConfig();
+				config.peerFrameGroups = previous.peerFrameGroups; config.peerSessionLinks = previous.peerSessionLinks;
+				config.frameTieReferee = previous.frameTieReferee; config.hostChangeReferee = previous.hostChangeReferee;
+				config.migrationTransportFactory = previous.migrationTransportFactory; config.migrationIceDial = previous.migrationIceDial; config.migrationIceHost = previous.migrationIceHost;
 				config.startFrame = activation; config.roundId = round; config.joinsRunningRound = config.continuesMatch = true;
 				config.originalRoundConfigHash = fixture.peers[donor - 1]->GetRoundConfigHash();
 				config.initialSeatHolds = replayCoordinator.HeldTransactions();
@@ -1783,6 +1827,7 @@ namespace RTE {
 					if (at != changes.begin()) config.matchConfig.peerInputDelayFrames[peer - 1] = std::prev(at)->second;
 				}
 				config.inputDelayFrames = config.matchConfig.peerInputDelayFrames[seat - 1];
+				config.relayToOtherPeers = config.localPeerId == config.authorityPeerId;
 				for (uint8_t peer = 1; peer <= seats; ++peer) config.peerInputDelayFrames[peer] = config.matchConfig.peerInputDelayFrames[peer - 1];
 				config.peerIncarnations[seat] = incarnation; config.seatStateThroughFrame = replay.applied;
 				fixture.peers[seat - 1] = std::make_unique<NetLockstepCoordinator>();
@@ -1903,7 +1948,7 @@ namespace RTE {
 			row.captureFrames = true; row.checkpointEveryFrames = 60;
 			Fixture fixture; fixture.parallel = true;
 			if (!fixture.Start(row, error)) return false;
-			std::vector<bool> heldBeforeAnswer(row.seats), playedWhilePending(row.seats), won(row.seats);
+			std::vector<bool> heldBeforeAnswer(row.seats), playedWhilePending(row.seats), won(row.seats), migrated(row.seats);
 			std::vector<uint64_t> heldAtFrame(row.seats), stoppedAtFrame(row.seats);
 			std::map<uint8_t, std::map<uint64_t, NetHash32>> winningHistory;
 			for (const uint64_t until = fixture.hub.faultEnd + 16000; fixture.hub.now < until;) {
@@ -1913,6 +1958,10 @@ namespace RTE {
 					const auto& peer = *fixture.peers[index];
 					const uint64_t frame = fixture.worlds[index].applied + 1;
 					const uint32_t members = s_FrameMembers(peer, frame), held = s_HeldSeats(peer, frame);
+					if (row.directMigration && fixture.hub.DuringFault() && fixture.hub.now >= fixture.hub.faultAt + 20000 && members) {
+						const uint8_t expected = members & 1U ? 1 : static_cast<uint8_t>(std::countr_zero(members) + 1);
+						migrated[index] = peer.IsRunning() && peer.GetHostPeerId() == expected && (expected == 1 || peer.GetMigrationResult().generation != 0);
+					}
 					const auto client = fixture.hub.directoryClients.find(seat);
 					const bool pending = client == fixture.hub.directoryClients.end() || client->second.firstDecidedMs == UINT64_MAX;
 					uint32_t absent = 0;
@@ -1927,6 +1976,9 @@ namespace RTE {
 						if (std::find(answer.reply.members.begin(), answer.reply.members.end(), seat) != answer.reply.members.end() && !won[index]) {
 							won[index] = true; winningHistory[seat] = fixture.worlds[index].hashes;
 						}
+					if (!row.internet && fixture.directRuling && (fixture.directRuling & (1U << index)) && !won[index]) {
+						won[index] = true; winningHistory[seat] = fixture.worlds[index].hashes;
+					}
 				}
 				if (!fixture.RecoverImages(error)) return false;
 			}
@@ -1934,10 +1986,11 @@ namespace RTE {
 			bool lost = false;
 			for (uint8_t seat = 1; seat <= row.seats; ++seat) {
 				const size_t index = seat - 1;
-				if (row.internet && (!heldBeforeAnswer[index] || !playedWhilePending[index])) {
-					error = "authority ruling: split peer " + std::to_string(seat) + " did not install its local hold and play before its own directory answer"; return false;
+				if (row.directMigration && !migrated[index]) { error = "direct ruling: the reachable group did not migrate within the hold window: seat=" + std::to_string(seat); return false; }
+				if (!heldBeforeAnswer[index] || !playedWhilePending[index]) {
+					error = "authority ruling: split peer " + std::to_string(seat) + " did not install its local hold and play before its arbitration"; return false;
 				}
-				if (fixture.lostAt[index] || (!row.internet && seat != 1)) {
+				if (fixture.lostAt[index] || (!row.internet && fixture.directRuling && !(fixture.directRuling & (1U << index)))) {
 					lost = true;
 					if (!stoppedAtFrame[index] || !fixture.imageReturns[index] ||
 					    (fixture.lostFrame[index] && stoppedAtFrame[index] + 1 != fixture.lostFrame[index])) {
@@ -1947,7 +2000,7 @@ namespace RTE {
 						    " image_returns=" + std::to_string(fixture.imageReturns[index]); return false;
 					}
 				} else {
-					if (row.internet && !won[index]) { error = "authority ruling: a healed split never received its arbitration answer"; return false; }
+					if (!won[index]) { error = "authority ruling: a healed split never received its arbitration answer"; return false; }
 					if (fixture.imageReturns[index] || stoppedAtFrame[index]) { error = "authority ruling: the ruling half stopped or replaced its world"; return false; }
 					if (const auto saved = winningHistory.find(seat); saved != winningHistory.end())
 						for (const auto& [frame, hash]: saved->second) if (fixture.worlds[index].hashes.at(frame) != hash) {
@@ -1978,7 +2031,8 @@ namespace RTE {
 			fixture.frameMembers[1][1] = 1;
 			if (fixture.CompareHistories(why)) { error = "fixture excused disagreement inside one half"; return false; }
 			fixture.frameMembers[1][1] = 2; fixture.hub.row.internet = false;
-			if (fixture.CompareHistories(why)) { error = "fixture let a direct client's discarded branch continue playing"; return false; }
+			// The revised direct contract permits two continuations before the heal; it still requires the actual losing image to adopt one history.
+			if (!fixture.CompareHistories(why)) { error = "fixture rejected independent direct continuations before heal: " + why; return false; }
 			fixture.worlds[1].hashes[1] = fixture.worlds[0].hashes[1];
 			if (!fixture.CompareHistories(why)) { error = "fixture rejected the adopted image history"; return false; }
 			fixture.playingMaxWait = {0, 51}; fixture.waitAt = {0, 0}; fixture.waitPlaying = {true, true};
@@ -3160,6 +3214,16 @@ namespace RTE {
 				return found == peer.m_RemoteTransports.end() ? c_InvalidNetPeerId : found->second;
 			};
 		});
+		if (arm >= 5 && arm <= 9) {
+			// Revised direct contract: both groups play and a hostless group (including one peer) migrates, then only the healed loser image-returns.
+			Case split{"direct_migrated_split_heals"}; split.subject = arm == 5 ? 3 : arm == 9 ? 2 : 1;
+			split.seats = arm == 6 ? 2 : 4; split.gapMs = 23000; split.tie = arm == 5;
+			split.splitContract = split.directMigration = true; split.oneWaySubject = arm >= 8;
+			std::string why;
+			const bool passed = CheckSplitContract(split, why);
+			if (!passed && error) *error = why;
+			return passed;
+		}
 		Case row{"certified_admin_continuity"}; row.subject = 1; row.gapMs = 20000; row.hung = true;
 		// The host returns after the votes, before their future activation frame.
 		if (arm == 4) row.gapMs = 15100;

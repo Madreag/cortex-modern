@@ -1,0 +1,775 @@
+{
+  "scope": "Complete Source/tools symbol, field-name and raw-magic census; native validation is separate.",
+  "publication_parent": "deb9e68abf815df27d4f57f8b789f9d982c725ce",
+  "changed_values": {
+    "migration_wire": [
+      7,
+      8
+    ],
+    "lockstep_admission": [
+      51,
+      52
+    ]
+  },
+  "encoders": [
+    {
+      "path": "Source/Network/NetLockstep.cpp",
+      "function": "NetHostMigrationCodec::Encode/Decode",
+      "handling": "The sole migration schema adds rosterRevision and requires exact version8; every sender and embedded certificate uses it."
+    },
+    {
+      "path": "Source/Network/NetIdentity.cpp",
+      "function": "CaptureManifestInputs",
+      "handling": "Stamps admission52 from c_AdmissionVersion."
+    },
+    {
+      "path": "Source/Network/NetIdentity.cpp",
+      "function": "HashDeterministicConfig and JSON encoding",
+      "handling": "Derive the stamped supportedLockstepCodecVersion; no literal current version."
+    },
+    {
+      "path": "Source/Network/NetMatchService.cpp",
+      "function": "CacheDiagnosticIdentity",
+      "handling": "Telemetry derives the stamped version."
+    },
+    {
+      "path": "Source/Network/NetSession.cpp",
+      "function": "VersionTuple and identity comparison",
+      "handling": "Advertise and compare the stamped version; older identities refuse admission."
+    }
+  ],
+  "test_encoders": {
+    "Source/Network/NetLockstepSelfTest.cpp": "DirectWireContract retains authenticated migration7 and admission51 negatives; CaptureWireContract retains migration6/admission48 negatives. Other claim refusal cases derive the current identity.",
+    "Source/Network/NetIdentitySelfTest.cpp": "Reads the current constant; literal1 intentionally changes the configuration.",
+    "Source/Network/NetSessionSelfTest.cpp": "Current/current and current/current-1 pairs derive the constant; legacy15 remains a negative.",
+    "Source/Network/NetMatchSelfTest.cpp": "Telemetry expectations derive the constant.",
+    "tools/test_telemetry_bundle.py": "Checks only the field name; no current-version literal."
+  },
+  "references": [
+    {
+      "path": "tools/test_telemetry_bundle.py",
+      "line": 38,
+      "text": "\"supported_lockstep_codec_version\", \"supported_world_lockstep_codec_version\","
+    },
+    {
+      "path": "Source/Network/NetMatchSelfTest.cpp",
+      "line": 2287,
+      "text": "if (!NetHostMigrationCodec::Encode(decision, key, decisionBytes) || !NetHostMigrationCodec::Encode(input, key, inputBytes) ||"
+    },
+    {
+      "path": "Source/Network/NetMatchSelfTest.cpp",
+      "line": 2316,
+      "text": "if (!NetHostMigrationCodec::Encode(wrapped, key, wrappedBytes) || !wrappedHostTransport.Send(hostRemotePeer, NetTransportLane::ControlReliable, wrappedBytes)) {"
+    },
+    {
+      "path": "Source/Network/NetMatchSelfTest.cpp",
+      "line": 16348,
+      "text": "for (const char* key : {\"supported_lockstep_codec_version\", \"supported_world_lockstep_codec_version\","
+    },
+    {
+      "path": "Source/Network/NetMatchSelfTest.cpp",
+      "line": 16373,
+      "text": "{\"supported_lockstep_codec_version\", NetLockstepCodec::c_AdmissionVersion}, {\"supported_world_lockstep_codec_version\", NetLockstepCodec::c_WorldVersion},"
+    },
+    {
+      "path": "Source/Network/NetMatchRunner.cpp",
+      "line": 92,
+      "text": "return m_PeerFrameKey != NetHash32{} && NetHostMigrationCodec::Decode(bytes, m_PeerFrameKey, message) &&"
+    },
+    {
+      "path": "Source/Network/NetMatchRunner.cpp",
+      "line": 929,
+      "text": "return NetHostMigrationCodec::Decode(bytes, key, message) && message.sessionId == id;"
+    },
+    {
+      "path": "Source/Network/NetPeerSessionWire.cpp",
+      "line": 172,
+      "text": "if (!NetHostMigrationCodec::Decode(bytes, candidate, message) ||"
+    },
+    {
+      "path": "Source/Network/NetPeerSessionWire.cpp",
+      "line": 207,
+      "text": "if (NetHostMigrationCodec::Encode(ack, replyKey, bytes)) (void)SendTo(message.senderPeerId, NetTransportLane::ControlReliable, bytes);"
+    },
+    {
+      "path": "Source/Network/NetPeerSessionWire.cpp",
+      "line": 252,
+      "text": "if (NetHostMigrationCodec::Encode(message, item.sendKey, bytes) && SendTo(peer, NetTransportLane::ControlReliable, bytes)) {"
+    },
+    {
+      "path": "Source/Network/NetPeerSessionWire.cpp",
+      "line": 278,
+      "text": "if (event.type == NetTransportEventType::PacketReceived && NetHostMigrationCodec::LooksLikePacket(event.bytes)) {"
+    },
+    {
+      "path": "Source/Network/NetPeerSessionWire.cpp",
+      "line": 316,
+      "text": "if (bytes.empty() || bytes.size() > NetHostMigrationCodec::c_ChunkBytes || m_Links->pendingBytes + bytes.size() > 8 * 1024 * 1024 || m_Links->pending[bound->second].size() >= 256) {"
+    },
+    {
+      "path": "Source/Network/NetMatchService.cpp",
+      "line": 1850,
+      "text": "if (!NetHostMigrationCodec::Encode(alive, config.migrationKey, bytes)) bytes.clear();"
+    },
+    {
+      "path": "Source/Network/NetMatchService.cpp",
+      "line": 6516,
+      "text": "for (const auto& event: m_CatchUpWirePackets) if (NetHostMigrationCodec::LooksLikePacket(event.bytes)) candidates.push_back(event.bytes);"
+    },
+    {
+      "path": "Source/Network/NetMatchService.cpp",
+      "line": 6525,
+      "text": "if (!NetHostMigrationCodec::Decode(bytes, m_MigrationKey, proof)) { ++unreadable; continue; }"
+    },
+    {
+      "path": "Source/Network/NetMatchService.cpp",
+      "line": 6660,
+      "text": "} else if (event.type == NetTransportEventType::PacketReceived && m_WorldCatchUp.privateMatch && NetHostMigrationCodec::LooksLikePacket(event.bytes)) {"
+    },
+    {
+      "path": "Source/Network/NetMatchService.cpp",
+      "line": 9138,
+      "text": "{\"supported_lockstep_codec_version\", config.supportedLockstepCodecVersion},"
+    },
+    {
+      "path": "Source/Network/NetMatchService.cpp",
+      "line": 10666,
+      "text": "if (!NetHostMigrationCodec::LooksLikePacket(bytes)) return false;"
+    },
+    {
+      "path": "Source/Network/NetMatchService.cpp",
+      "line": 10668,
+      "text": "return NetHostMigrationCodec::Decode(bytes, key, message) && message.sessionId == session;"
+    },
+    {
+      "path": "Source/Network/NetMatchService.cpp",
+      "line": 10770,
+      "text": "if (!NetHostMigrationCodec::LooksLikePacket(bytes)) return false;"
+    },
+    {
+      "path": "Source/Network/NetMatchService.cpp",
+      "line": 10777,
+      "text": "if (!NetHostMigrationCodec::Decode(bytes, key, message) || message.sessionId != sessionId) return false;"
+    },
+    {
+      "path": "Source/Network/NetIdentitySelfTest.cpp",
+      "line": 444,
+      "text": "config.supportedLockstepCodecVersion = 1;"
+    },
+    {
+      "path": "Source/Network/NetIdentitySelfTest.cpp",
+      "line": 572,
+      "text": "if (supported.supportedLockstepCodecVersion != NetLockstepCodec::c_AdmissionVersion ||"
+    },
+    {
+      "path": "Source/Network/NetLobbySession.cpp",
+      "line": 223,
+      "text": "if (bytes.size() < 8 || !NetHostMigrationCodec::LooksLikePacket(bytes)) return false;"
+    },
+    {
+      "path": "Source/Network/NetLobbySession.cpp",
+      "line": 230,
+      "text": "return event.type == NetTransportEventType::PacketReceived && (NetLockstepCodec::LooksLikePacket(event.bytes) || NetHostMigrationCodec::LooksLikePacket(event.bytes));"
+    },
+    {
+      "path": "Source/Network/NetPeerReturns.cpp",
+      "line": 139,
+      "text": "if (NetHostMigrationCodec::Encode(proof->second, m_Config.migrationKey, bytes)) certificates.push_back(std::move(bytes));"
+    },
+    {
+      "path": "Source/Network/NetPeerReturns.cpp",
+      "line": 147,
+      "text": "if (!NetHostMigrationCodec::Encode(witness, m_Config.migrationKey, bytes)) { unavailable(kept->first); return; }"
+    },
+    {
+      "path": "Source/Network/NetPeerReturns.cpp",
+      "line": 150,
+      "text": "if (body.size() > NetHostMigrationCodec::c_MaxPeerTailBytes) { unavailable(kept->first); return; }"
+    },
+    {
+      "path": "Source/Network/NetPeerReturns.cpp",
+      "line": 194,
+      "text": "const size_t end = std::min(body.bytes.size(), body.offset + NetHostMigrationCodec::c_ChunkBytes);"
+    },
+    {
+      "path": "Source/Network/NetLockstep.cpp",
+      "line": 3058,
+      "text": "bool NetHostMigrationCodec::LooksLikePacket(const std::vector<uint8_t>& bytes) {"
+    },
+    {
+      "path": "Source/Network/NetLockstep.cpp",
+      "line": 3064,
+      "text": "bool NetHostMigrationCodec::Encode(const NetHostMigrationMessage& message, const NetHash32& key, std::vector<uint8_t>& bytes) {"
+    },
+    {
+      "path": "Source/Network/NetLockstep.cpp",
+      "line": 3114,
+      "text": "bool NetHostMigrationCodec::Decode(const std::vector<uint8_t>& bytes, const NetHash32& key, NetHostMigrationMessage& message) {"
+    },
+    {
+      "path": "Source/Network/NetLockstep.cpp",
+      "line": 3211,
+      "text": "return bytes.size() <= NetHostMigrationCodec::c_MaxFrameBytes && remoteOffset == ready.remoteFrames.size();"
+    },
+    {
+      "path": "Source/Network/NetLockstep.cpp",
+      "line": 3282,
+      "text": "while (m_PeerReplayAppliedPrefixes.size() > NetHostMigrationCodec::c_PeerHistoryFrames) m_PeerReplayAppliedPrefixes.erase(m_PeerReplayAppliedPrefixes.begin());"
+    },
+    {
+      "path": "Source/Network/NetLockstep.cpp",
+      "line": 3299,
+      "text": "const size_t frames = UsesPeerFrameGroups() ? NetHostMigrationCodec::c_PeerHistoryFrames : NetHostMigrationCodec::c_HistoryFrames;"
+    },
+    {
+      "path": "Source/Network/NetLockstep.cpp",
+      "line": 3300,
+      "text": "const size_t byteCap = UsesPeerFrameGroups() ? NetHostMigrationCodec::c_MaxPeerHistoryBytes : NetHostMigrationCodec::c_MaxHistoryBytes;"
+    },
+    {
+      "path": "Source/Network/NetLockstep.cpp",
+      "line": 3352,
+      "text": "if (!NetHostMigrationCodec::Encode(message, m_Config.migrationKey, bytes))"
+    },
+    {
+      "path": "Source/Network/NetLockstep.cpp",
+      "line": 3727,
+      "text": "if (event.type == NetTransportEventType::PeerConnected && NetHostMigrationCodec::Encode(hello, m_Config.migrationKey, bytes)) {"
+    },
+    {
+      "path": "Source/Network/NetLockstep.cpp",
+      "line": 3732,
+      "text": "if (event.type != NetTransportEventType::PacketReceived || !NetHostMigrationCodec::Decode(event.bytes, m_Config.migrationKey, answer) ||"
+    },
+    {
+      "path": "Source/Network/NetLockstep.cpp",
+      "line": 3894,
+      "text": "if (UsesPeerFrameGroups() && m_Config.peerSessionLinks && event.type == NetTransportEventType::PacketReceived && !NetHostMigrationCodec::LooksLikePacket(event.bytes) &&"
+    },
+    {
+      "path": "Source/Network/NetLockstep.cpp",
+      "line": 3915,
+      "text": "if (NetHostMigrationCodec::Encode(reply, m_Config.migrationKey, bytes)) (void)listener->Send(event.peerId, NetTransportLane::ControlReliable, bytes);"
+    },
+    {
+      "path": "Source/Network/NetLockstep.cpp",
+      "line": 3939,
+      "text": "if (NetHostMigrationCodec::Encode(MigrationMessage(NetHostMigrationMessageType::Answer), m_Config.migrationKey, bytes))"
+    },
+    {
+      "path": "Source/Network/NetLockstep.cpp",
+      "line": 3972,
+      "text": "if (NetHostMigrationCodec::Encode(hello, m_Config.migrationKey, bytes)) (void)dial.transport->Send(dial.connection, NetTransportLane::ControlReliable, bytes);"
+    },
+    {
+      "path": "Source/Network/NetLockstep.cpp",
+      "line": 4086,
+      "text": "!(event.type == NetTransportEventType::PacketReceived && NetHostMigrationCodec::LooksLikePacket(event.bytes))) {"
+    },
+    {
+      "path": "Source/Network/NetLockstep.cpp",
+      "line": 4118,
+      "text": "if (hosting && !NetHostMigrationCodec::LooksLikePacket(event.bytes)) {"
+    },
+    {
+      "path": "Source/Network/NetLockstep.cpp",
+      "line": 4123,
+      "text": "if (m_MigrationPhase == NetHostMigrationPhase::Complete && hosting && NetHostMigrationCodec::Decode(event.bytes, m_Config.migrationKey, message) &&"
+    },
+    {
+      "path": "Source/Network/NetLockstep.cpp",
+      "line": 4129,
+      "text": "if (event.lane != NetTransportLane::ControlReliable || !NetHostMigrationCodec::Decode(event.bytes, m_Config.migrationKey, message) || message.sessionId != m_Config.sessionId || message.roundId != m_Config.matchConfig.roundId ||"
+    },
+    {
+      "path": "Source/Network/NetLockstep.cpp",
+      "line": 4196,
+      "text": "if (!hosting && IsMigrating() && message.boundary == m_MigrationBoundary && message.frame <= message.boundary && message.boundary - message.frame < NetHostMigrationCodec::c_HistoryFrames) {"
+    },
+    {
+      "path": "Source/Network/NetLockstep.cpp",
+      "line": 4207,
+      "text": "if (message.frame + NetHostMigrationCodec::c_HistoryFrames <= m_MigrationBoundary || m_MigrationIncoming.size() >= NetHostMigrationCodec::c_HistoryFrames)"
+    },
+    {
+      "path": "Source/Network/NetLockstep.cpp",
+      "line": 4331,
+      "text": "const size_t count = std::min(NetHostMigrationCodec::c_ChunkBytes, input->second.size() - offset);"
+    },
+    {
+      "path": "Source/Network/NetLockstep.cpp",
+      "line": 11710,
+      "text": "if (m_PlaneTicking && (event.type != NetTransportEventType::PacketReceived || (NetHostMigrationCodec::LooksLikePacket(event.bytes) && !UsesPeerFrameGroups()) ||"
+    },
+    {
+      "path": "Source/Network/NetLockstep.cpp",
+      "line": 11717,
+      "text": "if (event.type == NetTransportEventType::PacketReceived && NetHostMigrationCodec::LooksLikePacket(event.bytes)) {"
+    },
+    {
+      "path": "Source/Network/NetLockstep.cpp",
+      "line": 11731,
+      "text": "if (wire && NetHostMigrationCodec::Encode(reply, m_Config.migrationKey, bytes)) (void)wire->Send(event.peerId, NetTransportLane::ControlReliable, bytes);"
+    },
+    {
+      "path": "Source/Network/NetLockstep.cpp",
+      "line": 11888,
+      "text": "if (NetHostMigrationCodec::LooksLikePacket(event.bytes)) {"
+    },
+    {
+      "path": "Source/Network/NetLockstep.cpp",
+      "line": 11890,
+      "text": "if (NetHostMigrationCodec::Decode(event.bytes, m_Config.migrationKey, message)) {"
+    },
+    {
+      "path": "Source/Network/NetLockstep.cpp",
+      "line": 11901,
+      "text": "if (NetHostMigrationCodec::Encode(reply, m_Config.migrationKey, bytes)) (void)m_Transport->Send(event.peerId, NetTransportLane::ControlReliable, bytes);"
+    },
+    {
+      "path": "Source/Network/NetPeerFrames.cpp",
+      "line": 52,
+      "text": "if (!NetHostMigrationCodec::Encode(message, m_Config.migrationKey, bytes)) return false;"
+    },
+    {
+      "path": "Source/Network/NetPeerFrames.cpp",
+      "line": 381,
+      "text": "if (NetHostMigrationCodec::Decode(bytes, m_Config.migrationKey, message)) {"
+    },
+    {
+      "path": "Source/Network/NetPeerFrames.cpp",
+      "line": 558,
+      "text": "const uint64_t kept = m_Stats.nextFrame > NetHostMigrationCodec::c_PeerHistoryFrames ? m_Stats.nextFrame - NetHostMigrationCodec::c_PeerHistoryFrames : 0;"
+    },
+    {
+      "path": "Source/Network/NetSessionSelfTest.cpp",
+      "line": 830,
+      "text": "{NetLockstepCodec::c_AdmissionVersion, NetLockstepCodec::c_AdmissionVersion},"
+    },
+    {
+      "path": "Source/Network/NetSessionSelfTest.cpp",
+      "line": 831,
+      "text": "{NetLockstepCodec::c_AdmissionVersion, 15}, {15, NetLockstepCodec::c_AdmissionVersion},"
+    },
+    {
+      "path": "Source/Network/NetSessionSelfTest.cpp",
+      "line": 832,
+      "text": "{NetLockstepCodec::c_AdmissionVersion, NetLockstepCodec::c_AdmissionVersion - 1},"
+    },
+    {
+      "path": "Source/Network/NetSessionSelfTest.cpp",
+      "line": 833,
+      "text": "{NetLockstepCodec::c_AdmissionVersion - 1, NetLockstepCodec::c_AdmissionVersion}}};"
+    },
+    {
+      "path": "Source/Network/NetSessionSelfTest.cpp",
+      "line": 840,
+      "text": "hostConfig.localIdentity.deterministicConfig.supportedLockstepCodecVersion = versions[index].first;"
+    },
+    {
+      "path": "Source/Network/NetSessionSelfTest.cpp",
+      "line": 841,
+      "text": "clientConfig.localIdentity.deterministicConfig.supportedLockstepCodecVersion = versions[index].second;"
+    },
+    {
+      "path": "Source/Network/NetSessionSelfTest.cpp",
+      "line": 856,
+      "text": "const uint16_t current = NetLockstepCodec::c_AdmissionVersion, currentWorld = NetLockstepCodec::c_WorldVersion;"
+    },
+    {
+      "path": "Source/Network/NetSessionSelfTest.cpp",
+      "line": 866,
+      "text": "config->localIdentity.deterministicConfig.supportedLockstepCodecVersion = isCurrent ? current : static_cast<uint16_t>(current - 1);"
+    },
+    {
+      "path": "Source/Network/NetSessionSelfTest.cpp",
+      "line": 1092,
+      "text": "return NetHostMigrationCodec::LooksLikePacket(bytes) && NetHostMigrationCodec::Decode(bytes, key, message) && message.sessionId == sessionId;"
+    },
+    {
+      "path": "Source/Network/NetSessionSelfTest.cpp",
+      "line": 1115,
+      "text": "if (!NetHostMigrationCodec::Encode(message, key, bytes)) { *error = \"cannot encode the shared-wire handover fixture\"; return false; }"
+    },
+    {
+      "path": "Source/Network/NetSessionSelfTest.cpp",
+      "line": 1119,
+      "text": "if (!NetHostMigrationCodec::Encode(message, key, bytes)) return false;"
+    },
+    {
+      "path": "Source/Network/NetSessionSelfTest.cpp",
+      "line": 1135,
+      "text": "if (!NetHostMigrationCodec::Encode(message, key, bytes) || !hostWire.Send(1, NetTransportLane::ControlReliable, bytes, error)) return false;"
+    },
+    {
+      "path": "Source/Network/NetSession.cpp",
+      "line": 98,
+      "text": "return std::to_string(config.supportedLockstepCodecVersion) + \".\" + std::to_string(config.supportedWorldLockstepCodecVersion) + \".\" +"
+    },
+    {
+      "path": "Source/Network/NetSession.cpp",
+      "line": 142,
+      "text": "static constexpr Field fields[] = {&NetIdentityDeterministicConfig::supportedLockstepCodecVersion, &NetIdentityDeterministicConfig::supportedWorldLockstepCodecVersion,"
+    },
+    {
+      "path": "Source/Network/NetSessionPlaneSelfTest.cpp",
+      "line": 738,
+      "text": "NetHash32 key; key.fill(0x39); NetHostMigrationCodec::Encode(packet, key, bytes);"
+    },
+    {
+      "path": "Source/Network/NetSessionPlaneSelfTest.cpp",
+      "line": 746,
+      "text": "if (!NetHostMigrationCodec::Decode(bytes, key, packet) || packet.type != NetHostMigrationMessageType::PeerInput || packet.senderPeerId != 1) return;"
+    },
+    {
+      "path": "Source/Network/NetSessionPlaneSelfTest.cpp",
+      "line": 786,
+      "text": "if (!peeked) peeked = NetHostMigrationCodec::Decode(bytes, key, read);"
+    },
+    {
+      "path": "Source/Network/NetSessionPlaneSelfTest.cpp",
+      "line": 790,
+      "text": "if (hub.row.laterSessionMessageFirst && owner == 2 && NetHostMigrationCodec::Decode(bytes, key, decision) &&"
+    },
+    {
+      "path": "Source/Network/NetSessionPlaneSelfTest.cpp",
+      "line": 795,
+      "text": "decision.appliedFrame = hub.now; NetHostMigrationCodec::Encode(decision, key, delivered);"
+    },
+    {
+      "path": "Source/Network/NetSessionPlaneSelfTest.cpp",
+      "line": 798,
+      "text": "if (hub.row.receiptGap && NetHostMigrationCodec::Decode(bytes, key, decision) && RemoveReceiptGap(decision, delivered)) return true;"
+    },
+    {
+      "path": "Source/Network/NetSessionPlaneSelfTest.cpp",
+      "line": 807,
+      "text": "NetHostMigrationCodec::Decode(delivered, key, decision) && decision.type == NetHostMigrationMessageType::PeerControl) {"
+    },
+    {
+      "path": "Source/Network/NetSessionPlaneSelfTest.cpp",
+      "line": 857,
+      "text": "if (NetHostMigrationCodec::Decode(bytes, key, packet)) asymmetric = DelayAsymmetricInput(packet, *other, remote, lane, bytes);"
+    },
+    {
+      "path": "Source/Network/NetSessionPlaneSelfTest.cpp",
+      "line": 876,
+      "text": "if (hub.row.receiptGap && NetHostMigrationCodec::Decode(delivered, key, decision)) {"
+    },
+    {
+      "path": "Source/Network/NetSessionPlaneSelfTest.cpp",
+      "line": 906,
+      "text": "if (keepReturnCertificates && event.value.type == NetTransportEventType::PacketReceived && NetHostMigrationCodec::LooksLikePacket(event.value.bytes)) {"
+    },
+    {
+      "path": "Source/Network/NetSessionPlaneSelfTest.cpp",
+      "line": 909,
+      "text": "if (NetHostMigrationCodec::Decode(event.value.bytes, key, certificate) &&"
+    },
+    {
+      "path": "Source/Network/NetIdentity.h",
+      "line": 32,
+      "text": "uint16_t supportedLockstepCodecVersion = 0;"
+    },
+    {
+      "path": "Source/Network/NetIdentity.cpp",
+      "line": 161,
+      "text": "AppendInt(hasher, \"supported_lockstep_codec_version\", config.supportedLockstepCodecVersion);"
+    },
+    {
+      "path": "Source/Network/NetIdentity.cpp",
+      "line": 425,
+      "text": "{\"supported_lockstep_codec_version\", config.supportedLockstepCodecVersion},"
+    },
+    {
+      "path": "Source/Network/NetIdentity.cpp",
+      "line": 547,
+      "text": "manifest.deterministicConfig.supportedLockstepCodecVersion = NetLockstepCodec::c_AdmissionVersion;"
+    },
+    {
+      "path": "Source/Network/NetPeerBridges.cpp",
+      "line": 61,
+      "text": "return NetHostMigrationCodec::Decode({proposal.bytes.begin() + NetHash32{}.size(), proposal.bytes.end()}, m_Config.migrationKey, request) &&"
+    },
+    {
+      "path": "Source/Network/NetPeerBridges.cpp",
+      "line": 118,
+      "text": "if (!NetHostMigrationCodec::Encode(request, m_Config.migrationKey, signedRequest)) return;"
+    },
+    {
+      "path": "Source/Network/NetPeerBridges.cpp",
+      "line": 638,
+      "text": "if (!NetHostMigrationCodec::Encode(vote, m_Config.migrationKey, bytes)) return;"
+    },
+    {
+      "path": "Source/Network/NetPeerBridges.cpp",
+      "line": 692,
+      "text": "if (!NetHostMigrationCodec::Decode({certificate.bytes.begin() + offset, certificate.bytes.begin() + offset + size}, m_Config.migrationKey, vote) ||"
+    },
+    {
+      "path": "Source/Network/NetPeerBridges.cpp",
+      "line": 798,
+      "text": "if (!NetHostMigrationCodec::Decode({agreed.bytes.begin() + prefix.size(), agreed.bytes.end()}, m_Config.migrationKey, request)) return;"
+    },
+    {
+      "path": "Source/Network/NetLockstep.h",
+      "line": 523,
+      "text": "class NetHostMigrationCodec {"
+    },
+    {
+      "path": "Source/Network/NetLockstep.h",
+      "line": 525,
+      "text": "static constexpr uint32_t c_Magic = 0x314D4843;"
+    },
+    {
+      "path": "Source/Network/NetLockstep.h",
+      "line": 751,
+      "text": "static constexpr uint16_t c_AdmissionVersion = 52; //!< Direct holds continue locally and arbitrate authenticated histories at the heal."
+    },
+    {
+      "path": "Source/Network/NetPeerInputs.cpp",
+      "line": 31,
+      "text": "for (size_t offset = 0; offset < body.size(); offset += NetHostMigrationCodec::c_ChunkBytes) {"
+    },
+    {
+      "path": "Source/Network/NetPeerInputs.cpp",
+      "line": 35,
+      "text": "const size_t end = std::min(body.size(), offset + NetHostMigrationCodec::c_ChunkBytes);"
+    },
+    {
+      "path": "Source/Network/NetPeerInputs.cpp",
+      "line": 101,
+      "text": "for (size_t offset = 0; offset < body.size(); offset += NetHostMigrationCodec::c_ChunkBytes) {"
+    },
+    {
+      "path": "Source/Network/NetPeerInputs.cpp",
+      "line": 106,
+      "text": "const size_t end = std::min(body.size(), offset + NetHostMigrationCodec::c_ChunkBytes);"
+    },
+    {
+      "path": "Source/Network/NetPeerInputs.cpp",
+      "line": 488,
+      "text": "const size_t byteCap = inputMessage ? NetLockstepCodec::c_InputWindowByteCap : NetHostMigrationCodec::c_MaxPeerTailBytes;"
+    },
+    {
+      "path": "Source/Network/NetPeerInputs.cpp",
+      "line": 493,
+      "text": "(message.frame < m_Stats.nextFrame && m_Stats.nextFrame - message.frame > NetHostMigrationCodec::c_PeerHistoryFrames) ||"
+    },
+    {
+      "path": "Source/Network/NetPeerInputs.cpp",
+      "line": 518,
+      "text": "if (!TakeSize(body, offset, expandedSize) || expandedSize < 70 || expandedSize > NetHostMigrationCodec::c_MaxPeerTailBytes) return true;"
+    },
+    {
+      "path": "Source/Network/NetPeerInputs.cpp",
+      "line": 528,
+      "text": "if (!TakeSize(body, at, size) || size > NetHostMigrationCodec::c_MaxFrameBytes || at > body.size() || size > body.size() - at) return true;"
+    },
+    {
+      "path": "Source/Network/NetPeerInputs.cpp",
+      "line": 539,
+      "text": "if (!NetHostMigrationCodec::Decode({body.begin() + at, body.begin() + at + size}, m_Config.migrationKey, proof) ||"
+    },
+    {
+      "path": "Source/Network/NetPeerInputs.cpp",
+      "line": 564,
+      "text": "if (!NetHostMigrationCodec::Decode({body.begin() + at, body.begin() + at + size}, m_Config.migrationKey, witness) ||"
+    },
+    {
+      "path": "Source/Network/NetPeerInputs.cpp",
+      "line": 671,
+      "text": "for (size_t start = 0; start < wireBody.size(); start += NetHostMigrationCodec::c_ChunkBytes) {"
+    },
+    {
+      "path": "Source/Network/NetPeerInputs.cpp",
+      "line": 675,
+      "text": "const size_t end = std::min(wireBody.size(), start + NetHostMigrationCodec::c_ChunkBytes);"
+    },
+    {
+      "path": "Source/Network/NetLockstepSelfTest.cpp",
+      "line": 190,
+      "text": "if (!NetHostMigrationCodec::Encode(heartbeat, peer.m_Config.migrationKey, signedBytes) ||"
+    },
+    {
+      "path": "Source/Network/NetLockstepSelfTest.cpp",
+      "line": 191,
+      "text": "!NetHostMigrationCodec::Decode(signedBytes, peer.m_Config.migrationKey, authenticated) || !peer.HandlePeerFrameMessage(authenticated, 1100)) {"
+    },
+    {
+      "path": "Source/Network/NetLockstepSelfTest.cpp",
+      "line": 223,
+      "text": "if (!NetHostMigrationCodec::Encode(vote, peer.m_Config.migrationKey, signedVote)) { *error = \"the foreign hold vote did not encode\"; return false; }"
+    },
+    {
+      "path": "Source/Network/NetLockstepSelfTest.cpp",
+      "line": 494,
+      "text": "if (!NetHostMigrationCodec::Encode(proposal, peer.m_Config.migrationKey, signedVote)) return false;"
+    },
+    {
+      "path": "Source/Network/NetLockstepSelfTest.cpp",
+      "line": 564,
+      "text": "return NetHostMigrationCodec::Encode(message, peer.m_Config.migrationKey, bytes) &&"
+    },
+    {
+      "path": "Source/Network/NetLockstepSelfTest.cpp",
+      "line": 565,
+      "text": "NetHostMigrationCodec::Decode(bytes, peer.m_Config.migrationKey, authenticated) && peer.HandlePeerFrameMessage(authenticated, 5300);"
+    },
+    {
+      "path": "Source/Network/NetLockstepSelfTest.cpp",
+      "line": 609,
+      "text": "return NetHostMigrationCodec::Encode(message, peer.m_Config.migrationKey, signedMessage) &&"
+    },
+    {
+      "path": "Source/Network/NetLockstepSelfTest.cpp",
+      "line": 610,
+      "text": "NetHostMigrationCodec::Decode(signedMessage, peer.m_Config.migrationKey, authenticated) && peer.HandlePeerFrameMessage(authenticated, 8400);"
+    },
+    {
+      "path": "Source/Network/NetLockstepSelfTest.cpp",
+      "line": 677,
+      "text": "return NetHostMigrationCodec::Encode(message, peer.m_Config.migrationKey, signedMessage) &&"
+    },
+    {
+      "path": "Source/Network/NetLockstepSelfTest.cpp",
+      "line": 678,
+      "text": "NetHostMigrationCodec::Decode(signedMessage, peer.m_Config.migrationKey, authenticated) && peer.HandlePeerFrameMessage(authenticated, 2000 + frame);"
+    },
+    {
+      "path": "Source/Network/NetLockstepSelfTest.cpp",
+      "line": 722,
+      "text": "return NetHostMigrationCodec::Encode(proposal, peer.m_Config.migrationKey, bytes) &&"
+    },
+    {
+      "path": "Source/Network/NetLockstepSelfTest.cpp",
+      "line": 723,
+      "text": "NetHostMigrationCodec::Decode(bytes, peer.m_Config.migrationKey, authenticated) && peer.HandlePeerFrameMessage(authenticated, 1000);"
+    },
+    {
+      "path": "Source/Network/NetLockstepSelfTest.cpp",
+      "line": 773,
+      "text": "if (!NetHostMigrationCodec::Encode(proposal, peer.m_Config.migrationKey, bytes) ||"
+    },
+    {
+      "path": "Source/Network/NetLockstepSelfTest.cpp",
+      "line": 774,
+      "text": "!NetHostMigrationCodec::Decode(bytes, peer.m_Config.migrationKey, authenticated) || !peer.HandlePeerFrameMessage(authenticated, 1000) ||"
+    },
+    {
+      "path": "Source/Network/NetLockstepSelfTest.cpp",
+      "line": 794,
+      "text": "if (!NetHostMigrationCodec::Encode(vote, peer.m_Config.migrationKey, signedVote)) return NetHostMigrationMessage{};"
+    },
+    {
+      "path": "Source/Network/NetLockstepSelfTest.cpp",
+      "line": 834,
+      "text": "if (!NetHostMigrationCodec::Encode(proposal, peer.m_Config.migrationKey, signedVote)) { *error = \"the hold vote could not be signed\"; return false; }"
+    },
+    {
+      "path": "Source/Network/NetLockstepSelfTest.cpp",
+      "line": 911,
+      "text": "if (!NetHostMigrationCodec::Decode(bytes, peer.m_Config.migrationKey, message) || message.type != NetHostMigrationMessageType::PeerReceipt || !message.bytes.empty()) continue;"
+    },
+    {
+      "path": "Source/Network/NetLockstepSelfTest.cpp",
+      "line": 1047,
+      "text": "if (!NetHostMigrationCodec::Decode(bytes, peer.m_Config.migrationKey, message) || message.type != NetHostMigrationMessageType::PeerControl || message.senderPeerId != 1) continue;"
+    },
+    {
+      "path": "Source/Network/NetLockstepSelfTest.cpp",
+      "line": 1098,
+      "text": "if (!NetHostMigrationCodec::Decode(bytes, owner.m_Config.migrationKey, message)) continue;"
+    },
+    {
+      "path": "Source/Network/NetLockstepSelfTest.cpp",
+      "line": 1211,
+      "text": "if (!NetHostMigrationCodec::Encode(proposal, peer.m_Config.migrationKey, signedVote)) return false;"
+    },
+    {
+      "path": "Source/Network/NetLockstepSelfTest.cpp",
+      "line": 1261,
+      "text": "if (!NetHostMigrationCodec::Encode(request, key, bytes) || !NetHostMigrationCodec::Decode(bytes, key, decoded) ||"
+    },
+    {
+      "path": "Source/Network/NetLockstepSelfTest.cpp",
+      "line": 1272,
+      "text": "if (NetHostMigrationCodec::Decode(bytes, key, decoded)) {"
+    },
+    {
+      "path": "Source/Network/NetLockstepSelfTest.cpp",
+      "line": 1276,
+      "text": "previous.supportedLockstepCodecVersion = 48;"
+    },
+    {
+      "path": "Source/Network/NetLockstepSelfTest.cpp",
+      "line": 1278,
+      "text": "current.supportedLockstepCodecVersion = NetLockstepCodec::c_AdmissionVersion;"
+    },
+    {
+      "path": "Source/Network/NetLockstepSelfTest.cpp",
+      "line": 1292,
+      "text": "if (!NetHostMigrationCodec::Encode(heartbeat, key, bytes) || !NetHostMigrationCodec::Decode(bytes, key, decoded) || decoded.rosterRevision != 17) {"
+    },
+    {
+      "path": "Source/Network/NetLockstepSelfTest.cpp",
+      "line": 1299,
+      "text": "if (NetHostMigrationCodec::Decode(bytes, key, decoded)) { *error = \"the old migration contract accepted direct heal history\"; return false; }"
+    },
+    {
+      "path": "Source/Network/NetLockstepSelfTest.cpp",
+      "line": 1300,
+      "text": "NetIdentityDeterministicConfig previous; previous.supportedLockstepCodecVersion = 51;"
+    },
+    {
+      "path": "Source/Network/NetLockstepSelfTest.cpp",
+      "line": 1301,
+      "text": "auto current = previous; current.supportedLockstepCodecVersion = NetLockstepCodec::c_AdmissionVersion;"
+    },
+    {
+      "path": "Source/Network/NetLockstepSelfTest.cpp",
+      "line": 1350,
+      "text": "if (!NetHostMigrationCodec::Decode(bytes, peers[from].m_Config.migrationKey, message)) { *error = \"undecodable capture control\"; return false; }"
+    },
+    {
+      "path": "Source/Network/NetLockstepSelfTest.cpp",
+      "line": 1370,
+      "text": "if (!NetHostMigrationCodec::Encode(missing, peer.m_Config.migrationKey, signedMissing)) { *error = \"the negative capture vote did not encode\"; return false; }"
+    },
+    {
+      "path": "Source/Network/NetLockstepSelfTest.cpp",
+      "line": 1418,
+      "text": "if (!NetHostMigrationCodec::Decode(bytes, peer.m_Config.migrationKey, message)) { *error = \"handover emitted an undecodable packet\"; return false; }"
+    },
+    {
+      "path": "Source/Network/NetLockstepSelfTest.cpp",
+      "line": 5637,
+      "text": "if (!m_Peers.contains(event.peerId) && NetHostMigrationCodec::Decode(event.bytes, key, message)) m_Peers[event.peerId] = message.senderPeerId;"
+    },
+    {
+      "path": "Source/Network/NetLockstepSelfTest.cpp",
+      "line": 21708,
+      "text": "if (NetHostMigrationCodec::Decode(bytes, key, message)) {"
+    },
+    {
+      "path": "Source/Network/NetLockstepSelfTest.cpp",
+      "line": 21727,
+      "text": "return NetHostMigrationCodec::Encode(message, key, stale) && LoopbackTransport::Send(peer, lane, stale, error, congested);"
+    },
+    {
+      "path": "Source/Network/NetLockstepSelfTest.cpp",
+      "line": 21744,
+      "text": "NetHostMigrationCodec::Decode(event.bytes, key, message) && message.type == NetHostMigrationMessageType::Answer && message.senderPeerId == 2) {"
+    },
+    {
+      "path": "Source/Network/NetLockstepSelfTest.cpp",
+      "line": 28441,
+      "text": "previous.deterministicConfig.supportedLockstepCodecVersion = previousVersion;"
+    },
+    {
+      "path": "Source/Network/NetLockstepSelfTest.cpp",
+      "line": 28458,
+      "text": "std::cout << \"[net-lockstep-selftest] claim_rules_refusal previous=\" << previousVersion << \" current=\" << current.deterministicConfig.supportedLockstepCodecVersion << \" text=\\\"\" << client.BuildPlayerRefusalText() << \"\\\"\" << std::endl;"
+    }
+  ]
+}

@@ -13,6 +13,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <limits>
+#include <utility>
 
 namespace RTE {
 
@@ -238,7 +239,7 @@ namespace RTE {
 		if (request.members.empty() || request.members.size() >= request.owners.size()) return;
 		// A seat that heard the other half play on keeps asking what was decided: the referee holds one request per seat, and
 		// checking in again would replace the question and lose its answer.
-		if (m_PeerFrameTie && m_PeerFrameTie->queryOnly) {
+		if (m_Config.frameTieReferee && m_PeerFrameTie && m_PeerFrameTie->queryOnly) {
 			auto asked = *m_PeerFrameTie;
 			asked.members = request.members; asked.queryOnly = request.queryOnly;
 			if (asked == request) request = *m_PeerFrameTie;
@@ -246,7 +247,7 @@ namespace RTE {
 		if (!m_PeerFrameTie || *m_PeerFrameTie != request) { m_PeerFrameTie = request; m_PeerFrameTieSinceMs = nowMs; }
 		// Preserve the pre-hold electorate. Once the local hold is installed its absent seats no longer vote, but the outstanding
 		// directory question still refers to the original split and must keep being polled while the survivors play.
-		auto [question, inserted] = m_PeerSplitArbitrations.try_emplace(split, PeerSplitArbitration{request, owners, 0});
+		auto [question, inserted] = m_PeerSplitArbitrations.try_emplace(split, PeerSplitArbitration{request, owners, {}});
 		// Poll the current request for this split, including a reader's query of the other half. Retain the original
 		// electorate and installed hold boundary: changing the request must neither displace its answer nor rename history.
 		if (!inserted) question->second.request = request;
@@ -275,8 +276,8 @@ namespace RTE {
 			const uint32_t winner = m_PeerFrameTieWinners.at(split), local = SeatBit(m_Config.localPeerId);
 			// A reader that never continued its own branch can still consume the committed tail. Only a live losing branch
 			// has history to replace, and it enters the existing private-image return without stopping any winning survivor.
-			if (arbitration.holdFrame == 0 || m_Stats.nextFrame <= arbitration.holdFrame) continue;
-			const uint32_t playing = PeerFrameMembersAt(arbitration.holdFrame) & owners;
+			if (!arbitration.holdFrame || m_Stats.nextFrame <= *arbitration.holdFrame) continue;
+			const uint32_t playing = PeerFrameMembersAt(*arbitration.holdFrame) & owners;
 			if ((winner & local) == 0 && (playing & local) != 0 && (playing & winner) == 0) {
 				// Preparation may lead the displayed world by several ticks. Finish any granted tick, then discard that
 				// unplayed preparation: the private image replaces this branch at its actual completed boundary.
@@ -306,24 +307,41 @@ namespace RTE {
 	}
 
 	void NetLockstepCoordinator::CheckDirectPeerHistory(const NetHostMigrationMessage& message, uint64_t nowMs) {
-		if (m_Config.frameTieReferee || !m_LastCompletedSimulationTick || message.boundary == 0 ||
-		    message.appliedFrame < message.boundary || message.connectedMask == 0 ||
+		if (m_Config.frameTieReferee || !m_LastCompletedSimulationTick || message.members.empty() ||
+		    message.connectedMask == 0 ||
 		    (message.connectedMask & SeatBit(message.senderPeerId)) == 0 || message.bytes.size() != 8 + NetHash32{}.size()) return;
 		// A reader of this history has no competing continuation, whatever its current link or roster revision.
+		bool sameHistory = false;
 		if (m_MigrationHistory.contains(message.appliedFrame)) {
 			const auto prefix = PeerAppliedFramePrefix(message.appliedFrame);
-			if (std::equal(prefix.begin(), prefix.end(), message.bytes.begin() + 8)) return;
+			sameHistory = std::equal(prefix.begin(), prefix.end(), message.bytes.begin() + 8);
 		}
-		for (const auto& [split, arbitration]: m_PeerSplitArbitrations) {
-			if (split != message.frame || arbitration.holdFrame == 0 || *m_LastCompletedSimulationTick < arbitration.holdFrame ||
-			    (message.connectedMask & ~arbitration.owners) != 0) continue;
+		for (auto& [split, arbitration]: m_PeerSplitArbitrations) {
+			uint32_t remoteOwners = 0;
+			for (uint8_t owner: message.members) remoteOwners |= SeatBit(owner);
+			if (split != message.frame || remoteOwners != arbitration.owners ||
+			    ((message.connectedMask | message.voterMask) & ~arbitration.owners) != 0) continue;
+			arbitration.historiesSeen |= SeatBit(message.senderPeerId);
+			if (arbitration.offeredHold && *m_LastCompletedSimulationTick < arbitration.offeredHold->frame &&
+			    message.appliedFrame >= message.boundary && message.boundary == arbitration.offeredHold->frame &&
+			    message.connectedMask == arbitration.offeredHold->connectedMask && (message.voterMask & SeatBit(m_Config.localPeerId))) {
+				// The heal has one continuation. This reader committed nothing past its cutoff and adopts that standing hold.
+				arbitration.readerHoldFrame = arbitration.offeredHold->frame;
+				const auto certificate = std::exchange(arbitration.offeredHold, {});
+				InstallPeerBridge(*certificate, nowMs);
+				return;
+			}
+			if (sameHistory || !arbitration.holdFrame || *m_LastCompletedSimulationTick < *arbitration.holdFrame || message.appliedFrame < message.boundary) continue;
 			const uint32_t playing = PeerFrameMembersAt(*m_LastCompletedSimulationTick) & arbitration.owners;
 			if ((playing & SeatBit(m_Config.localPeerId)) == 0 || (playing & message.connectedMask) != 0) continue;
+			// Incoming traffic can flow throughout a one-way cut. Only the sender's authenticated receipt of this branch's
+			// committed history completes the exchange at the heal; hearing its continuation alone cannot stop this one.
+			if ((message.voterMask & SeatBit(m_Config.localPeerId)) == 0) continue;
 			const uint32_t chosen = DirectPeerWinner(playing, message.connectedMask);
 			auto [decision, inserted] = m_PeerFrameTieWinners.try_emplace(split, chosen);
 			if (!inserted) decision->second = DirectPeerWinner(decision->second, chosen);
 			DiagnosticLine() << "[net-direct-history] local=" << static_cast<int>(m_Config.localPeerId) << " peer=" << static_cast<int>(message.senderPeerId)
-			    << " split=" << split << " local_hold=" << arbitration.holdFrame << " remote_hold=" << message.boundary
+			    << " split=" << split << " local_hold=" << *arbitration.holdFrame << " remote_hold=" << message.boundary
 			    << " remote_applied=" << message.appliedFrame << " roster_revision=" << message.rosterRevision << " winners=" << decision->second << std::endl;
 		}
 		PollPeerFrameTies(nowMs);
@@ -435,8 +453,13 @@ namespace RTE {
 			const auto* roster = m_RosterReader ? m_RosterReader() : nullptr;
 			heartbeat.rosterRevision = roster ? roster->revision : m_Config.matchConfig.seatRosterRevision;
 			if (!m_Config.frameTieReferee) for (auto split = m_PeerSplitArbitrations.rbegin(); split != m_PeerSplitArbitrations.rend(); ++split) {
-				if (!split->second.holdFrame || heartbeat.appliedFrame < split->second.holdFrame) continue;
-				heartbeat.frame = split->first; heartbeat.boundary = split->second.holdFrame;
+				const auto boundary = split->second.holdFrame ? split->second.holdFrame :
+				    split->second.offeredHold ? std::optional(split->second.offeredHold->frame) : std::nullopt;
+				if (!boundary) continue;
+				heartbeat.frame = split->first; heartbeat.boundary = *boundary;
+				heartbeat.voterMask = split->second.historiesSeen;
+				for (uint8_t seat = 1; seat <= m_Config.peerCount; ++seat)
+					if (split->second.owners & SeatBit(seat)) heartbeat.members.push_back(seat);
 				break;
 			}
 			// Restored survivors can receive queued host traffic on a later local

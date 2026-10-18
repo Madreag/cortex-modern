@@ -286,6 +286,10 @@ namespace RTE {
 		const auto heard = m_PeerFrameWitnesses.find(frame);
 		const auto same = [](const PeerTailVote& a, const PeerTailVote& b) { return a.members == b.members && a.prefix == b.prefix && a.prepared == b.prepared && a.bytes == b.bytes; };
 		for (const auto& [donor, vote]: votes->second) {
+			// A remote group's tail is history, not authority to turn an active excluded owner into a private reader.
+			// Its installed standing hold (or the heal's no-continuation exchange) must establish that role first.
+			if (!m_Config.frameTieReferee && (vote.members & SeatBit(m_Config.localPeerId)) == 0 &&
+			    (m_FrameGroupMembers & SeatBit(m_Config.localPeerId)) != 0 && !m_PeerBridges.contains(m_Config.localPeerId)) continue;
 			uint32_t agreeing = 0;
 			for (const auto& [peer, other]: votes->second) if (same(other, vote)) agreeing |= SeatBit(peer) | other.confirmed;
 			// A member's witness this peer received itself confirms the record as one its donor carried does.
