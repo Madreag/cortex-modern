@@ -1503,7 +1503,7 @@ namespace RTE {
 					}
 					if (!peer.IsRunning() || imageReading[id - 1]) continue;
 					const uint64_t boundNext = world.applied + 1;
-					ObserveBoundRole(id - 1, !peer.IsLocalPrivateReaderAt(boundNext) && !peer.IsSeatUnderAI(id, boundNext) &&
+					ObserveBoundRole(id - 1, !peer.WaitsForPlacement() && !peer.IsLocalPrivateReaderAt(boundNext) && !peer.IsSeatUnderAI(id, boundNext) &&
 					    (s_FrameMembers(peer, boundNext) & (1U << (id - 1))));
 					if (splitParticipant[id - 1] && observedSplit[id - 1] && !imageNeeded[id - 1] &&
 					    (!(s_FrameMembers(peer, world.applied + 1) & (1U << (id - 1))) || peer.IsLocalPrivateReaderAt(world.applied + 1))) {
@@ -1543,7 +1543,9 @@ namespace RTE {
 						else if (!peer.PopReadyFrame(ready)) {
 							if (!waitAt[id - 1]) {
 								waitAt[id - 1] = hub.now;
-								waitPlaying[id - 1] = world.applied >= 60 && !OwnMachineTrouble(id) && !CatchingUp(peer) &&
+								// FLAGGED fixture departure: unplaced brains are at a barrier; its no-AI wait is not combat play.
+								// Raw waits remain measured, and CombatStarted restores the complete playing bound on these same peers.
+								waitPlaying[id - 1] = world.applied >= 60 && !peer.WaitsForPlacement() && !OwnMachineTrouble(id) && !CatchingUp(peer) &&
 								    !peer.IsLocalPrivateReaderAt(next) && !peer.IsSeatUnderAI(id, next) &&
 								    (s_FrameMembers(peer, next) & (1U << (id - 1)));
 							}
@@ -1964,15 +1966,14 @@ namespace RTE {
 				if (!fixture.Step(error) || !fixture.CheckBound(error)) return false;
 			return true;
 		}
-		bool CheckSplitContract(Case row, std::string& error) {
-			row.captureFrames = true; row.checkpointEveryFrames = 60;
-			Fixture fixture; fixture.parallel = true;
-			if (!fixture.Start(row, error)) return false;
+		bool CheckStartedSplitContract(Fixture& fixture, std::string& error, const std::function<bool(std::string&)>& observe = {}) {
+			const Case row = fixture.hub.row;
 			std::vector<bool> heldBeforeAnswer(row.seats), playedWhilePending(row.seats), won(row.seats), migrated(row.seats);
 			std::vector<uint64_t> heldAtFrame(row.seats), stoppedAtFrame(row.seats);
 			std::map<uint8_t, std::map<uint64_t, NetHash32>> winningHistory;
 			for (const uint64_t until = fixture.hub.faultEnd + 16000; fixture.hub.now < until;) {
 				if (!fixture.Step(error) || !fixture.CheckBound(error)) return false;
+				if (observe && !observe(error)) return false;
 				for (uint8_t seat = 1; seat <= row.seats; ++seat) {
 					const size_t index = seat - 1;
 					const auto& peer = *fixture.peers[index];
@@ -2036,6 +2037,62 @@ namespace RTE {
 			DiagnosticLine() << "[session-plane-split] authority_contract=local_hold_async_split both_halves_bound_ms=50 local_holds_before_reply=1"
 			                 << " losing_half_stopped_at_decision=1 image_return=1 winner_history_untouched=1" << fixture.RefereeEvidence() << std::endl;
 			return true;
+		}
+		bool CheckSplitContract(Case row, std::string& error) {
+			row.captureFrames = true; row.checkpointEveryFrames = 60;
+			Fixture fixture; fixture.parallel = true;
+			return fixture.Start(row, error) && CheckStartedSplitContract(fixture, error);
+		}
+		bool CheckPlacementCombatReturn(std::string& error) {
+			Case row{"placement_then_combat_image_return"}; row.seats = 3; row.subject = 1; row.gapMs = 1500;
+			row.rosterStage = 2; row.captureFrames = true; row.checkpointEveryFrames = 60;
+			Fixture fixture; fixture.parallel = true;
+			if (!fixture.Start(row, error)) return false;
+			// One continuous set of coordinators: a placement cut must neither assign any unplaced brain to AI nor replace history.
+			while (fixture.hub.now < fixture.hub.faultEnd) {
+				if (!fixture.Step(error)) return false;
+				for (const auto& peer: fixture.peers) {
+					if (!peer->WaitsForPlacement()) { error = "a peer bypassed the placement barrier"; return false; }
+					for (uint8_t seat = 1; seat <= row.seats; ++seat) if (peer->HasHeldAISeat(seat)) { error = "an unplaced brain was assigned to AI"; return false; }
+				}
+			}
+			const uint64_t resumed = std::max_element(fixture.worlds.begin(), fixture.worlds.end(), [](const World& a, const World& b) { return a.applied < b.applied; })->applied + 60;
+			const uint64_t recoverUntil = fixture.hub.now + 4000;
+			while (std::any_of(fixture.worlds.begin(), fixture.worlds.end(), [&](const World& world) { return world.applied < resumed; })) {
+				if (fixture.hub.now >= recoverUntil) { error = "placement did not recover its original history"; return false; }
+				if (!fixture.Step(error)) return false;
+			}
+			if (fixture.splitHistories || std::any_of(fixture.imageReturns.begin(), fixture.imageReturns.end(), [](uint64_t count) { return count != 0; })) {
+				error = "placement recovery manufactured a second history or image"; return false;
+			}
+			for (const auto& peer: fixture.peers) for (uint8_t seat = 1; seat <= row.seats; ++seat)
+				if (peer->HasHeldAISeat(seat)) { error = "placement recovery held an unplaced brain"; return false; }
+			NetRosterEvent event{NetRosterEventKind::CombatStarted}; event.frame = resumed;
+			auto combat = ApplyRosterEvent(fixture.agreedRoster, event);
+			if (combat.refused) { error = "placement did not enter combat: " + combat.reason; return false; }
+			fixture.agreedRoster = std::move(combat.roster);
+			for (const auto& peer: fixture.peers) if (peer->WaitsForPlacement()) { error = "combat retained the placement guard"; return false; }
+			// The completed placement fault has one equal history; the following combat cut is a new physical event.
+			fixture.sawSplit = fixture.splitHistories = false; fixture.splitFrom = {}; fixture.directRuling = 0;
+			std::fill(fixture.observedSplit.begin(), fixture.observedSplit.end(), 0);
+			std::fill(fixture.splitParticipant.begin(), fixture.splitParticipant.end(), false);
+			fixture.hub.row.gapMs = 8000; fixture.hub.row.blackout = fixture.hub.row.splitContract = true;
+			fixture.hub.faultAt = fixture.hub.now + 1000; fixture.hub.faultEnd = fixture.hub.faultAt + 8000;
+			std::vector<uint64_t> before; bool checkedPace = false;
+			const bool passed = CheckStartedSplitContract(fixture, error, [&](std::string& why) {
+				if (before.empty() && fixture.hub.now >= fixture.hub.faultAt) for (const auto& world: fixture.worlds) before.push_back(world.applied);
+				if (!checkedPace && fixture.hub.now >= fixture.hub.faultAt + 7500) {
+					checkedPace = true;
+					for (uint8_t peer: {2, 3}) if (fixture.worlds[peer - 1].applied < before[peer - 1] + 440 ||
+					    !fixture.peers[peer - 1]->IsSeatUnderAI(1, fixture.worlds[peer - 1].applied)) {
+						why = "the placement-to-combat survivors did not retain their original 440-frame progress and host hold"; return false;
+					}
+				}
+				return true;
+			});
+			if (passed && !checkedPace) { error = "the placement-to-combat progress check was not exercised"; return false; }
+			if (passed) DiagnosticLine() << "[net-lockstep-selftest] PASS placement_barrier_releases_three_peer_host_blackout_hold_and_return no_placement_ai=1 combat_progress=440 bound_ms=50 actual_image=1" << std::endl;
+			return passed;
 		}
 		bool CheckAuthorityOracle(std::string& error) {
 			Fixture fixture; fixture.hub.row.seats = 2; fixture.hub.row.internet = true;
@@ -3252,6 +3309,7 @@ namespace RTE {
 				return found == peer.m_RemoteTransports.end() ? c_InvalidNetPeerId : found->second;
 			};
 		});
+		if (arm == 10) { std::string why; const bool passed = CheckPlacementCombatReturn(why); if (!passed && error) *error = why; return passed; }
 		if (arm >= 5 && arm <= 9) {
 			// Revised direct contract: both groups play and a hostless group (including one peer) migrates, then only the healed loser image-returns.
 			Case split{"direct_migrated_split_heals"}; split.subject = arm == 5 ? 3 : arm == 9 ? 2 : 1;
@@ -4384,8 +4442,10 @@ namespace RTE {
 						maxProofBound = std::max(maxProofBound, administrative + otherKinds.size() + peer->m_PeerBridges.size());
 					}
 					std::cerr << "[session-plane-tail-capacity] seed=0 generation=" << generation << " proof_bound=" << maxProofBound << " image_handoff=" << capacityAnswered << std::endl;
-					for (uint8_t seat = 1; seat <= 4; ++seat) if (seat != former && fixture.maxWait[seat - 1] > 50 && pastBound.empty())
-						pastBound = "survivor " + std::to_string(seat) + " waited " + std::to_string(fixture.maxWait[seat - 1]) + "ms at generation " + std::to_string(generation);
+					// FLAGGED fixture departure: a former host may still be a private reader during the next administration.
+					// Retain raw waits, and use the same continuously enforced playing role and unchanged 50 ms bound here.
+					for (uint8_t seat = 1; seat <= 4; ++seat) if (seat != former && fixture.playingMaxWait[seat - 1] > 50 && pastBound.empty())
+						pastBound = "survivor " + std::to_string(seat) + " waited " + std::to_string(fixture.playingMaxWait[seat - 1]) + "ms at generation " + std::to_string(generation);
 					if (capacityAnswered) return pastBound.empty() || fail(pastBound);
 				}
 				if (fixture.hub.adminHistory.size() != 33 || maxProofBound > 32)

@@ -6086,52 +6086,9 @@ namespace RTE {
 		}
 
 		bool TestPlacementBarrierReleasesPeerBridging(std::string* error) {
-			QuorumRig r;
-			if (!StartQuorumRig(r, 3, 47380, error, true, NetTransportLane::InputUnreliable)) return false;
-			std::array<NetSeatRoster, 3> rosters;
-			for (size_t i = 0; i < rosters.size(); ++i) {
-				auto& roster = rosters[i];
-				roster.matchId = r.Peer(i + 1).GetConfig().sessionId;
-				roster.stage = NetRosterStage::Starting; roster.roundNo = 1;
-				for (uint8_t seat = 1; seat <= 3; ++seat) {
-					NetRosterSeat entry; entry.seatId = seat; entry.owner = 300 + seat; entry.ticket = 400 + seat; entry.phase = NetSeatPhase::Starting;
-					roster.seats.push_back(entry);
-				}
-				roster = ApplyRosterEvent(roster, {NetRosterEventKind::RoundStarted}).roster;
-				roster = ApplyRosterEvent(roster, {NetRosterEventKind::PlacementStarted}).roster;
-				r.Peer(i + 1).SetRosterReader([&, i] { return &rosters[i]; });
-				if (!r.Peer(i + 1).WaitsForPlacement()) { *error = "a peer bypassed the placement barrier"; return false; }
-			}
-			if (!PumpQuorumRig(r, 4000, [&] { return *std::min_element(r.simulated.begin(), r.simulated.end()) >= 60; })) { *error = "placement startup stalled:" + r.Report(); return false; }
-			r.partition->Split({1}, {2, 3});
-			(void)PumpQuorumRig(r, 1500, [] { return false; });
-			for (uint8_t peer = 1; peer <= 3; ++peer) if (r.Peer(peer).IsSeatUnderAI(1, r.Peer(peer).GetStats().nextFrame)) {
-				*error = "an unplaced host brain was assigned to the AI"; return false;
-			}
-			r.partition->cut.clear();
-			const uint64_t resumed = *std::max_element(r.simulated.begin(), r.simulated.end()) + 60;
-			if (!PumpQuorumRig(r, 4000, [&] { return *std::min_element(r.simulated.begin(), r.simulated.end()) >= resumed; })) { *error = "placement recovery stalled:" + r.Report(); return false; }
-			for (size_t i = 0; i < rosters.size(); ++i) {
-				NetRosterEvent event{NetRosterEventKind::CombatStarted}; event.frame = resumed;
-				const auto running = ApplyRosterEvent(rosters[i], event);
-				if (running.refused) { *error = "placement did not enter combat"; return false; }
-				rosters[i] = running.roster;
-			}
-			if (!PumpQuorumRig(r, 1000, [&] { return *std::min_element(r.simulated.begin(), r.simulated.end()) > resumed + 10; })) { *error = "combat boundary stalled:" + r.Report(); return false; }
-			for (uint8_t peer = 1; peer <= 3; ++peer) if (r.Peer(peer).WaitsForPlacement()) { *error = "combat retained the placement bridge guard"; return false; }
-			const auto before = r.simulated;
-			[]<class Peer>(Peer& peer, uint64_t frame) { if constexpr (requires { peer.SetPeerFrameBlackoutForTest(frame, 8000); }) peer.SetPeerFrameBlackoutForTest(frame, 8000); }(r.Peer(1), r.simulated[0]);
-			(void)PumpQuorumRig(r, 7500, [] { return false; });
-			for (uint8_t peer: {2, 3}) if (r.simulated[peer - 1] < before[peer - 1] + 440 || !r.Peer(peer).IsSeatUnderAI(1, r.simulated[peer - 1])) {
-				*error = "the three-seat combat majority waited on the host:" + r.Report(); return false;
-			}
-			(void)PumpQuorumRig(r, 10000, [] { return false; });
-			if (!QuorumFoldsAgree(r, {1, 2, 3}, error)) return false;
-			for (uint8_t peer = 1; peer <= 3; ++peer) if (r.Peer(peer).IsSeatUnderAI(1, r.simulated[peer - 1]) || r.rewinds[peer - 1] || !r.Peer(peer).IsRunning()) {
-				*error = "the host did not return to the shared combat history:" + r.Report(); return false;
-			}
-			std::cout << "[net-lockstep-selftest] PASS placement_barrier_releases_three_peer_host_blackout_hold_and_return" << std::endl;
-			return true;
+			// FLAGGED fixture departure: the same peers cross placement and combat, then heal the combat split through an actual image.
+			// The former rig had no image path. Preserve the placement no-AI barrier, combat progress, 50 ms bound and winning history.
+			return NetSessionPlaneSelfTest::CheckHostAdministration(10, error);
 		}
 
 		void KillQuorumPeer(QuorumRig& r, uint8_t peer) {
@@ -31044,6 +31001,12 @@ namespace {
 				std::string error;
 				if (!TestOwnerSilenceThreshold(4, &error)) return fail(error);
 				std::cout << "[net-lockstep-selftest] row two_internet_client_loop_3s_keepalive_host_keeps_the_bound passed" << std::endl;
+				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
+			if (std::string_view(selectedCase) == "placement-return") {
+				std::string error;
+				if (!TestPlacementBarrierReleasesPeerBridging(&error)) return fail(error);
 				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
