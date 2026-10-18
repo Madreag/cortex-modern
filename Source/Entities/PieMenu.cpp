@@ -440,6 +440,7 @@ int PieMenu::ReadProperty(const std::string_view& propName, Reader& reader) {
 		if (!LoadRuntimeCheckpoint(m_PersistedRuntime, true)) reader.ReportError("invalid PieMenu runtime checkpoint");
 	});
 	MatchProperty("SpecialBehaviour_Rotation", { reader >> m_Rotation; });
+	MatchProperty("SpecialBehaviour_CompleteTree", { m_PersistedCompleteTree = base64_decode(reader.ReadPropValue()); });
 
 	MatchProperty("IconSeparatorMode", {
 		std::string iconSeparatorModeString = reader.ReadPropValue();
@@ -590,6 +591,17 @@ std::string PieMenu::SaveCompleteCheckpoint() const {
 		return value.Text();
 	}));
 	return writer.Text();
+}
+
+void PieMenu::SaveCompleteTreeProperty(Writer& writer) const {
+	writer.NewPropertyWithValue("SpecialBehaviour_CompleteTree", CheckpointWriter::Native([this] { return SaveCompleteCheckpoint(); }).Base64(true));
+}
+
+void PieMenu::RestorePersistedCompleteTree() {
+	if (m_PersistedCompleteTree.empty()) return;
+	const std::string text = m_PersistedCompleteTree.Value();
+	CheckpointString().swap(m_PersistedCompleteTree);
+	if (!LoadCompleteCheckpoint(text)) throw std::runtime_error("could not restore a script-owned pie menu");
 }
 
 bool PieMenu::LoadCompleteCheckpoint(std::string_view text) {

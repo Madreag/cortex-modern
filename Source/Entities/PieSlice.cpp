@@ -152,6 +152,11 @@ int PieSlice::ReadProperty(const std::string_view& propName, Reader& reader) {
 	});
 	MatchProperty("CanBeMiddleSlice", { reader >> m_CanBeMiddleSlice; });
 	MatchProperty("Enabled", { reader >> m_Enabled; });
+	MatchProperty("SpecialBehaviour_CompleteSubTree", {
+		const std::string tree = base64_decode(reader.ReadPropValue());
+		if (!m_SubPieMenu) reader.ReportError("a saved pie slice tree has no submenu");
+		else m_SubPieMenu->m_PersistedCompleteTree = tree;
+	});
 	MatchProperty("Icon", { SetIcon(dynamic_cast<Icon*>(g_PresetMan.ReadReflectedPreset(reader))); });
 	MatchProperty("ScriptPath", {
 		std::string scriptPath;

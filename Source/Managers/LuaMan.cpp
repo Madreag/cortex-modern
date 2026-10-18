@@ -7137,6 +7137,14 @@ static Serializable* ScriptGraphSerializable(luabind::detail::object_rep* rep) {
 	return nullptr;
 }
 
+// A script-owned pie menu, or the submenu of a script-owned slice, saves its complete tree beside its text.
+static void SaveScriptOwnedPieTree(Writer& writer, const Serializable* object) {
+	if (const auto* menu = dynamic_cast<const PieMenu*>(object)) menu->SaveCompleteTreeProperty(writer);
+	else if (const auto* slice = dynamic_cast<const PieSlice*>(object); slice && slice->GetSubPieMenu()) {
+		writer.NewPropertyWithValue("SpecialBehaviour_CompleteSubTree", CheckpointWriter::Native([slice] { return slice->GetSubPieMenu()->SaveCompleteCheckpoint(); }).Base64(true));
+	}
+}
+
 static int ScriptGraphNativeSave(lua_State* L) {
 	const auto* native = luabind::detail::is_class_object(L, 1);
 	if (native && native->crep() && ClassDerivesFrom(native->crep(), "GraphicalPrimitive")) {
@@ -7172,7 +7180,7 @@ static int ScriptGraphNativeSave(lua_State* L) {
 						if (const auto* mo = dynamic_cast<const MovableObject*>(owned)) Scene::SaveSceneObject(writer, mo, false, true);
 						else {
 							if (const auto* area = dynamic_cast<const Scene::Area*>(owned)) area->SaveSnapshot(writer);
-							else owned->Save(writer);
+							else { owned->Save(writer); SaveScriptOwnedPieTree(writer, owned); }
 							writer.ObjectEnd();
 						}
 					});
@@ -7184,7 +7192,7 @@ static int ScriptGraphNativeSave(lua_State* L) {
 				if (const MovableObject* mo = dynamic_cast<const MovableObject*>(object)) Scene::SaveSceneObject(writer, mo, false, true);
 				else {
 					if (const Scene::Area* area = dynamic_cast<const Scene::Area*>(object)) area->SaveSnapshot(writer);
-					else object->Save(writer);
+					else { object->Save(writer); SaveScriptOwnedPieTree(writer, object); }
 					writer.ObjectEnd();
 				}
 			}));
@@ -7203,6 +7211,7 @@ static int ScriptGraphNativeSave(lua_State* L) {
 			area->SaveSnapshot(writer);
 		} else {
 			object->Save(writer);
+			SaveScriptOwnedPieTree(writer, object);
 		}
 		writer.ObjectEnd();
 	}
@@ -7520,8 +7529,13 @@ static void RestoreCopiedActorMenus(MovableObject* object) {
 
 static int ScriptGraphNativeMenus(lua_State* L) {
 	try {
-		if (auto* object = dynamic_cast<MovableObject*>(ScriptGraphSerializable(luabind::detail::is_class_object(L, 1)))) {
+		Serializable* native = ScriptGraphSerializable(luabind::detail::is_class_object(L, 1));
+		if (auto* object = dynamic_cast<MovableObject*>(native)) {
 			RestoreCopiedActorMenus(object);
+		} else if (auto* menu = dynamic_cast<PieMenu*>(native)) {
+			menu->RestorePersistedCompleteTree();
+		} else if (auto* slice = dynamic_cast<PieSlice*>(native); slice && slice->GetSubPieMenu()) {
+			slice->GetSubPieMenu()->RestorePersistedCompleteTree();
 		}
 		lua_pushboolean(L, true);
 		return 1;
