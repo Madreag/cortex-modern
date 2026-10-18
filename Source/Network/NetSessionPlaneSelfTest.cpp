@@ -2092,7 +2092,11 @@ namespace RTE {
 				}
 				if (proposed && !agreed) {
 					agreed = fixture.peers[proposer - 1]->HasAgreedSeatReclaim(seat, activation);
-					for (uint8_t peer: survivors) agreed &= fixture.peers[peer - 1]->HasAgreedSeatReclaim(seat, activation);
+					// FLAGGED fixture departure: an intervening hold changes the activation's actual electorate.
+					const uint32_t playing = s_FrameMembers(*fixture.peers[proposer - 1], activation);
+					for (uint8_t peer = 1; peer <= seats; ++peer)
+						if (peer != seat && (playing & (1U << (peer - 1))) && !fixture.peers[proposer - 1]->IsSeatReclaimGap(peer, activation))
+							agreed &= fixture.peers[peer - 1]->HasAgreedSeatReclaim(seat, activation);
 					if (agreed) {
 						join.MarkActivationProposed(12);
 						fixture.peers[donor - 1]->NoteReturnerCatchingUp(seat, fixture.hub.now);
@@ -2130,7 +2134,8 @@ namespace RTE {
 			(void)fixture.peers[donor - 1]->SendReturnerTheRoundFrom(seat, activation);
 			for (const uint64_t until = fixture.hub.now + 1000; fixture.hub.now <= until;) if (!fixture.Step(error) || !fixture.CheckBound(error)) return false;
 			for (uint8_t peer: survivors) {
-				if (!fixture.peers[peer - 1]->IsRunning() || fixture.peers[peer - 1]->HasHeldAISeat(seat) || Bridges(*fixture.peers[peer - 1]).contains(seat))
+				const bool playing = (s_FrameMembers(*fixture.peers[donor - 1], activation) & (1U << (peer - 1))) != 0;
+				if (playing && (!fixture.peers[peer - 1]->IsRunning() || fixture.peers[peer - 1]->HasHeldAISeat(seat) || Bridges(*fixture.peers[peer - 1]).contains(seat)))
 					return fail("the image return was held again after its certified activation: observer=" + std::to_string(peer) +
 					            " returner_state=" + std::to_string(static_cast<int>(fixture.peers[seat - 1]->GetState())) +
 					            " starts_received=" + std::to_string(fixture.peers[seat - 1]->GetStats().startPacketsReceived));
