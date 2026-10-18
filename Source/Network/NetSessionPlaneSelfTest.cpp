@@ -1733,7 +1733,6 @@ namespace RTE {
 				if (floor != UINT64_MAX) hub.inputEvidence.erase(hub.inputEvidence.begin(), hub.inputEvidence.upper_bound(floor));
 				return true;
 			}
-			bool keepFrames = false; //!< A scheduled round alone keeps every committed frame, to name the inputs where histories part.
 			// The round is under way once every seat has displayed its first second; waits before that are the start's, not a hold's.
 			uint64_t settledAt = 0, startupWaitMs = 0, roundStartMs = 0;
 			std::vector<std::pair<uint64_t, uint64_t>> startups; //!< Each round's start, to the moment every seat displayed its first second.
@@ -3314,7 +3313,8 @@ namespace RTE {
 		// Nonsplit holds retain the existing own-cause, catch-up deadline, single-return and no-rehold properties.
 		std::optional<Finding> RunSchedule(const Schedule& schedule, Fixture& fixture) {
 			Case row{"random_hold_schedule"};
-			row.seats = schedule.seats; row.internet = schedule.internet; row.directoryExchangeMs = schedule.directoryExchangeMs; row.captureFrames = fixture.keepFrames;
+			// FLAGGED: any scheduled hold can require an image, including loss or slowdown.
+			row.seats = schedule.seats; row.internet = schedule.internet; row.directoryExchangeMs = schedule.directoryExchangeMs; row.captureFrames = true;
 			auto& hub = fixture.hub;
 			hub.schedule = &schedule; hub.random ^= schedule.seed * 0xD1B54A32D192ED03ULL;
 			std::string error;
@@ -5224,7 +5224,7 @@ namespace RTE {
 			if (std::string_view(text).starts_with("seed:")) schedule = GenerateSchedule(std::strtoull(text + 5, nullptr, 10));
 			else if (!ParseSchedule(text, schedule)) { DiagnosticLine() << "[net-session-plane-selftest] FAIL CC_TEST_HOLD_SCHEDULE does not parse"; return 1; }
 			if (!schedule.endMs) schedule.endMs = ScheduleEndMs(schedule);
-			Fixture fixture; fixture.keepFrames = true; const auto finding = RunSchedule(schedule, fixture);
+			Fixture fixture; const auto finding = RunSchedule(schedule, fixture);
 			DiagnosticLine() << "[net-session-plane-selftest] schedule " << FormatSchedule(schedule);
 			DiagnosticLine() << "[net-session-plane-selftest] " << (finding ? "FAIL " : "PASS ") << NameSchedule(schedule) << " seed=" << schedule.seed
 			                 << (finding ? " property=" + finding->property + " kind=" + finding->kind + ": " + finding->detail : "") << fixture.RefereeEvidence();
