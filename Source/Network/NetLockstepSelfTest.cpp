@@ -985,6 +985,70 @@ namespace RTE {
 		static bool ReturnKeepsOtherSeatHeld(std::string* error) { return ReturnMembershipCases(error, false); }
 		static bool ReturnStartAdmission(std::string* error) { return ReturnMembershipCases(error, true); }
 
+		static bool WaitingMeshPublishesOwnStart(std::string* error) {
+			Wire hostRoute; NetLockstepCoordinator peer; Configure(peer, hostRoute);
+			peer.m_Config.localPeerId = 3; peer.m_Config.authorityPeerId = 1;
+			peer.m_Config.peerFrameGroups = peer.m_Config.joinsRunningRound = peer.m_Config.continuesMatch = true;
+			peer.m_Config.startFrame = 1162; peer.m_Config.inputDelayFrames = 7;
+			peer.m_Config.peerInputDelayFrames = {{1, 7}, {2, 7}, {3, 7}};
+			peer.m_PeerAdmissions[3] = {1162, 7};
+			peer.m_RemotePeerIds = {1, 2}; peer.m_RemoteTransports = {{1, 41}};
+			peer.m_MigrationPhase = NetHostMigrationPhase::None;
+			peer.m_State = NetLockstepState::WaitingForStart; peer.m_Stats.nextFrame = 1162;
+			peer.m_FrameGroupMembers = 7; peer.m_FrameGroupChanges = {{1, 7}};
+			auto memberRoute = std::make_unique<Wire>(); Wire* const member = memberRoute.get();
+			peer.m_MigrationListener = std::move(memberRoute); peer.m_PeerListenerBindings[42] = 2;
+			if (!peer.SendStart(error) || !peer.HasPeerFrameRoute(2)) return false;
+			bool published = false;
+			for (const auto& bytes: member->sent) {
+				NetHostMigrationMessage authenticated;
+				if (!NetHostMigrationCodec::Decode(bytes, peer.m_Config.migrationKey, authenticated) ||
+				    authenticated.type != NetHostMigrationMessageType::PeerControl || authenticated.senderPeerId != 3) continue;
+				const auto decoded = NetLockstepCodec::Decode(authenticated.bytes, ControllerFrame::c_Version);
+				if (!decoded.ok) continue;
+				const auto* start = std::get_if<NetLockstepStart>(&decoded.packet.payload);
+				published |= start && start->localPeerId == 3 && start->roundId == 77 && start->startFrame == 1162 && start->inputDelayFrames == 7;
+			}
+			if (!published || peer.IsRunning()) { *error = "a waiting image return never published its own retained start to the authenticated non-host member route"; return false; }
+			return true;
+		}
+
+		static bool StoppedContinuationHasNoStartHandshake(std::string* error) {
+			for (bool stopped: {true, false}) {
+				Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
+				peer.m_Config.peerFrameGroups = true; peer.m_Config.authorityPeerId = 1;
+				peer.m_MigrationPhase = NetHostMigrationPhase::None;
+				peer.m_Config.inputDelayFrames = 7;
+				peer.m_Stats.nextFrame = 358; peer.m_LastCompletedSimulationTick = 357;
+				peer.m_State = stopped ? NetLockstepState::Stopped : NetLockstepState::Running;
+				peer.m_LocalSeatHeld = stopped; peer.m_LocalHoldFrame = 358;
+				const std::string decision = "PeerHeld:the directory selected the other split; returning through a private image";
+				peer.m_Stats.timeoutReason = stopped ? decision : "";
+				NetLockstepStart start;
+				start.sessionId = peer.m_Config.sessionId; start.roundId = 77; start.localPeerId = 3;
+				start.startFrame = 1034; start.inputDelayFrames = 7; start.peerCount = 3;
+				start.controllerFrameVersion = ControllerFrame::c_Version; start.controllerFrameEncodedSize = ControllerFrame::c_EncodedSize;
+				start.scenario = peer.m_Config.scenario; start.ownershipPolicy = peer.m_Config.ownershipPolicy;
+				auto message = peer.PeerFrameMessage(NetHostMigrationMessageType::PeerControl);
+				message.senderPeerId = 3;
+				if (!NetLockstepCodec::Encode({start}, message.bytes)) return false;
+				message.totalBytes = message.bytes.size();
+				std::vector<uint8_t> signedMessage; NetHostMigrationMessage authenticated;
+				if (!NetHostMigrationCodec::Encode(message, peer.m_Config.migrationKey, signedMessage) ||
+				    !NetHostMigrationCodec::Decode(signedMessage, peer.m_Config.migrationKey, authenticated) ||
+				    !peer.HandlePeerFrameMessage(authenticated, 16550)) return false;
+				if (stopped) {
+					if (!peer.IsStopped() || peer.m_Stats.timeoutReason != decision || peer.m_Stats.nextFrame != 358 ||
+					    peer.m_RemoteStartsReceived.contains(3) || peer.m_PeerAdmissions.contains(3) || !wire.sent.empty()) {
+						*error = "a winning member's return start changed the losing continuation's decision stop"; return false;
+					}
+				} else if (peer.GetState() != NetLockstepState::Failed || !peer.m_Stats.timeoutReason.starts_with("ProtocolError:lockstep start mismatch")) {
+					*error = "a live continuation accepted uncertified member start terms"; return false;
+				}
+			}
+			return true;
+		}
+
 		static bool ReturnMemberStarts(std::string* error) {
 			Wire wire; NetLockstepCoordinator peer;
 			Configure(peer, wire);
@@ -30923,6 +30987,18 @@ namespace {
 		};
 		static const char* selectedCase = std::getenv("CC_TEST_LOCKSTEP_SELFTEST_CASE");
 		if (selectedCase) {
+			if (std::string_view(selectedCase) == "stopped-start-handshake") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::StoppedContinuationHasNoStartHandshake(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS stopped_continuation_has_no_start_handshake\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
+			if (std::string_view(selectedCase) == "waiting-mesh-start") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::WaitingMeshPublishesOwnStart(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS waiting_mesh_publishes_its_own_start\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "foreign-history-scope") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::ForeignHistoryKeepsAnActiveContinuation(&error)) return fail(error);
@@ -31264,6 +31340,8 @@ namespace {
 		row(&SessionPlaneRecoveryTest::FutureRemovalKeepsPastAuthority, "a_future_removal_keeps_the_past_directory_decision");
 		row(&SessionPlaneRecoveryTest::ReturnStartAdmission, "a_return_start_uses_its_certified_admission");
 		row(&SessionPlaneRecoveryTest::ReturnMemberStarts, "a_return_keeps_each_authenticated_members_start");
+		row(&SessionPlaneRecoveryTest::WaitingMeshPublishesOwnStart, "waiting_mesh_publishes_its_own_start");
+		row(&SessionPlaneRecoveryTest::StoppedContinuationHasNoStartHandshake, "stopped_continuation_has_no_start_handshake");
 		row(&SessionPlaneRecoveryTest::RemovalNoticeRetries, "a_roster_removal_keeps_its_frame_after_a_cut");
 		row(&SessionPlaneRecoveryTest::FutureDepartureKeepsFramePrefix, "a_future_removal_does_not_rewrite_an_earlier_frame_prefix");
 		row(&SessionPlaneRecoveryTest::DeferredReturnKeepsItsFirstVote, "a_deferred_return_cannot_sign_a_second_activation");

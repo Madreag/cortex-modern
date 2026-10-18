@@ -798,6 +798,13 @@ namespace RTE {
 					}
 				}
 				if (hub.row.receiptGap && NetHostMigrationCodec::Decode(bytes, key, decision) && RemoveReceiptGap(decision, delivered)) return true;
+				if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS") && peekInto(decision) && decision.type == NetHostMigrationMessageType::PeerControl) {
+					const auto decoded = NetLockstepCodec::Decode(decision.bytes, ControllerFrame::c_Version);
+					if (decoded.ok) if (const auto* start = std::get_if<NetLockstepStart>(&decoded.packet.payload))
+						DiagnosticLine() << "[session-plane-start-send] transport_owner=" << unsigned(owner) << " to=" << unsigned(other->owner)
+						    << " wrapper_sender=" << unsigned(decision.senderPeerId) << " member=" << unsigned(start->localPeerId)
+						    << " frame=" << start->startFrame << " delay=" << start->inputDelayFrames << " now_ms=" << hub.now << std::endl;
+				}
 				if (hub.row.lateReceiptsFrom == owner && hub.DuringFault() && peekInto(decision) &&
 				    decision.type == NetHostMigrationMessageType::PeerReceipt) sessionDelay = hub.row.lateReceiptsMs;
 				if (hub.row.tailWaitForDirectory && hub.DuringFault() && other->owner == hub.row.subject && peekInto(decision) &&

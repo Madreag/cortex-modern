@@ -1,0 +1,426 @@
+{
+  "topology": "single-box",
+  "proof": false,
+  "complete_gate": false,
+  "parent": "e337e9987ef27d095a07baac7816037af7f70107",
+  "launches": [
+    {
+      "collection": "member-start-diagnostic",
+      "case": "refereed_2_2_split_then_a_second_drop_in_the_same_hold_over_100ms",
+      "exe_sha256": "17a13e7d6980e738aee20b46aa29077871c7589b76059cbbd3d3e5befe84665a",
+      "visible_window": true,
+      "exit_code": 1,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "member-start-diagnostic--refereed_2_2_split_then_a_second_drop_in_the_same_hold_over_100ms--stdout.log.gz",
+          "original_sha256": "074382b93ded9a7e624b7f6e28bf19a73cdf805bb5413c350b23e45271158df4",
+          "portable_sha256": "074382b93ded9a7e624b7f6e28bf19a73cdf805bb5413c350b23e45271158df4",
+          "compressed_sha256": "37e9668bccb4f06de67bd64ead2ea0b8bd1a0509c8128b014472e998f80f8a98"
+        },
+        {
+          "path": "member-start-diagnostic--refereed_2_2_split_then_a_second_drop_in_the_same_hold_over_100ms--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "waiting-mesh-start-red",
+      "case": "return-member-starts",
+      "exe_sha256": "5a9d97253249a91684975a9d6fe127486a296754a416386f389d210a13af6afb",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "waiting-mesh-start-red--return-member-starts--stdout.log.gz",
+          "original_sha256": "21ec548e7e2ef82083791e7472913347d8b3b756a1c01d000cd6617391e63047",
+          "portable_sha256": "21ec548e7e2ef82083791e7472913347d8b3b756a1c01d000cd6617391e63047",
+          "compressed_sha256": "dfa9d9d4afff7e49fc307f1e0691baa70ef5d8a076f91a63f1d34b70f50ec855"
+        },
+        {
+          "path": "waiting-mesh-start-red--return-member-starts--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "waiting-mesh-start-red",
+      "case": "waiting-mesh-start",
+      "exe_sha256": "5a9d97253249a91684975a9d6fe127486a296754a416386f389d210a13af6afb",
+      "visible_window": true,
+      "exit_code": 1,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "waiting-mesh-start-red--waiting-mesh-start--stdout.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        },
+        {
+          "path": "waiting-mesh-start-red--waiting-mesh-start--stderr.log.gz",
+          "original_sha256": "6a4a9a6d644f575c3b232d5ce452da4a028008a6e248e117aab5b8d1cedf9c01",
+          "portable_sha256": "6a4a9a6d644f575c3b232d5ce452da4a028008a6e248e117aab5b8d1cedf9c01",
+          "compressed_sha256": "394a243fe812a74a24e72d788ac91751c153d33906d468e47d1a66870bd4c048"
+        }
+      ]
+    },
+    {
+      "collection": "waiting-mesh-start-green",
+      "case": "direct-hold-scope",
+      "exe_sha256": "e1233233f2bfb61eba163f54b0f4126f34e1df6ba46aecae6ee1862b9bd693b8",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "waiting-mesh-start-green--direct-hold-scope--stdout.log.gz",
+          "original_sha256": "1ebb57ed8c7dd1dc3bfcb6aa4ec4ccebaad89f57a279666356c951ecba5eef5c",
+          "portable_sha256": "1ebb57ed8c7dd1dc3bfcb6aa4ec4ccebaad89f57a279666356c951ecba5eef5c",
+          "compressed_sha256": "0a6e55f744d76628bdf149e59b892e7afe4ae0ad5515b545584b6389594952c3"
+        },
+        {
+          "path": "waiting-mesh-start-green--direct-hold-scope--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "waiting-mesh-start-green",
+      "case": "foreign-history-scope",
+      "exe_sha256": "e1233233f2bfb61eba163f54b0f4126f34e1df6ba46aecae6ee1862b9bd693b8",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "waiting-mesh-start-green--foreign-history-scope--stdout.log.gz",
+          "original_sha256": "8bf4169d7c3e777e6f81550f0a9ea5b7310443fbce606cb82a4dc691ff7e281e",
+          "portable_sha256": "8bf4169d7c3e777e6f81550f0a9ea5b7310443fbce606cb82a4dc691ff7e281e",
+          "compressed_sha256": "cfb28b030354764c7efd17174a502b556f211dc19ce34e610591ada82271115d"
+        },
+        {
+          "path": "waiting-mesh-start-green--foreign-history-scope--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "waiting-mesh-start-green",
+      "case": "return-member-starts",
+      "exe_sha256": "e1233233f2bfb61eba163f54b0f4126f34e1df6ba46aecae6ee1862b9bd693b8",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "waiting-mesh-start-green--return-member-starts--stdout.log.gz",
+          "original_sha256": "21ec548e7e2ef82083791e7472913347d8b3b756a1c01d000cd6617391e63047",
+          "portable_sha256": "21ec548e7e2ef82083791e7472913347d8b3b756a1c01d000cd6617391e63047",
+          "compressed_sha256": "dfa9d9d4afff7e49fc307f1e0691baa70ef5d8a076f91a63f1d34b70f50ec855"
+        },
+        {
+          "path": "waiting-mesh-start-green--return-member-starts--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "waiting-mesh-start-green",
+      "case": "waiting-mesh-start",
+      "exe_sha256": "e1233233f2bfb61eba163f54b0f4126f34e1df6ba46aecae6ee1862b9bd693b8",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "waiting-mesh-start-green--waiting-mesh-start--stdout.log.gz",
+          "original_sha256": "6d4ce7cb22c1c90328495db24beece5556f23eab386359d4cf831592d023910b",
+          "portable_sha256": "6d4ce7cb22c1c90328495db24beece5556f23eab386359d4cf831592d023910b",
+          "compressed_sha256": "24aea3343c1c6f5ef160a426491729e20c2e21f1607e2083c475e8947aa87dc7"
+        },
+        {
+          "path": "waiting-mesh-start-green--waiting-mesh-start--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "waiting-mesh-start-returns",
+      "case": "a_healed_tie_keeps_one_history_across_a_host_change",
+      "exe_sha256": "e1233233f2bfb61eba163f54b0f4126f34e1df6ba46aecae6ee1862b9bd693b8",
+      "visible_window": true,
+      "exit_code": 1,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "waiting-mesh-start-returns--a_healed_tie_keeps_one_history_across_a_host_change--stdout.log.gz",
+          "original_sha256": "9f76abde9b83a5472f97cf308d40352330a9041432dc2b3b2a9acc32d70ee4c4",
+          "portable_sha256": "9f76abde9b83a5472f97cf308d40352330a9041432dc2b3b2a9acc32d70ee4c4",
+          "compressed_sha256": "a14c0352de5b32a8dd048de2a46fdad3b7c14cc68b2046d33eb9de43249da9c8"
+        },
+        {
+          "path": "waiting-mesh-start-returns--a_healed_tie_keeps_one_history_across_a_host_change--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "waiting-mesh-start-returns",
+      "case": "refereed_2_2_split_then_a_second_drop_in_the_same_hold_over_100ms",
+      "exe_sha256": "e1233233f2bfb61eba163f54b0f4126f34e1df6ba46aecae6ee1862b9bd693b8",
+      "visible_window": true,
+      "exit_code": 1,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "waiting-mesh-start-returns--refereed_2_2_split_then_a_second_drop_in_the_same_hold_over_100ms--stdout.log.gz",
+          "original_sha256": "b8870e74868c3480267e609c6a8a4185eb0c7a3b9d83ecbcd33630c5bfbfb627",
+          "portable_sha256": "b8870e74868c3480267e609c6a8a4185eb0c7a3b9d83ecbcd33630c5bfbfb627",
+          "compressed_sha256": "d34f3e67c4dc6776746961349d3629b5f3711814568af78b2ffe639142610760"
+        },
+        {
+          "path": "waiting-mesh-start-returns--refereed_2_2_split_then_a_second_drop_in_the_same_hold_over_100ms--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "stopped-start-red",
+      "case": "stopped-start-handshake",
+      "exe_sha256": "a1bb49d9e26df0b272d3baec97049b2e1225eb0342c9a01a44afe7577ef23d6c",
+      "visible_window": true,
+      "exit_code": 1,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "stopped-start-red--stopped-start-handshake--stdout.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        },
+        {
+          "path": "stopped-start-red--stopped-start-handshake--stderr.log.gz",
+          "original_sha256": "dcf13eb2f3656099c5ac4b56f3160cf2619f493865100beaa2f51c7928e6c5d4",
+          "portable_sha256": "dcf13eb2f3656099c5ac4b56f3160cf2619f493865100beaa2f51c7928e6c5d4",
+          "compressed_sha256": "0d0d8c478dcc643f42f56c8835ebbf7fbf06195c69f93834c05dcbaae659adce"
+        }
+      ]
+    },
+    {
+      "collection": "stopped-start-green",
+      "case": "direct-hold-scope",
+      "exe_sha256": "6344089dedec1eb2106fb317cd92c8487c8ee1d053bf19327b5cf962b584723b",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "stopped-start-green--direct-hold-scope--stdout.log.gz",
+          "original_sha256": "1ebb57ed8c7dd1dc3bfcb6aa4ec4ccebaad89f57a279666356c951ecba5eef5c",
+          "portable_sha256": "1ebb57ed8c7dd1dc3bfcb6aa4ec4ccebaad89f57a279666356c951ecba5eef5c",
+          "compressed_sha256": "0a6e55f744d76628bdf149e59b892e7afe4ae0ad5515b545584b6389594952c3"
+        },
+        {
+          "path": "stopped-start-green--direct-hold-scope--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "stopped-start-green",
+      "case": "foreign-history-scope",
+      "exe_sha256": "6344089dedec1eb2106fb317cd92c8487c8ee1d053bf19327b5cf962b584723b",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "stopped-start-green--foreign-history-scope--stdout.log.gz",
+          "original_sha256": "8bf4169d7c3e777e6f81550f0a9ea5b7310443fbce606cb82a4dc691ff7e281e",
+          "portable_sha256": "8bf4169d7c3e777e6f81550f0a9ea5b7310443fbce606cb82a4dc691ff7e281e",
+          "compressed_sha256": "cfb28b030354764c7efd17174a502b556f211dc19ce34e610591ada82271115d"
+        },
+        {
+          "path": "stopped-start-green--foreign-history-scope--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "stopped-start-green",
+      "case": "return-member-starts",
+      "exe_sha256": "6344089dedec1eb2106fb317cd92c8487c8ee1d053bf19327b5cf962b584723b",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "stopped-start-green--return-member-starts--stdout.log.gz",
+          "original_sha256": "21ec548e7e2ef82083791e7472913347d8b3b756a1c01d000cd6617391e63047",
+          "portable_sha256": "21ec548e7e2ef82083791e7472913347d8b3b756a1c01d000cd6617391e63047",
+          "compressed_sha256": "dfa9d9d4afff7e49fc307f1e0691baa70ef5d8a076f91a63f1d34b70f50ec855"
+        },
+        {
+          "path": "stopped-start-green--return-member-starts--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "stopped-start-green",
+      "case": "stopped-start-handshake",
+      "exe_sha256": "6344089dedec1eb2106fb317cd92c8487c8ee1d053bf19327b5cf962b584723b",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "stopped-start-green--stopped-start-handshake--stdout.log.gz",
+          "original_sha256": "92f8688ccd8918311c77f0de41006ac6b1bfcedae5bff627c4ba328267f98230",
+          "portable_sha256": "92f8688ccd8918311c77f0de41006ac6b1bfcedae5bff627c4ba328267f98230",
+          "compressed_sha256": "0ba487550ff9511c7b69c5321b87f89cc096e9202be63ee95111b68cd9a07c70"
+        },
+        {
+          "path": "stopped-start-green--stopped-start-handshake--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "stopped-start-green",
+      "case": "waiting-mesh-start",
+      "exe_sha256": "6344089dedec1eb2106fb317cd92c8487c8ee1d053bf19327b5cf962b584723b",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "stopped-start-green--waiting-mesh-start--stdout.log.gz",
+          "original_sha256": "6d4ce7cb22c1c90328495db24beece5556f23eab386359d4cf831592d023910b",
+          "portable_sha256": "6d4ce7cb22c1c90328495db24beece5556f23eab386359d4cf831592d023910b",
+          "compressed_sha256": "24aea3343c1c6f5ef160a426491729e20c2e21f1607e2083c475e8947aa87dc7"
+        },
+        {
+          "path": "stopped-start-green--waiting-mesh-start--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "stopped-start-returns",
+      "case": "a_healed_tie_keeps_one_history_across_a_host_change",
+      "exe_sha256": "6344089dedec1eb2106fb317cd92c8487c8ee1d053bf19327b5cf962b584723b",
+      "visible_window": true,
+      "exit_code": 1,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "stopped-start-returns--a_healed_tie_keeps_one_history_across_a_host_change--stdout.log.gz",
+          "original_sha256": "f766bc37130c304bf2006970f12d38b0e5e229650a64b93b57dd83b4cb7d4012",
+          "portable_sha256": "f766bc37130c304bf2006970f12d38b0e5e229650a64b93b57dd83b4cb7d4012",
+          "compressed_sha256": "c058e42b01e5ba0810dcfd7e50a5f0ce29646e07e7a3eb7fe9f1ae4a2dd1cc5b"
+        },
+        {
+          "path": "stopped-start-returns--a_healed_tie_keeps_one_history_across_a_host_change--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "stopped-start-returns",
+      "case": "refereed_2_2_split_then_a_second_drop_in_the_same_hold_over_100ms",
+      "exe_sha256": "6344089dedec1eb2106fb317cd92c8487c8ee1d053bf19327b5cf962b584723b",
+      "visible_window": true,
+      "exit_code": 1,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "stopped-start-returns--refereed_2_2_split_then_a_second_drop_in_the_same_hold_over_100ms--stdout.log.gz",
+          "original_sha256": "3fd55c5b9a9a877b4320713427f531bdb83f415da4562161d7585fcd5e3b418c",
+          "portable_sha256": "3fd55c5b9a9a877b4320713427f531bdb83f415da4562161d7585fcd5e3b418c",
+          "compressed_sha256": "14addcc48e7ad5f66ab10d41e290d50cf770d422a8b3373699cd199be88243bc"
+        },
+        {
+          "path": "stopped-start-returns--refereed_2_2_split_then_a_second_drop_in_the_same_hold_over_100ms--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "mesh-handshake-native",
+      "case": "net-lockstep-selftest",
+      "exe_sha256": "6344089dedec1eb2106fb317cd92c8487c8ee1d053bf19327b5cf962b584723b",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "mesh-handshake-native--net-lockstep-selftest--stdout.log.gz",
+          "original_sha256": "fa6f26f42f7537131690f472085291b344f0d75d1917a9ef0ce24cc211f74ba0",
+          "portable_sha256": "fa6f26f42f7537131690f472085291b344f0d75d1917a9ef0ce24cc211f74ba0",
+          "compressed_sha256": "a850428b3890e243563f34248ea588c11609bd54ecb8a0618426d1a423b7884e"
+        },
+        {
+          "path": "mesh-handshake-native--net-lockstep-selftest--stderr.log.gz",
+          "original_sha256": "bfdc29fdfcf5b37842f01c5f7984efc1e426e23802e96de04ab4862ddf5fc6b1",
+          "portable_sha256": "bfdc29fdfcf5b37842f01c5f7984efc1e426e23802e96de04ab4862ddf5fc6b1",
+          "compressed_sha256": "6c817c1615e7669051461a53cbf38cffb663b4a0cf0b5e6f350c95fd3d247506"
+        }
+      ]
+    },
+    {
+      "collection": "mesh-handshake-native",
+      "case": "net-world-join-selftest",
+      "exe_sha256": "6344089dedec1eb2106fb317cd92c8487c8ee1d053bf19327b5cf962b584723b",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "mesh-handshake-native--net-world-join-selftest--stdout.log.gz",
+          "original_sha256": "0486afbc3caee4a9d2fa161343674a44d3a7e0ae835a4e4e251e453be5fe5503",
+          "portable_sha256": "0486afbc3caee4a9d2fa161343674a44d3a7e0ae835a4e4e251e453be5fe5503",
+          "compressed_sha256": "83977323d919e54ed5de3288d73d7aed35213de8f1d5b8577f79acf9b65adbaf"
+        },
+        {
+          "path": "mesh-handshake-native--net-world-join-selftest--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    }
+  ]
+}

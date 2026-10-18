@@ -11266,7 +11266,9 @@ namespace RTE {
 		auto bytesFor = [&](uint8_t peerId) -> const std::vector<uint8_t>& {
 			return windowed && FrameWindowAgreedFor(peerId) ? windowBytes : classicBytes;
 		};
-		if (UsesPeerFrameGroups() && IsRunning()) {
+		// A waiting mesh must publish its own controls to every member too. Requiring Running here makes a returner's
+		// start wait on the members that cannot see that start; a host's forwarded identity cannot replace its signature.
+		if (UsesPeerFrameGroups() && (IsRunning() || (!frame && m_State == NetLockstepState::WaitingForStart))) {
 			if (frame) {
 				NetLockstepFrame canonical = *frame;
 				if (outObservationsEncoded) canonical.observations.resize(std::min(canonical.observations.size(), *outObservationsEncoded));
@@ -12137,6 +12139,9 @@ namespace RTE {
 	}
 
 	void NetLockstepCoordinator::HandlePacket(const NetLockstepPacket& packet, uint64_t nowMs, NetPeerId fromTransport) {
+		// Authenticated mesh controls reach this dispatch without HandleEvent's ended-round guard. A losing
+		// continuation awaits its image; another member's new start cannot handshake or fail that old round.
+		if (m_State == NetLockstepState::Stopped || m_State == NetLockstepState::Failed) return;
 		// Only decoded traffic from a bound seat renews its silence deadline.
 		const uint8_t sender = std::visit(Overloaded{
 			[](const NetLockstepStart& start) { return start.localPeerId; },
