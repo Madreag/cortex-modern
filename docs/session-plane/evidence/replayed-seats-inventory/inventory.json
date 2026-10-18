@@ -1,0 +1,214 @@
+{
+  "exe_sha256": "0ab747001e75d1a82a33c22a97f0179b56a0a2627c6ad4f27577a797a37b524b",
+  "repo": "<REPO>",
+  "passed": 8,
+  "total": 10,
+  "quiet_rows": [],
+  "sanitizer": null,
+  "complete": true,
+  "running": null,
+  "results": {
+    "net-session-plane": {
+      "pass": false,
+      "exit_code": 1,
+      "timed_out": false,
+      "pass_lines": 0,
+      "fail_lines": [
+        "[net-session-plane-selftest] FAIL",
+        "[net-session-plane-selftest] FAIL",
+        "[net-session-plane-selftest] FAIL"
+      ],
+      "fatal": [
+        "[net-session-plane-selftest] FAIL relay_link_blackout_return: seed=0 phased relay return failed: peer=2 blackout_gap_ms=46 pre_fault_pace_lead_ms=33 return_ms=4079 post_return_wait_ms=0 returns=1",
+        "[net-session-plane-selftest] FAIL four_seats_held_joiner_at_round_rate_uses_a_different_donor_over_200ms: seed=0 histories differ at displayed frame 1694: peer 1 members=15 peer 3 members=6; authority ruling requires equal history within a half and after image return; now_ms=28690 live_split=0 separated_frame=0 authors=1/3 ai=none/1,4",
+        "[net-session-plane-selftest] FAIL held_seat_return_meets_a_silent_voter: seed=0 authority ruling image return: the image return was held again during its healthy observation"
+      ],
+      "reason": "exit_code=1",
+      "binary": "0ab747001e75d1a82a33c22a97f0179b56a0a2627c6ad4f27577a797a37b524b",
+      "fixed_failure_report": {
+        "path": "<RUN>/net-session-plane-selftest/fixed-failure-groups.txt",
+        "binary": "0ab747001e75d1a82a33c22a97f0179b56a0a2627c6ad4f27577a797a37b524b",
+        "digest": "96b75eaaf0c8d6896c99337417bd1a5fb18b95964069c8d5e0707d67d2409877",
+        "suite_root": "<RUN>",
+        "saved_cases_ran": 108
+      },
+      "row_elapsed_s": 245.25162029200874,
+      "start_load": [
+        1.5166015625,
+        2.12939453125,
+        1.943359375
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-session-plane-hold-schedules": {
+      "pass": false,
+      "exit_code": 1,
+      "timed_out": false,
+      "pass_lines": 0,
+      "fail_lines": [
+        "[net-session-plane-selftest] FAIL",
+        "[net-session-plane-selftest] FAIL",
+        "[net-session-plane-selftest] FAIL"
+      ],
+      "fatal": [
+        "[net-session-plane-selftest] FAIL random_hold_schedules shape=three_direct_seats_53ms_jitter_26ms_seat3_slow_92pc_334ms_back_at_105pc_seat2_slow_83pc_5325ms_back_at_100pc_host_hung_750ms_back_at_105pc_loss_90pc_host_engine_failed_seed_197 group=history:engine_failed:3:direct seeds=197 property=history kind=engine_failed minimize_runs=60 repeats=1: peer 2 failed: ProtocolError:the committed tail differs from displayed history at frame 677 at 15610 ms",
+        "[net-session-plane-selftest] FAIL random_hold_schedules shape=three_direct_seats_111ms_jitter_5ms_host_silent_1650ms_seat3_hung_1470ms_back_at_120pc_engine_rule_seed_71 group=history:engine_rule:4:direct seeds=71 property=history kind=engine_rule minimize_runs=13 repeats=1: authority ruling: playing split peer 3 became a private reader before a losing decision; a pending referee never suspends its half at 5913 ms",
+        "[net-session-plane-selftest] FAIL random_hold_schedules group=history:histories_differ:2:direct seeds=66,90,102,126,136,153: reproduced by fixed row two_direct_seats_170ms_seat2_slow_88pc_200ms_back_at_120pc_loss_60pc_seat2_held_seat_never_returns_seed_79"
+      ],
+      "reason": "exit_code=1",
+      "binary": "0ab747001e75d1a82a33c22a97f0179b56a0a2627c6ad4f27577a797a37b524b",
+      "schedule_summary": "[net-session-plane-selftest] random_hold_schedules schedules=200 ran=200 seeds=1..200",
+      "fixed_failure_report": {
+        "path": "<RUN>/net-session-plane-selftest/fixed-failure-groups.txt",
+        "binary": "0ab747001e75d1a82a33c22a97f0179b56a0a2627c6ad4f27577a797a37b524b",
+        "digest": "96b75eaaf0c8d6896c99337417bd1a5fb18b95964069c8d5e0707d67d2409877",
+        "suite_root": "<RUN>",
+        "saved_cases_ran": 108
+      },
+      "row_elapsed_s": 200.7621651669906,
+      "start_load": [
+        1.30029296875,
+        1.63134765625,
+        1.7578125
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-input-acceptance": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "0ab747001e75d1a82a33c22a97f0179b56a0a2627c6ad4f27577a797a37b524b",
+      "row_elapsed_s": 1.9565644999966025,
+      "start_load": [
+        1.36474609375,
+        1.4833984375,
+        1.66259765625
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-lockstep-released-claims": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "0ab747001e75d1a82a33c22a97f0179b56a0a2627c6ad4f27577a797a37b524b",
+      "row_elapsed_s": 1.9924925829982385,
+      "start_load": [
+        1.36474609375,
+        1.4833984375,
+        1.66259765625
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-lockstep-release-paths": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "0ab747001e75d1a82a33c22a97f0179b56a0a2627c6ad4f27577a797a37b524b",
+      "row_elapsed_s": 3.3449951250076992,
+      "start_load": [
+        1.49560546875,
+        1.50830078125,
+        1.67041015625
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-lockstep-seat-succession": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "0ab747001e75d1a82a33c22a97f0179b56a0a2627c6ad4f27577a797a37b524b",
+      "row_elapsed_s": 20.243972917000065,
+      "start_load": [
+        1.49560546875,
+        1.50830078125,
+        1.67041015625
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-lockstep-seat-admission": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "0ab747001e75d1a82a33c22a97f0179b56a0a2627c6ad4f27577a797a37b524b",
+      "row_elapsed_s": 12.356767916993704,
+      "start_load": [
+        1.54638671875,
+        1.521484375,
+        1.67041015625
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-rejoin-matrix": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "0ab747001e75d1a82a33c22a97f0179b56a0a2627c6ad4f27577a797a37b524b",
+      "row_elapsed_s": 27.053120750002563,
+      "start_load": [
+        1.57861328125,
+        1.5283203125,
+        1.66943359375
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-lockstep": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 3,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "0ab747001e75d1a82a33c22a97f0179b56a0a2627c6ad4f27577a797a37b524b",
+      "row_elapsed_s": 47.801415208989056,
+      "start_load": [
+        1.63427734375,
+        2.30029296875,
+        1.96826171875
+      ],
+      "topology": "single-box: not proof"
+    },
+    "net-world-join": {
+      "pass": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "pass_lines": 1,
+      "fail_lines": [],
+      "fatal": [],
+      "reason": "",
+      "binary": "0ab747001e75d1a82a33c22a97f0179b56a0a2627c6ad4f27577a797a37b524b",
+      "row_elapsed_s": 11.589623375009978,
+      "start_load": [
+        1.0400390625,
+        2.052734375,
+        1.89306640625
+      ],
+      "topology": "single-box: not proof"
+    }
+  },
+  "topology": "single-box: not proof"
+}

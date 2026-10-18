@@ -1,0 +1,14 @@
+{
+  "previous_binary": "2d023ac4b670d063fe72e4a5a573796cb7b545ecadad7a5e1bcc04a4a926cb97",
+  "binary": "0ab747001e75d1a82a33c22a97f0179b56a0a2627c6ad4f27577a797a37b524b",
+  "fixed_green": 186,
+  "fixed_total": 241,
+  "new_green": [
+    "four_internet_seats_split_12_34_heals_then_13_24_splits",
+    "four_seats_hold_during_another_seats_private_catch_up",
+    "private_history_author_requires_authenticated_commit_evidence"
+  ],
+  "new_red": [],
+  "random_green": 95,
+  "random_total": 200
+}
