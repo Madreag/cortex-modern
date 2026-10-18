@@ -18,6 +18,9 @@
 #include "MovableMan.h"
 #include "GameActivity.h"
 #include "ActivityMan.h"
+#include "GAScripted.h"
+#include "GlobalScript.h"
+#include "SceneMan.h"
 #include "ContentFile.h"
 
 #include "GUI.h"
@@ -570,7 +573,13 @@ std::string PieMenu::SaveCompleteCheckpoint() const {
 		else if (source) {
 			if (source->IsOriginalPreset()) {
 				sourceKind = 4; sourceClass = source->GetClassName(); sourceName = source->GetPresetName(); sourceModule = source->GetModuleName();
-			} else if (const auto* object = dynamic_cast<const MovableObject*>(source)) { sourceKind = 3; sourceUID = object->GetUniqueID(); } else throw UnsupportedCheckpointNative("a pie slice has an unknown original source");
+			} else if (const auto* object = dynamic_cast<const MovableObject*>(source)) {
+				sourceKind = 3; sourceUID = object->GetUniqueID();
+			} else if (const auto [kind, index] = slice->CheckpointRoundSource(); kind) {
+				// The activity, its global scripts and the scene are found again by their place in the restored round.
+				sourceKind = kind; sourceUID = index;
+				if (kind == 6) { sourceClass = source->GetClassName(); sourceName = source->GetPresetName(); sourceModule = source->GetModuleName(); }
+			} else throw UnsupportedCheckpointNative("a pie slice has an unknown original source");
 		}
 		const std::string script = slice->m_LuabindFunctionObject ? slice->m_LuabindFunctionObject->GetFilePath() : "";
 		value(static_cast<const Entity&>(*slice), slice->m_Type, slice->m_Direction, slice->m_CanBeMiddleSlice,
@@ -619,6 +628,17 @@ bool PieMenu::LoadCompleteCheckpoint(std::string_view text) {
 			} else if (sourceKind == 4) {
 				slice->m_OriginalSource = g_PresetMan.GetEntityPreset(sourceClass, sourceName, sourceModule);
 				if (!slice->m_OriginalSource) throw std::runtime_error("missing checkpoint pie source preset");
+			} else if (sourceKind == 5) {
+				slice->m_OriginalSource = g_ActivityMan.GetActivity();
+				if (!slice->m_OriginalSource) throw std::runtime_error("missing checkpoint pie activity");
+			} else if (sourceKind == 6) {
+				const auto* activity = dynamic_cast<const GAScripted*>(g_ActivityMan.GetActivity());
+				const GlobalScript* script = activity && sourceUID > 0 && static_cast<size_t>(sourceUID) <= activity->GetGlobalScripts().size() ? activity->GetGlobalScripts()[sourceUID - 1] : nullptr;
+				if (!script || script->GetClassName() != sourceClass || script->GetPresetName() != sourceName || script->GetModuleName() != sourceModule) throw std::runtime_error("missing checkpoint pie global script");
+				slice->m_OriginalSource = script;
+			} else if (sourceKind == 7) {
+				slice->m_OriginalSource = g_SceneMan.GetScene();
+				if (!slice->m_OriginalSource) throw std::runtime_error("missing checkpoint pie scene");
 			} else throw std::runtime_error("invalid checkpoint pie source");
 			slice->m_FunctionName = function;
 			if (!script.empty()) {

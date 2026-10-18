@@ -4,6 +4,8 @@
 #include "LuabindObjectWrapper.h"
 #include "Icon.h"
 
+#include <utility>
+
 namespace RTE {
 
 	class PieMenu;
@@ -125,6 +127,12 @@ namespace RTE {
 		/// Sets the original Entity source of this PieSlice.
 		/// @param originalSource A pointer to the original Entity source of this PieSlice.
 		void SetOriginalSource(const Entity* originalSource) { m_OriginalSource = originalSource; }
+
+		/// Names a source that belongs to the running round by its place there, for a checkpoint: {5, 0} the activity, {6, n} its nth
+		/// global script, {7, 0} the scene, {0, 0} anything else. Only the address is compared; the source itself is never read.
+		static std::pair<int, int> RoundSourceReference(const Entity* identity);
+		/// This slice's RoundSourceReference; a frozen copy's is taken from its live source at the boundary.
+		std::pair<int, int> CheckpointRoundSource() const { return IsFrozenCheckpointNative() ? m_FrozenRoundSource : RoundSourceReference(m_OriginalSource); }
 
 		/// Gets whether or not this PieSlice is enabled.
 		/// @return Whether or not this PieSlice is enabled.
@@ -263,6 +271,7 @@ namespace RTE {
 		void RecalculateMidAngle();
 
 		bool m_CheckpointInitialized = false;
+		std::pair<int, int> m_FrozenRoundSource{0, 0}; //!< A frozen copy's round source reference, read from the live source.
 
 		/// Clears all the member variables of this PieSlice, effectively resetting the members of this abstraction level only.
 		void Clear();

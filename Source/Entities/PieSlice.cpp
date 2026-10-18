@@ -4,8 +4,16 @@
 #include "PieMenu.h"
 #include "PresetMan.h"
 #include "LuaMan.h"
+#include "ActivityMan.h"
+#include "SceneMan.h"
+#include "GAScripted.h"
+#include "GlobalScript.h"
+#include "MovableObject.h"
+#include "CheckpointFrozenContainers.h"
+#include "Base64/base64.h"
 
 #include <memory>
+#include <utility>
 
 using namespace RTE;
 
@@ -19,7 +27,22 @@ PieSlice::PieSlice(const PieSlice& source, CheckpointNativeSnapshot& snapshot) :
 	m_FunctionName(snapshot.Freeze(source.m_FunctionName, &m_FunctionName)),
 	m_SubPieMenu(snapshot.Object(source.m_SubPieMenu.get()), [] { PieMenuCustomDeleter deleter; deleter.owned = true; return deleter; }()),
 	m_StartAngle(source.m_StartAngle), m_SlotCount(source.m_SlotCount), m_MidAngle(source.m_MidAngle),
-	m_DrawFlippedToMatchAbsoluteAngle(source.m_DrawFlippedToMatchAbsoluteAngle), m_CheckpointInitialized(source.m_CheckpointInitialized) {
+	m_DrawFlippedToMatchAbsoluteAngle(source.m_DrawFlippedToMatchAbsoluteAngle), m_CheckpointInitialized(source.m_CheckpointInitialized),
+	m_FrozenRoundSource(RoundSourceReference(static_cast<const Entity*>(CheckpointNativeStorage::Original(source.m_OriginalSource)))) {
+}
+
+std::pair<int, int> PieSlice::RoundSourceReference(const Entity* identity) {
+	// A frozen source may still be under construction by another freeze, so nothing here reads it.
+	if (!identity) return {0, 0};
+	const Activity* activity = g_ActivityMan.GetActivity();
+	if (!activity) return {0, 0};
+	if (identity == activity) return {5, 0};
+	if (identity == g_SceneMan.GetScene()) return {7, 0};
+	if (const auto* scripted = dynamic_cast<const GAScripted*>(CheckpointNativeStorage::Source(activity))) {
+		const auto scripts = CheckpointValues(scripted->GetGlobalScripts());
+		for (size_t index = 0; index < scripts.size(); ++index) if (scripts[index] == identity) return {6, static_cast<int>(index + 1)};
+	}
+	return {0, 0};
 }
 
 Entity* PieSlice::FreezeCheckpointNative(CheckpointNativeSnapshot& snapshot) const {
