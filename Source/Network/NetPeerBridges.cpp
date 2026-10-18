@@ -734,6 +734,12 @@ namespace RTE {
 		};
 		NetHostMigrationMessage agreed; uint32_t voters = 0;
 		if (!DecodePeerBridgeCertificate(certificate, agreed, voters)) { refused("certificate"); return; }
+		// Foreign decisions cannot govern this active continuation.
+		if (agreed.preparedFrame != 0 && agreed.preparedFrame != 3 &&
+		    (agreed.connectedMask & SeatBit(m_Config.localPeerId)) == 0 &&
+		    (PeerFrameMembersAt(agreed.frame) & SeatBit(m_Config.localPeerId)) != 0 && !IsLocalPrivateReaderAt(agreed.frame)) {
+			refused("foreign continuation"); return;
+		}
 		if (agreed.preparedFrame == 0 && (agreed.connectedMask & SeatBit(m_Config.localPeerId)) == 0)
 			DiagnosticLine() << "[net-peer-foreign-hold] local=" << static_cast<int>(m_Config.localPeerId) << " frame=" << agreed.frame
 			    << " next=" << m_Stats.nextFrame << " displayed=" << m_LastCompletedSimulationTick.value_or(0)

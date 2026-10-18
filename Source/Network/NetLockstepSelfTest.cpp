@@ -585,6 +585,32 @@ namespace RTE {
 				const std::string arm = std::string(directory ? "directory" : "direct") + " tail role=" + std::to_string(role);
 				check(confirmed == (role == 2) && peer.m_FrameGroupMembers == (role == 2 ? 2U : 3U), arm + " converted an active owner or blocked a private reader");
 			}
+			for (bool directory: {false, true}) for (bool decided: {false, true}) for (unsigned role = 0; role < 3; ++role) {
+				Wire wire; NetLockstepCoordinator peer; configure(peer, wire, directory);
+				if (role != 0) {
+					peer.m_PeerBridges[1] = {50, 50, true, role == 1 ? std::optional<uint64_t>(70) : std::nullopt, {}, 2};
+					peer.m_PeerFrameHolds[1][50] = true;
+					if (role == 1) peer.m_PeerFrameHolds[1][70] = false;
+					else { peer.m_FrameGroupMembers = 2; peer.m_FrameGroupChanges[50] = 2; }
+				}
+				if (decided) peer.m_PeerFrameTieWinners[peer.PeerSplitEpoch(150)] = 2;
+				peer.m_MigrationHistory[149] = {1, 2, 3};
+				auto vote = peer.PeerFrameMessage(NetHostMigrationMessageType::PeerBridge);
+				vote.senderPeerId = vote.successorPeerId = 2; vote.frame = 150; vote.boundary = 149;
+				vote.preparedFrame = 2; vote.connectedMask = vote.voterMask = 2; vote.members = {2}; vote.completeFrom = 7;
+				const auto prefix = peer.PeerAppliedFramePrefix(149); vote.bytes.assign(prefix.begin(), prefix.end()); vote.totalBytes = vote.bytes.size();
+				std::vector<uint8_t> signedVote;
+				if (!NetHostMigrationCodec::Encode(vote, peer.m_Config.migrationKey, signedVote)) return false;
+				auto certificate = vote; certificate.type = NetHostMigrationMessageType::PeerBridgeCommit; certificate.bytes = {1};
+				for (unsigned shift = 0; shift < 32; shift += 8) certificate.bytes.push_back(static_cast<uint8_t>(signedVote.size() >> shift));
+				certificate.bytes.insert(certificate.bytes.end(), signedVote.begin(), signedVote.end()); certificate.totalBytes = certificate.bytes.size();
+				const uint16_t previous = peer.InputDelayAt(2, 150);
+				peer.InstallPeerBridge(certificate, 1000);
+				const std::string arm = std::string(directory ? "directory" : "direct") + " foreign delay role=" + std::to_string(role) + " decided=" + std::to_string(decided);
+				check(!peer.TakePendingPeerDecisions(7000) && peer.m_PendingPeerDecisions.empty(), arm + " fenced a foreign continuation");
+				check(peer.m_PeerBridgeCertificates.contains({150, NetPeerFrameDetail::DecisionKind(vote)}) == (role == 2) &&
+				    peer.InputDelayAt(2, 150) == (role == 2 ? 7 : previous), arm + " changed active history or blocked a private reader");
+			}
 			return passed;
 		}
 
