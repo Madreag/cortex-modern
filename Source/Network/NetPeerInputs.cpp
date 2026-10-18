@@ -34,7 +34,9 @@ namespace RTE {
 			message.totalBytes = static_cast<uint32_t>(body.size()); message.offset = static_cast<uint32_t>(offset);
 			const size_t end = std::min(body.size(), offset + NetHostMigrationCodec::c_ChunkBytes);
 			message.bytes.assign(body.begin() + offset, body.begin() + end);
-			// A requested repair must survive the missing input's original path.
+			// Small gap repairs have the live input's independent path as well as eventual reliable delivery. An older
+			// lost control packet must not hold this exact missing input behind the ordered stream's retransmission.
+			if (body.size() <= 4096) SendPeerFrameMessage(message, NetTransportLane::InputUnreliable, onlyPeer);
 			SendPeerFrameMessage(std::move(message), NetTransportLane::ControlReliable, onlyPeer);
 		}
 	}

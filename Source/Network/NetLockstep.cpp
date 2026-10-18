@@ -8564,7 +8564,10 @@ namespace RTE {
 		std::string ignored;
 		// Ask the whole peer group: a previously accepting witness may itself
 		// have gone quiet since issuing its receipt.
-		if (SendPacket({request}, NetTransportLane::ControlReliable, &ignored, nullptr, nullptr, UsesPeerFrameGroups() ? 0 : via)) ++m_Stats.frameResendRequests;
+		// A request repairs the live input lane. Its independent copy must not wait behind an unrelated ordered loss;
+		// keep the reliable copy and the same measured request spacing for eventual delivery.
+		const bool independent = UsesPeerFrameGroups() && SendPacket({request}, NetTransportLane::InputUnreliable, &ignored);
+		if (SendPacket({request}, NetTransportLane::ControlReliable, &ignored, nullptr, nullptr, UsesPeerFrameGroups() ? 0 : via) || independent) ++m_Stats.frameResendRequests;
 	}
 
 	size_t NetLockstepCoordinator::ResendRelayedFramesFrom(uint8_t requesterPeerId, uint8_t senderPeerId, uint64_t fromFrame) {
@@ -8825,6 +8828,9 @@ namespace RTE {
 		}
 		auto& peerFrames = m_RemoteFrames[frame.targetFrame];
 		if (peerFrames.find(frame.senderPeerId) != peerFrames.end()) {
+			// A sender repairing a buffered input may be missing its receipt, rather than the input itself. The peer-group
+			// cumulative receipt must replace that lost acknowledgement even before this prepared frame is played.
+			NotePeerInputAccepted(frame);
 			AcknowledgeAcceptedInput(frame.senderPeerId, frame.targetFrame);
 			if (windowCopy) {
 				++m_Stats.windowCopiesSkipped;

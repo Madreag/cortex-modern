@@ -106,13 +106,13 @@ namespace RTE {
 		for (auto kept = first; kept != m_MigrationHistory.end() && kept->first < range->second.second && m_LastCompletedSimulationTick && kept->first <= *m_LastCompletedSimulationTick; ++kept) {
 			// The donor's live seat keeps its next update while a reader catches up.
 			if (preparedFrames >= 4 || (preparedFrames != 0 && RTE::SteadyClock::now() >= workEnd)) break;
-			const auto [wire, route] = PeerFrameRoute(peer);
-			const uint64_t retryMs = wire && wire->IsPeerPingMeasured(route) ? std::max<uint64_t>(500, wire->GetPeerPingMs(route)) : 1000;
 			if ((m_PeerAppliedThrough.contains(peer) && kept->first <= m_PeerAppliedThrough.at(peer)) || queued.contains(kept->first) ||
-			    (sent.contains(kept->first) && (!repeats.contains(kept->first) || m_TimingNowMs < sent.at(kept->first) + retryMs))) {
+			    (sent.contains(kept->first) && !repeats.contains(kept->first))) {
 				range->second.first = std::max(range->second.first, kept->first + 1);
 				continue;
 			}
+			// A repeat marker is an authenticated reader's explicit missing-range request, not a resend timer. Honor that
+			// repair through the ordinary frame/byte work caps; a prior send cannot prove that the reader received it.
 			// Bound application work even when several pipelined requests
 			// overlap. A large record resumes at its last queued chunk.
 			if (queued.size() >= 128 || queuedBytes >= 4 * 1024 * 1024) break;
@@ -396,6 +396,27 @@ namespace RTE {
 		// budget through that interval; matching one survivor's display clock can still leave it behind a faster survivor's phase.
 		if (const auto back = m_ReclaimTransactions.find(m_Config.localPeerId); back != m_ReclaimTransactions.end() &&
 		    *m_LastCompletedSimulationTick >= back->second.activationFrame && *m_LastCompletedSimulationTick < back->second.neutralThroughFrame) return true;
+		// An extrapolated display clock is a phase goal, not receipt credit. An extra tick must leave the first outstanding
+		// own target enough ordinary tick slots for its full trip to every playing reader. Otherwise catching up spends the
+		// delay queue faster than production/receipts can refill it and invents a missing peer on a healthy steady link.
+		const uint64_t next = *m_LastCompletedSimulationTick + 1;
+		const auto receipts = m_PeerInputReceipts.find(m_Config.localPeerId);
+		for (uint8_t reader = 1; reader <= m_Config.peerCount; ++reader) {
+			if (reader == m_Config.localPeerId || (PeerFrameMembersAt(next) & SeatBit(reader)) == 0) continue;
+			uint64_t outstanding = EffectiveStartOf(m_Config.localPeerId);
+			if (receipts != m_PeerInputReceipts.end()) if (const auto through = receipts->second.find(reader); through != receipts->second.end())
+				outstanding = std::max(outstanding, through->second);
+			if (const auto back = m_ReclaimTransactions.find(m_Config.localPeerId); back != m_ReclaimTransactions.end())
+				outstanding = std::max(outstanding, back->second.neutralThroughFrame + 1);
+			if (outstanding <= next) return false;
+			const auto [wire, route] = PeerFrameRoute(reader);
+			if (!wire || !wire->IsPeerPingMeasured(route)) return false;
+			const auto sent = m_PeerInputSentAtMs.find(outstanding);
+			const uint64_t sentAt = sent == m_PeerInputSentAtMs.end() ? m_TimingNowMs : sent->second;
+			const double receiptAt = static_cast<double>(sentAt) + wire->GetPeerPingMs(route);
+			const double consumeAt = static_cast<double>(m_TimingNowMs) + (outstanding - next - 1) * m_Config.simTickMs;
+			if (consumeAt < receiptAt) return false;
+		}
 		// The initial handshake reaches seats at different times. Follow one
 		// stable member's displayed clock so that difference cannot become a
 		// permanent phase offset. This only selects the existing 3x/six-tick

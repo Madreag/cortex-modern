@@ -139,9 +139,10 @@ namespace RTE {
 		struct DelayWire final : LoopbackTransport {
 			uint32_t rtt = 0;
 			bool measured = true;
+			std::vector<NetTransportLane> lanes;
 			uint32_t GetPeerPingMs(NetPeerId) const override { return rtt; }
 			bool IsPeerPingMeasured(NetPeerId) const override { return measured; }
-			bool Send(NetPeerId, NetTransportLane, const std::vector<uint8_t>&, std::string* = nullptr, bool* = nullptr) override { return true; }
+			bool Send(NetPeerId, NetTransportLane lane, const std::vector<uint8_t>&, std::string* = nullptr, bool* = nullptr) override { lanes.push_back(lane); return true; }
 		};
 
 		static bool DirectHistoriesChooseAtHeal(std::string* error) {
@@ -412,6 +413,116 @@ namespace RTE {
 				if (peer.PeerFrameCatchUpActive()) { *error = "the completed phase correction kept granting extra ticks"; return false; }
 				peer.m_TimingNowMs = 3000;
 				if (peer.PeerFrameCatchUpActive()) { *error = "a completed delay transition became a permanent faster clock"; return false; }
+			}
+			return true;
+		}
+
+		static bool ActivePacePreservesReceiptRunway(std::string* error) {
+			DelayWire wire; wire.rtt = 250;
+			NetLockstepCoordinator peer; ConfigureDelay(peer, wire, 0, 16);
+			peer.m_Config.localPeerId = 2;
+			peer.m_RemotePeerIds = {1}; peer.m_RemoteTransports = {{1, 42}};
+			peer.m_RemoteStartsReceived = {1};
+			peer.m_FrameGroupChanges = {{1, 3}};
+			peer.m_Config.startFrame = 1; peer.m_PeerEffectiveStart[2] = 17;
+			peer.m_LastCompletedSimulationTick = 16; peer.m_Stats.nextFrame = 17;
+			peer.m_LastQueuedTargetFrame = 32;
+			peer.m_PeerAppliedThrough[1] = 13; peer.m_PeerAppliedAtMs[1] = 851;
+			peer.m_PeerInputReceipts[2][1] = 17; peer.m_PeerInputSentAtMs[17] = 643;
+			peer.m_TimingNowMs = 854;
+			if (peer.PeerFrameCatchUpActive()) { *error = "the extrapolated display clock spent frame 17's outstanding 250 ms receipt runway"; return false; }
+			// A prepared queue with real receipt runway can still close a display phase difference.
+			peer.m_PeerInputReceipts[2][1] = 33; peer.m_PeerInputSentAtMs[33] = 700;
+			peer.m_LastQueuedTargetFrame = 40;
+			if (!peer.PeerFrameCatchUpActive()) { *error = "available receipt runway no longer permits active phase alignment"; return false; }
+			peer.m_Config.peerCount = peer.m_Config.matchConfig.peerCount = 3;
+			peer.m_FrameGroupMembers = 7; peer.m_FrameGroupChanges = {{1, 7}};
+			peer.m_RemotePeerIds = {1, 3}; peer.m_RemoteTransports[3] = 42;
+			peer.m_PeerInputReceipts[2][3] = 17;
+			if (peer.PeerFrameCatchUpActive()) { *error = "a receipt quorum spent another playing reader's outstanding runway"; return false; }
+			peer.m_Config.peerCount = peer.m_Config.matchConfig.peerCount = 2;
+			peer.m_FrameGroupMembers = 3; peer.m_FrameGroupChanges = {{1, 3}};
+			peer.m_LastCompletedSimulationTick = 28; peer.m_Stats.nextFrame = 29;
+			peer.m_PeerAppliedThrough[1] = 30;
+			if (peer.PeerFrameCatchUpActive()) { *error = "active phase alignment consumed the last outstanding target's receipt runway"; return false; }
+			// Already committed private history has no new own-input receipt obligation.
+			peer.m_PeerBridges[2] = {17, 17, true, {}, {}, 1};
+			peer.m_PeerTailThrough = 40;
+			if (!peer.PeerFrameCatchUpActive()) { *error = "receipt pacing blocked a private reader's certified tail"; return false; }
+			return true;
+		}
+
+		static bool ExplicitTailRepairIsNotAnUnsolicitedRepeat(std::string* error) {
+			DelayWire wire; wire.rtt = 22;
+			NetLockstepCoordinator peer; ConfigureDelay(peer, wire, 0, 3);
+			peer.m_LastCompletedSimulationTick = 100; peer.m_PeerAppliedThrough[2] = 99;
+			NetLockstepReadyFrame ready; ready.frame = 100; ready.localPeerId = ready.authorityPeerId = ready.updateAuthorityPeerId = 1;
+			if (!peer.EncodeMigrationFrame(ready, peer.m_MigrationHistory[100])) { *error = "the repair detector's committed frame did not encode"; return false; }
+			peer.m_TimingNowMs = 1050; peer.m_PeerTailLastSentMs[2][100] = 1000;
+			peer.SendPeerCommittedTail(2, 100);
+			if (!peer.m_PeerTailOutgoing[2].empty()) { *error = "an unrequested tail record repeated"; return false; }
+			// The reader has now explicitly requested the missing record, inside the old donor timer.
+			peer.m_PeerTailResendFrames[2].insert(100);
+			peer.SendPeerCommittedTail(2, 100);
+			if (!peer.m_PeerTailOutgoing[2].contains(100)) { *error = "the donor's old-send timer vetoed an explicit missing-record repair"; return false; }
+			peer.FlushPeerCommittedTails(1050);
+			if (peer.m_PeerTailFramesSent != 1 || !peer.m_PeerTailOutgoing[2].empty() || peer.m_PeerTailResendFrames[2].contains(100)) {
+				*error = "an explicit tail repair did not consume exactly one bounded send"; return false;
+			}
+			peer.SendPeerCommittedTail(2, 100);
+			if (!peer.m_PeerTailOutgoing[2].empty()) { *error = "a repaired record repeated without another request"; return false; }
+			peer.m_PeerAppliedThrough[2] = 100; peer.m_PeerTailResendFrames[2].insert(100);
+			peer.SendPeerCommittedTail(2, 100);
+			if (!peer.m_PeerTailOutgoing[2].empty()) { *error = "an already-applied record repeated after the reader's progress"; return false; }
+			return true;
+		}
+
+		static bool InputGapRepairSurvivesAnOrderedLanePause(std::string* error) {
+			DelayWire wire; wire.rtt = 22;
+			NetLockstepCoordinator peer; ConfigureDelay(peer, wire, 0, 3);
+			peer.m_Config.frameLane = NetTransportLane::InputUnreliable;
+			peer.m_TimingNowMs = 1000;
+			const auto bothLanes = [&] {
+				return std::count(wire.lanes.begin(), wire.lanes.end(), NetTransportLane::InputUnreliable) == 1 &&
+				    std::count(wire.lanes.begin(), wire.lanes.end(), NetTransportLane::ControlReliable) == 1 && wire.lanes.size() == 2;
+			};
+			NetLockstepFrame input; input.senderPeerId = 1; input.targetFrame = 100; input.roundId = peer.m_RoundId;
+			peer.SendForwardedPeerInput(input, 2);
+			if (!bothLanes()) { *error = "an exact input repair depends on the paused ordered lane"; return false; }
+			wire.lanes.clear();
+			peer.m_Stats.peers[2].highestTargetFrame = 101; peer.m_Stats.peers[2].pingMs = 22;
+			peer.RequestMissingFrames(2, 100, 1000, 50);
+			if (!bothLanes()) { *error = "a missing-input request depends on the paused ordered lane"; return false; }
+			peer.RequestMissingFrames(2, 100, 1001, 51);
+			if (!bothLanes()) { *error = "independent repair bypassed the existing request spacing"; return false; }
+			return true;
+		}
+
+		static bool BufferedInputRepairRepeatsItsReceipt(std::string* error) {
+			Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
+			peer.m_Config.peerFrameGroups = true; peer.m_Config.authorityPeerId = 1;
+			peer.m_MigrationPhase = NetHostMigrationPhase::None;
+			peer.m_FrameGroupMembers = 7; peer.m_FrameGroupChanges = {{1, 7}};
+			peer.m_Stats.nextFrame = 100; peer.m_LastCompletedSimulationTick = 99;
+			peer.m_PeerEffectiveStart[1] = 100;
+			NetLockstepFrame input; input.senderPeerId = 1; input.targetFrame = 100; input.roundId = 77;
+			peer.AcceptRemoteTick(input, 1000, false);
+			if (peer.m_PeerInputReceipts[1][2] != 101 || !peer.m_RemoteFrames[100].contains(1)) {
+				*error = "the repair detector did not retain its first unplayed input"; return false;
+			}
+			wire.sent.clear(); // Its first receipt was lost, and the sender repairs the exact same buffered input.
+			peer.AcceptRemoteTick(input, 1011, false);
+			bool repeated = false;
+			for (const auto& bytes: wire.sent) {
+				NetHostMigrationMessage message;
+				if (NetHostMigrationCodec::Decode(bytes, peer.m_Config.migrationKey, message) &&
+				    message.type == NetHostMigrationMessageType::PeerReceipt && message.bytes.empty() &&
+				    message.senderPeerId == 2 && message.successorPeerId == 1 && message.frame == 101) repeated = true;
+			}
+			if (!repeated) { *error = "an exact repair of an already buffered input did not repeat its lost receipt"; return false; }
+			if (peer.m_Stats.nextFrame != 100 || peer.m_LastCompletedSimulationTick != 99 || peer.m_PeerAcceptedThrough[1] != 101 ||
+			    peer.m_RemoteFrames[100].size() != 1) {
+				*error = "a repeated receipt changed the retained input or simulation history"; return false;
 			}
 			return true;
 		}
@@ -30877,6 +30988,34 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "active-pace-runway") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::ActivePacePreservesReceiptRunway(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS active_pace_preserves_receipt_runway" << std::endl;
+				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
+			if (std::string_view(selectedCase) == "explicit-tail-repair") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::ExplicitTailRepairIsNotAnUnsolicitedRepeat(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS explicit_tail_repair_is_not_an_unsolicited_repeat" << std::endl;
+				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
+			if (std::string_view(selectedCase) == "input-gap-independent") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::InputGapRepairSurvivesAnOrderedLanePause(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS input_gap_repair_survives_an_ordered_lane_pause" << std::endl;
+				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
+			if (std::string_view(selectedCase) == "buffered-input-receipt") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::BufferedInputRepairRepeatsItsReceipt(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS a_buffered_input_repair_repeats_its_receipt" << std::endl;
+				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "owner-hitch-two-internet") {
 				std::string error;
 				if (!TestOwnerSilenceThreshold(4, &error)) return fail(error);
@@ -30943,6 +31082,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::DeliveredReturnKeepsCertifiedHold, "an_old_return_delivery_preserves_a_newer_certified_hold");
 		row(&SessionPlaneRecoveryTest::ReturnDelayPadding, "a_return_delay_rise_pads_only_owed_live_inputs");
 		row(&SessionPlaneRecoveryTest::ReceiptPublicationSurvivesSilence, "a_receiver_republishes_only_its_own_cumulative_receipts");
+		row(&SessionPlaneRecoveryTest::BufferedInputRepairRepeatsItsReceipt, "a_buffered_input_repair_repeats_its_receipt");
 		row(&SessionPlaneRecoveryTest::NeutralSeatOnlyQueriesTheReferee, "a_neutral_seat_only_queries_the_assigned_referee_half");
 		row(&SessionPlaneRecoveryTest::SilenceDoesNotChangeTheSendingRate, "a_silent_interval_does_not_lower_the_measured_sending_rate");
 		row(&SessionPlaneRecoveryTest::HoldInvitation, "an_unsigned_hold_invitation_never_fences_an_input");
@@ -30952,6 +31092,9 @@ namespace {
 		row(&SessionPlaneRecoveryTest::HeldHostBaseCapture, "held_host_names_a_private_base_through_the_playing_seats");
 		row(&SessionPlaneRecoveryTest::PendingDecisionsSurviveLocalTime, "pending_decisions_wait_for_authority_across_local_timeouts");
 		row(&SessionPlaneRecoveryTest::DelayFallRetimesTheProducer, "a_delay_fall_retimes_its_producer_with_the_bounded_budget");
+		row(&SessionPlaneRecoveryTest::ActivePacePreservesReceiptRunway, "active_pace_preserves_receipt_runway");
+		row(&SessionPlaneRecoveryTest::ExplicitTailRepairIsNotAnUnsolicitedRepeat, "explicit_tail_repair_is_not_an_unsolicited_repeat");
+		row(&SessionPlaneRecoveryTest::InputGapRepairSurvivesAnOrderedLanePause, "input_gap_repair_survives_an_ordered_lane_pause");
 		row(&SessionPlaneRecoveryTest::Boundary, "successor_refuses_unvalidated_boundary_before_publish");
 		row(&SessionPlaneRecoveryTest::Leave, "leave_clears_every_live_handover_phase");
 		row(&SessionPlaneRecoveryTest::AuthenticatedSilence, "undecodable_packet_does_not_refresh_authenticated_silence");
