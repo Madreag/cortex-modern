@@ -435,6 +435,7 @@ namespace RTE {
 			int64_t now = 0; //!< The tick's sim time.
 			bool paused = false; //!< Only requested captures are scheduled while simulation time is paused.
 			size_t unwritten = 0; //!< Captures this peer's writer has not finished.
+			bool writerReady = true; //!< This peer's writer has retired its last capture and prepared the next one.
 			std::vector<CheckpointNote> applied; //!< The schedule entries the tick's committed frame carried.
 			std::vector<uint64_t> finished; //!< Captures this peer's writer finished since the last boundary.
 			std::vector<uint64_t> refused; //!< Of those, the captures whose archive the writer refused.

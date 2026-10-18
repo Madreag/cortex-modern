@@ -4052,9 +4052,10 @@ static std::string ResyncSaveName() {
 			m_OpenCaptureManual = false;
 		}
 		output.manualPending = ask;
-		// Publication can reach the network pump before the writer has finished releasing its capture. Its future is
-		// still the existing one-writer gate: wait before naming another command, including a requested fresher base.
-		if (input.unwritten != 0 || (m_OpenCaptureTick != 0 && (input.tick <= m_OpenCaptureTick || !m_CaptureWriters.empty()))) return output;
+		// Publication can reach the network pump before the writer has finished releasing its capture, and its future is ready
+		// before the writer has prepared the next plan: wait for both before naming another command, including a requested
+		// fresher base. The ask and the deadline stay pending, and the command is named at the first tick the writer is ready.
+		if (input.unwritten != 0 || !input.writerReady || (m_OpenCaptureTick != 0 && (input.tick <= m_OpenCaptureTick || !m_CaptureWriters.empty()))) return output;
 		m_OpenCaptureTick = 0;
 		m_OpenCaptureForJoin = false;
 		// Every peer keeps the schedule the host announced in the agreed config, not its own setting.
@@ -4290,7 +4291,9 @@ static std::string ResyncSaveName() {
 		for (const auto& [sender, checkpoint]: ScenarioRunner::TakeAppliedCheckpoints()) applied.push_back({sender, checkpoint.kind, checkpoint.tick});
 		// A segment held for its checkpoint opens the moment the archive thread has named the digest.
 		std::vector<uint64_t> refused;
-		const std::vector<uint64_t> finished = TakeAutosaveVerdicts(&refused);
+		// A finished capture is reported once this peer's saver has retired it and prepared the next one, so the host never names a
+		// capture a writer is still getting ready for; a saver whose preparation failed reports at once.
+		const std::vector<uint64_t> finished = g_ActivityMan.AutosaveWriterBusy() ? std::vector<uint64_t>{} : TakeAutosaveVerdicts(&refused);
 		if (ScenarioRunner::HasPendingLockstepWorldSegment()) SealWorldReplaySegment();
 		AppendCommittedJoinFrame(tick);
 		if (!ScenarioRunner::IsLockstepControllerSyncActive() || m_AutosaveMatchId.empty() || !m_Coordinator) return;
@@ -4299,6 +4302,7 @@ static std::string ResyncSaveName() {
 		input.now = g_TimerMan.GetSimTimeTicks();
 		input.paused = paused;
 		input.unwritten = g_ActivityMan.UnwrittenAutosaves();
+		input.writerReady = g_ActivityMan.AutosaveWriterReady();
 		input.applied = std::move(applied);
 		input.finished = finished;
 		input.refused = std::move(refused);
