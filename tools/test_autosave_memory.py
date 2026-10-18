@@ -11,6 +11,7 @@ import ctypes
 from datetime import datetime, timezone
 import hashlib
 import json
+import os
 import platform
 from pathlib import Path
 import re
@@ -67,6 +68,8 @@ def main():
     p.add_argument('--slope-mb-per-minute', type=float, default=1.0)
     p.add_argument('--rise-mb', type=float, default=100)
     p.add_argument('--census-histogram', action='store_true')
+    p.add_argument('--split-cpus', action='store_true',
+                   help='each engine on its own half of the logical CPUs, so one peer cannot take the other\'s time')
     p.add_argument('--port', type=int, default=49488)
     a = p.parse_args()
     repo = a.repo.resolve()
@@ -87,6 +90,8 @@ def main():
     argv = {'host': ['-net-match-service-e2e', '-net-host'] + common,
             'client': ['-net-match-service-e2e', '-net-join', '127.0.0.1'] + common}
     env = {'CCCP_HEADLESS': '1', 'CC_RUNNER_IGNORE_FULLSCREEN': '1', 'CC_TEST_NET_MATCH_E2E_WAIT_PEERS': '1'}
+    half = (os.cpu_count() or 2) // 2
+    masks = {'host': (1 << half) - 1, 'client': ((1 << half) - 1) << half} if a.split_cpus else {}
     settings = {'AutosaveSeconds': '0', 'NetworkHostDelayPolicy': 'Fixed', 'NetworkIceEnable': '0',
                 'NetworkPortMapEnable': '0', 'NetworkHostVisibility': 'Unlisted', 'EnableLuaDebugging': '0',
                 'ResolutionX': '960', 'ResolutionY': '540', 'EnableVSync': '0'}
@@ -96,6 +101,8 @@ def main():
                              '-input-script', str(repo / 'tools/e2e/play-input.txt'),
                              '-net-match-service-preset', 'Determinism FeelBaseline', '-net-match-service-module', 'UserScenes.rte']
         role_env = dict(env)
+        if role in masks:
+            role_env['CC_RUNNER_AFFINITY_MASK'] = f'0x{masks[role]:x}'
         runs[role] = make_run(repo, args, out / role, seconds + 1800, env=role_env)
         seed_settings(runs[role], settings)
         fixture = Path(runs[role].cwd) / 'Userdata/UserScenes.rte'
@@ -110,7 +117,7 @@ def main():
             '\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n')
     config = {'topology': 'single-box', 'proof': False, 'box': platform.node(), 'minutes': a.minutes, 'autosave_seconds': a.autosave_seconds,
               'settle_minutes': a.settle_minutes, 'slope_mb_per_minute': a.slope_mb_per_minute, 'rise_mb': a.rise_mb,
-              'settings': settings, 'environment': env,
+              'settings': settings, 'environment': env, 'affinity_masks': {role: f'0x{mask:x}' for role, mask in masks.items()},
               'source_head': subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip(),
               'exe_sha256': hashlib.sha256((repo / 'Cortex Command.exe').read_bytes()).hexdigest(),
               'started_utc': datetime.now(timezone.utc).isoformat()}
