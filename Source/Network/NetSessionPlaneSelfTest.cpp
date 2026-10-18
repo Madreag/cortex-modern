@@ -1212,6 +1212,12 @@ namespace RTE {
 				}
 				return true;
 			}
+			void ObserveSplit(uint8_t a, uint8_t b) {
+				sawSplit = true;
+				auto& from = splitFrom[a][b];
+				// FLAGGED fixture departure: only the minimum displayed cursor is a prefix both peers committed before this cut.
+				if (!from) from = std::min(worlds[a - 1].applied, worlds[b - 1].applied) + 1;
+			}
 			bool CompareHistories(std::string& error) {
 				for (uint8_t a = 1; a <= hub.row.seats; ++a) for (uint8_t b = a + 1; b <= hub.row.seats; ++b) {
 					const auto& left = worlds[a - 1]; const auto& right = worlds[b - 1];
@@ -1220,12 +1226,16 @@ namespace RTE {
 						if (left.hashes.at(frame) == right.hashes.at(frame)) continue;
 						const uint32_t l = frameMembers[a - 1].at(frame), r = frameMembers[b - 1].at(frame);
 						const uint8_t authorA = frameAuthors[a - 1].at(frame), authorB = frameAuthors[b - 1].at(frame);
-						const uint64_t separated = splitFrom[std::min(authorA, authorB)][std::max(authorA, authorB)];
-						// Only two genuinely separated, independently playing groups may have different displayed histories.
-						// Membership comes from each engine's installed state at that tick, never from this fault schedule.
-						// The revised direct ruling permits both continuations too; equality within each group remains mandatory.
-						if (separated && frame >= separated && l && r && !(l & r) &&
-						    (l & (1U << (authorA - 1))) && (r & (1U << (authorB - 1)))) { splitHistories = true; continue; }
+						const bool authors = authorA && authorA <= hub.row.seats && authorB && authorB <= hub.row.seats && authorA != authorB;
+						const uint64_t separated = authors ? splitFrom[std::min(authorA, authorB)][std::max(authorA, authorB)] : 0;
+						const uint32_t first = authors ? 1U << (authorA - 1) : 0, second = authors ? 1U << (authorB - 1) : 0;
+						// FLAGGED fixture departure: bounded local holds are asynchronous. A cut peer can still consume human inputs
+						// sent before the other side's hold, so its installed sender mask can temporarily overlap that continuation.
+						// Require physical separation and an installed exclusion of the other author. Connected authors, the shared
+						// pre-cut prefix and an adopted image's same-author history never get this exception; no fixture supplies a group.
+						if (separated && frame >= separated && (l & first) && (r & second) && (!(l & second) || !(r & first))) {
+							splitHistories = true; continue;
+						}
 						error = "histories differ at displayed frame " + std::to_string(frame) + ": peer " + std::to_string(a) + " members=" + std::to_string(l) +
 						    " peer " + std::to_string(b) + " members=" + std::to_string(r) + "; authority ruling requires equal history within a half and after image return" +
 						    "; now_ms=" + std::to_string(hub.now) + " live_split=" + std::to_string(hub.LiveSplit(a, b)) + " separated_frame=" + std::to_string(separated) +
@@ -1411,10 +1421,7 @@ namespace RTE {
 				}
 				const auto gone = [&](uint8_t id) { return scheduled && scheduled->Left(id, hub.now); };
 				for (uint8_t a = 1; a <= hub.row.seats; ++a) for (uint8_t b = a + 1; b <= hub.row.seats; ++b)
-					if (hub.LiveSplit(a, b)) {
-						sawSplit = true;
-						if (!splitFrom[a][b]) splitFrom[a][b] = std::max(worlds[a - 1].applied, worlds[b - 1].applied) + 1;
-					}
+					if (hub.LiveSplit(a, b)) ObserveSplit(a, b);
 				for (uint8_t seat = 1; seat <= hub.row.seats; ++seat) {
 					uint32_t cut = 0;
 					for (uint8_t other = 1; other <= hub.row.seats; ++other) if (hub.LiveSplit(seat, other)) cut |= 1U << (other - 1);
@@ -2103,15 +2110,34 @@ namespace RTE {
 			if (fixture.CompareHistories(why)) { error = "fixture accepted different histories without a real split"; return false; }
 			fixture.splitFrom[1][2] = 1;
 			if (!fixture.CompareHistories(why)) { error = "fixture rejected two actually separated, disjoint playing groups: " + why; return false; }
-			fixture.compared = {}; fixture.frameMembers[1][1] = 3;
-			if (fixture.CompareHistories(why)) { error = "fixture excused disagreement inside an overlapping playing group"; return false; }
-			fixture.frameMembers[1][1] = 1;
+			fixture.compared = {}; fixture.frameMembers[0][1] = fixture.frameMembers[1][1] = 3;
+			if (fixture.CompareHistories(why)) { error = "fixture excused disagreement between mutually included playing authors"; return false; }
+			fixture.frameMembers[0][1] = fixture.frameMembers[1][1] = 1;
 			if (fixture.CompareHistories(why)) { error = "fixture excused disagreement inside one half"; return false; }
 			fixture.frameMembers[1][1] = 2; fixture.hub.row.internet = false;
 			// The revised direct contract permits two continuations before the heal; it still requires the actual losing image to adopt one history.
 			if (!fixture.CompareHistories(why)) { error = "fixture rejected independent direct continuations before heal: " + why; return false; }
+			fixture.compared = {}; fixture.frameAuthors[1][1] = 1;
+			if (fixture.CompareHistories(why)) { error = "fixture excused different hashes in an image's adopted author history"; return false; }
+			fixture.frameAuthors[1][1] = 2;
 			fixture.worlds[1].hashes[1] = fixture.worlds[0].hashes[1];
 			if (!fixture.CompareHistories(why)) { error = "fixture rejected the adopted image history"; return false; }
+			// At a real cut one local hold may precede the other half consuming its inputs already in flight.
+			Fixture causal; causal.hub.row.seats = 3; causal.worlds.resize(3);
+			causal.frameMembers = {{0, 1}, {0, 7}, {0, 7}}; causal.frameAuthors = {{0, 1}, {0, 2}, {0, 3}};
+			causal.ObserveSplit(1, 2); causal.ObserveSplit(1, 3);
+			for (auto& world: causal.worlds) { world.applied = 1; world.hashes[1] = {}; }
+			causal.worlds[1].hashes[1][0] = causal.worlds[2].hashes[1][0] = 1;
+			const bool asymmetricHold = causal.CompareHistories(why);
+			// The connected half still has one history, even while the cut pair's installed masks overlap.
+			causal.compared = {}; causal.compared[1][2] = causal.compared[1][3] = 1;
+			causal.worlds[2].hashes[1][0] = 2;
+			const bool connectedHalfRejected = !causal.CompareHistories(why) && why.find("peer 2 members=7 peer 3 members=7") != std::string::npos;
+			Fixture frontier; frontier.worlds.resize(2); frontier.worlds[0].applied = 7; frontier.worlds[1].applied = 9;
+			frontier.ObserveSplit(1, 2);
+			const bool sharedPrefix = frontier.splitFrom[1][2] == 8;
+			fixture.compared = {}; fixture.worlds[1].hashes[1][0] = 1; fixture.splitFrom[1][2] = 2;
+			const bool priorHistoryRejected = !fixture.CompareHistories(why);
 			fixture.playingMaxWait = {0, 51}; fixture.waitAt = {0, 0}; fixture.waitPlaying = {true, true};
 			fixture.hub.row.internet = fixture.hub.row.directoryDown = true;
 			if (fixture.CheckBound(why)) { error = "fixture waived a playing half's bound during a directory outage"; return false; }
@@ -2130,10 +2156,15 @@ namespace RTE {
 			fixture.playingMaxWait = {0, 0}; fixture.waitAt = {100, 0}; fixture.waitPlaying = {true, false}; fixture.hub.now = 151;
 			fixture.ObserveBoundRole(0, false);
 			const bool overrunRetained = !fixture.CheckBound(why);
-			if (!readerIsNotLoser || !liveLoser || !nonSplit || !winner || !endedAtHold || !overrunRetained) {
+			DiagnosticLine() << "[session-plane-oracle-causality] asymmetric_local_hold=" << asymmetricHold
+			    << " first_shared_prefix=" << sharedPrefix << " connected_half_rejected=" << connectedHalfRejected << " prior_history_rejected=" << priorHistoryRejected;
+			if (!readerIsNotLoser || !liveLoser || !nonSplit || !winner || !endedAtHold || !overrunRetained ||
+			    !asymmetricHold || !sharedPrefix || !connectedHalfRejected || !priorHistoryRejected) {
 				error = "fixture role classification: private_query_is_not_a_loser=" + std::to_string(readerIsNotLoser) +
 				    " actual_loser_checked=" + std::to_string(liveLoser) + " nonsplit_unchanged=" + std::to_string(nonSplit) + " winner_unchanged=" + std::to_string(winner) +
-				    " playing_wait_ends_at_hold=" + std::to_string(endedAtHold) + " actual_51ms_overrun_rejected=" + std::to_string(overrunRetained); return false;
+				    " playing_wait_ends_at_hold=" + std::to_string(endedAtHold) + " actual_51ms_overrun_rejected=" + std::to_string(overrunRetained) +
+				    " asymmetric_local_hold=" + std::to_string(asymmetricHold) + " first_shared_prefix=" + std::to_string(sharedPrefix) +
+				    " connected_half_rejected=" + std::to_string(connectedHalfRejected) + " prior_history_rejected=" + std::to_string(priorHistoryRejected); return false;
 			}
 			return true;
 		}
