@@ -762,6 +762,17 @@ namespace RTE {
 			    delay > NetLockstepCodec::c_MaxPeerInputDelayFrames || neutral < delay || neutral > NetLockstepCodec::c_MaxFutureFrameSkew || agreed.frame > UINT64_MAX - neutral) { refused("runway"); return; }
 			returnDelays[peer] = {static_cast<uint16_t>(delay), agreed.frame + neutral, incarnation};
 		}
+		if (agreed.preparedFrame == 0 && (agreed.connectedMask & SeatBit(m_Config.localPeerId)) == 0 &&
+		    (voters & SeatBit(m_Config.localPeerId)) == 0 && (PeerFrameMembersAt(agreed.frame) & SeatBit(m_Config.localPeerId)) != 0 &&
+		    !IsSeatReclaimGap(m_Config.localPeerId, agreed.frame) &&
+		    (GetResumeFrame() > agreed.frame || (m_LastDeliveredFrame && *m_LastDeliveredFrame >= agreed.frame) ||
+		     (m_GrantedSimulationTick && *m_GrantedSimulationTick >= agreed.frame))) {
+			// Every hold is local, including a directory match's. A played or delivered continuation cannot adopt another
+			// group's hold as its own history, nor replace its arbitration question with a private reader's query.
+			const auto arbitration = m_PeerSplitArbitrations.find(PeerSplitEpoch(agreed.frame));
+			if (arbitration != m_PeerSplitArbitrations.end()) arbitration->second.offeredHold = certificate;
+			refused("foreign continuation"); return;
+		}
 		// A hold, rather than a normally in-flight input or receipt, opens the arbitration question. Asking earlier can assign a
 		// healthy startup gap a permanent winner and then reuse that unrelated answer when a machine actually stops.
 		if (agreed.preparedFrame == 0) CheckPeerFrameTie(certificate.frame, agreed.connectedMask, nowMs);

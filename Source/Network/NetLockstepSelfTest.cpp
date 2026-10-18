@@ -331,6 +331,60 @@ namespace RTE {
 			return true;
 		}
 
+		static bool ForeignHistoryKeepsAnActiveContinuation(std::string* error) {
+			bool passed = true;
+			const auto check = [&](bool ok, const std::string& why) {
+				if (!ok) { passed = false; *error += why + "; "; std::cout << "[foreign-history-scope] FAIL " << why << std::endl; }
+			};
+			const auto configure = [](NetLockstepCoordinator& peer, Wire& wire, bool directory) {
+				Configure(peer, wire);
+				peer.m_Config.peerFrameGroups = true; peer.m_Config.localPeerId = peer.m_Config.authorityPeerId = 1;
+				peer.m_Config.peerCount = peer.m_Config.matchConfig.peerCount = 2;
+				peer.m_Config.matchConfig.players.resize(2); peer.m_Config.matchConfig.successorOrder = {2};
+				if (directory) peer.m_Config.frameTieReferee = [](const NetFrameTieRequest&) { NetFrameTieReply reply; reply.state = NetFrameTieReply::State::Waiting; return reply; };
+				peer.m_RoundConfigHash = NetMatchConfigUtil::HashConfig(peer.m_Config.matchConfig);
+				peer.m_RemotePeerIds = {2}; peer.m_RemoteTransports = {{2, 42}};
+				peer.m_MigrationPhase = NetHostMigrationPhase::None;
+				peer.m_FrameGroupMembers = 3; peer.m_FrameGroupChanges = {{1, 3}};
+				peer.m_Stats.nextFrame = 150; peer.m_LastCompletedSimulationTick = 149;
+				peer.m_MigrationHistory[99] = {1, 2, 3};
+			};
+			for (bool directory: {false, true}) {
+				Wire wire; NetLockstepCoordinator peer; configure(peer, wire, directory);
+				peer.CheckPeerFrameTie(120, 1, 950);
+				auto vote = peer.PeerFrameMessage(NetHostMigrationMessageType::PeerBridge);
+				vote.senderPeerId = vote.successorPeerId = 2; vote.frame = vote.boundary = 100;
+				vote.preparedFrame = 0; vote.connectedMask = vote.voterMask = 2; vote.members = {1};
+				const auto prefix = peer.PeerFramePrefix(99); vote.bytes.assign(prefix.begin(), prefix.end()); vote.totalBytes = vote.bytes.size();
+				std::vector<uint8_t> signedVote;
+				if (!NetHostMigrationCodec::Encode(vote, peer.m_Config.migrationKey, signedVote)) { *error = "foreign continuation vote did not encode"; return false; }
+				auto certificate = vote; certificate.type = NetHostMigrationMessageType::PeerBridgeCommit; certificate.bytes = {1};
+				for (unsigned shift = 0; shift < 32; shift += 8) certificate.bytes.push_back(static_cast<uint8_t>(signedVote.size() >> shift));
+				certificate.bytes.insert(certificate.bytes.end(), signedVote.begin(), signedVote.end()); certificate.totalBytes = certificate.bytes.size();
+				peer.InstallPeerBridge(certificate, 1000);
+				const std::string mode = directory ? "directory" : "direct";
+				check(!peer.m_PeerBridges.contains(1) && peer.m_FrameGroupMembers == 3 && peer.m_PendingPeerDecisions.empty(), mode + " foreign hold replaced played history");
+				check(peer.m_PeerFrameTie && !peer.m_PeerFrameTie->queryOnly && peer.m_PeerFrameTie->members == std::vector<uint16_t>{1}, mode + " foreign hold replaced the local arbitration question");
+			}
+			for (bool directory: {false, true}) for (unsigned role = 0; role < 3; ++role) {
+				Wire wire; NetLockstepCoordinator peer; configure(peer, wire, directory);
+				if (role != 0) {
+					NetLockstepCoordinator::PeerBridge own; own.fromFrame = own.aiFrame = 50; own.committedHold = true; own.members = 2;
+					if (role == 1) own.returnFrame = 70;
+					peer.m_PeerBridges[1] = own;
+					peer.m_PeerFrameHolds[1][50] = true;
+					if (role == 1) peer.m_PeerFrameHolds[1][70] = false;
+					else { peer.m_FrameGroupMembers = 2; peer.m_FrameGroupChanges[50] = 2; }
+				}
+				NetLockstepCoordinator::PeerTailVote tail; tail.members = tail.confirmed = 2; tail.bytes = {7, 8, 9}; tail.through = 150;
+				peer.m_PeerTailVotes[150][2] = tail;
+				const bool confirmed = peer.ConfirmPeerTail(150, 1000);
+				const std::string arm = std::string(directory ? "directory" : "direct") + " tail role=" + std::to_string(role);
+				check(confirmed == (role == 2) && peer.m_FrameGroupMembers == (role == 2 ? 2U : 3U), arm + " converted an active owner or blocked a private reader");
+			}
+			return passed;
+		}
+
 		static void ConfigureDelay(NetLockstepCoordinator& peer, DelayWire& wire, unsigned mode, uint16_t delay) {
 			Configure(peer, wire);
 			peer.m_Config.localPeerId = peer.m_Config.authorityPeerId = 1;
@@ -30869,6 +30923,12 @@ namespace {
 		};
 		static const char* selectedCase = std::getenv("CC_TEST_LOCKSTEP_SELFTEST_CASE");
 		if (selectedCase) {
+			if (std::string_view(selectedCase) == "foreign-history-scope") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::ForeignHistoryKeepsAnActiveContinuation(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS foreign_history_keeps_an_active_continuation\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "remote-input-receipt-group") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::RemoteInputReceiptsFormTheLocalHoldGroup(&error)) return fail(error);
@@ -31197,6 +31257,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::LinkFallNeedsFiveMeasuredSeconds, "link_fall_requires_five_continuous_measured_seconds");
 		row(&SessionPlaneRecoveryTest::DirectHistoriesChooseAtHeal, "direct_heal_uses_committed_histories_and_human_seats");
 		row(&SessionPlaneRecoveryTest::DirectHoldScope, "a_foreign_local_hold_requires_the_readers_healed_history");
+		row(&SessionPlaneRecoveryTest::ForeignHistoryKeepsAnActiveContinuation, "foreign_history_keeps_an_active_continuation");
 
 		row(&SessionPlaneRecoveryTest::ConcurrentReturnMembership, "a_later_return_keeps_the_earlier_scheduled_return");
 		row(&SessionPlaneRecoveryTest::ReturnKeepsOtherSeatHeld, "a_return_cannot_return_another_held_seat");
