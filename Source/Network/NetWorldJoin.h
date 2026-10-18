@@ -200,6 +200,7 @@ namespace RTE {
 		std::deque<TailDatagram> tailInFlight; //!< Tail datagrams sent and not yet passed by its replay, lowest frames first.
 		double tailAckRttMs = 0; //!< The shortest time from a datagram's first send to the report that passes it; 0 until measured.
 		uint32_t tailLinkRttMs = 0; //!< The link's own round trip to the returner, as its transport measures it; 0 until known.
+		uint64_t tailStalledAck = 0, tailStalledSinceMs = 0; //!< Where its replay was when it last kept the round's rate, and since when it has not.
 		uint64_t tailSentNew = 0, tailSentRepeat = 0, tailSentResend = 0, tailSentBytes = 0, tailRefused = 0, tailLoggedMs = 0; //!< The tail's traffic, logged every two seconds.
 		const char* catchUpGate = nullptr; //!< What the last catch-up report met on its way to an activation.
 		const char* catchUpGateLogged = nullptr; //!< The gate last written to the log, and the horizon it was written at.
@@ -436,6 +437,8 @@ namespace RTE {
 	inline constexpr uint64_t c_NetWorldTailRepeatMs = 20;
 	/// How many of the lowest unpassed tail datagrams go again when their resend time runs out.
 	inline constexpr size_t c_NetWorldTailResendDepth = 2;
+	/// The replay rate a returner's tail is resent for while its replay stands still, until its headroom is measured.
+	inline constexpr double c_NetWorldTailStalledReplayRate = 3.0;
 	/// The datagrams in flight to one returner: a replay far behind passes them late, and new frames must not wait on it.
 	inline constexpr size_t c_NetWorldTailInFlightLimit = 8192;
 	/// How long a returning seat may replay without showing headroom before its rejoin is ended and retried.

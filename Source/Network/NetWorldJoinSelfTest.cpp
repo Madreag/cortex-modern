@@ -4407,6 +4407,46 @@ namespace RTE {
 		return 0;
 	}
 
+	/// A replay held up by a lost datagram is missing its neighbours too: once it has passed fewer frames than the round made over a
+	/// resend time, every datagram it could pass in the next one goes again, while a replay that keeps the round's rate keeps the
+	/// resends to its lowest two.
+	int TestAStalledReplayGetsItsNextIntervalAgain() {
+		const auto resent = [](NetWorldJoinHost& host, uint64_t nowMs) {
+			std::vector<uint8_t> chunk;
+			size_t count = 0;
+			while (count < 1000 && host.NextTailDatagram(42, nowMs, chunk)) ++count;
+			return count;
+		};
+		for (const bool stalled: {false, true}) {
+			NetWorldJoinHost host;
+			auto config = NetMatchConfigUtil::MakeDefault(0x9A23);
+			std::string error;
+			if (!host.ConfigureMatchRejoins(config, 9, 1000.0 / 60.0, &error)) return Fail("stalled-tail fixture: " + error);
+			for (uint64_t tick = 30; tick <= 400; ++tick) {
+				NetLockstepFrame frame;
+				frame.senderPeerId = 1; frame.targetFrame = tick; frame.roundId = 9;
+				if (!host.Tail().Append(frame, &error)) return Fail("stalled-tail tail: " + error);
+			}
+			if (!host.BeginInPlaceRejoin(42, 2, 2, 3, "returning", 1, 50, &error)) return Fail("stalled-tail rejoin: " + error);
+			host.NoteRejoinLinkFit(42, true);
+			host.NoteTailLinkRtt(42, 282);
+			if (resent(host, 1000) == 0 || resent(host, 1030) == 0) return Fail("the stalled-tail fixture sent no tail and no repeats");
+			uint64_t activation = 0;
+			host.NoteCatchUpClock(42, 1100);
+			if (!host.NoteCatchUpProgress(42, 60, 10, 100, 120, &activation, &error)) return Fail(error);
+			(void)resent(host, 1100);
+			// One resend time after the report: a replay that has kept the round's rate since gets its lowest two only.
+			if (!stalled) {
+				host.NoteCatchUpClock(42, 1550);
+				if (!host.NoteCatchUpProgress(42, 100, 40, 450, 150, &activation, &error)) return Fail(error);
+			}
+			const size_t again = resent(host, 1700);
+			const size_t expected = stalled ? static_cast<size_t>(std::ceil(463.0 / (1000.0 / 60.0) * c_NetWorldTailStalledReplayRate / c_NetWorldTailDatagramFrames)) : c_NetWorldTailResendDepth;
+			if (again != expected) return Fail(std::string(stalled ? "a stalled" : "a moving") + " replay was resent " + std::to_string(again) + " datagrams, not " + std::to_string(expected));
+		}
+		return 0;
+	}
+
 	/// A held seat whose player kept its state catches up on the committed tail from its own tick: no image is staged or sent,
 	/// the tail starts at the next frame, and a state the kept tail no longer reaches is refused so the seat takes the image.
 	int TestAHeldSeatCatchesUpInPlaceWithoutAnImage() {
@@ -10295,6 +10335,7 @@ namespace RTE {
 		if (const int result = TestPrivateRejoinHeadroom(); result != 0) return result;
 		if (const int result = TestPrivateActivationWaitsForTheCatchUp(); result != 0) return result;
 		if (const int result = TestAHeldSeatCatchesUpInPlaceWithoutAnImage(); result != 0) return result;
+		if (const int result = TestAStalledReplayGetsItsNextIntervalAgain(); result != 0) return result;
 		if (const int result = TestAReturnedSeatTakesNoBaseThatStallsTheRound(); result != 0) return result;
 		if (const int result = TestTheColdFirstCaptureNeverDecidesAHeldSeatsRefresh(); result != 0) return result;
 		if (const int result = TestAHeldWorldSeatWaitsForItsReturner(); result != 0) return result;

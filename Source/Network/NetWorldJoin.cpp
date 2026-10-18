@@ -2191,11 +2191,24 @@ namespace RTE {
 			session->tailLoggedMs = nowMs;
 			session->tailSentNew = session->tailSentRepeat = session->tailSentResend = session->tailSentBytes = session->tailRefused = 0;
 		}
+		// A replay held up by its lowest unpassed frames lacks them, and the loss that took them took their neighbours with them: once
+		// it has passed fewer frames than the round made over a resend time, every datagram it could pass within the next one goes again.
+		if (session->tailStalledSinceMs == 0) { session->tailStalledAck = session->acknowledgedThrough; session->tailStalledSinceMs = nowMs; }
+		const uint64_t roundFrames = m_SimTickMs > 0 && nowMs > session->tailStalledSinceMs ? static_cast<uint64_t>(static_cast<double>(nowMs - session->tailStalledSinceMs) / m_SimTickMs) : 0;
+		if (session->acknowledgedThrough < session->tailStalledAck || session->acknowledgedThrough - session->tailStalledAck >= std::max<uint64_t>(roundFrames, 1)) {
+			session->tailStalledAck = session->acknowledgedThrough;
+			session->tailStalledSinceMs = nowMs;
+		}
+		size_t resendDepth = c_NetWorldTailResendDepth;
+		if (session->catchUpSinceMs != 0 && nowMs >= session->tailStalledSinceMs + resendMs && m_SimTickMs > 0) {
+			const double rate = session->headroom.Ready() ? std::max(1.0, session->headroom.Ratio()) : c_NetWorldTailStalledReplayRate;
+			resendDepth = std::max(resendDepth, static_cast<size_t>(std::ceil(static_cast<double>(resendMs) / m_SimTickMs * rate / c_NetWorldTailDatagramFrames)));
+		}
 		size_t position = 0;
 		for (auto sent = session->tailInFlight.begin(); sent != session->tailInFlight.end(); ++position) {
 			if (session->activationTick != 0 && sent->first >= session->activationTick) break;
 			// Past the lowest ones only the newest, not yet sent twice, can be due, and they are the back of the queue.
-			if (sent->repeated && position >= c_NetWorldTailResendDepth) {
+			if (sent->repeated && position >= resendDepth) {
 				auto newest = session->tailInFlight.end();
 				while (newest != session->tailInFlight.begin() && !std::prev(newest)->repeated) --newest;
 				if (newest == session->tailInFlight.end() || newest <= sent) break;
@@ -2204,7 +2217,7 @@ namespace RTE {
 				continue;
 			}
 			// Only the lowest datagrams hold the replay up: those above them are most likely held already and pass once they do.
-			const bool due = sent->repeated ? position < c_NetWorldTailResendDepth && nowMs >= sent->sentMs + resendMs : nowMs >= sent->firstSentMs + c_NetWorldTailRepeatMs;
+			const bool due = sent->repeated ? position < resendDepth && nowMs >= sent->sentMs + resendMs : nowMs >= sent->firstSentMs + c_NetWorldTailRepeatMs;
 			if (!due) {
 				++sent;
 				continue;
