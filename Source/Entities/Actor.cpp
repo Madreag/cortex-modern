@@ -133,6 +133,8 @@ Actor::Actor(const Actor& source, CheckpointNativeSnapshot& snapshot) :
 	m_PersistedControllerInputMode(snapshot.Freeze(source.m_PersistedControllerInputMode)),
 	m_PersistedControllerQuickDisabled(snapshot.Freeze(source.m_PersistedControllerQuickDisabled)),
 	m_PersistedCompletePieMenu(snapshot.Freeze(source.m_PersistedCompletePieMenu, &m_PersistedCompletePieMenu)),
+	m_LegacyCompletePieMenu(snapshot.Freeze(source.m_LegacyCompletePieMenu, &m_LegacyCompletePieMenu)),
+	m_NeedsLegacyPieMenuBaseline(snapshot.Freeze(source.m_NeedsLegacyPieMenuBaseline)),
 	m_PersistedPieMenuState(snapshot.Freeze(source.m_PersistedPieMenuState, &m_PersistedPieMenuState)),
 	m_PersistedViewPoint(snapshot.Freeze(source.m_PersistedViewPoint)),
 	m_HasPersistedViewPoint(snapshot.Freeze(source.m_HasPersistedViewPoint)),
@@ -260,6 +262,8 @@ Actor::~Actor() {
 
 void Actor::Clear() {
 	m_PersistedCompletePieMenu.clear();
+	m_LegacyCompletePieMenu.clear();
+	m_NeedsLegacyPieMenuBaseline = false;
 	m_FrozenCompletePieMenu = nullptr;
 	CheckpointChange changed(*this, [this] {
 		return CheckpointFields(
@@ -434,6 +438,8 @@ int Actor::Create(const Actor& reference) {
 	m_PersistedControllerQuickDisabled = reference.m_PersistedControllerQuickDisabled;
 	m_PersistedControllerPlayer = reference.m_PersistedControllerPlayer;
 	m_PersistedCompletePieMenu = reference.m_PersistedCompletePieMenu;
+	m_LegacyCompletePieMenu = reference.m_LegacyCompletePieMenu;
+	m_NeedsLegacyPieMenuBaseline = reference.m_NeedsLegacyPieMenuBaseline;
 	m_PersistedPieMenuState = reference.m_PersistedPieMenuState;
 	m_PersistedViewPoint = reference.m_PersistedViewPoint;
 	m_HasPersistedViewPoint = reference.m_HasPersistedViewPoint;
@@ -670,7 +676,7 @@ int Actor::ReadProperty(const std::string_view& propName, Reader& reader) {
 	});
 	MatchProperty("ControllerInputMode", { reader >> m_PersistedControllerInputMode; });
 	MatchProperty("ControllerQuickDisabled", { reader >> m_PersistedControllerQuickDisabled; });
-	MatchProperty("PieMenuState", { reader >> m_PersistedPieMenuState; });
+	MatchProperty("PieMenuState", { reader >> m_PersistedPieMenuState; m_NeedsLegacyPieMenuBaseline = true; });
 	MatchProperty("SpecialBehaviour_CompletePieMenu", { m_PersistedCompletePieMenu = base64_decode(reader.ReadPropValue()); });
 	MatchProperty("SpecialBehaviour_MovementState", {
 		int state = 0;
@@ -856,7 +862,11 @@ void Actor::SaveSnapshotConfiguration(Writer& writer) const {
 		writer.NewProperty("PieMenu"); writer.Append(m_FrozenPieMenu->ReindentWriter(writer.GetIndent() - 1));
 	} else if (m_PieMenu) writer.NewPropertyWithValue("PieMenu", m_PieMenu.get());
 	if (const PieMenu* menu = m_FrozenCompletePieMenu ? m_FrozenCompletePieMenu : m_PieMenu.get()) {
-		writer.NewPropertyWithValue("SpecialBehaviour_CompletePieMenu", CheckpointWriter::Native([menu] { return menu->SaveCompleteCheckpoint(); }).Base64(true));
+		const CheckpointText complete = CheckpointWriter::Native([menu] { return menu->SaveCompleteCheckpoint(); });
+		// An unchanged older image keeps its exact encoding. Any value changed since native reconstruction needs the full tree.
+		if (m_LegacyCompletePieMenu.empty() || complete.Text() != m_LegacyCompletePieMenu.Value()) {
+			writer.NewPropertyWithValue("SpecialBehaviour_CompletePieMenu", complete.Base64(true));
+		}
 	}
 	writer.NewPropertyWithValue("GoldCarried", m_GoldCarried);
 	writer.NewPropertyWithValue("AIMode", m_AIMode);
@@ -2533,11 +2543,19 @@ bool Actor::IsGoneItemInReach(const HeldDevice* item) {
 }
 
 void Actor::RestoreCompletePieMenuCheckpoint() {
-	if (m_PersistedCompletePieMenu.empty()) return;
+	if (m_PersistedCompletePieMenu.empty()) {
+		if (m_NeedsLegacyPieMenuBaseline && m_PieMenu) {
+			m_LegacyCompletePieMenu = CheckpointWriter::Native([this] { return m_PieMenu->SaveCompleteCheckpoint(); }).Text();
+		}
+		m_NeedsLegacyPieMenuBaseline = false;
+		return;
+	}
 	if (!m_PieMenu || !m_PieMenu->LoadCompleteCheckpoint(m_PersistedCompletePieMenu)) {
 		throw std::runtime_error("could not restore complete pie menu for actor " + std::to_string(GetUniqueID()));
 	}
 	m_PersistedCompletePieMenu.clear();
+	m_LegacyCompletePieMenu.clear();
+	m_NeedsLegacyPieMenuBaseline = false;
 }
 
 void Actor::ResolveFaithfulLinks() {
@@ -2640,6 +2658,8 @@ void Actor::ApplyPersistedControllerMode() {
 }
 
 void Actor::Update() {
+	// Only a same-boundary recapture may reuse an older menu encoding; ordinary ticks always carry the complete tree.
+	if (!m_LegacyCompletePieMenu.empty()) m_LegacyCompletePieMenu.clear();
 	ZoneScoped;
 
 	// The wound, travel and death paths write health and status straight, so the stamp is taken around them.

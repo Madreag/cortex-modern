@@ -1137,6 +1137,8 @@ namespace RTE {
 		long long m_PersistedControllerInputMode; //!< Saved wire-applied input mode, -1 when absent.
 		int m_PersistedControllerQuickDisabled; //!< Saved quick-disable flag, -1 when absent.
 		CheckpointString m_PersistedCompletePieMenu;
+		CheckpointString m_LegacyCompletePieMenu; //!< Exact reconstructed values until the first update of an older image.
+		bool m_NeedsLegacyPieMenuBaseline = false;
 		CheckpointString m_PersistedPieMenuState; //!< Saved pie menu interaction state, applied on snapshot adopt.
 		Vector m_PersistedViewPoint; //!< Saved view point, applied on snapshot adopt (Create re-derives the live one).
 		bool m_HasPersistedViewPoint = false;
