@@ -263,11 +263,12 @@ namespace RTE {
 		}
 
 		static bool DirectHistoriesChooseAtHeal(std::string* error) {
-			struct Arm { uint32_t own, remote; uint8_t local; bool loses; bool continued = true, cpuPair = false, granted = false, zero = false; };
+			struct Arm { uint32_t own, remote; uint8_t local; bool loses; bool continued = true, cpuPair = false, granted = false, zero = false; uint32_t initial = 0; };
 			const std::vector<Arm> arms = {
 			    {12, 3, 3, true}, {3, 12, 1, false}, {14, 1, 2, false}, {1, 14, 1, true},
 			    {4, 2, 3, true}, {2, 4, 2, false}, {12, 3, 3, false, false},
-			    {12, 3, 3, false, true, true}, {12, 3, 3, true, true, false, true}, {12, 3, 3, true, true, false, false, true}};
+			    {12, 3, 3, false, true, true}, {12, 3, 3, true, true, false, true}, {12, 3, 3, true, true, false, false, true},
+			    {2, 13, 2, true, true, false, false, false, 6}};
 			for (size_t index = 0; index < arms.size(); ++index) {
 				const auto& arm = arms[index];
 				Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
@@ -281,8 +282,13 @@ namespace RTE {
 				peer.m_Stats.nextFrame = 201; peer.m_LastCompletedSimulationTick = peer.m_LastDeliveredFrame = 200;
 				const uint64_t hold = arm.zero ? 0 : 100, epoch = arm.zero ? 0 : 1;
 				peer.m_Config.startFrame = epoch;
-				peer.m_FrameGroupMembers = arm.own; peer.m_FrameGroupChanges = {{epoch, 15}}; peer.m_FrameGroupChanges[hold] = arm.own;
-				for (uint8_t seat = 1; seat <= 4; ++seat) if (!(arm.own & (1U << (seat - 1)))) peer.m_PeerFrameHolds[seat][hold] = true;
+				const uint32_t initial = arm.initial ? arm.initial : arm.own;
+				peer.m_FrameGroupMembers = arm.own; peer.m_FrameGroupChanges = {{epoch, 15}}; peer.m_FrameGroupChanges[hold] = initial;
+				if (arm.initial) peer.m_FrameGroupChanges[150] = arm.own;
+				for (uint8_t seat = 1; seat <= 4; ++seat) {
+					if (!(initial & (1U << (seat - 1)))) peer.m_PeerFrameHolds[seat][hold] = true;
+					else if (!(arm.own & (1U << (seat - 1)))) peer.m_PeerFrameHolds[seat][150] = true;
+				}
 				NetFrameTieRequest request; request.frame = epoch;
 				for (uint8_t seat = 1; seat <= 4; ++seat) {
 					request.owners.push_back(seat);
@@ -324,6 +330,30 @@ namespace RTE {
 				if (peer.IsStopped() != arm.loses || (arm.loses && (peer.GetResumeFrame() != (arm.granted ? 202 : 201) || !peer.GetStats().timeoutReason.starts_with("PeerHeld:")))) {
 					*error = "direct heal chose the wrong continuation or stop boundary: arm=" + std::to_string(index) + " state=" + NetLockstepCoordinator::StateName(peer.GetState()); return false;
 				}
+			}
+			return true;
+		}
+
+		static bool DirectHistoryQuestionsRemainReachable(std::string* error) {
+			Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
+			peer.m_Config.peerFrameGroups = true; peer.m_MigrationPhase = NetHostMigrationPhase::None;
+			peer.m_Stats.nextFrame = 401; peer.m_LastCompletedSimulationTick = 400;
+			peer.m_FrameGroupMembers = 2; peer.m_FrameGroupChanges = {{1, 7}, {100, 6}, {200, 2}};
+			for (const auto& [epoch, owners, hold]: std::array<std::tuple<uint64_t, uint32_t, uint64_t>, 2>{{{1, 7, 100}, {100, 6, 200}}}) {
+				NetFrameTieRequest request; request.frame = epoch;
+				for (uint8_t seat = 1; seat <= 3; ++seat) if (owners & (1U << (seat - 1))) request.owners.push_back(seat);
+				request.members = {2}; peer.m_PeerSplitArbitrations[epoch] = {request, owners, hold};
+			}
+			for (uint64_t now: {1000, 1100, 1200, 1300}) peer.TickPeerFrameGroups(now);
+			std::set<uint64_t> advertised;
+			for (const auto& bytes: wire.sent) {
+				NetHostMigrationMessage message;
+				if (!NetHostMigrationCodec::Decode(bytes, peer.m_Config.migrationKey, message) || message.type != NetHostMigrationMessageType::PeerHeartbeat) continue;
+				if (message.frame == 1 && message.boundary == 100 && message.members == std::vector<uint8_t>{1, 2, 3}) advertised.insert(1);
+				if (message.frame == 100 && message.boundary == 200 && message.members == std::vector<uint8_t>{2, 3}) advertised.insert(100);
+			}
+			if (advertised != std::set<uint64_t>{1, 100} || !peer.IsRunning() || !peer.m_PeerFrameTieWinners.empty()) {
+				*error = "a later direct hold starved the earlier heal-history exchange, or silence selected a history"; return false;
 			}
 			return true;
 		}
@@ -31205,6 +31235,12 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS direct_heal_uses_committed_histories_and_human_seats\n[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "direct-history-questions") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::DirectHistoryQuestionsRemainReachable(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS direct_history_questions_remain_reachable\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "link-measurement-presence") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::MissingOrZeroLinkNeverUsesReceipts(&error)) return fail(error);
@@ -31495,6 +31531,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::LinkRiseHasNoResizeCooldown, "link_rise_has_no_resize_cooldown");
 		row(&SessionPlaneRecoveryTest::LinkFallNeedsFiveMeasuredSeconds, "link_fall_requires_five_continuous_measured_seconds");
 		row(&SessionPlaneRecoveryTest::DirectHistoriesChooseAtHeal, "direct_heal_uses_committed_histories_and_human_seats");
+		row(&SessionPlaneRecoveryTest::DirectHistoryQuestionsRemainReachable, "direct_history_questions_remain_reachable");
 		row(&SessionPlaneRecoveryTest::DirectHoldScope, "a_foreign_local_hold_requires_the_readers_healed_history");
 		row(&SessionPlaneRecoveryTest::ForeignHistoryKeepsAnActiveContinuation, "foreign_history_keeps_an_active_continuation");
 		row(&SessionPlaneRecoveryTest::TailHoldSignersAreNotAnotherPlayingHalf, "tail_hold_signers_are_not_another_playing_half");

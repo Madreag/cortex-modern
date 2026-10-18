@@ -1816,6 +1816,7 @@ namespace RTE {
 		std::map<uint8_t, std::deque<std::pair<uint64_t, uint64_t>>> m_PeerAppliedProgress; //!< When each seat's applied frame rose, and to which, over the last seconds.
 		std::deque<std::pair<uint64_t, uint64_t>> m_OwnDisplayProgress; //!< When this machine displayed each recent tick, over the last seconds.
 		uint64_t m_PeerHeartbeatAtMs = 0;
+		std::optional<uint64_t> m_PeerHistoryQuestion; //!< Last direct question advertised; rotate retained epochs without adding heartbeat traffic.
 		uint64_t m_PeerTailRequestAtMs = 0;
 		uint8_t m_PeerTailDonor = 0;
 		uint64_t m_PeerTailDuplicateFrames = 0;

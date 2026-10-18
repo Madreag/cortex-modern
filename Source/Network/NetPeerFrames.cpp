@@ -286,7 +286,9 @@ namespace RTE {
 			// A reader that never continued its own branch can still consume the committed tail. Only a live losing branch
 			// has history to replace, and it enters the existing private-image return without stopping any winning survivor.
 			if (!arbitration.holdFrame || m_Stats.nextFrame <= *arbitration.holdFrame) continue;
-			const uint32_t playing = PeerFrameMembersAt(*arbitration.holdFrame) & owners;
+			// Later local holds can shrink this continuation before the heal. Its first hold's membership may still name a
+			// peer that never joined its history; judge the actual completed continuation, as the history exchange does.
+			const uint32_t playing = PeerFrameMembersAt(m_LastCompletedSimulationTick.value_or(*arbitration.holdFrame)) & owners;
 			if ((winner & local) == 0 && (playing & local) != 0 && (playing & winner) == 0) {
 				// Preparation may lead the displayed world by several ticks. Finish any granted tick, then discard that
 				// unplayed preparation: the private image replaces this branch at its actual completed boundary.
@@ -461,16 +463,23 @@ namespace RTE {
 			heartbeat.connectedMask = PeerFrameMembersAt(heartbeat.appliedFrame);
 			const auto* roster = m_RosterReader ? m_RosterReader() : nullptr;
 			heartbeat.rosterRevision = roster ? roster->revision : m_Config.matchConfig.seatRosterRevision;
-			if (!m_Config.frameTieReferee) for (auto split = m_PeerSplitArbitrations.rbegin(); split != m_PeerSplitArbitrations.rend(); ++split) {
-				const auto boundary = split->second.holdFrame ? split->second.holdFrame :
-				    split->second.offeredHold ? std::optional(split->second.offeredHold->frame) : std::nullopt;
-				if (!boundary) continue;
-				heartbeat.frame = split->first; heartbeat.boundary = *boundary;
-				heartbeat.voterMask = split->second.historiesSeen & split->second.owners;
-				heartbeat.offset = (split->second.historiesSeen >> c_DirectReaderReceiptShift) & split->second.owners;
-				for (uint8_t seat = 1; seat <= m_Config.peerCount; ++seat)
-					if (split->second.owners & SeatBit(seat)) heartbeat.members.push_back(seat);
-				break;
+			// A new local hold must not hide the older split still named by another continuation. Rotate the retained
+			// questions on the existing heartbeat, so nested holds can complete the same bilateral history exchange.
+			if (!m_Config.frameTieReferee && !m_PeerSplitArbitrations.empty()) {
+				auto split = m_PeerHistoryQuestion ? m_PeerSplitArbitrations.upper_bound(*m_PeerHistoryQuestion) : m_PeerSplitArbitrations.begin();
+				if (split == m_PeerSplitArbitrations.end()) split = m_PeerSplitArbitrations.begin();
+				for (size_t remaining = m_PeerSplitArbitrations.size(); remaining; --remaining) {
+					const auto boundary = split->second.holdFrame ? split->second.holdFrame :
+					    split->second.offeredHold ? std::optional(split->second.offeredHold->frame) : std::nullopt;
+					if (!boundary) { if (++split == m_PeerSplitArbitrations.end()) split = m_PeerSplitArbitrations.begin(); continue; }
+					heartbeat.frame = split->first; heartbeat.boundary = *boundary;
+					heartbeat.voterMask = split->second.historiesSeen & split->second.owners;
+					heartbeat.offset = (split->second.historiesSeen >> c_DirectReaderReceiptShift) & split->second.owners;
+					for (uint8_t seat = 1; seat <= m_Config.peerCount; ++seat)
+						if (split->second.owners & SeatBit(seat)) heartbeat.members.push_back(seat);
+					m_PeerHistoryQuestion = split->first;
+					break;
+				}
 			}
 			// Restored survivors can receive queued host traffic on a later local
 			// clock. Advertise eligibility before anyone fixes an immutable vote;

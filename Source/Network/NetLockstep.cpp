@@ -5504,7 +5504,7 @@ namespace RTE {
 		if (!m_Config.peerSessionLinks) { PeerListenerBindings().clear(); PeerPrimaryBindings().clear(); }
 		m_FrameGroupChanges.clear(); m_PeerFrameHolds.clear(); m_PeerOwnershipChanges.clear(); m_PeerSplitRenewals.clear(); m_PeerDelayBelowSinceMs.clear();
 		m_PeerFrameTie.reset(); m_PeerFrameTieWinners.clear(); m_PeerFrameTieSinceMs = 0;
-		m_PeerSplitArbitrations.clear();
+		m_PeerSplitArbitrations.clear(); m_PeerHistoryQuestion.reset();
 		m_PeerAdminRequest.reset(); m_PeerAdminOwnVote.reset(); m_PeerAdminFrameMembers = 0;
 		m_PeerAdminReady.clear();
 		m_PeerInputSentAtMs.clear(); m_PeerReceiptDelaySamples.clear();
