@@ -3660,6 +3660,8 @@ if type(ra.sound) == "userdata" then
 	check("entity_copy_storage_independent", a.sound.Volume == 4, a.sound.Volume)
 	check("entity_copy_has_sounds", ra.sound:HasAnySounds() and a.sound:HasAnySounds())
 end
+)lua"
+    R"lua(
 check("owned_entity_identity", ra.mo ~= nil and ra.mo.UniqueID == a.mo.UniqueID and not rawequal(ra.mo, a.mo))
 local restoredDeviceSlice = ra.mo.PieMenu:GetFirstPieSliceByPresetName("Constructor Options").SubPieMenu:GetFirstPieSliceByPresetName("Constructor Order Construction")
 check("owned_actor_device_slice_value_and_alias", restoredDeviceSlice ~= nil and restoredDeviceSlice.Enabled == ra.deviceSliceEnabled and rawequal(ra.deviceSlice, ra.deviceSliceAlias))
