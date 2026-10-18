@@ -1533,6 +1533,18 @@ namespace RTE {
 		       WorldCatchUpHasFrame(nextSimTick);
 	}
 
+	static bool RebaseInputDelayClock(uint64_t nowMs) {
+		if (!s_LockstepCoordinator || !s_LockstepCoordinator->TakeInputDelayClockRebase()) return false;
+		// A new target mapping has a new input phase. Debt from the old phase would consume the producer's correction
+		// immediately; discard that clock debt, while every actual simulation tick still runs in order.
+		g_TimerMan.HoldSimTicks(0);
+		s_PaceSlide.Reset();
+		s_OwnSeatCatchUpBudget = 0;
+		s_PeerCatchUpCredit = 0;
+		s_PeerCatchUpBudgetAtMs = nowMs;
+		return true;
+	}
+
 	void ScenarioRunner::BeginWorldCatchUpFrame(double drawMs, double untilDrawMs, RTE::SteadyClock::time_point now) {
 		s_WorldCatchUpBudget = s_WorldCatchUpActive ? c_WorldCatchUpTicksPerRealFrame : 0;
 		// A replay that does not close on the round never comes back, and a frame's time after its draw reads the display's wait as
@@ -1569,6 +1581,7 @@ namespace RTE {
 		s_OwnSeatCatchUpBudget = c_WorldCatchUpTicksPerRealFrame;
 		NetLockstepPlaneGuard plane;
 		const uint64_t nowMs = NetLockstepNowMs();
+		(void)RebaseInputDelayClock(nowMs);
 		const bool catchingUp = s_LockstepCoordinator && s_LockstepCoordinator->PeerFrameCatchUpActive();
 		static uint64_t detailAtMs = 0, detailCalls = 0, detailActive = 0, detailElapsedMs = 0;
 		if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) {
@@ -3496,6 +3509,7 @@ namespace RTE {
 			s_PreSimWait = now;
 			return false;
 		}
+		if (RebaseInputDelayClock(NetLockstepNowMs())) return false;
 		if (s_LockstepCoordinator->PeerFrameCatchUpActive()) {
 			if (s_OwnSeatCatchUpBudget <= 0) { s_PreSimWait = now; return false; }
 		}

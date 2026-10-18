@@ -5397,6 +5397,8 @@ namespace RTE {
 		m_SettledTimings.clear();
 		m_PreStartTiming.clear();
 		m_DelayChanges = m_Config.initialDelayChanges;
+		m_InputDelayPace.reset();
+		m_InputDelayClockRebase = false;
 		m_DelayEstimators.clear();
 		m_AnnouncedCaptureTicks.clear();
 		m_LocalCaptureTick.reset();
@@ -6119,6 +6121,9 @@ namespace RTE {
 		}
 		m_DeferredControllerFrames.clear();
 		m_LastProducedFrame = producedFrame;
+		// Once this transition emits fresh targets again, no folded-sample gap remains to correct. A producer already
+		// ahead of its receivers can reach that frontier before a whole nominal phase shift is possible.
+		if (m_InputDelayPace && producedFrame >= m_InputDelayPace->freshFromFrame) m_InputDelayPace.reset();
 		PadAheadOfDelayRise();
 		return true;
 	}
@@ -6373,6 +6378,36 @@ namespace RTE {
 		return PeerInputDelay(peerId);
 	}
 
+	void NetLockstepCoordinator::ApplyInputDelayChange(uint8_t peer, uint64_t frame, uint16_t delay, uint64_t nowMs) {
+		const uint16_t previous = InputDelayAt(peer, frame);
+		m_DelayChanges[peer][frame] = delay;
+		if (m_Playback || !IsRunning() || delay >= previous || !m_LastCompletedSimulationTick ||
+		    frame <= *m_LastCompletedSimulationTick) return;
+		m_InputDelayClockRebase = true;
+		if (peer != m_Config.localPeerId) return;
+		// Folded samples consume the old queue without extending its frontier. Advance the producer by that exact difference
+		// before the future decrease, preserving every committed tick and using the existing bounded catch-up budget.
+		const uint64_t due = std::max(*m_LastCompletedSimulationTick, InputDelayRetimingTarget().value_or(*m_LastCompletedSimulationTick));
+		const uint64_t freshFrom = frame + std::min<uint64_t>(previous - delay, UINT64_MAX - frame);
+		m_InputDelayPace = {nowMs, due + std::min<uint64_t>(previous - delay, UINT64_MAX - due),
+		    std::max(freshFrom, m_InputDelayPace ? m_InputDelayPace->freshFromFrame : 0)};
+		DiagnosticLine() << "[net-input-retiming] local=" << static_cast<int>(peer) << " frame=" << frame << " from=" << previous << " to=" << delay
+		    << " displayed=" << *m_LastCompletedSimulationTick << " phase_target=" << m_InputDelayPace->frame << " now_ms=" << nowMs << std::endl;
+	}
+
+	bool NetLockstepCoordinator::TakeInputDelayClockRebase() {
+		NET_PLANE_CHECK();
+		return std::exchange(m_InputDelayClockRebase, false);
+	}
+
+	std::optional<uint64_t> NetLockstepCoordinator::InputDelayRetimingTarget() const {
+		if (!m_InputDelayPace || !std::isfinite(m_Config.simTickMs) || m_Config.simTickMs <= 0) return {};
+		const uint64_t elapsed = m_TimingNowMs >= m_InputDelayPace->atMs ? m_TimingNowMs - m_InputDelayPace->atMs : 0;
+		const double ticks = elapsed / m_Config.simTickMs;
+		if (ticks >= static_cast<double>(UINT64_MAX - m_InputDelayPace->frame)) return UINT64_MAX;
+		return m_InputDelayPace->frame + static_cast<uint64_t>(ticks);
+	}
+
 	bool NetLockstepCoordinator::DeferLocalInput(uint64_t producedFrame, const std::vector<ControllerFrame>& frames) {
 		NET_PLANE_CHECK();
 		const uint16_t delay = InputDelayAt(m_Config.localPeerId, producedFrame);
@@ -6514,7 +6549,7 @@ namespace RTE {
 		if (timing.action == NetTimingAction::CapturePark) {
 			ApplyCapturePark(timing);
 		} else if (timing.action == NetTimingAction::Delay) {
-			m_DelayChanges[timing.peerId][timing.applyFrame] = timing.delayFrames;
+			ApplyInputDelayChange(timing.peerId, timing.applyFrame, timing.delayFrames, m_TimingNowMs);
 			if (!recorded) m_LastDelayResizeMs[timing.peerId] = m_TimingNowMs;
 			++m_Stats.delayChangesCommitted;
 			if (timing.peerId == m_Config.localPeerId) PadAheadOfDelayRise();
@@ -10253,6 +10288,7 @@ namespace RTE {
 		FlushTimingOutgoing();
 		// A tick the sim applied counts even once the round has failed: the heal resumes from it.
 		if (IsRunning() || IsFailed()) m_LastCompletedSimulationTick = completedTick;
+		if (const auto phase = InputDelayRetimingTarget(); phase && completedTick >= *phase) m_InputDelayPace.reset();
 		if (UsesPeerFrameGroups() && IsRunning()) SendPeerFrameWitness(completedTick);
 		if (UsesPeerFrameGroups()) {
 			m_OwnDisplayProgress.emplace_back(m_TimingNowMs, completedTick);

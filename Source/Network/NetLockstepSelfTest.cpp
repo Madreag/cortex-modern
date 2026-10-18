@@ -384,6 +384,38 @@ namespace RTE {
 			return true;
 		}
 
+		static bool DelayFallRetimesTheProducer(std::string* error) {
+			const auto rebase = []<class Peer>(Peer& peer) {
+				if constexpr (requires { peer.TakeInputDelayClockRebase(); }) return peer.TakeInputDelayClockRebase();
+				else return false;
+			};
+			for (unsigned mode = 0; mode != 4; ++mode) {
+				DelayWire wire; NetLockstepCoordinator peer; ConfigureDelay(peer, wire, mode, 8);
+				peer.m_TimingNowMs = 1000;
+				NetLockstepTiming change; change.action = NetTimingAction::Delay;
+				change.peerId = 2; change.applyFrame = 4440; change.delayFrames = 2;
+				peer.ApplyTiming(change);
+				if (peer.PeerFrameCatchUpActive()) { *error = "another producer's delay fall advanced our phase"; return false; }
+				if (!rebase(peer) || rebase(peer)) { *error = "a committed decrease did not rebase the consumer's old clock debt exactly once"; return false; }
+				change.peerId = 1; change.delayFrames = 9;
+				peer.ApplyTiming(change);
+				if (peer.PeerFrameCatchUpActive()) { *error = "a delay increase advanced the producer's phase"; return false; }
+				if (rebase(peer)) { *error = "a delay increase discarded consumer clock debt"; return false; }
+				change.delayFrames = 2;
+				peer.ApplyTiming(change);
+				if (!rebase(peer) || rebase(peer)) { *error = "the local producer's decrease did not rebase its consumer clock exactly once"; return false; }
+				if (!peer.PeerFrameCatchUpActive()) { *error = "a seven-tick delay fall did not grant bounded producer retiming in mode " + std::to_string(mode); return false; }
+				peer.m_TimingNowMs = 1100;
+				(void)peer.FinishSimulationTick(4429);
+				if (!peer.PeerFrameCatchUpActive()) { *error = "retiming ignored ordinary ticks elapsed during its catch-up"; return false; }
+				(void)peer.FinishSimulationTick(4435);
+				if (peer.PeerFrameCatchUpActive()) { *error = "the completed phase correction kept granting extra ticks"; return false; }
+				peer.m_TimingNowMs = 3000;
+				if (peer.PeerFrameCatchUpActive()) { *error = "a completed delay transition became a permanent faster clock"; return false; }
+			}
+			return true;
+		}
+
 		static bool LinkDelay(std::string* error) {
 			for (const auto [rtt, minimum, maximum]: {std::array<uint32_t, 3>{30, 3, 6}, {58, 5, 6}, {200, 13, 14}}) {
 				NetInputDelayEstimator link;
@@ -933,14 +965,16 @@ namespace RTE {
 				peer.m_Config.peerCount = peer.m_Config.matchConfig.peerCount = 4;
 				peer.m_Config.peerFrameGroups = true; peer.m_MigrationPhase = NetHostMigrationPhase::None;
 				peer.m_Stats.nextFrame = 5000; peer.m_LastCompletedSimulationTick = 4999;
-				peer.m_FrameGroupMembers = 14; peer.m_FrameGroupChanges = {{1, 15}, {4300, 14}};
-				peer.m_PeerBridges[1] = {4300, 4420, true, {}, {}, 14};
-				peer.m_PeerFrameHolds[1][4300] = true;
+				// Ruling 2: the host returned at 4420; both its hold history and group history must contain that return.
+				peer.m_FrameGroupMembers = 15; peer.m_FrameGroupChanges = {{1, 15}, {4300, 14}, {4420, 15}};
+				peer.m_PeerBridges[1] = {4300, 4300, true, 4420, {}, 15};
+				peer.m_PeerFrameHolds[1] = {{4300, true}, {4420, false}};
+				peer.m_ReclaimTransactions[1] = {1, 1, 4420 * 8 + 1, 1, 4420, 10, 4430};
 				peer.m_ReclaimTransactions[4] = {4, 1, 4500 * 8 + 4, 1, 4500, 10, 5100};
 				std::optional<NetFrameTieRequest> asked;
 				peer.m_Config.frameTieReferee = [&](const NetFrameTieRequest& request) { asked = request; return NetFrameTieReply{}; };
 				peer.CheckPeerFrameTie(5000, 10, 1000);
-				if (!asked || asked->owners != std::vector<uint16_t>{1, 2, 3, 4} || asked->members != std::vector<uint16_t>{1, 2} || asked->queryOnly != (local == 4)) {
+				if (!asked || asked->owners != std::vector<uint16_t>{1, 2, 3, 4} || asked->members != std::vector<uint16_t>{2} || asked->queryOnly != (local == 4)) {
 					*error = "a neutral seat checked in as a voter outside the referee's assigned half"; return false;
 				}
 			}
@@ -1223,8 +1257,10 @@ namespace RTE {
 						certificate.bytes.insert(certificate.bytes.end(), signedVote.begin(), signedVote.end());
 						certificate.totalBytes = certificate.bytes.size();
 						peer.InstallPeerBridge(certificate, 100);
-						if (peer.m_PendingPeerDecisions.size() != 1 || !peer.m_PeerBridges.empty()) {
-							*error = "the authentic tied-half certificate did not wait for its own directory answer"; return false;
+						// Ruling 2: a certified local hold never waits for the directory's split answer.
+						if (!peer.m_PendingPeerDecisions.empty() || !peer.m_PeerBridges.contains(1) ||
+						    peer.m_PeerBridges.at(1).fromFrame != 4423 || peer.m_PeerBridges.at(1).aiFrame != 4423 || peer.m_FrameGroupMembers != 2) {
+							*error = "the authentic tied-half certificate did not install its local AI hold immediately"; return false;
 						}
 					} else {
 						proposal.boundary = 4422; proposal.preparedFrame = 2;
@@ -1235,11 +1271,12 @@ namespace RTE {
 						peer.m_PeerVotedAtMs[{4423, 10}] = 100;
 						peer.m_RemoteFrames[4423][1] = {};
 					}
-					// Identical authority and inputs must fence the same frame on either side of the old local timeout.
+					// Local holds remain playable; an unconfirmed delay decision still fences its frame across the old timeout.
 					const uint64_t oldTimeout = arm == 0 ? 5000 : 2000;
-					if (!peer.TakePendingPeerDecisions(100 + oldTimeout - 1 + 2 * index) ||
-					    (arm == 0 && (peer.m_PendingPeerDecisions.size() != 1 || peer.m_Stats.decisionsDropped != 0))) {
-						*error = arm == 0 ? "a local five-second timer erased an unresolved certified hold" : "a local two-second timer let a voted decision's frame play without its certificate";
+					const bool fenced = peer.TakePendingPeerDecisions(100 + oldTimeout - 1 + 2 * index);
+					if (arm == 0 ? fenced || !peer.m_PendingPeerDecisions.empty() || peer.m_Stats.decisionsDropped != 0 ||
+					    !peer.m_PeerBridges.contains(1) || peer.m_PeerBridges.at(1).fromFrame != 4423 || !peer.IsRunning() : !fenced) {
+						*error = arm == 0 ? "the old directory timeout fenced or erased a locally installed hold" : "a local two-second timer let a voted decision's frame play without its certificate";
 						return false;
 					}
 				}
@@ -1248,7 +1285,7 @@ namespace RTE {
 					for (auto& peer: peers) {
 						if (peer.TakePendingPeerDecisions(7000) || !peer.m_PendingPeerDecisions.empty() ||
 						    !peer.m_PeerBridgeCertificates.contains({4423, 0}) || !peer.m_PeerBridges.contains(1) || peer.m_PeerBridges.at(1).fromFrame != 4423) {
-							*error = "the late real authority answer did not install the same retained hold"; return false;
+							*error = "the late real authority answer changed the retained local hold"; return false;
 						}
 					}
 				}
@@ -24807,8 +24844,7 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 	}
 
 
-	// mp-rollback-lag at 100 ms one way: a returner trailing the round by 27 frames came back at delay 21, delivered every input about
-	// nine frames late and was held again 65 frames after its return.
+	// Ruling 2: return work belongs to the temporary neutral trail, never the permanent link delay.
 	bool TestAReturnerDelayCoversItsTrail(std::string* error) {
 			SessionFixtureClock fixtureClock;
 		LoopbackTransport hostWire, clientWire;
@@ -24828,11 +24864,12 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 		host.m_Stats.peers[2].pingMs = 200; host.m_Stats.peers[2].jitterMs = 1;
 		const uint64_t frame = 500;
 		if (!host.SchedulePeerReclaim(2, 2, 2, frame, error, 27)) return false;
-		// 27 frames of trail and 101 ms one way, seven ticks.
+		// This transport has no RTT measurement: keep the last link-derived delay and cover all 27 trail frames separately.
 		const uint16_t returned = host.InputDelayAt(2, frame);
-		if (returned < 34 || host.InputDelayAt(2, frame - 1) != 21) {
-			*error = "a returner trailing by 27 frames on a 200 ms link came back at delay " + std::to_string(returned) + ", before its return " +
-			         std::to_string(host.InputDelayAt(2, frame - 1)) + "; every input of it would reach the survivors late";
+		const auto reclaims = host.ReclaimTransactions();
+		if (returned != 21 || host.InputDelayAt(2, frame - 1) != 21 || !reclaims.contains(2) ||
+		    reclaims.at(2).activationFrame != frame || reclaims.at(2).delayFrames != 21 || reclaims.at(2).neutralThroughFrame != frame + 21 + 27) {
+			*error = "a returner's permanent link delay or separate 27-frame neutral trail changed: delay=" + std::to_string(returned);
 			return false;
 		}
 		std::cout << "[net-lockstep-selftest] PASS a_returner_delay_covers_its_trail delay=" << returned << std::endl;
@@ -26409,8 +26446,8 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			};
 			while (now < 9000 && !queueFailed && host.IsRunning() && client.IsRunning()) pump();
 			const uint16_t delay = host.InputDelayAt(2, sims[0].tick);
-			const uint32_t linkDelay = 10; // 90 ms RTT covers 135 ms plus one tick.
-			const uint32_t extraDelay = delay > linkDelay ? delay - linkDelay : 0;
+			// Ruling 2: a machine spike never inflates permanent delay; the measured 90 ms RTT requires seven ticks.
+			const uint32_t linkDelay = 7;
 			const bool spikeCase = test.stallAtTick != 0, warmCase = test.warmupTicks != 0;
 			// A connected slower human keeps its seat. Measure the work its fixed production cadence can deliver.
 			const uint64_t hostTickAtHold = sims[0].tick, hostWaitBeforeHold = sims[0].totalWaitMs;
@@ -26425,10 +26462,10 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			const auto holds = host.GetStats().peers.at(2).holds;
 			const bool slowWaited = !spikeCase && holds == 0 && !client.IsLocalSeatHeld() && client.IsRunning() &&
 			    sims[1].tick - clientTickBefore == dueProduction && sims[0].tick >= hostTickAtHold + dueDelivery;
-			if (queueFailed || !host.IsRunning() || sims[0].longestWaitMs > 50 || (!warmCase && extraDelay > 3) ||
-			    (warmCase ? holds != 0 || client.IsLocalSeatHeld() || sims[0].tick < 300 : spikeCase ? holds != 0 || !stalled || delay <= start || sims[0].tick < 300 : !slowWaited)) {
+			if (queueFailed || !host.IsRunning() || sims[0].longestWaitMs > 50 || delay != linkDelay ||
+			    (warmCase ? holds != 0 || client.IsLocalSeatHeld() || sims[0].tick < 300 : spikeCase ? holds != 0 || !stalled || sims[0].tick < 300 : !slowWaited)) {
 				*error = std::string(test.name) + ": holds=" + std::to_string(holds) + " self_held=" + std::to_string(client.IsLocalSeatHeld()) + " stalled=" + std::to_string(stalled) +
-				         " start_delay=" + std::to_string(start) + " delay=" + std::to_string(delay) + " link_delay=" + std::to_string(linkDelay) + " extra_delay=" + std::to_string(extraDelay) +
+					         " start_delay=" + std::to_string(start) + " delay=" + std::to_string(delay) + " link_delay=" + std::to_string(linkDelay) +
 				         " host_tick=" + std::to_string(sims[0].tick) + " host_tick_at_hold=" + std::to_string(hostTickAtHold) + " host_longest_wait_ms=" + std::to_string(sims[0].longestWaitMs) +
 				         " host_wait_before_hold_ms=" + std::to_string(hostWaitBeforeHold) + " due_production=" + std::to_string(dueProduction) +
 				         " actual_production=" + std::to_string(sims[1].tick - clientTickBefore) + " due_delivery=" + std::to_string(dueDelivery) + " queue=" + queueError;
@@ -26442,9 +26479,9 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 	}
 
 	bool TestALiveDelayDecreaseKeepsAWaitedSeatsSlack(std::string* error) {
-		struct Case { const char* name; uint64_t clientPeriodMs; uint16_t clientDelay; uint64_t clientStartMs; uint16_t keptDelay; }; // the delay kept at least; 0: any delay below the start
-		// A seat our sim waits on is late by a steady amount at the round's rate - it starts 200 ms behind a delay of 8 - and keeps its slack.
-		const Case cases[] = {{"a seat our sim waits on", 17, 8, 200, 8}, {"a seat that runs ahead", 12, 8, 0, 0}, {"a seat five ticks behind", 17, 12, 85, 0}};
+		struct Case { const char* name; uint64_t clientPeriodMs; uint16_t clientDelay; uint64_t clientStartMs; };
+		// Ruling 2: machine phase never pads permanent delay; all three cases must reach the two-tick link estimate without a >50 ms wait.
+		const Case cases[] = {{"a seat our sim waits on", 17, 8, 200}, {"a seat that runs ahead", 12, 8, 0}, {"a seat five ticks behind", 17, 12, 85}};
 		for (const Case& test: cases) {
 			const uint64_t clientPeriodMs = test.clientPeriodMs;
 			LoopbackTransport hostWire, clientWire;
@@ -26466,7 +26503,11 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			hostWire.SetFaultConfig(link); clientWire.SetFaultConfig(link);
 			if (!StartCoordinatorPair(48921, hostWire, clientWire, host, client, hostConfig, clientConfig, error)) return false;
 			if (!DriveCoordinators(hostWire, clientWire, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error, 1000, 5)) return false;
-			struct Sim { NetLockstepCoordinator* coordinator; int64_t uid; uint64_t periodMs; uint64_t tick = 0; bool produced = false; uint64_t startAtMs = 0; uint64_t longestWaitMs = 0; };
+			struct Sim {
+				NetLockstepCoordinator* coordinator; int64_t uid; uint64_t periodMs; uint64_t tick = 0; bool produced = false;
+				uint64_t startAtMs = 0; uint64_t longestWaitMs = 0; double credit = 1;
+				std::optional<uint64_t> waitAtMs;
+			};
 			Sim sims[2] = {{&host, 100, 17}, {&client, 200, clientPeriodMs}};
 			sims[1].startAtMs = test.clientStartMs;
 			uint64_t now = 0;
@@ -26475,11 +26516,21 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			const auto pump = [&] {
 				hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); host.Tick(now); client.Tick(now);
 				for (Sim& sim: sims) {
+					if (now < sim.startAtMs) continue;
+					const bool rebase = []<class Peer>(Peer& peer) {
+						if constexpr (requires { peer.TakeInputDelayClockRebase(); }) return peer.TakeInputDelayClockRebase();
+						else return false;
+					}(*sim.coordinator);
+					if (rebase) sim.credit = 0;
+					// Flagged fixture correction: consume the same bounded 3x/six-tick phase budget as the match loop.
+					// Hardcoding one tick per period would prevent an engine correction from ever reaching this detector.
+					if (now > sim.startAtMs && !rebase) sim.credit = std::min(static_cast<double>(c_NetSeatCatchUpBurstTicks), sim.credit +
+					    (sim.coordinator->PeerFrameCatchUpActive() ? static_cast<double>(c_NetSeatCatchUpRate) / sim.coordinator->GetConfig().simTickMs : 1.0 / sim.periodMs));
+					while (sim.credit >= 1 && sim.coordinator->IsRunning()) {
 					// Both delays are above zero: a tick before the commit stream runs without a frame, every later one
 					// waits for its committed frame before it produces the input its delay puts ahead of it.
 					const bool beforeStart = sim.tick < sim.coordinator->GetStats().effectiveStartFrame;
 					const bool frameReady = sim.coordinator->HasReadyFrame(sim.tick);
-					if (now < sim.startAtMs) continue;
 					if (!sim.produced && (beforeStart || frameReady) && !sim.coordinator->TimingDecisionPendingAt(sim.tick)) {
 						// While a delay shrinks the ticks whose targets are already queued fold into the next input, as the sim does.
 						if (!sim.coordinator->DeferLocalInput(sim.tick, {MakeFrame(sim.uid, sim.tick)}) &&
@@ -26488,13 +26539,16 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 					}
 					NetLockstepReadyFrame ready;
 					if (sim.produced && beforeStart) {
-						++sim.tick; sim.produced = false; sim.startAtMs = now + sim.periodMs;
+						++sim.tick; sim.produced = false; sim.credit -= 1; sim.waitAtMs.reset();
 					} else if (sim.produced && frameReady && sim.coordinator->PopReadyFrame(ready)) {
 						(void)sim.coordinator->FinishSimulationTick(ready.frame);
-						if (now > 1000) sim.longestWaitMs = std::max(sim.longestWaitMs, now - sim.startAtMs);
-						++sim.tick; sim.produced = false; sim.startAtMs = now + sim.periodMs;
-					} else if (sim.coordinator == &host && !beforeStart) {
-						(void)host.NoteFrameWait(sim.tick, now);
+						if (now > 1000 && sim.waitAtMs) sim.longestWaitMs = std::max(sim.longestWaitMs, now - *sim.waitAtMs);
+						++sim.tick; sim.produced = false; sim.credit -= 1; sim.waitAtMs.reset();
+					} else {
+						if (!sim.waitAtMs) sim.waitAtMs = now;
+						if (!beforeStart) (void)sim.coordinator->NoteFrameWait(sim.tick, now);
+						break;
+					}
 					}
 				}
 				++now;
@@ -26503,10 +26557,10 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			while (now < 9000 && !queueFailed && host.IsRunning() && client.IsRunning()) pump();
 			const auto holds = host.GetStats().peers.at(2).holds;
 			const uint16_t delay = host.InputDelayAt(2, sims[0].tick);
-			if (queueFailed || holds != 0 || !host.IsRunning() || sims[0].longestWaitMs > 50 || (test.keptDelay ? delay < test.keptDelay : delay >= test.clientDelay) || sims[0].tick < 300) {
-				*error = std::string(test.name) + ": holds=" + std::to_string(holds) + " kept_delay=" + std::to_string(test.keptDelay) +
+			if (queueFailed || holds != 0 || !host.IsRunning() || sims[0].longestWaitMs > 50 || delay != 2 || sims[0].tick < 300 || client.PeerFrameCatchUpActive()) {
+				*error = std::string(test.name) + ": holds=" + std::to_string(holds) +
 				         " delay=" + std::to_string(delay) + " host_tick=" + std::to_string(sims[0].tick) + " client_tick=" + std::to_string(sims[1].tick) +
-				         " host_longest_wait_ms=" + std::to_string(sims[0].longestWaitMs) + " queue=" + queueError;
+				         " host_longest_wait_ms=" + std::to_string(sims[0].longestWaitMs) + " retiming_active=" + std::to_string(client.PeerFrameCatchUpActive()) + " queue=" + queueError;
 				return false;
 			}
 			std::cout << "[net-lockstep-selftest] PASS a_live_delay_decrease_keeps_a_waited_seats_slack case=\"" << test.name << "\" client_period_ms=" << clientPeriodMs
@@ -30810,6 +30864,19 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "link-delay-transitions") {
+				std::string error;
+				if (!TestALiveDelayDecreaseKeepsAWaitedSeatsSlack(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
+			if (std::string_view(selectedCase) == "delay-producer-phase") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::DelayFallRetimesTheProducer(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS a_delay_fall_retimes_its_producer_with_the_bounded_budget" << std::endl;
+				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "owner-hitch-two-internet") {
 				std::string error;
 				if (!TestOwnerSilenceThreshold(4, &error)) return fail(error);
@@ -30884,6 +30951,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::DirectWireContract, "direct_heal_has_a_distinct_wire_and_admission_contract");
 		row(&SessionPlaneRecoveryTest::HeldHostBaseCapture, "held_host_names_a_private_base_through_the_playing_seats");
 		row(&SessionPlaneRecoveryTest::PendingDecisionsSurviveLocalTime, "pending_decisions_wait_for_authority_across_local_timeouts");
+		row(&SessionPlaneRecoveryTest::DelayFallRetimesTheProducer, "a_delay_fall_retimes_its_producer_with_the_bounded_budget");
 		row(&SessionPlaneRecoveryTest::Boundary, "successor_refuses_unvalidated_boundary_before_publish");
 		row(&SessionPlaneRecoveryTest::Leave, "leave_clears_every_live_handover_phase");
 		row(&SessionPlaneRecoveryTest::AuthenticatedSilence, "undecodable_packet_does_not_refresh_authenticated_silence");

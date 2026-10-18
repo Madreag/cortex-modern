@@ -810,7 +810,7 @@ namespace RTE {
 			// Every delay the whole group certifies names its split afresh from its frame.
 			m_PeerSplitRenewals[agreed.frame] = agreed.connectedMask;
 			const bool restated = agreed.completeFrom == InputDelayAt(peer, agreed.frame);
-			m_DelayChanges[peer][agreed.frame] = static_cast<uint16_t>(agreed.completeFrom);
+			ApplyInputDelayChange(peer, agreed.frame, static_cast<uint16_t>(agreed.completeFrom), nowMs);
 			if (restated) return;
 			m_LastDelayResizeMs[peer] = nowMs; ++m_Stats.delayChangesCommitted;
 			++m_Stats.peers[peer].delayResizes;

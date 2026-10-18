@@ -1185,6 +1185,8 @@ namespace RTE {
 			NET_PLANE_CHECK(); m_TestBlackoutFrame = frame; m_TestBlackoutDurationMs = durationMs; m_TestBlackoutDirectoryDark = directoryDark; m_TestBlackoutAtMs.reset();
 		}
 		bool PeerFrameCatchUpActive() const;
+		/// Consumes a committed delay fall's clock rebase; old consumer debt must not spend the producer's new phase.
+		bool TakeInputDelayClockRebase();
 		/// The latest local input accepted by the current peer authority, inclusive.
 		std::optional<uint64_t> GetLocalInputAcceptedThrough() const;
 		/// @param fromFrame The first frame the hold covers, when the seat named it; 0 for the first frame the host lacks its input.
@@ -2104,6 +2106,8 @@ namespace RTE {
 		void FlushTimingOutgoing();
 		void CommitTiming(uint64_t revision);
 		void ApplyTiming(const NetLockstepTiming& timing, bool recorded = false);
+		void ApplyInputDelayChange(uint8_t peer, uint64_t frame, uint16_t delay, uint64_t nowMs);
+		std::optional<uint64_t> InputDelayRetimingTarget() const;
 		bool HasOrderedHostHold() const;
 		bool IsOrderedHostReturn(const NetLockstepTiming& timing) const;
 		void ReclaimHostSeat(uint64_t nowMs);
@@ -2137,6 +2141,9 @@ namespace RTE {
 		bool DecisionSettled(const TimingDecision& decision) const;
 		std::vector<std::pair<NetLockstepTiming, NetPeerId>> m_PreStartTiming;
 		std::map<uint8_t, std::map<uint64_t, uint16_t>> m_DelayChanges;
+		struct InputDelayPace { uint64_t atMs = 0, frame = 0, freshFromFrame = 0; };
+		std::optional<InputDelayPace> m_InputDelayPace; //!< A delay fall advances only this producer's phase, through the bounded match budget.
+		bool m_InputDelayClockRebase = false;
 		std::map<uint8_t, NetInputDelayEstimator> m_DelayEstimators;
 		std::map<uint8_t, uint64_t> m_LastDelayResizeMs;
 		std::map<uint8_t, uint64_t> m_LastSubstituteCommittedMs;

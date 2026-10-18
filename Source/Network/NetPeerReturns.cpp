@@ -386,7 +386,9 @@ namespace RTE {
 
 	bool NetLockstepCoordinator::PeerFrameCatchUpActive() const {
 		NET_PLANE_CHECK();
-		if (!UsesPeerFrameGroups() || !IsRunning() || !m_LastCompletedSimulationTick) return false;
+		if (!IsRunning() || !m_LastCompletedSimulationTick) return false;
+		if (const auto phase = InputDelayRetimingTarget(); phase && *m_LastCompletedSimulationTick < *phase) return true;
+		if (!UsesPeerFrameGroups()) return false;
 		const auto own = m_PeerBridges.find(m_Config.localPeerId);
 		if (own != m_PeerBridges.end() && own->second.committedHold && !own->second.returnFrame &&
 		    m_PeerTailThrough && *m_LastCompletedSimulationTick < *m_PeerTailThrough) return true;
