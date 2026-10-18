@@ -2,7 +2,7 @@
   "topology": "single-box",
   "proof": false,
   "complete_gate": false,
-  "parent": "deb9e68abf815df27d4f57f8b789f9d982c725ce",
+  "parent": "cc0b1b21bcb92bfcdc6a1b40b38d3452a08508a7",
   "launches": [
     {
       "collection": "ruling-direct-red",
@@ -1208,6 +1208,402 @@
         },
         {
           "path": "direct-milestone-controls--net-session-selftest--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "direct-reader-receipt-red",
+      "case": "direct-heal-history",
+      "exe_sha256": "beb0e63118954ee565b13c3006e7ca79a48c578d9dfa214a51ca75d0fcc5ee73",
+      "visible_window": true,
+      "exit_code": 1,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "direct-reader-receipt-red--direct-heal-history--stdout.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        },
+        {
+          "path": "direct-reader-receipt-red--direct-heal-history--stderr.log.gz",
+          "original_sha256": "7a25a63510a2d4d95021f750f1064c61e8e7ae53ea2a68ea76ea7e660108d3b4",
+          "portable_sha256": "7a25a63510a2d4d95021f750f1064c61e8e7ae53ea2a68ea76ea7e660108d3b4",
+          "compressed_sha256": "a9abf9acc6ede902bbf7f9e5576d257c9dd2012c6ca34eaf4723668d13c2c0af"
+        }
+      ]
+    },
+    {
+      "collection": "direct-reader-receipt-red",
+      "case": "direct-hold-scope",
+      "exe_sha256": "beb0e63118954ee565b13c3006e7ca79a48c578d9dfa214a51ca75d0fcc5ee73",
+      "visible_window": true,
+      "exit_code": 1,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "direct-reader-receipt-red--direct-hold-scope--stdout.log.gz",
+          "original_sha256": "4c6990b54ab2f51642a5988dd34b101ef9602521204f036a4280493c177b8769",
+          "portable_sha256": "4c6990b54ab2f51642a5988dd34b101ef9602521204f036a4280493c177b8769",
+          "compressed_sha256": "85eacc2b63d2ed3f9d92a4fa221d2b6ad8457ee78f4948fb71434ccba36730fa"
+        },
+        {
+          "path": "direct-reader-receipt-red--direct-hold-scope--stderr.log.gz",
+          "original_sha256": "97f5f58922acc94d7145f0a474b7c9a30c05e13f8434d8dc071bfcdd490f0f54",
+          "portable_sha256": "97f5f58922acc94d7145f0a474b7c9a30c05e13f8434d8dc071bfcdd490f0f54",
+          "compressed_sha256": "1cb1d44df435b966f8da820ecac746cc517d16121d208032a0010b2806fe56e8"
+        }
+      ]
+    },
+    {
+      "collection": "direct-reader-receipt-verified",
+      "case": "direct-heal-history",
+      "exe_sha256": "ba91ca1ebe9855fd9887139a1aad3b5d683fa9254d3a5d486956cf4bc3492b62",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "direct-reader-receipt-verified--direct-heal-history--stdout.log.gz",
+          "original_sha256": "9937c2dbfd27c3250f8aea85b6d55bcbdd1e44a9df747e15afdc805aa16cf523",
+          "portable_sha256": "9937c2dbfd27c3250f8aea85b6d55bcbdd1e44a9df747e15afdc805aa16cf523",
+          "compressed_sha256": "ccc0f4d9adc8108807388eb824e51a3de47341a99b63282d7c298de2d198fe04"
+        },
+        {
+          "path": "direct-reader-receipt-verified--direct-heal-history--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "direct-reader-receipt-verified",
+      "case": "direct-hold-scope",
+      "exe_sha256": "ba91ca1ebe9855fd9887139a1aad3b5d683fa9254d3a5d486956cf4bc3492b62",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "direct-reader-receipt-verified--direct-hold-scope--stdout.log.gz",
+          "original_sha256": "1ebb57ed8c7dd1dc3bfcb6aa4ec4ccebaad89f57a279666356c951ecba5eef5c",
+          "portable_sha256": "1ebb57ed8c7dd1dc3bfcb6aa4ec4ccebaad89f57a279666356c951ecba5eef5c",
+          "compressed_sha256": "0a6e55f744d76628bdf149e59b892e7afe4ae0ad5515b545584b6389594952c3"
+        },
+        {
+          "path": "direct-reader-receipt-verified--direct-hold-scope--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "direct-reader-receipt-verified",
+      "case": "direct-human-majority-split",
+      "exe_sha256": "ba91ca1ebe9855fd9887139a1aad3b5d683fa9254d3a5d486956cf4bc3492b62",
+      "visible_window": true,
+      "exit_code": 1,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "direct-reader-receipt-verified--direct-human-majority-split--stdout.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        },
+        {
+          "path": "direct-reader-receipt-verified--direct-human-majority-split--stderr.log.gz",
+          "original_sha256": "a86fff4b2604b11286ad9b8fe5005101b26dc1f3d65c6c5677b2eb67589b4e6d",
+          "portable_sha256": "a86fff4b2604b11286ad9b8fe5005101b26dc1f3d65c6c5677b2eb67589b4e6d",
+          "compressed_sha256": "48d58311b5fe7f73ccb54e8b06c6ff91609a7a098c3b64bf93a59763fbe5326d"
+        }
+      ]
+    },
+    {
+      "collection": "direct-reader-receipt-verified",
+      "case": "direct-lone-split",
+      "exe_sha256": "ba91ca1ebe9855fd9887139a1aad3b5d683fa9254d3a5d486956cf4bc3492b62",
+      "visible_window": true,
+      "exit_code": 1,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "direct-reader-receipt-verified--direct-lone-split--stdout.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        },
+        {
+          "path": "direct-reader-receipt-verified--direct-lone-split--stderr.log.gz",
+          "original_sha256": "a86fff4b2604b11286ad9b8fe5005101b26dc1f3d65c6c5677b2eb67589b4e6d",
+          "portable_sha256": "a86fff4b2604b11286ad9b8fe5005101b26dc1f3d65c6c5677b2eb67589b4e6d",
+          "compressed_sha256": "48d58311b5fe7f73ccb54e8b06c6ff91609a7a098c3b64bf93a59763fbe5326d"
+        }
+      ]
+    },
+    {
+      "collection": "direct-reader-receipt-verified",
+      "case": "direct-one-way-host-split",
+      "exe_sha256": "ba91ca1ebe9855fd9887139a1aad3b5d683fa9254d3a5d486956cf4bc3492b62",
+      "visible_window": true,
+      "exit_code": 1,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "direct-reader-receipt-verified--direct-one-way-host-split--stdout.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        },
+        {
+          "path": "direct-reader-receipt-verified--direct-one-way-host-split--stderr.log.gz",
+          "original_sha256": "a86fff4b2604b11286ad9b8fe5005101b26dc1f3d65c6c5677b2eb67589b4e6d",
+          "portable_sha256": "a86fff4b2604b11286ad9b8fe5005101b26dc1f3d65c6c5677b2eb67589b4e6d",
+          "compressed_sha256": "48d58311b5fe7f73ccb54e8b06c6ff91609a7a098c3b64bf93a59763fbe5326d"
+        }
+      ]
+    },
+    {
+      "collection": "direct-reader-receipt-verified",
+      "case": "direct-one-way-joiner-split",
+      "exe_sha256": "ba91ca1ebe9855fd9887139a1aad3b5d683fa9254d3a5d486956cf4bc3492b62",
+      "visible_window": true,
+      "exit_code": 1,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "direct-reader-receipt-verified--direct-one-way-joiner-split--stdout.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        },
+        {
+          "path": "direct-reader-receipt-verified--direct-one-way-joiner-split--stderr.log.gz",
+          "original_sha256": "a86fff4b2604b11286ad9b8fe5005101b26dc1f3d65c6c5677b2eb67589b4e6d",
+          "portable_sha256": "a86fff4b2604b11286ad9b8fe5005101b26dc1f3d65c6c5677b2eb67589b4e6d",
+          "compressed_sha256": "48d58311b5fe7f73ccb54e8b06c6ff91609a7a098c3b64bf93a59763fbe5326d"
+        }
+      ]
+    },
+    {
+      "collection": "direct-reader-receipt-verified",
+      "case": "direct-two-two-split",
+      "exe_sha256": "ba91ca1ebe9855fd9887139a1aad3b5d683fa9254d3a5d486956cf4bc3492b62",
+      "visible_window": true,
+      "exit_code": 1,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "direct-reader-receipt-verified--direct-two-two-split--stdout.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        },
+        {
+          "path": "direct-reader-receipt-verified--direct-two-two-split--stderr.log.gz",
+          "original_sha256": "a86fff4b2604b11286ad9b8fe5005101b26dc1f3d65c6c5677b2eb67589b4e6d",
+          "portable_sha256": "a86fff4b2604b11286ad9b8fe5005101b26dc1f3d65c6c5677b2eb67589b4e6d",
+          "compressed_sha256": "48d58311b5fe7f73ccb54e8b06c6ff91609a7a098c3b64bf93a59763fbe5326d"
+        }
+      ]
+    },
+    {
+      "collection": "direct-reader-receipt-verified",
+      "case": "direct-wire-contract",
+      "exe_sha256": "ba91ca1ebe9855fd9887139a1aad3b5d683fa9254d3a5d486956cf4bc3492b62",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "direct-reader-receipt-verified--direct-wire-contract--stdout.log.gz",
+          "original_sha256": "0848916f0e3152c6f2e27b624507d5df8382300f16445e476d3bb6f149fbec76",
+          "portable_sha256": "0848916f0e3152c6f2e27b624507d5df8382300f16445e476d3bb6f149fbec76",
+          "compressed_sha256": "114f60e9f09c7a0f7a7d84fcb4c18f48d71d8534f583c9ce15401693e800ec0e"
+        },
+        {
+          "path": "direct-reader-receipt-verified--direct-wire-contract--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "direct-reader-receipt-verified",
+      "case": "return-member-starts",
+      "exe_sha256": "ba91ca1ebe9855fd9887139a1aad3b5d683fa9254d3a5d486956cf4bc3492b62",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "direct-reader-receipt-verified--return-member-starts--stdout.log.gz",
+          "original_sha256": "21ec548e7e2ef82083791e7472913347d8b3b756a1c01d000cd6617391e63047",
+          "portable_sha256": "21ec548e7e2ef82083791e7472913347d8b3b756a1c01d000cd6617391e63047",
+          "compressed_sha256": "dfa9d9d4afff7e49fc307f1e0691baa70ef5d8a076f91a63f1d34b70f50ec855"
+        },
+        {
+          "path": "direct-reader-receipt-verified--return-member-starts--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "direct-reader-full-verified",
+      "case": "direct-split-human-majority",
+      "exe_sha256": "ba91ca1ebe9855fd9887139a1aad3b5d683fa9254d3a5d486956cf4bc3492b62",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "direct-reader-full-verified--direct-split-human-majority--stdout.log.gz",
+          "original_sha256": "67607549fbdfef99294de4314fe216ff51b10174458a4bac8bc406771e178d8c",
+          "portable_sha256": "67607549fbdfef99294de4314fe216ff51b10174458a4bac8bc406771e178d8c",
+          "compressed_sha256": "253905303dfa77d33739dfbdd32e17fe5f6a62701f7a858145b305f3efc5e8aa"
+        },
+        {
+          "path": "direct-reader-full-verified--direct-split-human-majority--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "direct-reader-full-verified",
+      "case": "direct-split-lone",
+      "exe_sha256": "ba91ca1ebe9855fd9887139a1aad3b5d683fa9254d3a5d486956cf4bc3492b62",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "direct-reader-full-verified--direct-split-lone--stdout.log.gz",
+          "original_sha256": "1cc4ea64397b42e7280317e89f6671cc914e434ca74b321f86805267398bfe1f",
+          "portable_sha256": "1cc4ea64397b42e7280317e89f6671cc914e434ca74b321f86805267398bfe1f",
+          "compressed_sha256": "0ee0f6e253c6ae166de0fd213300fe8d2878df9a89a922450656c5f14c2b43c2"
+        },
+        {
+          "path": "direct-reader-full-verified--direct-split-lone--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "direct-reader-full-verified",
+      "case": "direct-split-one-way",
+      "exe_sha256": "ba91ca1ebe9855fd9887139a1aad3b5d683fa9254d3a5d486956cf4bc3492b62",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "direct-reader-full-verified--direct-split-one-way--stdout.log.gz",
+          "original_sha256": "3bf499503d853fba5b704ad50dc821eda984ace2784d1fc756edb0c26d7a44dc",
+          "portable_sha256": "3bf499503d853fba5b704ad50dc821eda984ace2784d1fc756edb0c26d7a44dc",
+          "compressed_sha256": "36b603947d162b26ef38e143328b098586ab80af0e0aa483071d4b06d3c20521"
+        },
+        {
+          "path": "direct-reader-full-verified--direct-split-one-way--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "direct-reader-full-verified",
+      "case": "direct-split-one-way-joiner",
+      "exe_sha256": "ba91ca1ebe9855fd9887139a1aad3b5d683fa9254d3a5d486956cf4bc3492b62",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "direct-reader-full-verified--direct-split-one-way-joiner--stdout.log.gz",
+          "original_sha256": "e9a3e79b20792ad90e0f48d9a89b3c7fb9aaa9ab70ff7fde9d6060a46cd0d767",
+          "portable_sha256": "e9a3e79b20792ad90e0f48d9a89b3c7fb9aaa9ab70ff7fde9d6060a46cd0d767",
+          "compressed_sha256": "15001328ea8d5614f0a2f9344f435920e6e93a7580ac9105c2cf3b67f7b16670"
+        },
+        {
+          "path": "direct-reader-full-verified--direct-split-one-way-joiner--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "direct-reader-full-verified",
+      "case": "direct-split-two-two",
+      "exe_sha256": "ba91ca1ebe9855fd9887139a1aad3b5d683fa9254d3a5d486956cf4bc3492b62",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "direct-reader-full-verified--direct-split-two-two--stdout.log.gz",
+          "original_sha256": "bff64c987f30e25e3d15048acc109eac2184f38164771db2cdd84d51fabc3a05",
+          "portable_sha256": "bff64c987f30e25e3d15048acc109eac2184f38164771db2cdd84d51fabc3a05",
+          "compressed_sha256": "a8499f1b5406e063453d86c72a66af0fc3402ece321fa771f8a5f2791ec697cf"
+        },
+        {
+          "path": "direct-reader-full-verified--direct-split-two-two--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "direct-reader-hung-verified",
+      "case": "hung_host_18s_direct_survivor_holds_then_migrates_roster",
+      "exe_sha256": "ba91ca1ebe9855fd9887139a1aad3b5d683fa9254d3a5d486956cf4bc3492b62",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "direct-reader-hung-verified--hung_host_18s_direct_survivor_holds_then_migrates_roster--stdout.log.gz",
+          "original_sha256": "240621d217d7dea95c43ab499f1986fe7f5a47bde7d556a151ff3bd48a22c115",
+          "portable_sha256": "240621d217d7dea95c43ab499f1986fe7f5a47bde7d556a151ff3bd48a22c115",
+          "compressed_sha256": "a3a921ae781258521a66dd1cb968fce104def70fc2e5073479f23485c9d663b3"
+        },
+        {
+          "path": "direct-reader-hung-verified--hung_host_18s_direct_survivor_holds_then_migrates_roster--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "direct-reader-hung-verified",
+      "case": "hung_host_3s_direct_survivor_holds_without_a_split",
+      "exe_sha256": "ba91ca1ebe9855fd9887139a1aad3b5d683fa9254d3a5d486956cf4bc3492b62",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "direct-reader-hung-verified--hung_host_3s_direct_survivor_holds_without_a_split--stdout.log.gz",
+          "original_sha256": "9e089ac9243703044be148db4159bab0e2b8b6965660e7db9658bba1ecfd4689",
+          "portable_sha256": "9e089ac9243703044be148db4159bab0e2b8b6965660e7db9658bba1ecfd4689",
+          "compressed_sha256": "ab30066598ccea9fe8c9dfd503bde68cb4fd20989f70f74a479b5688f45bce82"
+        },
+        {
+          "path": "direct-reader-hung-verified--hung_host_3s_direct_survivor_holds_without_a_split--stderr.log.gz",
           "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
           "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"

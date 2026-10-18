@@ -20,6 +20,14 @@ history, foreign-hold scope, wire/admission and retained member-start detectors
 pass too. Both unchanged hung-host controls and the complete identity, session,
 match/startup and seat-succession suites pass on that same executable.
 
+The reader-receipt follow-up reproduces two REDs before the fix: a pre-hold
+report was acknowledged as a continuation, and a reader-only acknowledgement
+could not adopt the sole committed history. Executable `ba91ca1e` passes both
+detectors, all five full split recoveries and both unchanged hung-host controls.
+Five wrongly named case selections in `direct-reader-receipt-verified` are
+retained as failed invocations, with no engine-property verdict; the corrected
+full cases are in `direct-reader-full-verified`.
+
 The original obsolete direct assertions and every intervening RED remain in the
 receipts. Other complete-suite rows and the fixed/random catalogues still need
 their final validation; this is not the complete gate.

@@ -18,6 +18,9 @@
 namespace RTE {
 
 	using namespace NetPeerFrameDetail;
+	// The low seat bits acknowledge committed continuations; the next seat bits acknowledge pre-hold reader reports.
+	// Heartbeats publish those distinct masks in voterMask and offset, respectively. A reader receipt cannot decide a split.
+	static constexpr unsigned c_DirectReaderReceiptShift = NetMatchConfigUtil::c_MaxPeerCount;
 
 	std::pair<INetTransport*, NetPeerId> NetLockstepCoordinator::PeerFrameRoute(uint8_t peer) const {
 		if (m_Config.peerSessionLinks) return m_Config.peerSessionLinks->RouteTo(peer);
@@ -320,11 +323,11 @@ namespace RTE {
 			uint32_t remoteOwners = 0;
 			for (uint8_t owner: message.members) remoteOwners |= SeatBit(owner);
 			if (split != message.frame || remoteOwners != arbitration.owners ||
-			    ((message.connectedMask | message.voterMask) & ~arbitration.owners) != 0) continue;
-			arbitration.historiesSeen |= SeatBit(message.senderPeerId);
+			    ((message.connectedMask | message.voterMask | message.offset) & ~arbitration.owners) != 0) continue;
+			arbitration.historiesSeen |= SeatBit(message.senderPeerId) << (message.appliedFrame >= message.boundary ? 0 : c_DirectReaderReceiptShift);
 			if (arbitration.offeredHold && *m_LastCompletedSimulationTick < arbitration.offeredHold->frame &&
 			    message.appliedFrame >= message.boundary && message.boundary == arbitration.offeredHold->frame &&
-			    message.connectedMask == arbitration.offeredHold->connectedMask && (message.voterMask & SeatBit(m_Config.localPeerId))) {
+			    message.connectedMask == arbitration.offeredHold->connectedMask && ((message.voterMask | message.offset) & SeatBit(m_Config.localPeerId))) {
 				// The heal has one continuation. This reader committed nothing past its cutoff and adopts that standing hold.
 				arbitration.readerHoldFrame = arbitration.offeredHold->frame;
 				const auto certificate = std::exchange(arbitration.offeredHold, {});
@@ -457,7 +460,8 @@ namespace RTE {
 				    split->second.offeredHold ? std::optional(split->second.offeredHold->frame) : std::nullopt;
 				if (!boundary) continue;
 				heartbeat.frame = split->first; heartbeat.boundary = *boundary;
-				heartbeat.voterMask = split->second.historiesSeen;
+				heartbeat.voterMask = split->second.historiesSeen & split->second.owners;
+				heartbeat.offset = (split->second.historiesSeen >> c_DirectReaderReceiptShift) & split->second.owners;
 				for (uint8_t seat = 1; seat <= m_Config.peerCount; ++seat)
 					if (split->second.owners & SeatBit(seat)) heartbeat.members.push_back(seat);
 				break;

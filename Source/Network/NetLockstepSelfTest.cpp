@@ -181,6 +181,13 @@ namespace RTE {
 				heartbeat.rosterRevision = 17;
 				heartbeat.bytes.assign(40, 0); std::fill(heartbeat.bytes.begin() + 8, heartbeat.bytes.end(), 0x6a);
 				heartbeat.totalBytes = static_cast<uint32_t>(heartbeat.bytes.size());
+				if (hold != 0) {
+					auto reader = heartbeat; reader.appliedFrame = hold - 1;
+					peer.CheckDirectPeerHistory(reader, 1098);
+					if (peer.m_PeerSplitArbitrations.at(epoch).historiesSeen & (1U << (reader.senderPeerId - 1))) {
+						*error = "a pre-hold reader report was acknowledged as a committed continuation"; return false;
+					}
+				}
 				// A one-way heartbeat is not a healed exchange: its sender must have received this branch's history too.
 				peer.CheckDirectPeerHistory(heartbeat, 1099);
 				if (!peer.IsRunning() || !peer.m_PeerFrameTieWinners.empty()) { *error = "a one-way history report selected a direct continuation"; return false; }
@@ -237,7 +244,7 @@ namespace RTE {
 				history.connectedMask = 2; history.members = {1, 2}; history.bytes.assign(40, 0x6a);
 				peer.CheckDirectPeerHistory(history, 1100);
 				if (peer.m_PeerBridges.contains(1) || !peer.IsRunning()) { *error = "a one-way report adopted an active owner's foreign hold"; return false; }
-				history.voterMask = 1;
+				history.offset = 1; // A reader's acknowledgement is distinct from receipt of a committed continuation.
 				peer.CheckDirectPeerHistory(history, 1200);
 				if (!peer.m_PeerBridges.contains(1) || peer.m_FrameGroupMembers != 2 || !peer.IsRunning()) {
 					*error = "a healed owner with no continuation could not adopt the sole committed history"; return false;

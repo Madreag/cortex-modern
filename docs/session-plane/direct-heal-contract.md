@@ -29,7 +29,8 @@ frame and digest describe completed simulation, not speculative preparation.
 Its explicit electorate marks a continuation; zero is a valid hold frame and
 split epoch. The ledger records an installed hold separately from its number.
 The heartbeat's voter mask acknowledges whose committed history this peer has
-received in that epoch. A competing branch is selected only after both
+received in that epoch. Its offset mask separately acknowledges pre-hold reader
+reports; receiving one never acknowledges a committed continuation. A competing branch is selected only after both
 directions of that exchange complete; incoming one-way traffic cannot decide
 the fault. A foreign group's local hold is a history offer to an active excluded
 owner. If the healed exchange confirms that owner has no continuation, it can
