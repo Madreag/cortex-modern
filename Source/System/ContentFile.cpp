@@ -217,6 +217,32 @@ std::vector<AudioCheckpoint::Sample> ContentFile::ReadCheckpointSamples() {
 	return values;
 }
 
+std::string ContentFile::ReadCheckpointSamplePath(const FMOD::Sound* sound) {
+	if (!sound) return {};
+	if (!CheckpointNativeStorage::Reading()) {
+		std::string path;
+		for (const auto& [candidate, loaded]: s_LoadedSamples) if (loaded == sound && (path.empty() || candidate < path)) path = candidate;
+		if (path.empty()) throw UnsupportedCheckpointNative("sample has no cached asset identity");
+		return path;
+	}
+	using Paths = std::unordered_map<const FMOD::Sound*, std::string>;
+	static const char kind{};
+	const auto paths = std::static_pointer_cast<const Paths>(CheckpointNativeStorage::ReadIndex(&s_SampleValues, &kind, [] {
+		auto result = std::make_shared<Paths>();
+		CheckpointForEachValue(*CheckpointNativeStorage::Source(&s_SampleValues), [&](const auto& entry) {
+			const auto* record = CheckpointNativeStorage::Source(entry.second.get());
+			if (!record->sound) return;
+			const auto& candidate = entry.first.Value();
+			const auto [path, added] = result->try_emplace(record->sound, candidate);
+			if (!added && candidate < path->second) path->second = candidate;
+		});
+		return result;
+	}));
+	const auto path = paths->find(sound);
+	if (path == paths->end()) throw UnsupportedCheckpointNative("saved sample has no cached asset identity");
+	return path->second;
+}
+
 std::string ContentFile::SavedSampleValuesMismatch() {
 	CheckpointNativeStorage::AllocationScope storage(true);
 	const std::string path = "checkpoint-selftest/saved-sample.wav";
@@ -237,6 +263,7 @@ std::string ContentFile::SavedSampleValuesMismatch() {
 	CheckpointNativeStorage::ReadScope read(inventory->Pages(), headers);
 	const auto values = ReadCheckpointSamples();
 	const auto saved = std::find_if(values.begin(), values.end(), [&](const auto& sample) { return sample.path == path; });
+	if (ReadCheckpointSamplePath(record->sound) != path) return "saved sample identity follows later cache removal";
 	return saved != values.end() && saved->SaveCheckpoint() == before.SaveCheckpoint() ? std::string{} : "saved sample follows later values or cache removal";
 }
 

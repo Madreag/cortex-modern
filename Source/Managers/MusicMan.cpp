@@ -489,11 +489,7 @@ struct MusicCheckpoint {
         CheckpointWriter writer("MusicSet1");
         writer(source.m_SoundSelectionCycleMode, source.m_CurrentSelection, source.m_SoundData.size());
         for (const auto& sample: CheckpointValues(source.m_SoundData)) {
-            std::string path;
-            if (sample.SoundObject) {
-                for (const auto& [candidate, sound]: ContentFile::s_LoadedSamples) if (sound == sample.SoundObject && (path.empty() || candidate < path)) path = candidate;
-                if (path.empty()) throw std::runtime_error("music sample has no cached asset identity");
-            }
+            const std::string path = ContentFile::ReadCheckpointSamplePath(sample.SoundObject);
             writer(CheckpointWriter::Native([&] {
                 CheckpointWriter value("MusicSample1");
                 value(sample.SoundFile, path, sample.Offset, sample.MinimumAudibleDistance, sample.AttenuationStartDistance);
