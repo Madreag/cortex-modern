@@ -1077,10 +1077,12 @@ namespace RTE {
 		}
 
 		static bool StoppedContinuationHasNoStartHandshake(std::string* error) {
-			for (bool stopped: {true, false}) {
+			for (unsigned role = 0; role < 3; ++role) {
+				const bool stopped = role == 0, foreign = role == 2;
 				Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
 				peer.m_Config.peerFrameGroups = true; peer.m_Config.authorityPeerId = 1;
 				peer.m_MigrationPhase = NetHostMigrationPhase::None;
+				peer.m_FrameGroupMembers = 7; peer.m_FrameGroupChanges = {{1, 7}};
 				peer.m_Config.inputDelayFrames = 7;
 				peer.m_Stats.nextFrame = 358; peer.m_LastCompletedSimulationTick = 357;
 				peer.m_State = stopped ? NetLockstepState::Stopped : NetLockstepState::Running;
@@ -1094,6 +1096,7 @@ namespace RTE {
 				start.scenario = peer.m_Config.scenario; start.ownershipPolicy = peer.m_Config.ownershipPolicy;
 				auto message = peer.PeerFrameMessage(NetHostMigrationMessageType::PeerControl);
 				message.senderPeerId = 3;
+				message.connectedMask = foreign ? 5 : 7;
 				if (!NetLockstepCodec::Encode({start}, message.bytes)) return false;
 				message.totalBytes = message.bytes.size();
 				std::vector<uint8_t> signedMessage; NetHostMigrationMessage authenticated;
@@ -1104,6 +1107,10 @@ namespace RTE {
 					if (!peer.IsStopped() || peer.m_Stats.timeoutReason != decision || peer.m_Stats.nextFrame != 358 ||
 					    peer.m_RemoteStartsReceived.contains(3) || peer.m_PeerAdmissions.contains(3) || !wire.sent.empty()) {
 						*error = "a winning member's return start changed the losing continuation's decision stop"; return false;
+					}
+				} else if (foreign) {
+					if (!peer.IsRunning() || peer.m_Stats.nextFrame != 358 || peer.m_RemoteStartsReceived.contains(3) || peer.m_PeerAdmissions.contains(3) || !wire.sent.empty()) {
+						*error = "another continuation's return start changed a live peer before it adopted that continuation"; return false;
 					}
 				} else if (peer.GetState() != NetLockstepState::Failed || !peer.m_Stats.timeoutReason.starts_with("ProtocolError:lockstep start mismatch")) {
 					*error = "a live continuation accepted uncertified member start terms"; return false;

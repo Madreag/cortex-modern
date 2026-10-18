@@ -1,0 +1,492 @@
+{
+  "topology": "single-box",
+  "proof": false,
+  "complete_gate": false,
+  "parent": "712e3ee8500251b089ece4f462654fdd395772e7",
+  "launches": [
+    {
+      "collection": "foreign-start-red",
+      "case": "return-member-starts",
+      "exe_sha256": "bb1a8d8c3c81779669258581343dd713bfeeefffbcfebaa73da26513310f01e3",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "foreign-start-red--return-member-starts--stdout.log.gz",
+          "original_sha256": "21ec548e7e2ef82083791e7472913347d8b3b756a1c01d000cd6617391e63047",
+          "portable_sha256": "21ec548e7e2ef82083791e7472913347d8b3b756a1c01d000cd6617391e63047",
+          "compressed_sha256": "dfa9d9d4afff7e49fc307f1e0691baa70ef5d8a076f91a63f1d34b70f50ec855"
+        },
+        {
+          "path": "foreign-start-red--return-member-starts--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "foreign-start-red",
+      "case": "stopped-start-handshake",
+      "exe_sha256": "bb1a8d8c3c81779669258581343dd713bfeeefffbcfebaa73da26513310f01e3",
+      "visible_window": true,
+      "exit_code": 1,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "foreign-start-red--stopped-start-handshake--stdout.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        },
+        {
+          "path": "foreign-start-red--stopped-start-handshake--stderr.log.gz",
+          "original_sha256": "27e78e713fd6a2357684824be2934be55acaa86b39b4db9ce4e11946933181b4",
+          "portable_sha256": "27e78e713fd6a2357684824be2934be55acaa86b39b4db9ce4e11946933181b4",
+          "compressed_sha256": "1762383c9e1b649af07b58b94f11efe2abd91fefa2d06d4985368f600f1cbfda"
+        }
+      ]
+    },
+    {
+      "collection": "foreign-start-diagnostic",
+      "case": "a_healed_tie_keeps_one_history_across_a_host_change",
+      "exe_sha256": "bb1a8d8c3c81779669258581343dd713bfeeefffbcfebaa73da26513310f01e3",
+      "visible_window": true,
+      "exit_code": 1,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "foreign-start-diagnostic--a_healed_tie_keeps_one_history_across_a_host_change--stdout.log.gz",
+          "original_sha256": "eb2ae7bdfdd8bc445f7dac6a0d7edbdfc8bf5740aebc05b6bc823207f768de8e",
+          "portable_sha256": "eb2ae7bdfdd8bc445f7dac6a0d7edbdfc8bf5740aebc05b6bc823207f768de8e",
+          "compressed_sha256": "36ca649b68f56a90f550da8631f862b8a3bcf3924f27e34fd43bfbd5ef72d4a5"
+        },
+        {
+          "path": "foreign-start-diagnostic--a_healed_tie_keeps_one_history_across_a_host_change--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "foreign-start-green",
+      "case": "direct-hold-scope",
+      "exe_sha256": "6756516bac52dc28a20ef96a7a3fee73f9d9581db5ac81891117c2e0132e20a5",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "foreign-start-green--direct-hold-scope--stdout.log.gz",
+          "original_sha256": "1ebb57ed8c7dd1dc3bfcb6aa4ec4ccebaad89f57a279666356c951ecba5eef5c",
+          "portable_sha256": "1ebb57ed8c7dd1dc3bfcb6aa4ec4ccebaad89f57a279666356c951ecba5eef5c",
+          "compressed_sha256": "0a6e55f744d76628bdf149e59b892e7afe4ae0ad5515b545584b6389594952c3"
+        },
+        {
+          "path": "foreign-start-green--direct-hold-scope--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "foreign-start-green",
+      "case": "foreign-history-scope",
+      "exe_sha256": "6756516bac52dc28a20ef96a7a3fee73f9d9581db5ac81891117c2e0132e20a5",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "foreign-start-green--foreign-history-scope--stdout.log.gz",
+          "original_sha256": "8bf4169d7c3e777e6f81550f0a9ea5b7310443fbce606cb82a4dc691ff7e281e",
+          "portable_sha256": "8bf4169d7c3e777e6f81550f0a9ea5b7310443fbce606cb82a4dc691ff7e281e",
+          "compressed_sha256": "cfb28b030354764c7efd17174a502b556f211dc19ce34e610591ada82271115d"
+        },
+        {
+          "path": "foreign-start-green--foreign-history-scope--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "foreign-start-green",
+      "case": "return-member-starts",
+      "exe_sha256": "6756516bac52dc28a20ef96a7a3fee73f9d9581db5ac81891117c2e0132e20a5",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "foreign-start-green--return-member-starts--stdout.log.gz",
+          "original_sha256": "21ec548e7e2ef82083791e7472913347d8b3b756a1c01d000cd6617391e63047",
+          "portable_sha256": "21ec548e7e2ef82083791e7472913347d8b3b756a1c01d000cd6617391e63047",
+          "compressed_sha256": "dfa9d9d4afff7e49fc307f1e0691baa70ef5d8a076f91a63f1d34b70f50ec855"
+        },
+        {
+          "path": "foreign-start-green--return-member-starts--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "foreign-start-green",
+      "case": "stopped-start-handshake",
+      "exe_sha256": "6756516bac52dc28a20ef96a7a3fee73f9d9581db5ac81891117c2e0132e20a5",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "foreign-start-green--stopped-start-handshake--stdout.log.gz",
+          "original_sha256": "92f8688ccd8918311c77f0de41006ac6b1bfcedae5bff627c4ba328267f98230",
+          "portable_sha256": "92f8688ccd8918311c77f0de41006ac6b1bfcedae5bff627c4ba328267f98230",
+          "compressed_sha256": "0ba487550ff9511c7b69c5321b87f89cc096e9202be63ee95111b68cd9a07c70"
+        },
+        {
+          "path": "foreign-start-green--stopped-start-handshake--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "foreign-start-green",
+      "case": "waiting-mesh-start",
+      "exe_sha256": "6756516bac52dc28a20ef96a7a3fee73f9d9581db5ac81891117c2e0132e20a5",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "foreign-start-green--waiting-mesh-start--stdout.log.gz",
+          "original_sha256": "6d4ce7cb22c1c90328495db24beece5556f23eab386359d4cf831592d023910b",
+          "portable_sha256": "6d4ce7cb22c1c90328495db24beece5556f23eab386359d4cf831592d023910b",
+          "compressed_sha256": "24aea3343c1c6f5ef160a426491729e20c2e21f1607e2083c475e8947aa87dc7"
+        },
+        {
+          "path": "foreign-start-green--waiting-mesh-start--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "foreign-start-returns",
+      "case": "a_healed_tie_keeps_one_history_across_a_host_change",
+      "exe_sha256": "6756516bac52dc28a20ef96a7a3fee73f9d9581db5ac81891117c2e0132e20a5",
+      "visible_window": true,
+      "exit_code": 1,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "foreign-start-returns--a_healed_tie_keeps_one_history_across_a_host_change--stdout.log.gz",
+          "original_sha256": "9e03f32ff8f15207bc726a2f697da0ed4fd31c6638b321fbde2856d5f45cf043",
+          "portable_sha256": "9e03f32ff8f15207bc726a2f697da0ed4fd31c6638b321fbde2856d5f45cf043",
+          "compressed_sha256": "2dd5d3e70f734d76a9644ce7e3ddfdbdb3962f14c0ccc6c548cfeaf232c54fdc"
+        },
+        {
+          "path": "foreign-start-returns--a_healed_tie_keeps_one_history_across_a_host_change--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "foreign-start-returns",
+      "case": "joiner_catching_up_at_102_percent_returns_four_seats_over_100ms",
+      "exe_sha256": "6756516bac52dc28a20ef96a7a3fee73f9d9581db5ac81891117c2e0132e20a5",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "foreign-start-returns--joiner_catching_up_at_102_percent_returns_four_seats_over_100ms--stdout.log.gz",
+          "original_sha256": "e6e3042f8c2258ab3e9cda2b4b418baf8668d27959863cc51d0d8b66a5b05614",
+          "portable_sha256": "e6e3042f8c2258ab3e9cda2b4b418baf8668d27959863cc51d0d8b66a5b05614",
+          "compressed_sha256": "3aac866b304ddbb1a8172869fa96a47ae3f461014a3eb300d3c215bf3f1349f7"
+        },
+        {
+          "path": "foreign-start-returns--joiner_catching_up_at_102_percent_returns_four_seats_over_100ms--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "foreign-start-returns",
+      "case": "refereed_2_2_split_then_a_second_drop_in_the_same_hold_over_100ms",
+      "exe_sha256": "6756516bac52dc28a20ef96a7a3fee73f9d9581db5ac81891117c2e0132e20a5",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "foreign-start-returns--refereed_2_2_split_then_a_second_drop_in_the_same_hold_over_100ms--stdout.log.gz",
+          "original_sha256": "03ae46fdba4dda72d21937d317d18ef896f4dcde367bb9ce6374b8e609e74861",
+          "portable_sha256": "03ae46fdba4dda72d21937d317d18ef896f4dcde367bb9ce6374b8e609e74861",
+          "compressed_sha256": "53fff3ba344cc588068a763d0259a70ede55df3174d84944a177a50a9326b14a"
+        },
+        {
+          "path": "foreign-start-returns--refereed_2_2_split_then_a_second_drop_in_the_same_hold_over_100ms--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "foreign-start-returns",
+      "case": "repeated_host_changes_bound_the_tail_or_answer_missing",
+      "exe_sha256": "6756516bac52dc28a20ef96a7a3fee73f9d9581db5ac81891117c2e0132e20a5",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "foreign-start-returns--repeated_host_changes_bound_the_tail_or_answer_missing--stdout.log.gz",
+          "original_sha256": "7f90b548d02b2594450b8e2d513c166586638eff7e35445fa56c324885cd327b",
+          "portable_sha256": "7f90b548d02b2594450b8e2d513c166586638eff7e35445fa56c324885cd327b",
+          "compressed_sha256": "af82214c83524703a2bb116320e35fab83d3bdecb0f24ede6cf90011b610ad04"
+        },
+        {
+          "path": "foreign-start-returns--repeated_host_changes_bound_the_tail_or_answer_missing--stderr.log.gz",
+          "original_sha256": "e297e3bbe435723304639d20623a81dd7a93a3e092edee35061d9c4c9800e00c",
+          "portable_sha256": "e297e3bbe435723304639d20623a81dd7a93a3e092edee35061d9c4c9800e00c",
+          "compressed_sha256": "79798acc13dd7e0c97d3ca3c84168ac85fae44f89abae45f86f9e3d94b5e1610"
+        }
+      ]
+    },
+    {
+      "collection": "foreign-start-inventory",
+      "case": "net-input-acceptance-selftest",
+      "exe_sha256": "6756516bac52dc28a20ef96a7a3fee73f9d9581db5ac81891117c2e0132e20a5",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "foreign-start-inventory--net-input-acceptance-selftest--stdout.log.gz",
+          "original_sha256": "bf37e3c61fe5d6e4e4021ffa28121937e32aa6b6c42e27ddb03c28d026321e57",
+          "portable_sha256": "bf37e3c61fe5d6e4e4021ffa28121937e32aa6b6c42e27ddb03c28d026321e57",
+          "compressed_sha256": "2ba1e8f5fd4d36e699c99be488fc335582356e2d3796c1b429a7719701f2d7dd"
+        },
+        {
+          "path": "foreign-start-inventory--net-input-acceptance-selftest--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "foreign-start-inventory",
+      "case": "net-lockstep-release-paths-selftest",
+      "exe_sha256": "6756516bac52dc28a20ef96a7a3fee73f9d9581db5ac81891117c2e0132e20a5",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "foreign-start-inventory--net-lockstep-release-paths-selftest--stdout.log.gz",
+          "original_sha256": "06db8c222249141d1936febed0fe96b7eb440c6b6a69a427badd39faa5e6c6df",
+          "portable_sha256": "06db8c222249141d1936febed0fe96b7eb440c6b6a69a427badd39faa5e6c6df",
+          "compressed_sha256": "310beb8cd5c7e8ae5c3d1a96344226fe4f76b4433dd41c7a121b1fb701ecb975"
+        },
+        {
+          "path": "foreign-start-inventory--net-lockstep-release-paths-selftest--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "foreign-start-inventory",
+      "case": "net-lockstep-released-claims-selftest",
+      "exe_sha256": "6756516bac52dc28a20ef96a7a3fee73f9d9581db5ac81891117c2e0132e20a5",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "foreign-start-inventory--net-lockstep-released-claims-selftest--stdout.log.gz",
+          "original_sha256": "93bd9346d8fe902f8907b1e2ff41f6cae7f0db3dc75d2b33ba9db7aae3b34fe2",
+          "portable_sha256": "93bd9346d8fe902f8907b1e2ff41f6cae7f0db3dc75d2b33ba9db7aae3b34fe2",
+          "compressed_sha256": "429c71784e777e30f940db652a45918b6cf6f37d52341e4ca21ada25dec47eac"
+        },
+        {
+          "path": "foreign-start-inventory--net-lockstep-released-claims-selftest--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "foreign-start-inventory",
+      "case": "net-lockstep-seat-admission-selftest",
+      "exe_sha256": "6756516bac52dc28a20ef96a7a3fee73f9d9581db5ac81891117c2e0132e20a5",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "foreign-start-inventory--net-lockstep-seat-admission-selftest--stdout.log.gz",
+          "original_sha256": "90e69fb392330ef2a327545e22d6c73b60cf359cf08b97774f3502f9cb3d1e63",
+          "portable_sha256": "90e69fb392330ef2a327545e22d6c73b60cf359cf08b97774f3502f9cb3d1e63",
+          "compressed_sha256": "44e7783315d632d03d8e6a163b48f702426d5e43f4f5a686e39b00c2c06f07d6"
+        },
+        {
+          "path": "foreign-start-inventory--net-lockstep-seat-admission-selftest--stderr.log.gz",
+          "original_sha256": "9c2f44c4a7d6c1111805b06c6570ff6d71115188adf6c1d7b45cf0478269e4cc",
+          "portable_sha256": "9c2f44c4a7d6c1111805b06c6570ff6d71115188adf6c1d7b45cf0478269e4cc",
+          "compressed_sha256": "9fccbea688ef22c22a56a04638020687ff2969dbf342e82569c787c1154a53ea"
+        }
+      ]
+    },
+    {
+      "collection": "foreign-start-inventory",
+      "case": "net-lockstep-seat-succession-selftest",
+      "exe_sha256": "6756516bac52dc28a20ef96a7a3fee73f9d9581db5ac81891117c2e0132e20a5",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "foreign-start-inventory--net-lockstep-seat-succession-selftest--stdout.log.gz",
+          "original_sha256": "cbb7abe28ed513a6add7b6ee71fd37c9531db9a2bb5f8063d0a6a37516ddf806",
+          "portable_sha256": "cbb7abe28ed513a6add7b6ee71fd37c9531db9a2bb5f8063d0a6a37516ddf806",
+          "compressed_sha256": "1fdf2446c0ab418016d120ab34cd01c00f7250142ef03561babea726f30fbb6a"
+        },
+        {
+          "path": "foreign-start-inventory--net-lockstep-seat-succession-selftest--stderr.log.gz",
+          "original_sha256": "8340167d42effb8c7144b78d137f96daa526ac44d940fadb8d0cfaaf46d3a7c0",
+          "portable_sha256": "8340167d42effb8c7144b78d137f96daa526ac44d940fadb8d0cfaaf46d3a7c0",
+          "compressed_sha256": "57eff3e3e2319df0384b21a6e4cb8de7b31586a959468b38ba54a60198a00bfe"
+        }
+      ]
+    },
+    {
+      "collection": "foreign-start-inventory",
+      "case": "net-lockstep-selftest",
+      "exe_sha256": "6756516bac52dc28a20ef96a7a3fee73f9d9581db5ac81891117c2e0132e20a5",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "foreign-start-inventory--net-lockstep-selftest--stdout.log.gz",
+          "original_sha256": "f2f11cfba16473640fdd7a48b8d1737026de6fe1904aeb31e0a1c09ea88c94db",
+          "portable_sha256": "f2f11cfba16473640fdd7a48b8d1737026de6fe1904aeb31e0a1c09ea88c94db",
+          "compressed_sha256": "d20144b31599b9e4a6ff642ecaa5404cff99ec90e54c1cd16b79c317c1d9e24e"
+        },
+        {
+          "path": "foreign-start-inventory--net-lockstep-selftest--stderr.log.gz",
+          "original_sha256": "bfdc29fdfcf5b37842f01c5f7984efc1e426e23802e96de04ab4862ddf5fc6b1",
+          "portable_sha256": "bfdc29fdfcf5b37842f01c5f7984efc1e426e23802e96de04ab4862ddf5fc6b1",
+          "compressed_sha256": "6c817c1615e7669051461a53cbf38cffb663b4a0cf0b5e6f350c95fd3d247506"
+        }
+      ]
+    },
+    {
+      "collection": "foreign-start-inventory",
+      "case": "net-rejoin-matrix-selftest",
+      "exe_sha256": "6756516bac52dc28a20ef96a7a3fee73f9d9581db5ac81891117c2e0132e20a5",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "foreign-start-inventory--net-rejoin-matrix-selftest--stdout.log.gz",
+          "original_sha256": "c9d08975fc0105d28de31aa0b7221b835ad9fb6f4d26f4a9e544b91605369a6e",
+          "portable_sha256": "c9d08975fc0105d28de31aa0b7221b835ad9fb6f4d26f4a9e544b91605369a6e",
+          "compressed_sha256": "066cf77beeba4544dd1db519122bcceb5f5694b98f2742d5f869981620e3645b"
+        },
+        {
+          "path": "foreign-start-inventory--net-rejoin-matrix-selftest--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "foreign-start-inventory",
+      "case": "net-session-plane-hold-schedules-selftest",
+      "exe_sha256": "6756516bac52dc28a20ef96a7a3fee73f9d9581db5ac81891117c2e0132e20a5",
+      "visible_window": true,
+      "exit_code": 1,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "foreign-start-inventory--net-session-plane-hold-schedules-selftest--stdout.log.gz",
+          "original_sha256": "6222cbaa76ee6ba77ec164c3685b4568c39b2e25e51274fc86e912013a367558",
+          "portable_sha256": "6222cbaa76ee6ba77ec164c3685b4568c39b2e25e51274fc86e912013a367558",
+          "compressed_sha256": "6ed6a0d953f840f65ac788bb0e80ff722fda04d3ee4977e17ba0aafbc63b482e"
+        },
+        {
+          "path": "foreign-start-inventory--net-session-plane-hold-schedules-selftest--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    },
+    {
+      "collection": "foreign-start-inventory",
+      "case": "net-session-plane-selftest",
+      "exe_sha256": "6756516bac52dc28a20ef96a7a3fee73f9d9581db5ac81891117c2e0132e20a5",
+      "visible_window": true,
+      "exit_code": 1,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "foreign-start-inventory--net-session-plane-selftest--stdout.log.gz",
+          "original_sha256": "38989a1aa6806bb7b303123f991d03beeae0fc068dc309ca056f733b92e205c2",
+          "portable_sha256": "38989a1aa6806bb7b303123f991d03beeae0fc068dc309ca056f733b92e205c2",
+          "compressed_sha256": "a7670845343910a3e627769bb1d1418be405e99e7f32218a59568ab6c183a129"
+        },
+        {
+          "path": "foreign-start-inventory--net-session-plane-selftest--stderr.log.gz",
+          "original_sha256": "e297e3bbe435723304639d20623a81dd7a93a3e092edee35061d9c4c9800e00c",
+          "portable_sha256": "e297e3bbe435723304639d20623a81dd7a93a3e092edee35061d9c4c9800e00c",
+          "compressed_sha256": "79798acc13dd7e0c97d3ca3c84168ac85fae44f89abae45f86f9e3d94b5e1610"
+        }
+      ]
+    },
+    {
+      "collection": "foreign-start-inventory",
+      "case": "net-world-join-selftest",
+      "exe_sha256": "6756516bac52dc28a20ef96a7a3fee73f9d9581db5ac81891117c2e0132e20a5",
+      "visible_window": true,
+      "exit_code": 0,
+      "timed_out": false,
+      "logs": [
+        {
+          "path": "foreign-start-inventory--net-world-join-selftest--stdout.log.gz",
+          "original_sha256": "c9e2e94a0bac3a3374a4bae6fd513dae31984bfb7148c8234126e9e00c97104a",
+          "portable_sha256": "c9e2e94a0bac3a3374a4bae6fd513dae31984bfb7148c8234126e9e00c97104a",
+          "compressed_sha256": "58bc49367ba078b501ac792a63b37fb7fe49b99d55f5076182e1e9730be70ad6"
+        },
+        {
+          "path": "foreign-start-inventory--net-world-join-selftest--stderr.log.gz",
+          "original_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "portable_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "compressed_sha256": "9ceffb7310338057cfe71a4ae1e2c98d2c485d81cdef906532a801f457a38d64"
+        }
+      ]
+    }
+  ]
+}

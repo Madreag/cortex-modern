@@ -803,7 +803,7 @@ namespace RTE {
 					if (decoded.ok) if (const auto* start = std::get_if<NetLockstepStart>(&decoded.packet.payload))
 						DiagnosticLine() << "[session-plane-start-send] transport_owner=" << unsigned(owner) << " to=" << unsigned(other->owner)
 						    << " wrapper_sender=" << unsigned(decision.senderPeerId) << " member=" << unsigned(start->localPeerId)
-						    << " frame=" << start->startFrame << " delay=" << start->inputDelayFrames << " now_ms=" << hub.now << std::endl;
+						    << " members=" << decision.connectedMask << " frame=" << start->startFrame << " delay=" << start->inputDelayFrames << " now_ms=" << hub.now << std::endl;
 				}
 				if (hub.row.lateReceiptsFrom == owner && hub.DuringFault() && peekInto(decision) &&
 				    decision.type == NetHostMigrationMessageType::PeerReceipt) sessionDelay = hub.row.lateReceiptsMs;

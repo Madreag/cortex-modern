@@ -520,6 +520,10 @@ namespace RTE {
 				if constexpr (requires { payload.senderPeerId; }) return payload.senderPeerId == message.senderPeerId;
 				else return payload.localPeerId == message.senderPeerId;
 			}, decoded.packet.payload)) {
+				// A member can return to another continuation before this peer has adopted it. That start belongs to its
+				// named group, not this running peer's handshake. Waiting image returners still take their own member starts.
+				if (IsRunning() && std::holds_alternative<NetLockstepStart>(decoded.packet.payload) &&
+				    (message.connectedMask & SeatBit(message.senderPeerId)) != 0 && (message.connectedMask & SeatBit(m_Config.localPeerId)) == 0) return true;
 				heard();
 				m_AuthenticatedPeerMessage = message.senderPeerId;
 				HandlePacket(decoded.packet, nowMs, c_InvalidNetPeerId);
