@@ -749,6 +749,8 @@ def main():
 
     if options.repo is None or options.out is None:
         parser.error("--repo and --out are required unless --score-stdout is set")
+    # Repository files must keep their meaning after a runner enters its private cwd.
+    options.repo = options.repo.resolve()
     unknown = [name for name in options.only if name not in SELFTESTS and name not in LOAD_SENSITIVE]
     if unknown:
         parser.error(f"no such row: {', '.join(unknown)}")
