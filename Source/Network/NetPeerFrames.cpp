@@ -248,7 +248,10 @@ namespace RTE {
 		if (!m_PeerFrameTie || *m_PeerFrameTie != request) { m_PeerFrameTie = request; m_PeerFrameTieSinceMs = nowMs; }
 		// Preserve the pre-hold electorate. Once the local hold is installed its absent seats no longer vote, but the outstanding
 		// directory question still refers to the original split and must keep being polled while the survivors play.
-		m_PeerSplitArbitrations.try_emplace(split, PeerSplitArbitration{request, owners, 0});
+		auto [question, inserted] = m_PeerSplitArbitrations.try_emplace(split, PeerSplitArbitration{request, owners, 0});
+		// Poll the current request for this split, including a reader's query of the other half. Retain the original
+		// electorate and installed hold boundary: changing the request must neither displace its answer nor rename history.
+		if (!inserted) question->second.request = request;
 		PollPeerFrameTies(nowMs);
 	}
 
