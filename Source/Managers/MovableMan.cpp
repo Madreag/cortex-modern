@@ -3576,16 +3576,6 @@ bool MovableMan::ValidateScriptGraphs(const std::vector<std::string>& graphs, st
 bool MovableMan::RestoreScriptGraphs(const std::vector<std::string>& graphs, std::string* error, bool reuseHeld) {
 	AudioMan::RestorePlayPhaseScope playPhase("RestoreScriptGraphs");
 	if (!ValidateScriptGraphs(graphs, error)) return false;
-	// Native attachment reconstruction has finished. Replace device-supplied menu clones before graph preparation
-	// resolves borrowed slice paths, including actors nested inside an inventory or a craft.
-	try {
-		for (MovableObject* object: SnapshotKnownObjects()) {
-			if (auto* actor = dynamic_cast<Actor*>(object)) actor->RestoreCompletePieMenuCheckpoint();
-		}
-	} catch (const std::exception& exception) {
-		if (error) *error = exception.what();
-		return false;
-	}
 	std::vector<std::string> errors;
 	if (!reuseHeld) g_LuaMan.ResetPathCallbacks();
 	struct AllocationState {
@@ -3604,6 +3594,17 @@ bool MovableMan::RestoreScriptGraphs(const std::vector<std::string>& graphs, std
 	for (size_t index = 0; index < graphs.size(); ++index) {
 		if (!graphs[index].empty()) {
 			g_LuaMan.GetStateByIndex(static_cast<int>(index)).PrepareScriptGraph(&graphs[index], errors, reuseHeld);
+		}
+	}
+	// Graph preparation creates Lua-owned native trees too. All states' saved IDs must exist before a menu
+	// can resolve its device sources, and every menu must be complete before any borrowed handle is rebound.
+	if (errors.empty()) {
+		try {
+			for (MovableObject* object: SnapshotKnownObjects()) {
+				if (auto* actor = dynamic_cast<Actor*>(object)) actor->RestoreCompletePieMenuCheckpoint();
+			}
+		} catch (const std::exception& exception) {
+			errors.emplace_back(exception.what());
 		}
 	}
 	if (errors.empty()) {

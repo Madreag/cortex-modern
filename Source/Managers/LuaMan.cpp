@@ -2753,9 +2753,25 @@ function Graph.prepare(text, reuseHeld)
 	return problems
 end
 
-function Graph.prepareRoots()
+-- Direct graph restores also create native trees; finish their menus before roots or borrowed values use them.
+function Graph.prepareMenus()
 	local problems = {}
 	if not preparedGraph then return { "no script graph was prepared" } end
+	if preparedGraph.menusReady then return problems end
+	for _, entry in ipairs(preparedGraph.graph.order) do
+		local object = entry.copy and preparedGraph.objects[entry.id]
+		if object then
+			local ok, message = _ScriptGraphNativeMenus(object)
+			if not ok then problems[#problems + 1] = message end
+		end
+	end
+	preparedGraph.menusReady = #problems == 0
+	return problems
+end
+
+function Graph.prepareRoots()
+	local problems = Graph.prepareMenus()
+	if #problems > 0 then return problems end
 	for _, root in ipairs(preparedGraph.graph.roots) do
 		local ok, message = _ScriptGraphAdoptRoot(tonumber(root.uid))
 		if not ok then problems[#problems + 1] = message end
@@ -2770,6 +2786,8 @@ function Graph.clearPrepared() preparedGraph = nil end
 function Graph.deserialize(text, reuseHeld, adoptRoots)
 	if not preparedGraph or preparedGraph.text ~= text then Graph.prepare(text, reuseHeld) end
 	local graph, objects, problems = preparedGraph.graph, preparedGraph.objects, preparedGraph.problems
+	for _, message in ipairs(Graph.prepareMenus()) do problems[#problems + 1] = message end
+	if #problems > 0 then preparedGraph = nil; return {}, problems end
 	if adoptRoots and not preparedGraph.rootsReady then
 		for _, message in ipairs(Graph.prepareRoots()) do problems[#problems + 1] = message end
 	end
@@ -3387,6 +3405,13 @@ a.aSoundTop.shared = a.shared
 a.mo = CreateAHuman("Green Dummy", "Base.rte")
 a.mo.Pos = Vector(640, 480)
 a.mo:SetSpritePixelIndex(1, 1, 0, 19, -1, false)
+-- This actor stays Lua-owned. Its native copy and complete device menu are created by Graph.prepare itself.
+a.mo:AddInventoryItem(CreateHDFirearm("Constructor", "Base.rte"))
+a.mo:EquipFirearm(true)
+a.deviceSlice = a.mo.PieMenu:GetFirstPieSliceByPresetName("Constructor Options").SubPieMenu:GetFirstPieSliceByPresetName("Constructor Order Construction")
+a.deviceSliceAlias = a.deviceSlice
+a.deviceSliceEnabled = not a.deviceSlice.Enabled
+a.deviceSlice.Enabled = a.deviceSliceEnabled
 a.primitiveLine = LinePrimitive(2, Vector(3.25, 7.5), Vector(51, 63), 3.75, 47)
 a.primitiveLineAlias = a.primitiveLine
 a.primitiveText = TextPrimitive(1, Vector(15, 19), "native graph 42", true, 1, 0.375)
@@ -3636,6 +3661,13 @@ if type(ra.sound) == "userdata" then
 	check("entity_copy_has_sounds", ra.sound:HasAnySounds() and a.sound:HasAnySounds())
 end
 check("owned_entity_identity", ra.mo ~= nil and ra.mo.UniqueID == a.mo.UniqueID and not rawequal(ra.mo, a.mo))
+local restoredDeviceSlice = ra.mo.PieMenu:GetFirstPieSliceByPresetName("Constructor Options").SubPieMenu:GetFirstPieSliceByPresetName("Constructor Order Construction")
+check("owned_actor_device_slice_value_and_alias", restoredDeviceSlice ~= nil and restoredDeviceSlice.Enabled == ra.deviceSliceEnabled and rawequal(ra.deviceSlice, ra.deviceSliceAlias))
+if restoredDeviceSlice and ra.deviceSlice then
+	ra.deviceSlice.Enabled = not ra.deviceSliceEnabled
+	check("owned_actor_device_slice_targets_restored_menu", restoredDeviceSlice.Enabled == not ra.deviceSliceEnabled)
+	ra.deviceSlice.Enabled = ra.deviceSliceEnabled
+end
 check("owned_primitive_alias", rawequal(ra.primitiveLine, ra.primitiveLineAlias))
 check("owned_primitive_state", _ScriptGraphNativeSave(ra.primitiveLine) == ra.primitiveStates[1] and _ScriptGraphNativeSave(ra.primitiveText) == ra.primitiveStates[2] and _ScriptGraphNativeSave(ra.primitiveBitmap) == ra.primitiveStates[3] and _ScriptGraphNativeSave(ra.primitiveFile) == ra.primitiveStates[4])
 check("owned_sprite_pixel_state", ra.mo:GetSpritePixelIndex(1, 1, 0) == 19 and a.mo:GetSpritePixelIndex(1, 1, 0) == 19)
@@ -7474,6 +7506,30 @@ static int ScriptGraphNativeResolve(lua_State* L) {
 	return 1;
 }
 
+static void RestoreCopiedActorMenus(MovableObject* object) {
+	if (auto* actor = dynamic_cast<Actor*>(object)) {
+		actor->RestoreCompletePieMenuCheckpoint();
+		for (MovableObject* item: *actor->GetInventory()) RestoreCopiedActorMenus(item);
+	}
+	if (auto* craft = dynamic_cast<ACraft*>(object)) {
+		for (MovableObject* item: craft->GetCollectedInventory()) RestoreCopiedActorMenus(item);
+	}
+}
+
+static int ScriptGraphNativeMenus(lua_State* L) {
+	try {
+		if (auto* object = dynamic_cast<MovableObject*>(ScriptGraphSerializable(luabind::detail::is_class_object(L, 1)))) {
+			RestoreCopiedActorMenus(object);
+		}
+		lua_pushboolean(L, true);
+		return 1;
+	} catch (const std::exception& error) {
+		lua_pushboolean(L, false);
+		lua_pushstring(L, error.what());
+		return 2;
+	}
+}
+
 static int ScriptGraphPrimitiveResolve(lua_State* L) {
 	auto* rep = luabind::detail::is_class_object(L, 1);
 	lua_pushboolean(L, !rep || !rep->crep() || !ClassDerivesFrom(rep->crep(), "GraphicalPrimitive") || static_cast<GraphicalPrimitive*>(rep->ptr())->ResolveCheckpointReferences());
@@ -7864,6 +7920,8 @@ void LuaStateWrapper::LoadScriptGraphHelper() {
 		lua_setglobal(m_State, "_ScriptGraphDeadReference");
 		lua_pushcfunction(m_State, ScriptGraphNativeResolve);
 		lua_setglobal(m_State, "_ScriptGraphNativeResolve");
+		lua_pushcfunction(m_State, ScriptGraphNativeMenus);
+		lua_setglobal(m_State, "_ScriptGraphNativeMenus");
 		lua_pushlightuserdata(m_State, this);
 		lua_pushcclosure(m_State, ScriptGraphAdoptRoot, 1);
 		lua_setglobal(m_State, "_ScriptGraphAdoptRoot");

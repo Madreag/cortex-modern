@@ -13,11 +13,16 @@ p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--repo', type=Path, required=True)
 p.add_argument('--out', type=Path, required=True)
 p.add_argument('--port', type=int, default=49472)
+p.add_argument('--lua-owned-holder', action='store_true', help='Keep the Constructor actor under Lua ownership, outside the world actor list.')
+p.add_argument('--auto-delay', action='store_true', help='Use the engine Auto return-delay policy with the same one-frame initial delay.')
 a = p.parse_args()
 sys.path.insert(0, str(a.repo / 'tools'))
 from run_sim_test import make_run, seed_settings
 
 plant = (Path(__file__).with_name('fixtures') / 'device_slice_checkpoint.lua').read_text()
+if a.lua_owned_holder:
+    assert plant.count('MovableMan:AddActor(holder);') == 1
+    plant = plant.replace('MovableMan:AddActor(holder);', '-- Kept by Lua only; never entered in the world actor list.', 1)
 out = a.out.resolve()
 out.mkdir(parents=True, exist_ok=False)
 (out / 'driver-as-run.py').write_bytes(Path(__file__).read_bytes())
@@ -33,13 +38,16 @@ common = ['-net-match-service-e2e', '-net-port', str(a.port), '-net-match-peers'
           '-max-ticks', '12000', '-net-match-service-preset', 'Determinism FeelBaseline',
           '-net-match-service-module', 'UserScenes.rte', '-menu-script', str(menu),
           '-input-script', str(a.repo / 'tools/e2e/play-input.txt')]
+if a.auto_delay:
+    common += ['-net-match-auto-delay']
 env = dict(CCCP_HEADLESS='1', CC_RUNNER_IGNORE_FULLSCREEN='1', CCCP_CHECKPOINT_PHASES='1',
            CC_TEST_NET_MATCH_E2E_WAIT_PEERS='1', CC_TEST_MEMORY_CENSUS_TICKS='60')
-settings = dict(AutosaveSeconds='0', NetworkHostDelayPolicy='Fixed', NetworkIceEnable='0',
+settings = dict(AutosaveSeconds='0', NetworkHostDelayPolicy='Auto' if a.auto_delay else 'Fixed', NetworkIceEnable='0',
                 NetworkPortMapEnable='0', NetworkHostVisibility='Unlisted', EnableLuaDebugging='0',
                 ResolutionX='960', ResolutionY='540', EnableVSync='0')
 runs, records, active = {}, {}, []
 result = dict(proof=False, topology='single-box', maximum_concurrent_engines=2,
+              lua_owned_holder=a.lua_owned_holder, input_delay_frames=1, delay_policy=settings['NetworkHostDelayPolicy'],
               exe_sha256=hashlib.sha256((a.repo / 'Cortex Command.exe').read_bytes()).hexdigest(), checks={})
 
 def prepare(role):
