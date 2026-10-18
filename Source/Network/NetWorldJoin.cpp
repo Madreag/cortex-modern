@@ -2433,13 +2433,16 @@ namespace RTE {
 			session->catchUpGate = "outside-lead";
 			return true;
 		}
-		// It is handed its seat only once it can play live on time, as an in-place return is: what it trails past its link's round trip - the
-		// tail's way to it and its report's way back - fits the bound, or its measured rate closes it before its activation.
+		// A neutral activation gap primes the input pipeline but does not remove a persistent producer phase lag.
+		// The first live target and its receipts still take a full trip. With the link's RTT+one-tick delay
+		// and the next simulation slot, only the hold bound can be spent trailing the live clock. The
+		// received report's cursor also trails by its incoming half-trip, during which the reader kept playing.
+		// A genuinely closing reader instead keeps the future activation its measured rate reaches below.
 		if (provesHeadroom && (session->tailLinkRttMs != 0 || session->tailAckRttMs > 0)) {
 			const double lagMs = std::max<double>(session->tailLinkRttMs, session->tailAckRttMs);
-			const uint64_t lag = m_SimTickMs > 0 ? static_cast<uint64_t>(std::ceil(lagMs / m_SimTickMs)) : 0;
+			const uint64_t reportTransit = m_SimTickMs > 0 ? static_cast<uint64_t>(std::floor(lagMs / (2 * m_SimTickMs))) : 0;
 			const bool closing = session->closingMeasured && session->closingRate > 0.1;
-			if (behind > lag + m_Config.slowPlayerBoundTicks && !closing) return wait("trail-open", "it trails the round past its link and does not close on it");
+			if (behind > reportTransit + m_Config.slowPlayerBoundTicks && !closing) return wait("trail-open", "its first input would reach the round past its bound");
 		}
 		// A returner inside the lead has closed on the round by its own replay: the lead primes its pipeline. One still closing
 		// is given the frames its measured rate needs to reach the horizon too, so it is at its activation before the round is.

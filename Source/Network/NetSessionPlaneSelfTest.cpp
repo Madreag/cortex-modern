@@ -1822,6 +1822,9 @@ namespace RTE {
 			if (!join.NoteTransferComplete(12, 8, &error)) return false;
 			join.NoteRejoinLinkFit(12, true); join.NoteTailLinkRtt(12, rttMs);
 			uint64_t activation = 0, reported = replay.applied, reportAt = fixture.hub.now, work = 0;
+			struct ReplayReport { uint64_t arrival, applied, ticks, elapsed, work; };
+			std::deque<ReplayReport> reports;
+			unsigned reportsRead = 0;
 			double credit = 0;
 			bool proposed = false, agreed = false;
 			bool liveStarted = false;
@@ -1899,14 +1902,30 @@ namespace RTE {
 					credit -= 1; ++work;
 				}
 				if (!activation && fixture.hub.now >= reportAt + 100) {
-					(void)join.NoteRejoinCapacity(12, work, work * 1000, 0);
-					join.NoteCatchUpClock(12, fixture.hub.now);
-					if (!join.NoteCatchUpProgress(12, replay.applied, replay.applied - reported, fixture.hub.now - reportAt,
-					                            fixture.worlds[donor - 1].applied, &activation, &error)) return false;
+					// Flagged fixture correction: production receives this cursor after its link transit. Comparing
+					// an instantaneous callback to a transported report invents an extra half-trip of producer lag.
+					reports.push_back({fixture.hub.now + fixture.hub.Delay(seat, donor), replay.applied, replay.applied - reported,
+					                   fixture.hub.now - reportAt, work});
 					reported = replay.applied; reportAt = fixture.hub.now;
 				}
+				while (!activation && !reports.empty() && reports.front().arrival <= fixture.hub.now) {
+					const auto report = reports.front(); reports.pop_front();
+					(void)join.NoteRejoinCapacity(12, report.work, report.work * 1000, 0);
+					if (!join.NoteCatchUpProgress(12, report.applied, report.ticks, report.elapsed,
+					                            fixture.worlds[donor - 1].applied, &activation, &error)) return false;
+					join.NoteCatchUpClock(12, fixture.hub.now);
+					if (reportsRead++ < 3) DiagnosticLine() << "[session-plane-image-report] returner=" << unsigned(seat)
+					    << " arrival_ms=" << fixture.hub.now << " transit_ms=" << fixture.hub.Delay(seat, donor)
+					    << " applied=" << report.applied << " horizon=" << fixture.worlds[donor - 1].applied << std::endl;
+				}
 				if (activation && !proposed) {
-					if (!fixture.peers[donor - 1]->SchedulePeerReclaim(seat, s_ReturnTransport(*fixture.peers[donor - 1], seat), incarnation, activation, &error)) return false;
+					// Flagged fixture correction: the service carries the measured private-reader trail into the
+					// temporary activation gap. Dropping it asks for input before that reader can produce it.
+					const auto* session = join.FindSession(12);
+					if (!session || session->activationTick != activation) return fail("the image activation lost its measured session");
+					if (!fixture.peers[donor - 1]->SchedulePeerReclaim(seat, s_ReturnTransport(*fixture.peers[donor - 1], seat), incarnation, activation, &error, session->activationTrailFrames)) return false;
+					DiagnosticLine() << "[session-plane-image-reclaim] returner=" << unsigned(seat) << " activation=" << activation
+					                 << " trail=" << session->activationTrailFrames << std::endl;
 					proposed = true;
 				}
 				if (proposed && !agreed) {
