@@ -41,6 +41,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <chrono>
+#include <cmath>
 #include <iomanip>
 #include <iostream>
 #include <map>
@@ -2413,6 +2414,13 @@ namespace RTE {
 		const auto& acks = s_LockstepCoordinator->GetAuthoritativeCommandAcks();
 		if (const auto ack = acks.find(config.localPeerId); ack != acks.end()) {
 			s_LocalCommandOutbox.erase(s_LocalCommandOutbox.begin(), s_LocalCommandOutbox.upper_bound(ack->second));
+		}
+		// The host acknowledges only what it plays: one the round holds or has lost acknowledges nothing until it is back, so a
+		// command waits for it through the reconnect window and no longer.
+		if (const uint8_t host = producing->GetHostPeerId(); host != config.localPeerId && config.simTickMs > 0 &&
+		    (producing->IsSeatUnderAI(host, tick) || producing->IsPeerGoneAtFrame(host, tick))) {
+			const uint64_t window = static_cast<uint64_t>(std::ceil(c_NetHostLossSilenceMs / config.simTickMs));
+			std::erase_if(s_LocalCommandOutbox, [&](const auto& entry) { return entry.second.frame + window < tick; });
 		}
 		std::vector<NetGameCommand> commands;
 		const uint64_t targetFrame = tick + producing->InputDelayAt(config.localPeerId, tick);

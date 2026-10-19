@@ -64,6 +64,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <atomic>
@@ -2600,6 +2601,34 @@ namespace RTE {
 			if (!peer.m_RemoteStartsReceived.contains(3) || peer.m_RemoteStarts.at(3).inputDelayFrames != 8 || !peer.IsRunning()) {
 				*error = "a returning seat waited on a late member start its certificate's terms answer: received=" + std::to_string(peer.m_RemoteStartsReceived.contains(3)) +
 				    " running=" + std::to_string(peer.IsRunning()); return false;
+			}
+			return true;
+		}
+
+		static bool AHeldHostLeavesTheCommandOutboxBounded(std::string* error) {
+			// The host is held from frame 100 and never comes back: nothing acknowledges the commands this seat plays meanwhile.
+			Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
+			peer.m_MigrationPhase = NetHostMigrationPhase::None;
+			peer.m_AiHeldSeats[1] = 100;
+			struct Scope { ~Scope() { ScenarioRunner::SetLockstepCoordinator(nullptr); ScenarioRunner::DrainLocalGameCommands(); } } scope;
+			ScenarioRunner::DrainLocalGameCommands();
+			ScenarioRunner::SetLockstepCoordinator(&peer);
+			const uint64_t window = static_cast<uint64_t>(std::ceil(c_NetHostLossSilenceMs / peer.m_Config.simTickMs));
+			size_t peak = 0, atWindow = 0;
+			for (uint64_t tick = 100; tick < 100 + 2 * window; ++tick) {
+				peer.m_Stats.nextFrame = tick; peer.m_LastCompletedSimulationTick = tick - 1;
+				if (!ScenarioRunner::EnqueueLocalGameCommand({2, NetGameSetTeamFunds{-1, static_cast<int32_t>(tick)}})) { *error = "a command was refused"; return false; }
+				std::string why;
+				if (!ScenarioRunner::QueueLockstepLocalControllerFrames(tick, {}, &why)) { *error = "the seat's input did not queue: " + why; return false; }
+				const size_t outbox = ScenarioRunner::CaptureUnacknowledgedLocalCommands().size();
+				peak = std::max(peak, outbox);
+				if (tick == 100 + window) atWindow = outbox;
+			}
+			// Inside the reconnect window every command waits for the host to come back and acknowledge it; past it none is kept longer.
+			if (atWindow < window || peak > window + 1) {
+				*error = "a held host's unacknowledged commands were not bounded by the reconnect window: " + std::to_string(atWindow) + " kept at the window's end, " +
+				         std::to_string(peak) + " at most over " + std::to_string(2 * window) + " ticks";
+				return false;
 			}
 			return true;
 		}
@@ -33288,6 +33317,12 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS an_open_vote_asks_for_its_frames_record_at_once\n[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "held-host-command-outbox") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::AHeldHostLeavesTheCommandOutboxBounded(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS a_held_host_leaves_the_command_outbox_bounded\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "returner-member-terms") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::AReturningSeatTakesItsMembersTermsAsTheirStarts(&error)) return fail(error);
@@ -33650,6 +33685,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::AStraddlingRulingIsTheOtherHalfsQuestion, "a_straddling_ruling_is_the_other_halfs_question");
 		row(&SessionPlaneRecoveryTest::AMinorityGroupOnlyQueriesTheReferee, "a_minority_group_only_queries_the_referee");
 		row(&SessionPlaneRecoveryTest::AReturningSeatTakesItsMembersTermsAsTheirStarts, "a_returning_seat_takes_its_members_terms_as_their_starts");
+		row(&SessionPlaneRecoveryTest::AHeldHostLeavesTheCommandOutboxBounded, "a_held_host_leaves_the_command_outbox_bounded");
 		row(&SessionPlaneRecoveryTest::ReaderLinksContributeToInputRunway, "reader_links_contribute_to_input_runway");
 		row(&SessionPlaneRecoveryTest::LinkRiseHasNoResizeCooldown, "link_rise_has_no_resize_cooldown");
 		row(&SessionPlaneRecoveryTest::LinkFallNeedsFiveMeasuredSeconds, "link_fall_requires_five_continuous_measured_seconds");
