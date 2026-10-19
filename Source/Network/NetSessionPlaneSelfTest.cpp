@@ -1572,6 +1572,7 @@ namespace RTE {
 			// Any spell of the seat's own or a loss burst on its own links: the schedule's cause rule charges each to the seat.
 			bool OwnTrouble(uint8_t seat) const {
 				if (OwnMachineTrouble(seat)) return true;
+			std::vector<uint64_t> releasedAt; //!< The engine's tick that released each seat's waited frame, which the bound is judged at.
 				if (!hub.schedule) return false;
 				if (hub.schedule->Active(seat, hub.now)) return true;
 				for (const auto& burst: hub.schedule->bursts) if (burst.seat == seat && hub.now >= burst.atMs && hub.now < burst.atMs + burst.ms) return true;
@@ -1673,7 +1674,7 @@ namespace RTE {
 			void FinishWait(uint8_t seat, uint64_t frame) {
 				const size_t index = seat - 1;
 				if (!waitAt[index]) return;
-				const uint64_t duration = hub.now - waitAt[index];
+				const uint64_t endAt = WaitEnd(index), duration = endAt - waitAt[index];
 				maxWait[index] = std::max(maxWait[index], duration);
 				if (waitPlaying[index]) playingMaxWait[index] = std::max(playingMaxWait[index], duration);
 				if (duration > static_cast<uint64_t>(std::ceil(c_TestBoundTicks * c_TestTickMs))) waits.push_back({seat, waitAt[index], hub.now, frame, waitPlaying[index]});
@@ -1684,13 +1685,13 @@ namespace RTE {
 				if (!waitAt[index] || !waitPlaying[index] || (playing && !OwnMachineTrouble(static_cast<uint8_t>(index + 1)))) return;
 				// FLAGGED fixture departure: an own hold or injected own-machine pause ends this wait's playing portion.
 				// As when a wait begins during that pause, its raw time remains, as does any preceding playing overrun.
-				playingMaxWait[index] = std::max(playingMaxWait[index], hub.now - waitAt[index]);
+				playingMaxWait[index] = std::max(playingMaxWait[index], WaitEnd(index) - waitAt[index]);
 				waitPlaying[index] = false;
 			}
 			bool CheckBound(std::string& error) const {
 				for (uint8_t seat = 1; seat <= hub.row.seats; ++seat) {
 					const size_t index = seat - 1;
-					const uint64_t wait = std::max(playingMaxWait[index], waitAt[index] && waitPlaying[index] ? hub.now - waitAt[index] : 0);
+					const uint64_t wait = std::max(playingMaxWait[index], waitAt[index] && waitPlaying[index] ? WaitEnd(index) - waitAt[index] : 0);
 					if (wait > static_cast<uint64_t>(std::ceil(c_TestBoundTicks * c_TestTickMs))) {
 						error = "authority ruling: playing peer " + std::to_string(seat) + " waited " + std::to_string(wait) +
 						    "ms; the local hold/stop bound is 50ms, including both split halves and a pending or unreachable directory" +
@@ -1713,6 +1714,9 @@ namespace RTE {
 				for (uint8_t other = 1; other <= hub.row.seats; ++other) {
 					compared[std::min(seat, other)][std::max(seat, other)] = 0; pairSeparatedFrom[std::min(seat, other)][std::max(seat, other)] = 0;
 				}
+			// The game takes a frame the engine releases inside the update that waited for it: the wait ends at that tick, not at the
+			// fixture's next step.
+			uint64_t WaitEnd(size_t index) const { return index < releasedAt.size() && releasedAt[index] ? releasedAt[index] : hub.now; }
 			}
 			bool InputSplitCausedHold(uint8_t seat, uint64_t since, uint64_t until, uint8_t troubled, uint64_t from, uint64_t to) const {
 				return std::any_of(inputSplitCauses.begin(), inputSplitCauses.end(), [&](const InputSplitCause& cause) {
@@ -1722,6 +1726,7 @@ namespace RTE {
 			}
 			bool CompareHistories(std::string& error) {
 				for (uint8_t a = 1; a <= hub.row.seats; ++a) for (uint8_t b = a + 1; b <= hub.row.seats; ++b) {
+				if (index < releasedAt.size()) releasedAt[index] = 0;
 					const auto& left = worlds[a - 1]; const auto& right = worlds[b - 1];
 					const uint64_t common = std::min(left.applied, right.applied);
 					for (uint64_t frame = compared[a][b] + 1; frame <= common; ++frame) {
@@ -1802,7 +1807,7 @@ namespace RTE {
 				    row.tieBeforeAdministration || (row.gapMs && !row.frozen && !row.slowPercent && !row.inputsLost && !row.keepInputEvery);
 				// FLAGGED fixture departure: a stopped machine can require the same automatic image return as a split link.
 				if (maySplit || row.imageReturn || row.gapMs) { hub.row.captureFrames = true; hub.row.checkpointEveryFrames = 60; }
-				worlds.resize(row.seats); for (auto& world: worlds) world.sharedDigests = &sharedDigests; committed.resize(row.seats); credits.resize(row.seats); queued.resize(row.seats); waitAt.resize(row.seats);
+				worlds.resize(row.seats); for (auto& world: worlds) world.sharedDigests = &sharedDigests; committed.resize(row.seats); credits.resize(row.seats); queued.resize(row.seats); waitAt.resize(row.seats); releasedAt.assign(row.seats, 0);
 				maxWait.resize(row.seats); caughtAt.resize(row.seats); settledDelay.resize(row.seats); settledChanges.resize(row.seats);
 				displayedAt.resize(row.seats); blackoutGap.resize(row.seats); returnedAt.resize(row.seats); postReturnWait.resize(row.seats); seenAI.resize(row.seats);
 				imageAt.resize(row.seats);
@@ -1971,7 +1976,7 @@ namespace RTE {
 					if (earlierRoundRule.empty()) earlierRoundRule = TwoReturnFrames();
 					for (auto& peer: peers) peer = std::make_unique<NetLockstepCoordinator>();
 					for (uint8_t id = 1; id <= hub.row.seats; ++id) {
-						worlds[id - 1] = World{}; worlds[id - 1].sharedDigests = &sharedDigests; credits[id - 1].Reset(); queued[id - 1] = 0; waitAt[id - 1] = 0;
+						worlds[id - 1] = World{}; worlds[id - 1].sharedDigests = &sharedDigests; credits[id - 1].Reset(); queued[id - 1] = 0; waitAt[id - 1] = releasedAt[id - 1] = 0;
 						if (heldSince[id] != UINT64_MAX) { heldSpans[id].push_back({heldSince[id], hub.now}); heldSince[id] = UINT64_MAX; }
 					}
 					hashedThrough = 0; sharedDigests.clear(); roundStartMs = hub.now;
@@ -2024,7 +2029,7 @@ namespace RTE {
 				for (uint8_t id = 1; id <= hub.row.seats; ++id) {
 					auto& peer = *peers[id - 1]; auto& world = worlds[id - 1];
 					if (gone(id)) { leaverStopped |= peer.IsStopped(); continue; }
-					if (between) { waitAt[id - 1] = 0; continue; }
+					if (between) { waitAt[id - 1] = releasedAt[id - 1] = 0; continue; }
 					if (peer.IsFailed()) { error = "peer " + std::to_string(id) + " failed: " + peer.GetStats().timeoutReason; return false; }
 					const bool directHostlessGroup = !hub.row.internet && sawSplit && (s_HeldSeats(peer, world.applied + 1) & 1U);
 					const bool keptDirectMigration = !hub.row.internet && sawSplit && peer.GetConfig().migrationGeneration &&
@@ -2115,13 +2120,8 @@ namespace RTE {
 					const bool atRoundRate = id == hub.row.subject && hub.row.roundRateAfterMs && hub.now >= hub.faultEnd + hub.row.roundRateAfterMs;
 					const double catchUpRate = scheduled ? capacity / 100.0 : atRoundRate ? 1.0 : hub.row.catchUpPercent && id == hub.row.subject ? hub.row.catchUpPercent / 100.0 : c_TestCatchUpRate;
 					credits[id - 1].Accrue(hub.row.stepMs, slowed ? ratePercent / 100.0 : 1, catchUpRate, !slowed && CatchUpNeeded(peer));
-					// The game waits for a frame inside the update it already granted: that update takes the frame the moment it is ready,
-					// whatever pace the frames after it are given.
-					bool grantedUpdate = waitAt[id - 1] != 0;
-					unsigned released = 0;
-					while (grantedUpdate || credits[id - 1].MayGrant(!slowed && CatchUpNeeded(peer), !slowed && CatchingUp(peer, credits[id - 1].NextOrdinaryTickInMs(hub.row.stepMs)))) {
-						const bool catchingUp = !grantedUpdate && !slowed && CatchUpNeeded(peer);
-						grantedUpdate = false;
+					while (credits[id - 1].MayGrant(!slowed && CatchUpNeeded(peer), !slowed && CatchingUp(peer, credits[id - 1].NextOrdinaryTickInMs(hub.row.stepMs)))) {
+						const bool catchingUp = !slowed && CatchUpNeeded(peer);
 						const uint64_t next = world.applied + 1;
 						if (queued[id - 1] != next && !peer.TimingDecisionPendingAt(next)) {
 							ControllerFrame input; input.actorUniqueID = 1000 + id; input.analogMoveX = id * 100;
@@ -2144,8 +2144,7 @@ namespace RTE {
 								    !peer.IsLocalPrivateReaderAt(next) && !peer.IsSeatUnderAI(id, next) &&
 								    (s_FrameMembers(peer, next) & (1U << (id - 1)));
 							}
-							// As the game's consumer does, a wait that released the frame at the engine's tick takes it at once.
-							if (peer.NoteFrameWait(next, hub.now) && ++released <= 4) { grantedUpdate = true; continue; }
+							if (peer.NoteFrameWait(next, hub.now) && !releasedAt[id - 1]) releasedAt[id - 1] = hub.now;
 							break;
 						}
 						FinishWait(id, next);
@@ -2659,7 +2658,7 @@ namespace RTE {
 			    std::to_string(static_cast<int>(fixture.peers[seat - 1]->GetState())) + " starts_received=" + std::to_string(fixture.peers[seat - 1]->GetStats().startPacketsReceived) + s_WaitState(*fixture.peers[seat - 1]));
 			fixture.peers[seat - 1]->AdoptReplayedSeatTransitions(replayCoordinator, activation - 1);
 			fixture.discardedHistories[seat - 1].push_back(fixture.worlds[seat - 1].hashes);
-			fixture.worlds[seat - 1] = std::move(replay); fixture.queued[seat - 1] = activation - 1; fixture.credits[seat - 1].Reset(); fixture.waitAt[seat - 1] = 0;
+			fixture.worlds[seat - 1] = std::move(replay); fixture.queued[seat - 1] = activation - 1; fixture.credits[seat - 1].Reset(); fixture.waitAt[seat - 1] = fixture.releasedAt[seat - 1] = 0;
 			fixture.frameMembers[seat - 1].assign(fixture.frameMembers[donor - 1].begin(), fixture.frameMembers[donor - 1].begin() + activation);
 			fixture.frameAuthors[seat - 1].assign(fixture.frameAuthors[donor - 1].begin(), fixture.frameAuthors[donor - 1].begin() + activation);
 			fixture.committed[seat - 1].clear();
@@ -3536,8 +3535,8 @@ namespace RTE {
 			const uint64_t end = hub.now;
 			for (uint8_t seat = 1; seat <= schedule.seats; ++seat) {
 				if (fixture.heldSince[seat] != UINT64_MAX) fixture.heldSpans[seat].push_back({fixture.heldSince[seat], UINT64_MAX});
-				if (fixture.waitAt[seat - 1] && end - fixture.waitAt[seat - 1] > static_cast<uint64_t>(std::ceil(c_TestBoundTicks * c_TestTickMs)))
-					fixture.waits.push_back({seat, fixture.waitAt[seat - 1], end, fixture.worlds[seat - 1].applied + 1, fixture.waitPlaying[seat - 1]});
+				if (fixture.waitAt[seat - 1] && fixture.WaitEnd(seat - 1) - fixture.waitAt[seat - 1] > static_cast<uint64_t>(std::ceil(c_TestBoundTicks * c_TestTickMs)))
+					fixture.waits.push_back({seat, fixture.waitAt[seat - 1], fixture.WaitEnd(seat - 1), fixture.worlds[seat - 1].applied + 1, fixture.waitPlaying[seat - 1]});
 			}
 			if (!fixture.settledAt || fixture.startups.empty() || fixture.startups.back().first != fixture.roundStartMs)
 				return Finding{"history", "never_started", "the seats never all displayed their first second of a round"};
