@@ -13,7 +13,7 @@ p.add_argument('--out', type=Path, required=True)
 p.add_argument('--source', type=Path, required=True, help='Retained fixture runtime containing Autosaves and UserScenes.rte')
 a = p.parse_args()
 sys.path.insert(0, str(a.repo / 'tools'))
-from run_sim_test import make_run, seed_settings
+from run_sim_test import make_run, seed_settings, engine_executable, file_sha256
 
 a.out.mkdir(parents=True, exist_ok=False)
 (a.out / 'driver-as-run.py').write_bytes(Path(__file__).read_bytes())
@@ -44,7 +44,7 @@ checks = {'normal_exit': record.get('exit_code') == 0 and not record.get('timed_
           'continued_120_ticks': bool(continuation and int(continuation[2]) - int(continuation[1]) == 120),
           'no_fixture_or_restore_error': not errors}
 result = {'source': str(saved), 'source_sha256': hashlib.sha256(saved.read_bytes()).hexdigest(),
-          'exe_sha256': hashlib.sha256((a.repo / 'Cortex Command.exe').read_bytes()).hexdigest(),
+          'exe_sha256': file_sha256(engine_executable(a.repo)),
           'record': record, 'checks': checks, 'verified_updates': verified, 'errors': errors[:30], 'pass': all(checks.values())}
 (a.out / 'summary.json').write_text(json.dumps(result, indent=2))
 print(json.dumps({key: value for key, value in result.items() if key not in ('record', 'errors')}))

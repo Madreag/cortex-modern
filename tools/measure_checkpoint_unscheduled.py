@@ -35,7 +35,7 @@ def main():
     a = p.parse_args()
     repo = (a.checkout or a.repo).resolve()
     sys.path.insert(0, str(repo / 'tools'))
-    from run_sim_test import engine_executable, file_sha256, make_run, seed_settings
+    from run_sim_test import make_run, seed_settings, engine_executable, file_sha256
     out = a.out.resolve()
     out.mkdir(parents=True, exist_ok=False)
     (out / 'driver-as-run.py').write_bytes(Path(__file__).read_bytes())

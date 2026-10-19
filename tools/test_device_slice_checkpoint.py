@@ -1,6 +1,5 @@
 """Capture live Constructor and stock grenade-launcher slices, then return from their world image; two local peers, proof:false."""
 import argparse
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -17,7 +16,7 @@ p.add_argument('--lua-owned-holder', action='store_true', help='Keep the Constru
 p.add_argument('--auto-delay', action='store_true', help='Use the engine Auto return-delay policy with the same one-frame initial delay.')
 a = p.parse_args()
 sys.path.insert(0, str(a.repo / 'tools'))
-from run_sim_test import make_run, seed_settings
+from run_sim_test import make_run, seed_settings, engine_executable, file_sha256
 
 plant = (Path(__file__).with_name('fixtures') / 'device_slice_checkpoint.lua').read_text()
 if a.lua_owned_holder:
@@ -48,7 +47,7 @@ settings = dict(AutosaveSeconds='0', NetworkHostDelayPolicy='Auto' if a.auto_del
 runs, records, active = {}, {}, []
 result = dict(proof=False, topology='single-box', maximum_concurrent_engines=2,
               lua_owned_holder=a.lua_owned_holder, input_delay_frames=1, delay_policy=settings['NetworkHostDelayPolicy'],
-              exe_sha256=hashlib.sha256((a.repo / 'Cortex Command.exe').read_bytes()).hexdigest(), checks={})
+              exe_sha256=file_sha256(engine_executable(a.repo)), checks={})
 
 def prepare(role):
     steps = []

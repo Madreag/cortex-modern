@@ -229,6 +229,8 @@ std::unique_ptr<Entity> GUICheckpoint::LoadOwnedEntity(std::string_view text, bo
 }
 
 std::string GUICheckpoint::SaveEntityReference(const Entity* entity, const Scene* scene) {
+	const Entity* identity = static_cast<const Entity*>(CheckpointNativeStorage::Original(entity));
+	if (CheckpointNativeStorage::Reading()) entity = CheckpointNativeSnapshot::Source(entity);
 	CheckpointWriter writer("GUIEntity2");
 	writer(entity != nullptr);
 	if (entity) {
@@ -238,11 +240,20 @@ std::string GUICheckpoint::SaveEntityReference(const Entity* entity, const Scene
 		size_t placedIndex = 0;
 		if (!uid && !entity->IsOriginalPreset()) {
 			if (!scene) scene = g_SceneMan.GetScene();
+			if (CheckpointNativeStorage::Reading()) scene = CheckpointNativeStorage::Source(scene);
 			if (scene) {
 				for (int set = 0; set < Scene::PLACEDSETSCOUNT && placedSet < 0; ++set) {
 					const auto* objects = scene->GetPlacedObjects(set);
-					const auto found = std::find(objects->begin(), objects->end(), entity);
-					if (found != objects->end()) { placedSet = set; placedIndex = std::distance(objects->begin(), found); kind = 2; }
+					if (CheckpointNativeStorage::Reading()) {
+						size_t index = 0;
+						for (const auto* object: CheckpointValues(*objects)) {
+							if (CheckpointNativeStorage::Original(object) == identity) { placedSet = set; placedIndex = index; kind = 2; break; }
+							++index;
+						}
+					} else {
+						const auto found = std::find(objects->begin(), objects->end(), entity);
+						if (found != objects->end()) { placedSet = set; placedIndex = std::distance(objects->begin(), found); kind = 2; }
+					}
 				}
 			}
 			if (placedSet < 0) throw std::runtime_error("a GUI entity reference has no persistent owner: " + entity->GetClassName() + " \"" + entity->GetPresetName() + "\"");

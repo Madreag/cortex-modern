@@ -74,6 +74,8 @@ namespace RTE {
 
 		void clear() noexcept { m_Value.clear(); m_Bytes.clear(); }
 		void reserve(size_t size) { m_Value.reserve(size); }
+		/// The bytes both buffers hold, including the owned mirror.
+		size_t capacity() const noexcept { return m_Value.capacity() + m_Bytes.capacity(); }
 		void shrink_to_fit() { m_Value.shrink_to_fit(); m_Bytes.shrink_to_fit(); }
 		void resize(size_t size, char value = char()) { Mutate([&](std::string& into) { into.resize(size, value); }); }
 		void push_back(char value) { Mutate([&](std::string& into) { into.push_back(value); }); }

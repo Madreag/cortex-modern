@@ -2183,6 +2183,15 @@ size_t ActivityMan::UnwrittenAutosaves() {
 	return m_AutosaveTasks.size() + prepared;
 }
 
+bool ActivityMan::AutosaveWriterReady() {
+	// A finished capture's future is ready before its boundary retires and the next plan is prepared.
+	return UnwrittenAutosaves() == 0 && (!m_PreparedAutosave || m_PreparedAutosave->queue.Ready());
+}
+
+bool ActivityMan::AutosaveWriterBusy() {
+	return UnwrittenAutosaves() != 0 || (m_PreparedAutosave && m_PreparedAutosave->queue.Busy());
+}
+
 bool ActivityMan::RunCheckpointCaptureSelfTest(uint64_t tick) {
 	try {
 		const bool admission = AutosaveArchiveWriter::RunAdmissionSelfTest();

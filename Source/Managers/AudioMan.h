@@ -122,6 +122,8 @@ namespace RTE {
 		void PrepareCheckpointValues();
 		void RebuildCheckpointValues(CheckpointNativeSnapshot& snapshot) const;
 		static std::string CheckpointBackendSelfTestMismatch();
+		/// Exercises the music saver's voice filtering while the playing map changes after its boundary.
+		static std::string CheckpointVoiceMapSelfTestMismatch(const std::function<std::string()>& musicSave, SoundContainer& sound);
 		static std::string CheckpointRegistryStorageSelfTestMismatch();
 		/// Empty when a frozen read of the manager's startup containers stays inside the frozen pages after the round's preparation.
 		static std::string CheckpointStartupLinksSelfTestMismatch();

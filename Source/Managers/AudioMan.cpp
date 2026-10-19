@@ -3277,6 +3277,69 @@ FMOD::ChannelControl* AudioMan::ReadCheckpointPlayback(int identity) const {
 	return found == playback->channels.end() ? nullptr : found->second;
 }
 
+std::string AudioMan::CheckpointVoiceMapSelfTestMismatch(const std::function<std::string()>& musicSave, SoundContainer& sound) {
+	CheckpointNativeStorage::AllocationScope allocations(true);
+	auto& live = g_AudioMan;
+	live.PrepareCheckpointValues();
+	// As an autosave's preparation does: voices started before this point, by earlier tests too, move into checkpoint storage.
+	OwnCheckpointStorage(live.m_PlayingVoices);
+	constexpr int first = std::numeric_limits<int>::max() - 4096;
+	constexpr int count = 256;
+	struct Cleanup {
+		AudioMan& live; SoundContainer& sound;
+		~Cleanup() {
+			for (int identity = first; identity < first + count; ++identity) {
+				live.m_PlayingVoices.erase(identity);
+				sound.m_PlayingChannels.erase(identity);
+			}
+		}
+	} cleanup{live, sound};
+	for (int index = 0; index < count; ++index) sound.m_PlayingChannels.insert(first + index);
+	size_t mismatches = 0, mutations = 0;
+	for (int boundary = 0; boundary < 8; ++boundary) {
+		for (int index = 0; index < count; ++index) {
+			auto& voice = live.m_PlayingVoices[first + index];
+			voice.predicted = index % 2 != 0;
+		}
+		const auto capture = [&] { return CheckpointWriter::CaptureNative(musicSave).Text(); };
+		const std::string expected = capture();
+		CheckpointNativeStorage::Root audioRoot(&live);
+		CheckpointNativeStorage::Root musicRoot(&g_MusicMan);
+		const auto [sampleSource, sampleBytes] = ContentFile::LoadedSampleRegistry();
+		std::vector<std::max_align_t> sampleHeader((sampleBytes + sizeof(std::max_align_t) - 1) / sizeof(std::max_align_t));
+		auto pages = CheckpointNativeStorage::Prepare();
+		audioRoot.Freeze(); musicRoot.Freeze();
+		std::memcpy(sampleHeader.data(), sampleSource, sampleBytes);
+		for (const auto& part: pages) part->Arm();
+		// The first read must already see different live flags, even without a fortunate thread schedule.
+		for (int index = 0; index < count; ++index) live.m_PlayingVoices[first + index].predicted = index % 2 == 0;
+		std::atomic<bool> started = false, finished = false;
+		std::exception_ptr failure;
+		std::jthread saver([&] {
+			try {
+				const std::array roots{audioRoot.Range(), musicRoot.Range(), CheckpointNativeStorage::RootRange{sampleSource, sampleHeader.data(), sampleBytes}};
+				CheckpointNativeStorage::ReadScope read(pages, roots);
+				started.store(true, std::memory_order_release);
+				for (int save = 0; save < 128; ++save) if (capture() != expected) ++mismatches;
+			} catch (...) { failure = std::current_exception(); }
+			finished.store(true, std::memory_order_release);
+		});
+		while (!started.load(std::memory_order_acquire) && !finished.load(std::memory_order_acquire)) std::this_thread::yield();
+		while (!finished.load(std::memory_order_acquire)) {
+			// Start and stop voices without changing the music container or any saved bytes.
+			for (int index = 0; index < count; ++index) {
+				live.m_PlayingVoices.erase(first + index);
+				live.m_PlayingVoices[first + index].predicted = index % 2 == 0;
+				++mutations;
+			}
+		}
+		saver.join();
+		if (failure) std::rethrow_exception(failure);
+	}
+	System::PrintDiagnosticLine(std::format("[music-checkpoint-selftest] voice_map_stress boundaries=8 saves=1024 mutations={} mismatches={}", mutations, mismatches));
+	return mismatches ? "the music saver followed voice predictions after its boundary" : std::string{};
+}
+
 std::string AudioMan::CheckpointBackendSelfTestMismatch() {
 	CheckpointNativeStorage::AllocationScope allocations(true);
 	auto backend = std::make_unique<CheckpointBackend>();
