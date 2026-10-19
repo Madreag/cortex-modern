@@ -10,11 +10,13 @@ Each peer's frame pacing is reported for the [frame-pace] windows where no save 
 detector's classification): the median frame rate, the 95th and 99th percentiles of the per-window worst frame interval
 and the peer's holds of its own seat there. --base names a base build's run of this detector (its folder or result.json);
 each peer then keeps at least 95 % of the base's frame rate and at most 125 % of its worst frame interval there, and holds
-its own seat no more often than the base did.
+its own seat no more often than the base did. --split-cpus gives each engine its own half of the logical CPUs, so one
+peer's saver working beside its game cannot take the other peer's time, as on two machines.
 """
 import argparse
 from datetime import datetime, timezone
 import json
+import os
 import platform
 from pathlib import Path
 import re
@@ -65,6 +67,8 @@ def main():
     p.add_argument('--limit-seconds', type=int, default=900)
     p.add_argument('--port', type=int, default=49484)
     p.add_argument('--base', type=Path, help="a base build's run of this detector (its folder or result.json)")
+    p.add_argument('--split-cpus', action='store_true',
+                   help="each engine on its own half of the logical CPUs, so one peer cannot take the other's time")
     a = p.parse_args()
     base_dir = None
     if a.base:
@@ -89,6 +93,8 @@ def main():
             'client': ['-net-match-service-e2e', '-net-join', '127.0.0.1'] + common}
     env = {'CCCP_HEADLESS': '1', 'CC_RUNNER_IGNORE_FULLSCREEN': '1', 'CC_TEST_MEMORY_CENSUS_TICKS': '60',
            'CC_TEST_NET_MATCH_E2E_WAIT_PEERS': '1'}
+    half = (os.cpu_count() or 2) // 2
+    masks = {'host': (1 << half) - 1, 'client': ((1 << half) - 1) << half} if a.split_cpus else {}
     settings = {'AutosaveSeconds': '0', 'NetworkHostDelayPolicy': 'Fixed', 'NetworkIceEnable': '0',
                 'NetworkPortMapEnable': '0', 'NetworkHostVisibility': 'Unlisted', 'EnableLuaDebugging': '0',
                 'ResolutionX': '960', 'ResolutionY': '540', 'EnableVSync': '0'}
@@ -100,6 +106,8 @@ def main():
         role_env = dict(env)
         if role == 'host' and a.host_sim_cost_us:
             role_env['CCCP_TEST_SIM_COST_US'] = str(a.host_sim_cost_us)
+        if role in masks:
+            role_env['CC_RUNNER_AFFINITY_MASK'] = f'0x{masks[role]:x}'
         # Each engine leaves when the driver has seen its captures.
         probe_dir = out / f'{role}-probe'
         probe_dir.mkdir()
@@ -122,6 +130,7 @@ def main():
     interval_ticks = 60 * a.autosave_seconds
     config = {'topology': 'single-box', 'proof': False, 'box': platform.node(), 'autosave_seconds': a.autosave_seconds,
               'host_sim_cost_us': a.host_sim_cost_us, 'input_delay_frames': 1, 'settings': settings, 'environment': env,
+              'affinity_masks': {role: f'0x{mask:x}' for role, mask in masks.items()},
               'source_head': subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip(),
               'exe_sha256': file_sha256(engine_executable(repo)),
               'started_utc': datetime.now(timezone.utc).isoformat(), 'base_run': str(base_dir) if base_dir else None}
