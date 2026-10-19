@@ -19,10 +19,6 @@
   {
    "name": "ComboHostNetSlowPolicy",
    "enabled": true
-  },
-  {
-   "name": "ButtonHostNetRecalc",
-   "enabled": true
   }
  ]
 }

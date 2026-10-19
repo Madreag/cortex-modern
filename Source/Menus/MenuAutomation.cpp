@@ -2854,9 +2854,9 @@ namespace RTE::MenuAutomation {
 			same("hint_policy_substitute", NetSlowPlayerPolicyText(NetSlowPlayerPolicy::Substitute), "Give the seat to the AI (host too) until they catch up");
 			same("hint_policy_pause", NetSlowPlayerPolicyText(NetSlowPlayerPolicy::Pause), "Pause for them (up to 20 s)");
 			same("hint_bound_substitute", NetSlowPlayerHint(NetSlowPlayerPolicy::Substitute, 3, tickMs),
-			     "A player late past 3 ticks (50 ms), host too, is held to the AI while others play on. Other policies return in a later version.");
+			     "A player late past 3 ticks (50 ms), host too, is held to the AI while others play on.");
 			same("hint_bound_one_tick", NetSlowPlayerHint(NetSlowPlayerPolicy::Substitute, 1, tickMs),
-			     "A player late past 1 tick (17 ms), host too, is held to the AI while others play on. Other policies return in a later version.");
+			     "A player late past 1 tick (17 ms), host too, is held to the AI while others play on.");
 			same("hint_bound_pause", NetSlowPlayerHint(NetSlowPlayerPolicy::Pause, 3, tickMs), "Everyone waits for a late player, host included, for up to 20 s.");
 			same("hint_auto_delay", NetAutoDelayText(3), "ping plus a 3-tick margin, raised live if inputs arrive late");
 			same("hint_autosave_range", NetAutosaveRangeHint(), "1 to 60 minutes, or off");

@@ -1768,8 +1768,13 @@ void MainMenuGUI::CreateHostOptionsControls() {
 		m_HostNetPeerDelayBoxes[peer] = dynamic_cast<GUITextBox*>(get(("TextHostNetPeerDelay" + n).c_str()));
 	}
 	m_HostNetPingLabel = dynamic_cast<GUILabel*>(get("LabelHostNetPing"));
-	m_HostNetRecalcButton = dynamic_cast<GUIButton*>(get("ButtonHostNetRecalc"));
 	m_HostNetModeLabel = dynamic_cast<GUILabel*>(get("LabelHostNetMode"));
+	if ((m_HostNetOptionHintLabel = dynamic_cast<GUILabel*>(get("LabelHostNetOptionHint")))) {
+		m_HostNetOptionHintLabel->SetFont(m_SubMenuScreenGUIControlManager->GetSkin()->GetFont("FontSmall.png"));
+		m_HostNetOptionHintLabel->SetText(NetTimingRowHint(0));
+	}
+	m_HostNetHintRowControls = {get("LabelHostNetPolicy"), m_HostNetPolicyCombo, get("LabelHostNetMinDelay"), m_HostNetMinDelayBox,
+	                            get("LabelHostNetSlowBound"), m_HostNetSlowBoundBox, get("LabelHostNetRedundancy"), m_HostNetRedundancyCombo};
 	m_HostNetVisibilityCombo = dynamic_cast<GUIComboBox*>(get("ComboHostNetVisibility"));
 	m_HostNetIceCombo = dynamic_cast<GUIComboBox*>(get("ComboHostNetIce"));
 	m_HostNetIceHintLabel = dynamic_cast<GUILabel*>(get("LabelHostNetIceHint"));
@@ -2630,7 +2635,6 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 	HostOptSetEditable(m_HostNetMinDelayBox, editable);
 	// Recalculate means "re-sample the link for the automatic policy"; under Fixed the host's own
 	// figures are the answer, so the button stays off there.
-	HostOptSetEditable(m_HostNetRecalcButton, editable && !fixedPolicy && !m_HostOptionsSetupDraft);
 	if (m_HostNetPingLabel) {
 		std::string ping;
 		for (const NetLobbyMember& m : snapshot.members) {
@@ -2746,6 +2750,17 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 		}
 		const char* hint = m_HostRecHintRow == 1 ? NetJoinHistoryHint() : m_HostRecHintRow == 2 ? NetJoinLagHint() : NetReturnWindowHint();
 		if (m_HostRecOptionHintLabel->GetText() != hint) m_HostRecOptionHintLabel->SetText(hint);
+	}
+	// The Timing page's hint names what the row under the hand or with the focus costs; the last one stays.
+	if (m_HostNetOptionHintLabel && m_HostOptionsPages[c_HostOptionsTimingPage] && m_HostOptionsPages[c_HostOptionsTimingPage]->GetVisible()) {
+		int mouseX = 0, mouseY = 0;
+		m_SubMenuScreenGUIControlManager->GetManager()->GetInputController()->GetMousePosition(&mouseX, &mouseY);
+		for (size_t index = 0; index < m_HostNetHintRowControls.size(); ++index) {
+			GUIPanel* panel = m_HostNetHintRowControls[index] ? m_HostNetHintRowControls[index]->GetPanel() : nullptr;
+			if (panel && (panel->PointInside(mouseX, mouseY) || panel->HasFocus())) m_HostNetHintRow = static_cast<int>(index / 2);
+		}
+		const char* hint = NetTimingRowHint(m_HostNetHintRow);
+		if (m_HostNetOptionHintLabel->GetText() != hint) m_HostNetOptionHintLabel->SetText(hint);
 	}
 	if (m_HostRecLastSaveLabel) {
 		// H28: the service exposes no last-autosave tick getter, so the observation is the local
@@ -3900,13 +3915,6 @@ void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl
 	}
 	if (guiEventControl == m_HostNetSlowPolicyCombo) {
 		m_HostOptionsDraft.slowPlayerPolicy = NetSlowPlayerPolicy::Substitute;
-		return;
-	}
-	if (guiEventControl == m_HostNetRecalcButton) {
-		// The auto policy already re-derives each sender's figure from the live link; the button is
-		// the host's "look again now" - the readouts re-fill from the service snapshot this frame.
-		m_HostOptionsStatusLabel->SetText("The delay and ping figures were measured again.");
-		g_GUISound.ItemChangeSound()->Play();
 		return;
 	}
 	if (guiEventControl == m_HostRulesBrainlessCombo || guiEventControl == m_HostRecAutosaveCheck || guiEventControl == m_HostSessIdleCombo) {

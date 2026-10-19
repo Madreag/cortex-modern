@@ -435,7 +435,6 @@ namespace RTE {
 		GUILabel* m_HostNetEffectiveLabel = nullptr;
 		std::array<GUILabel*, 4> m_HostNetPeerLabels{};
 		std::array<GUITextBox*, 4> m_HostNetPeerDelayBoxes{};
-		GUIButton* m_HostNetRecalcButton = nullptr;
 		GUILabel* m_HostNetPingLabel = nullptr;
 		GUILabel* m_HostNetModeLabel = nullptr;          //!< H34: "Host mode: <Dedicated|Playing> - capacity N - humans seated M".
 		GUIComboBox* m_HostNetVisibilityCombo = nullptr; //!< H34: LAN only / Internet: Unlisted / Internet: Listed.
@@ -456,6 +455,9 @@ namespace RTE {
 		GUILabel* m_HostRecOptionHintLabel = nullptr;     //!< The consequence of the window or history row the player points at or has focused.
 		std::array<GUIControl*, 6> m_HostRecHintRowControls{}; //!< Each of those rows' label and combo, in row order.
 		int m_HostRecHintRow = 0;                         //!< The row the hint names: the last one pointed at or focused; the Return window first.
+		GUILabel* m_HostNetOptionHintLabel = nullptr;     //!< What the Timing row the player points at or has focused costs.
+		std::array<GUIControl*, 8> m_HostNetHintRowControls{}; //!< Each Timing row's label and control, in row order.
+		int m_HostNetHintRow = 0;                         //!< The Timing row the hint names; Input delay first.
 		/// Logs the history policy this host would run under the drafted return window and its own history options.
 		void LogHostHistoryPolicy() const;
 		GUILabel* m_HostRecWaitingLabel = nullptr;

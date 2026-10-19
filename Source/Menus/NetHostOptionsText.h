@@ -23,12 +23,46 @@ namespace RTE {
 	inline std::string NetSlowPlayerHint(NetSlowPlayerPolicy policy, uint16_t boundTicks, double tickMs) {
 		if (policy == NetSlowPlayerPolicy::Pause) return "Everyone waits for a late player, host included, for up to 20 s.";
 		return "A player late past " + std::to_string(boundTicks) + (boundTicks == 1 ? " tick (" : " ticks (") + std::to_string(std::lround(boundTicks * tickMs)) +
-		       " ms), host too, is held to the AI while others play on. Other policies return in a later version.";
+		       " ms), host too, is held to the AI while others play on.";
 	}
 
 	/// How the automatic input delay is sized, in the words every delay readout uses.
 	inline std::string NetAutoDelayText(uint16_t marginTicks) {
 		return "ping plus a " + std::to_string(marginTicks) + "-tick margin, raised live if inputs arrive late";
+	}
+
+	/// What each Timing row's choice costs, in the order the page lists them: input delay, minimum delay, slow player bound, redundancy.
+	inline const char* NetTimingRowHint(int row) {
+		switch (row) {
+			case 1: return "No player's delay drops below this; a higher floor rides out spikes but every press lands later";
+			case 2: return "How late a player may fall before the AI holds their seat; lower keeps everyone else smooth";
+			case 3: return "Each packet repeats this many earlier ticks; more rides out lost packets but uses more bandwidth";
+			default: return "Automatic sizes each player's delay from their ping; Fixed uses the numbers you type";
+		}
+	}
+
+	/// What each of this computer's hosting defaults costs, in the order Settings > Network > Hosting lists them.
+	inline const char* NetHostingRowHint(int row) {
+		switch (row) {
+			case 1: return "Minutes an open lobby waits with nobody joining before it closes";
+			case 2: return "Ticks AI route searches may take; longer avoids pauses on slow machines, AI orders start later";
+			case 3: return "A match that falls out of step reloads the host's copy on every machine";
+			default: return "Automatic sizes each player's delay from their ping; Fixed uses the frames below";
+		}
+	}
+
+	/// What the match status box shows under each choice of Settings > Network's first page.
+	inline const char* NetMatchStatusModeHint(SettingsMan::NetworkMatchStatusMode mode) {
+		switch (mode) {
+			case SettingsMan::NetworkMatchStatusMode::Off: return "Hidden; it still shows when your seat is held or your machine falls behind";
+			case SettingsMan::NetworkMatchStatusMode::Always: return "Shows who is connected and how, all match long";
+			default: return "Shows the match's state while someone is placing, waiting or away";
+		}
+	}
+
+	/// What Responsive controls does for the player who turns it on.
+	inline const char* NetResponsiveControlsHint() {
+		return "Your own units answer at once; the match confirms each move a moment later";
 	}
 
 	/// The autosave interval row's range.

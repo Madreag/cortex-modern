@@ -1152,9 +1152,9 @@ def third_pass_case(case, port, root, size):
                              + f"wait_file {marks['done']} 120\nexit\n")
         return scripts_, {}
     if case == "host-words":
-        # Words a player reads: Recalculate offers nothing before a lobby exists; the Internet page points at a page that
+        # Words a player reads: no control on the Timing page does nothing; the Internet page points at a page that
         # exists; the Timing page names seats, not peers; the authentication line says what this build does.
-        host = (setup + advanced + page("Timing") + "assert_enabled ButtonHostNetRecalc 0\n" + hand_pick("ComboHostNetPolicy", "Fixed")
+        host = (setup + advanced + page("Timing") + "assert_no_caption CollectionBoxHostPageTiming Recalculate\n" + hand_pick("ComboHostNetPolicy", "Fixed")
                 + "assert_label_absent LabelHostNetPeer1 Peer\nassert_label LabelHostNetPeer1 Seat 1\n"
                 + page("Recovery") + "assert_label LabelHostRecRejoin Authenticated rejoin: On\n"
                 + "activate ButtonHostOptBack\nwait 6\nactivate ButtonHostBack\nwait 6\nassert_substate Landing\n"
@@ -1394,7 +1394,7 @@ def scripts(case, port, root, size="960x540"):
                  "assert_label ComboHostNetSlowPolicy Give the seat to the AI (host too) until they catch up\n"
                  # V1 offers the default policy only; the hint says the others come back.
                  "assert_combo_items ComboHostNetSlowPolicy Give the seat to the AI (host too) until they catch up\n"
-                 "assert_label LabelHostNetSlowPolicyHint A player late past 3 ticks (50 ms), host too, is held to the AI while others play on. Other policies return in a later version.\n"
+                 "assert_label LabelHostNetSlowPolicyHint A player late past 3 ticks (50 ms), host too, is held to the AI while others play on.\n"
                  "assert_text_fits LabelHostNetSlowPolicyHint\n"
                  # Nothing drafted yet: Apply has nothing to commit.
                  "assert_enabled ButtonHostOptApply 0\n"
@@ -1405,7 +1405,7 @@ def scripts(case, port, root, size="960x540"):
                  "activate ButtonHostOptBack\nwait 3\nactivate ButtonMultiplayerCreate\nwait 15\n"
                  "activate ButtonLobbyOptions\nwait 3\nactivate TabHostPageConnection\nwait 3\nactivate TabHostPageTiming\nwait 3\n"
                  "assert_label ComboHostNetRedundancy 7 ticks\nassert_label TextHostNetSlowBound 7\n"
-                 "assert_label LabelHostNetSlowPolicyHint A player late past 7 ticks (117 ms), host too, is held to the AI while others play on. Other policies return in a later version.\n"
+                 "assert_label LabelHostNetSlowPolicyHint A player late past 7 ticks (117 ms), host too, is held to the AI while others play on.\n"
                  "assert_combo_items ComboHostNetSlowPolicy Give the seat to the AI (host too) until they catch up\n"
                  "assert_enabled TextHostNetSlowBound 1\nassert_text_fits LabelHostNetSlowPolicyHint\n"
                  "dump_host_options\nexit\n")
@@ -2028,10 +2028,11 @@ def scripts(case, port, root, size="960x540"):
             text += checks(control, "CollectionBoxHostPageTiming")
         text += "assert_label TextHostNetSlowBound 3\n"
         text += "assert_label ComboHostNetSlowPolicy Give the seat to the AI (host too) until they catch up\n"
-        text += "assert_label LabelHostNetSlowPolicyHint A player late past 3 ticks (50 ms), host too, is held to the AI while others play on. Other policies return in a later version.\n"
+        text += "assert_label LabelHostNetSlowPolicyHint A player late past 3 ticks (50 ms), host too, is held to the AI while others play on.\n"
         text += "assert_label LabelHostNetEffective Effective delay: ping plus a 3-tick margin, raised live if inputs arrive late, at least\n"
         text += checks("LabelHostNetEffective", "CollectionBoxHostPageTiming")
-        text += checks("ButtonHostNetRecalc", "CollectionBoxHostPageTiming")
+        text += checks("LabelHostNetPing", "CollectionBoxHostPageTiming")
+        text += checks("LabelHostNetOptionHint", "CollectionBoxHostPageTiming")
         # The host row names mode/capacity/seated humans off the adopted config.
         text += checks("LabelHostNetMode", "CollectionBoxHostPageTiming")
         text += "assert_label LabelHostNetMode Host mode: Player host - capacity 2 - humans seated 1\n"
