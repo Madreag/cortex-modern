@@ -1005,8 +1005,9 @@ namespace RTE {
 				reply.members = answer->second;
 				return reply;
 			};
-			// Arms: seat 1's other continuation in direct play; the same history; seat 1 asked the decided question; seat 2 did not.
-			for (unsigned arm = 0; arm < 4; ++arm) {
+			// Arms: seat 1's other continuation in direct play; the same history; seat 1 asked the decided question; seat 2 did not;
+			// one frame whose records differ, as a seat's own transition facts can, among frames whose records match.
+			for (unsigned arm = 0; arm < 5; ++arm) {
 				Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
 				const uint8_t local = arm == 3 ? 2 : 1, other = arm == 3 ? 1 : 2;
 				peer.m_Config.peerFrameGroups = true; peer.m_Config.localPeerId = local; peer.m_Config.authorityPeerId = 1;
@@ -1040,25 +1041,28 @@ namespace RTE {
 					if (seat == local) peer.m_LocalFrames[161] = input.frames; else peer.m_RemoteFrames[161][seat] = input.frames;
 					for (uint8_t reader = 1; reader <= 3; ++reader) peer.m_PeerInputReceipts[seat][reader] = 162;
 				}
-				// The other seat's witness of frame 155: its record keeps seat 3 when its history is the other continuation.
+				// The other seat's witnesses of frames 153-155: its records keep seat 3 when its history is the other continuation.
 				Wire otherWire; NetLockstepCoordinator witnessPeer; Configure(witnessPeer, otherWire);
 				witnessPeer.m_Config.peerFrameGroups = true; witnessPeer.m_Config.localPeerId = other;
 				witnessPeer.m_Config.peerCount = witnessPeer.m_Config.matchConfig.peerCount = 3;
 				witnessPeer.m_Config.matchConfig.players.resize(2); witnessPeer.m_Config.matchConfig.players.push_back({3, 2, false, "Third"});
-				const bool diverged = arm != 1;
-				witnessPeer.StoreMigrationFrame(155, record(witnessPeer, 155, diverged ? local == 1 : false));
-				const auto applied = witnessPeer.PeerAppliedFramePrefix(155);
-				auto witness = peer.PeerFrameMessage(NetHostMigrationMessageType::PeerReceipt);
-				witness.senderPeerId = witness.successorPeerId = other;
-				witness.preparedFrame = UINT64_MAX; witness.frame = witness.appliedFrame = 155;
-				witness.voterMask = diverged && local == 1 ? 7 : 3;
-				witness.bytes.assign(applied.begin(), applied.end()); witness.bytes.insert(witness.bytes.end(), applied.begin(), applied.end());
-				witness.totalBytes = static_cast<uint32_t>(witness.bytes.size());
+				const bool diverged = arm != 1 && arm != 4;
 				std::vector<uint8_t> signedBytes; NetHostMigrationMessage authenticated;
-				if (!NetHostMigrationCodec::Encode(witness, peer.m_Config.migrationKey, signedBytes) ||
-				    !NetHostMigrationCodec::Decode(signedBytes, peer.m_Config.migrationKey, authenticated) || !peer.HandlePeerFrameMessage(authenticated, 1200)) {
-					check(false, "arm " + std::to_string(arm) + ": the witness did not traverse the authenticated peer wire"); continue;
+				bool delivered = true;
+				for (uint64_t frame = 153; frame <= 155; ++frame) {
+					const bool differs = arm == 4 ? frame == 153 : diverged;
+					witnessPeer.StoreMigrationFrame(frame, record(witnessPeer, frame, differs ? local == 1 : local != 1));
+					const auto applied = witnessPeer.PeerAppliedFramePrefix(frame);
+					auto witness = peer.PeerFrameMessage(NetHostMigrationMessageType::PeerReceipt);
+					witness.senderPeerId = witness.successorPeerId = other;
+					witness.preparedFrame = UINT64_MAX; witness.frame = witness.appliedFrame = frame;
+					witness.voterMask = differs && local == 1 ? 7 : 3;
+					witness.bytes.assign(applied.begin(), applied.end()); witness.bytes.insert(witness.bytes.end(), applied.begin(), applied.end());
+					witness.totalBytes = static_cast<uint32_t>(witness.bytes.size());
+					delivered = delivered && NetHostMigrationCodec::Encode(witness, peer.m_Config.migrationKey, signedBytes) &&
+					    NetHostMigrationCodec::Decode(signedBytes, peer.m_Config.migrationKey, authenticated) && peer.HandlePeerFrameMessage(authenticated, 1200);
 				}
+				if (!delivered) { check(false, "arm " + std::to_string(arm) + ": a witness did not traverse the authenticated peer wire"); continue; }
 				if (local == 2) peer.CheckPeerFrameTie(161, 6, 1200);
 				(void)peer.ProposePeerBridge(161, 1200);
 				const bool held = (peer.PeerFrameMembersAt(161) & (1U << (other - 1))) == 0;
