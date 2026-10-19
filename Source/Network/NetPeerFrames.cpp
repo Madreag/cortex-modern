@@ -332,11 +332,12 @@ namespace RTE {
 			// Later local holds can shrink this continuation before the heal. Its first hold's membership may still name a
 			// peer that never joined its history; judge the actual completed continuation, as the history exchange does.
 			const uint32_t playing = PeerFrameMembersAt(m_LastCompletedSimulationTick.value_or(*arbitration.holdFrame)) & owners;
-			// A decision naming members of two continuations is the question one of them asked. A seat that holds a member it names
-			// as another continuation, and did not ask that question itself, lost it.
-			uint32_t other = 0;
+			// A decision naming members of two continuations is the question one of them asked: a seat held while it still counted a
+			// seat of this group asks with that seat named. A seat whose group plays some it names and holds others, and did not ask
+			// that question itself, lost it.
+			uint32_t other = owners & ~playing;
 			for (const auto& [peer, since]: m_PeerOtherContinuations) other |= SeatBit(peer);
-			const bool askerElsewhere = (winner & other) != 0 && (winner & local) != 0 && arbitration.asked != winner;
+			const bool askerElsewhere = (winner & other) != 0 && (winner & playing) != 0 && arbitration.asked != winner;
 			if (((winner & local) == 0 || askerElsewhere) && (playing & local) != 0 && ((playing & winner) == 0 || askerElsewhere)) {
 				// Preparation may lead the displayed world by several ticks. Finish any granted tick, then discard that
 				// unplayed preparation: the private image replaces this branch at its actual completed boundary.
