@@ -82,12 +82,13 @@ NETWORK_PAGE_BOX = NETWORK_BOXES[0]
 # The first view: the name, the Connection summary and its Change, the chat switches, the status display, then Advanced settings.
 BASICS_ROWS = ("LabelNetworkDisplayName", "TextNetworkDisplayName", "LabelNetworkConnectionSummary", "LabelNetworkConnectionValue",
                "ButtonNetworkConnectionChange", "CheckboxNetworkChatVisible", "CheckboxNetworkChatNotify", "LabelMatchStatusWidget",
-               "ComboMatchStatusWidget", "ButtonNetworkAdvanced", "LabelNetworkAdvancedHint")
+               "ComboMatchStatusWidget", "LabelMatchStatusWidgetHint", "ButtonNetworkAdvanced", "LabelNetworkAdvancedHint")
 NETWORK_ROWS = ("LabelNetworkDelayPolicy",
                 "RadioNetworkDelayAuto", "RadioNetworkDelayFixed", "LabelNetworkIdleWait",
                 "TextNetworkIdleWait", "LabelNetworkIdleWaitHint", "LabelNetworkPathHorizon",
-                "TextNetworkPathHorizon", "LabelNetworkPathHorizonHint", "CheckboxNetworkAutoRepair",
-                "CheckboxNetworkToasts", "CheckboxNetworkPrediction", "CheckboxNetworkDiagnostics")
+                "TextNetworkPathHorizon", "LabelNetworkPathHorizonHint", "CheckboxNetworkAutoRepair", "LabelNetworkHostingHint")
+# This computer's in-match options, on the match page beside chat.
+IN_MATCH_ROWS = ("CheckboxNetworkToasts", "CheckboxNetworkPrediction", "LabelNetworkPredictionHint", "CheckboxNetworkDiagnostics")
 NETWORK_FIXED_ROWS = ("LabelNetworkFixedDelay", "TextNetworkFixedDelay", "LabelNetworkFixedDelayHint")
 MAX_INPUT_DELAY_FRAMES = 60  # NetMatchConfigUtil::c_MaxInputDelayFrames, which the hint states.
 LOBBY_PORT_MAP_ROW = 14  # MainMenuGUI's port-map row: the host alone maps its router port, so only its lobby carries it.
@@ -1504,8 +1505,9 @@ def scripts(case, port, root, size="960x540"):
                  "set_text TextNetworkFixedDelay " + NETWORK_SAVED["NetworkInputDelayFrames"] + "\n"
                  "set_text TextNetworkIdleWait " + NETWORK_SAVED["NetworkHostIdleWaitMinutes"] + "\n"
                  "set_text TextNetworkPathHorizon " + NETWORK_SAVED["NetworkPathHorizonTicks"] + "\n"
-                 "post_command CheckboxNetworkAutoRepair\npost_command CheckboxNetworkToasts\n"
-                 "post_command CheckboxNetworkPrediction\npost_command CheckboxNetworkDiagnostics\nwait 3\ndump_player_options\n"
+                 "post_command CheckboxNetworkAutoRepair\nwait 3\ndump_player_options\n"
+                 "select_settings_page Network:Chat\nwait 3\n"
+                 "post_command CheckboxNetworkToasts\npost_command CheckboxNetworkPrediction\npost_command CheckboxNetworkDiagnostics\nwait 3\n"
                  "post_command ButtonBackToMainMenu\nwait 5\nassert_screen MainScreen\n")
         text += LANDING + "assert_label TextMultiplayerName " + NETWORK_SAVED["NetworkDisplayName"] + "\n"
         text += checks("LabelMultiplayerNamePrompt", "MultiplayerLandingPanel")
@@ -1527,8 +1529,9 @@ def scripts(case, port, root, size="960x540"):
         text += net_page("Chat")
         for control in ("CheckboxNetworkChatSound", "LabelNetworkChatScope", "ComboNetworkChatScope", "LabelNetworkChatTextSize",
                         "ComboNetworkChatTextSize", "LabelNetworkChatKey", "TextNetworkChatKey",
-                        "ButtonNetMutedPlayers", "LabelNetMutedReason"):
+                        "ButtonNetMutedPlayers", "LabelNetMutedReason", *IN_MATCH_ROWS):
             text += checks(control, "CollectionBoxNetPageChat")
+        text += "assert_label TabNetPageChat In match\nassert_no_overlap_within CollectionBoxNetPageChat\n"
         text += ("assert_enabled ButtonNetMutedPlayers 0\n"
                  "assert_label LabelNetMutedReason managed in the match\n"
                  "assert_label ComboNetworkChatScope " + CHAT_SEED["NetworkChatDefaultScope"] + "\n"
@@ -3065,7 +3068,7 @@ def run_case(options, case, root, failing=None):
             assert base[1] * 2 + base[3] == res_y, (base, res_y)
             # The player page shares the other pages' value column.
             column = rows["CollectionBoxNetPagePlayer"]["rect"][0] + NETWORK_VALUE_COLUMN
-            assert rows["CheckboxNetworkPrediction"]["rect"][0] == column, rows["CheckboxNetworkPrediction"]["rect"]
+            assert rows["RadioNetworkDelayAuto"]["rect"][0] == column, rows["RadioNetworkDelayAuto"]["rect"]
             assert not set(NETWORK_FIXED_ROWS) & rows.keys(), sorted(rows)
             assert all(rows[name]["text_fits"] for name in NETWORK_ROWS if rows[name]["text"]), rows
             after = {control["name"]: control for control in page[1]["controls"]}
@@ -3084,13 +3087,16 @@ def run_case(options, case, root, failing=None):
             # The page sits on the Misc page's grid: its first row at the top row, a 20px row pitch, and under the
             # automatic policy the hidden fixed row leaves no gap behind it.
             pitch = ("LabelNetworkDelayPolicy", "LabelNetworkFixedDelay", "LabelNetworkIdleWait", "LabelNetworkPathHorizon",
-                     "CheckboxNetworkAutoRepair", "CheckboxNetworkToasts", "CheckboxNetworkDiagnostics")
+                     "CheckboxNetworkAutoRepair")
             assert after[pitch[0]]["rect"][1] - after["CollectionBoxNetPagePlayer"]["rect"][1] == 12, (after[pitch[0]], after["CollectionBoxNetPagePlayer"])
             deltas = [after[b]["rect"][1] - after[a]["rect"][1] for a, b in zip(pitch, pitch[1:])]
-            assert deltas == [20] * 6, deltas
+            assert deltas == [20] * 4, deltas
             without_fixed = pitch[:1] + pitch[2:]
             closed = [rows[b]["rect"][1] - rows[a]["rect"][1] for a, b in zip(without_fixed, without_fixed[1:])]
-            assert closed == [20] * 5, closed
+            assert closed == [20] * 3, closed
+            # The hosting hint sits under the last row and moves with it.
+            assert after["LabelNetworkHostingHint"]["rect"][1] - after["CheckboxNetworkAutoRepair"]["rect"][1] == 28, after["LabelNetworkHostingHint"]
+            assert rows["LabelNetworkHostingHint"]["rect"][1] - rows["CheckboxNetworkAutoRepair"]["rect"][1] == 28, rows["LabelNetworkHostingHint"]
             # The landing's name row shares the Host/Join block's centre line; doubled centres avoid halves.
             landing = {c["name"]: c for c in images[-1]["controls"]}
             prompt, box = landing["LabelMultiplayerNamePrompt"]["rect"], landing["TextMultiplayerName"]["rect"]

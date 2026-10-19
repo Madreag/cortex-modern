@@ -170,7 +170,8 @@ std::vector<std::string> SettingsNetworkGUI::MissingControls(GUIControlManager* 
 	    "RadioNetworkDelayFixed", "TextNetworkAutosavesKept", "TextNetworkChatKey", "TextNetworkDiagDir", "TextNetworkDirPin",
 	    "TextNetworkDirUrl", "TextNetworkDisplayName", "TextNetworkFixedDelay", "TextNetworkIdleWait", "TextNetworkPathHorizon",
 	    "TextNetworkRelayAddress", "TextNetworkRelayPass", "TextNetworkRelayUser", "TextNetworkStunServers",
-	    "LabelNetworkConnectionIndicator", "ComboNetworkConnectionIndicator", "LabelNetworkConnectionIndicatorHint"};
+	    "LabelNetworkConnectionIndicator", "ComboNetworkConnectionIndicator", "LabelNetworkConnectionIndicatorHint",
+	    "LabelMatchStatusWidgetHint", "LabelNetworkHostingHint", "LabelNetworkPredictionHint", "LabelNetworkDelayPolicy"};
 	std::vector<std::string> missing;
 	for (const char* name : requiredControls) {
 		if (!parentControlManager->GetControl(name)) missing.emplace_back(name);
@@ -225,13 +226,26 @@ SettingsNetworkGUI::SettingsNetworkGUI(GUIControlManager* parentControlManager) 
 	m_AutoRepairCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->GetControl("CheckboxNetworkAutoRepair"));
 	m_ToastsCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->GetControl("CheckboxNetworkToasts"));
 	m_PredictionCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->GetControl("CheckboxNetworkPrediction"));
-	m_DiagnosticsCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->AddControl("CheckboxNetworkDiagnostics", "CHECKBOX", m_PageBoxes[0], 15, 132, 320, 20));
+	// This computer's in-match options share the match page with chat; the Hosting page holds only what the games it hosts use.
+	m_DiagnosticsCheckbox = dynamic_cast<GUICheckbox*>(m_GUIControlManager->AddControl("CheckboxNetworkDiagnostics", "CHECKBOX",
+	                                                                                    m_PageBoxes[static_cast<int>(Page::Chat)], 190, 136, 220, 20));
 	m_DiagnosticsCheckbox->SetText("Show network diagnostics");
+	m_PredictionHint = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetworkPredictionHint"));
+	m_PredictionHint->SetFont(m_GUIControlManager->GetSkin()->GetFont("FontSmall.png"));
+	m_PredictionHint->SetText(NetResponsiveControlsHint());
+	m_HostingHint = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetworkHostingHint"));
+	m_HostingHint->SetFont(m_GUIControlManager->GetSkin()->GetFont("FontSmall.png"));
+	m_HostingHint->SetText(NetHostingRowHint(0));
+	m_HostingHintRows = {std::pair<GUIControl*, int>{m_GUIControlManager->GetControl("LabelNetworkDelayPolicy"), 0}, {m_DelayPolicyAutoRadio, 0},
+	                     {m_DelayPolicyFixedRadio, 0}, {m_FixedDelayLabel, 0}, {m_FixedDelayTextbox, 0}, {m_IdleWaitLabel, 1}, {m_IdleWaitTextbox, 1},
+	                     {m_PathHorizonLabel, 2}, {m_PathHorizonTextbox, 2}, {m_AutoRepairCheckbox, 3}};
 
 	m_StatusModeCombo = dynamic_cast<GUIComboBox*>(m_GUIControlManager->GetControl("ComboMatchStatusWidget"));
 	m_StatusModeCombo->AddItem("Off");
 	m_StatusModeCombo->AddItem("When needed");
 	m_StatusModeCombo->AddItem("Always");
+	m_StatusModeHint = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelMatchStatusWidgetHint"));
+	m_StatusModeHint->SetFont(m_GUIControlManager->GetSkin()->GetFont("FontSmall.png"));
 	m_ConnectionIndicatorCombo = dynamic_cast<GUIComboBox*>(m_GUIControlManager->GetControl("ComboNetworkConnectionIndicator"));
 	m_ConnectionIndicatorCombo->AddItem("On");
 	m_ConnectionIndicatorCombo->AddItem("Off");
@@ -312,7 +326,7 @@ SettingsNetworkGUI::SettingsNetworkGUI(GUIControlManager* parentControlManager) 
 	};
 	m_RowsUnderFixedDelay = {rowTop(m_IdleWaitLabel), rowTop(m_IdleWaitTextbox), rowTop(m_IdleWaitHintLabel),
 	                         rowTop(m_PathHorizonLabel), rowTop(m_PathHorizonTextbox), rowTop(m_PathHorizonHintLabel), rowTop(m_AutoRepairCheckbox),
-	                         rowTop(m_ToastsCheckbox), rowTop(m_PredictionCheckbox), rowTop(m_DiagnosticsCheckbox)};
+	                         rowTop(m_HostingHint)};
 
 	ShowSavedValues();
 	// The skin draws only the player page's box first; checking its tab keeps the selector in step.
@@ -344,6 +358,7 @@ void SettingsNetworkGUI::ShowSavedValues() {
 	m_PredictionCheckbox->SetCheck(g_SettingsMan.LocalPredictionEnabled());
 	m_DiagnosticsCheckbox->SetCheck(g_SettingsMan.GetNetworkShowDiagnostics());
 	m_StatusModeCombo->SetSelectedIndex(static_cast<int>(g_SettingsMan.GetNetworkMatchStatusMode()));
+	m_StatusModeHint->SetText(NetMatchStatusModeHint(g_SettingsMan.GetNetworkMatchStatusMode()));
 	m_ConnectionIndicatorCombo->SetSelectedIndex(g_SettingsMan.GetNetworkConnectionIndicator() ? 0 : 1);
 	m_ConnectionIndicatorHint->SetText(NetLinkQualityPresentation::ToggleHint(g_SettingsMan.GetNetworkConnectionIndicator()));
 	m_ChatVisibleCheckbox->SetCheck(g_SettingsMan.GetNetworkChatVisible());
@@ -503,6 +518,18 @@ void SettingsNetworkGUI::UpdateStatusLines() {
 	m_DirStatusLabel->SetText(g_SettingsMan.GetSessionDirectoryUrl().empty() ? "Not configured" : "Configured");
 }
 
+void SettingsNetworkGUI::UpdateHoverHints() {
+	if (m_ActivePage != Page::Player) return;
+	int mouseX = 0, mouseY = 0;
+	m_GUIControlManager->GetManager()->GetInputController()->GetMousePosition(&mouseX, &mouseY);
+	for (const auto& [control, row]: m_HostingHintRows) {
+		GUIPanel* panel = control ? control->GetPanel() : nullptr;
+		if (panel && control->GetVisible() && (panel->PointInside(mouseX, mouseY) || panel->HasFocus())) m_HostingHintRow = row;
+	}
+	const char* hint = NetHostingRowHint(m_HostingHintRow);
+	if (m_HostingHint->GetText() != hint) m_HostingHint->SetText(hint);
+}
+
 void SettingsNetworkGUI::HandleInputEvents(GUIEvent& guiEvent) {
 	if (guiEvent.GetType() == GUIEvent::Command && guiEvent.GetControl() == m_ConnectionChangeButton) {
 		SetActivePage(Page::Connection);
@@ -588,6 +615,7 @@ void SettingsNetworkGUI::HandleInputEvents(GUIEvent& guiEvent) {
 		g_SettingsMan.SetNetworkShowDiagnostics(m_DiagnosticsCheckbox->GetCheck());
 	} else if (guiEvent.GetControl() == m_StatusModeCombo && guiEvent.GetMsg() == GUIComboBox::Closed) {
 		g_SettingsMan.SetNetworkMatchStatusMode(static_cast<SettingsMan::NetworkMatchStatusMode>(m_StatusModeCombo->GetSelectedIndex()));
+		m_StatusModeHint->SetText(NetMatchStatusModeHint(g_SettingsMan.GetNetworkMatchStatusMode()));
 	} else if (guiEvent.GetControl() == m_ConnectionIndicatorCombo && guiEvent.GetMsg() == GUIComboBox::Closed) {
 		g_SettingsMan.SetNetworkConnectionIndicator(m_ConnectionIndicatorCombo->GetSelectedIndex() == 0);
 		m_ConnectionIndicatorHint->SetText(NetLinkQualityPresentation::ToggleHint(g_SettingsMan.GetNetworkConnectionIndicator()));

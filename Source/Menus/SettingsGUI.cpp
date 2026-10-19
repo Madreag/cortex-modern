@@ -223,6 +223,9 @@ bool SettingsGUI::HandleInputEvents() {
 				break;
 		}
 	}
+	if (m_ActiveSettingsMenuScreen == SettingsMenuScreen::NetworkSettingsMenu && m_NetworkSettingsMenu) {
+		m_NetworkSettingsMenu->UpdateHoverHints();
+	}
 	// Manual input config sequence has to be updated outside the GUI event handling loop otherwise input capture doesn't work (loop only runs if event queue isn't empty).
 	if (m_ActiveSettingsMenuScreen == SettingsMenuScreen::InputSettingsMenu) {
 		if (m_InputSettingsMenu->InputMappingConfigIsConfiguringManually()) {

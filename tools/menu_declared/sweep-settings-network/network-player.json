@@ -19,18 +19,6 @@
   {
    "name": "CheckboxNetworkAutoRepair",
    "enabled": true
-  },
-  {
-   "name": "CheckboxNetworkToasts",
-   "enabled": true
-  },
-  {
-   "name": "CheckboxNetworkPrediction",
-   "enabled": true
-  },
-  {
-   "name": "CheckboxNetworkDiagnostics",
-   "enabled": true
   }
  ]
 }
