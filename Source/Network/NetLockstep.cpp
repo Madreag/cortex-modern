@@ -9452,8 +9452,8 @@ namespace RTE {
 		// agrees. A cleanly-left peer's last hashes still compare, but nobody waits on it.
 		for (const auto& [peerId, hash]: remoteIt->second) {
 			// A client held at this frame may have run it on its own input, off the round: its hash is its private simulation's until it
-			// returns. A held host still simulates the round.
-			if (peerId != GetHostPeerId() && IsSeatUnderAI(peerId, frame)) continue;
+			// returns. A held host still simulates a host-routed round; in a frame group it plays off the round like any held seat.
+			if ((UsesPeerFrameGroups() || peerId != GetHostPeerId()) && IsSeatUnderAI(peerId, frame)) continue;
 			++m_Stats.checksumCompares;
 			if (localIt->second != hash) {
 				++m_Stats.checksumMismatches;
