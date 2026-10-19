@@ -8051,8 +8051,9 @@ namespace RTE {
 		return true;
 	}
 
-	// A periodic capture named past its deadline is the host's own late save only when the host's own writer kept it waiting:
-	// one that waited only for another peer's report costs the host nothing.
+	// A periodic capture named past its deadline is the host's own late save exactly when the host's own writer was busy
+	// while it waited: one that waited only for another peer's report, or for the host's own report on its way, costs the
+	// host nothing.
 	bool TestALateCaptureNamesTheWriterThatMadeItLate(std::string* error) {
 		for (const bool ownSlow: {true, false}) {
 			NetMatchService service;
@@ -8062,7 +8063,8 @@ namespace RTE {
 			const int64_t tickLength = g_TimerMan.GetTicksPerSecond() / 60;
 			std::map<uint64_t, std::vector<NetMatchService::CheckpointNote>> stream;
 			std::vector<std::pair<uint64_t, uint64_t>> writer;
-			size_t late = 0, ownLate = 0;
+			std::set<uint64_t> busy;
+			size_t late = 0, ownLate = 0, misnamed = 0;
 			for (uint64_t tick = 1; tick <= 600; ++tick) {
 				NetMatchService::AutosaveTickInput input;
 				input.tick = tick; input.now = static_cast<int64_t>(tick) * tickLength;
@@ -8070,10 +8072,14 @@ namespace RTE {
 				input.writers = {1, 2}; input.lead = 5; input.localPeer = 1;
 				while (!writer.empty() && writer.front().second <= tick) { input.finished.push_back(writer.front().first); writer.erase(writer.begin()); }
 				input.unwritten = writer.size();
+				if (!writer.empty()) busy.insert(tick);
 				const NetMatchService::AutosaveTickOutput output = service.StepAutosaveSchedule(input);
 				if (output.periodicLateTicks > 0) {
 					++late;
 					if (output.periodicOwnLate) ++ownLate;
+					// The capture's deadline was its late ticks before this one; its own writer was busy at some tick since.
+					const auto since = busy.lower_bound(tick - static_cast<uint64_t>(output.periodicLateTicks));
+					if (output.periodicOwnLate != (since != busy.end() && *since <= tick)) ++misnamed;
 				}
 				if (output.capture) {
 					// One writer takes 90 ticks against the 60-tick schedule; the other reports 10 ticks after the capture.
@@ -8085,9 +8091,10 @@ namespace RTE {
 					stream[tick + 4].push_back(note);
 				}
 			}
-			if (late < 3 || ownLate != (ownSlow ? late : 0)) {
+			if (late < 3 || misnamed != 0 || (ownSlow ? ownLate < 3 : ownLate != 0)) {
 				*error = std::string("a-late-capture-names-the-writer-that-made-it-late: with the ") + (ownSlow ? "host's" : "other peer's") +
-				         " writer slow, " + std::to_string(ownLate) + " of " + std::to_string(late) + " late captures were the host's own late saves";
+				         " writer slow, " + std::to_string(ownLate) + " of " + std::to_string(late) + " late captures were the host's own late saves, " +
+				         std::to_string(misnamed) + " named against what its writer did";
 				return false;
 			}
 		}
