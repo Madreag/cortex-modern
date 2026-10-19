@@ -1331,11 +1331,11 @@ namespace RTE {
 					*error = "a live legacy seat was held before its combat deadline"; return false;
 				}
 				peer.m_PeerLastHeardMs[2] = 1050;
+				// A seat owes its input from its effective start, whether or not it has played yet this round.
 				const bool held = peer.DeclareOverdueInputs(frame, 1050, 1000, {2});
-				if (held != started || peer.IsSeatUnderAI(2, frame) != started) {
-					*error = "fresh authenticated traffic hid a missing-input combat deadline: mode=" + std::to_string(mode); return false;
+				if (!held || !peer.IsSeatUnderAI(2, frame)) {
+					*error = "fresh authenticated traffic hid a missing-input combat deadline: mode=" + std::to_string(mode) + " started=" + std::to_string(started); return false;
 				}
-				if (!started) continue;
 				const auto fact = peer.LastHoldOf(2);
 				if (!fact || fact->frame != frame || fact->cause != "combat_bridge" || fact->boundMs != 50) {
 					*error = "the combat hold lost its exact frame, cause or configured bound"; return false;
