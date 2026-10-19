@@ -5535,6 +5535,7 @@ namespace RTE {
 		m_RemoteObservations.clear();
 		m_RemoteChecksums.clear();
 		m_VerifiedAppliedFrames.clear();
+		m_PeerRecordMatches.clear(); m_DeferredChecksumFrames.clear();
 		m_LocalChecksums.clear();
 		m_PendingObservations.clear();
 		m_DroppedObservations.clear();
@@ -9453,10 +9454,27 @@ namespace RTE {
 		}
 		// A desync on ANY peer aborts, naming it; only verify (and prune) once every REQUIRED remote
 		// agrees. A cleanly-left peer's last hashes still compare, but nobody waits on it.
+		bool undecided = false;
 		for (const auto& [peerId, hash]: remoteIt->second) {
 			// A client held at this frame may have run it on its own input, off the round: its hash is its private simulation's until it
 			// returns. A held host still simulates a host-routed round; in a frame group it plays off the round like any held seat.
 			if ((UsesPeerFrameGroups() || peerId != GetHostPeerId()) && IsSeatUnderAI(peerId, frame)) continue;
+			if (localIt->second != hash && UsesPeerFrameGroups()) {
+				// A member that took an input on the other side of its bound plays another continuation: the split rule, not a repair,
+				// settles which one the round keeps. Only the same records with a different hash are a desync.
+				uint64_t first = 0;
+				const ChecksumCause cause = PeerChecksumCause(peerId, frame, first);
+				if (cause == ChecksumCause::Undecided) { undecided = true; continue; }
+				if (cause == ChecksumCause::Continuation) {
+					if (!m_PeerOtherContinuations.contains(peerId) && (PeerFrameMembersAt(m_Stats.nextFrame) & (1U << (peerId - 1))) != 0) {
+						m_PeerOtherContinuations[peerId] = first;
+						m_PeerContinuationEvidence.erase(peerId);
+						DiagnosticLine() << "[net-peer-continuation] local=" << static_cast<int>(m_Config.localPeerId) << " peer=" << static_cast<int>(peerId) << " frame=" << first
+						                 << " checksum_frame=" << frame << " cause=checksum next=" << m_Stats.nextFrame << " now_ms=" << m_TimingNowMs << std::endl;
+					}
+					continue;
+				}
+			}
 			++m_Stats.checksumCompares;
 			if (localIt->second != hash) {
 				++m_Stats.checksumMismatches;
@@ -9467,6 +9485,8 @@ namespace RTE {
 				return;
 			}
 		}
+		if (undecided) { m_DeferredChecksumFrames.insert(frame); return; }
+		m_DeferredChecksumFrames.erase(frame);
 		for (uint8_t peerId: m_RemotePeerIds) {
 			// Every live peer hashes every simulated tick — input ramp-in does not exempt it here.
 			if (!IsPeerGoneAtFrame(peerId, frame) && remoteIt->second.find(peerId) == remoteIt->second.end()) {
@@ -9475,7 +9495,11 @@ namespace RTE {
 		}
 		// Matched — drop this tick and any older so the maps stay bounded.
 		for (const auto& [peer, hash]: remoteIt->second)
-			if (hash == localIt->second) m_VerifiedAppliedFrames[peer] = std::max(m_VerifiedAppliedFrames[peer], frame);
+			if (hash == localIt->second) {
+				m_VerifiedAppliedFrames[peer] = std::max(m_VerifiedAppliedFrames[peer], frame);
+				if (const auto records = m_PeerRecordMatches.find(peer); records != m_PeerRecordMatches.end())
+					records->second.erase(records->second.begin(), records->second.upper_bound(frame));
+			}
 		m_LocalChecksums.erase(m_LocalChecksums.begin(), m_LocalChecksums.upper_bound(frame));
 		m_RemoteChecksums.erase(m_RemoteChecksums.begin(), m_RemoteChecksums.upper_bound(frame));
 	}

@@ -1710,6 +1710,12 @@ namespace RTE {
 		uint64_t PeerSplitEpoch(uint64_t frame) const;
 		/// A member whose committed record of a frame this seat also applied differs plays another continuation.
 		void NotePeerContinuation(uint8_t peer, uint64_t frame, const NetHash32& applied, uint32_t peerMembers);
+		/// Records whether a member's witnessed record of a frame this peer applied is its own, for the checksum that follows.
+		void NotePeerRecord(uint8_t peer, uint64_t frame, const NetHash32& applied);
+		enum class ChecksumCause { Desync, Continuation, Undecided };
+		/// Why a member's hash of a frame differs from this peer's: records that differed since the last match, the same records, or not yet known.
+		ChecksumCause PeerChecksumCause(uint8_t peer, uint64_t frame, uint64_t& firstDiffering) const;
+		void RecheckDeferredChecksums();
 		bool HoldsOtherContinuation(uint64_t frame) const;
 		/// Whether these seats confirm a frame the given group of members played: a majority of them, or on a tie the half the round's tie
 		/// rule names, as for every other decision of that group.
@@ -2517,6 +2523,8 @@ namespace RTE {
 		std::map<uint8_t, uint64_t> m_AuthoritativeCommandAcks;
 		std::map<uint64_t, std::map<uint8_t, std::array<uint8_t, 32>>> m_RemoteChecksums; //!< frame -> (peerId -> hash)
 		std::map<uint8_t, uint64_t> m_VerifiedAppliedFrames; //!< Matching hashes keep their applied prefix after the hash buffers are pruned.
+		std::map<uint8_t, std::map<uint64_t, bool>> m_PeerRecordMatches; //!< Each member's witnessed record of a frame applied here: whether it was this peer's.
+		std::set<uint64_t> m_DeferredChecksumFrames; //!< Frames whose differing hash waits on the records that decide it.
 		std::deque<NetLockstepReadyFrame> m_ReadyFrames;
 		/// Command counts before the coordinator adds boundary events, by frame and sender.
 		std::map<uint64_t, std::map<uint8_t, size_t>> m_PendingSourceCommandCounts;

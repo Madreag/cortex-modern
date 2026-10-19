@@ -362,7 +362,9 @@ namespace RTE {
 				std::copy_n(message.bytes.begin(), prefix.size(), prefix.begin());
 				if (!m_PeerAppliedPrefixes.contains(message.senderPeerId) || m_PeerAppliedPrefixes.at(message.senderPeerId).first < message.frame)
 					m_PeerAppliedPrefixes[message.senderPeerId] = {message.frame, prefix};
+				NotePeerRecord(message.senderPeerId, message.frame, prefix);
 				NotePeerContinuation(message.senderPeerId, message.frame, prefix, message.voterMask);
+				if (!m_DeferredChecksumFrames.empty()) RecheckDeferredChecksums();
 				if (m_PeerTailVotes.contains(message.frame)) ConfirmPeerTail(message.frame, nowMs);
 				return true;
 			}

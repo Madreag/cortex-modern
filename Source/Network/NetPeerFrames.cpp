@@ -248,6 +248,33 @@ namespace RTE {
 		    << " next=" << m_Stats.nextFrame << " displayed=" << *m_LastCompletedSimulationTick << " now_ms=" << m_TimingNowMs << std::endl;
 	}
 
+	void NetLockstepCoordinator::NotePeerRecord(uint8_t peer, uint64_t frame, const NetHash32& applied) {
+		if (!UsesPeerFrameGroups() || peer == 0 || peer > m_Config.peerCount || peer == m_Config.localPeerId || applied == NetHash32{} ||
+		    !m_LastCompletedSimulationTick || frame > *m_LastCompletedSimulationTick || !m_MigrationHistory.contains(frame)) return;
+		const auto own = PeerAppliedFramePrefix(frame);
+		if (own != NetHash32{}) m_PeerRecordMatches[peer][frame] = own == applied;
+	}
+
+	NetLockstepCoordinator::ChecksumCause NetLockstepCoordinator::PeerChecksumCause(uint8_t peer, uint64_t frame, uint64_t& firstDiffering) const {
+		const uint64_t verified = m_VerifiedAppliedFrames.contains(peer) ? m_VerifiedAppliedFrames.at(peer) : 0;
+		const auto records = m_PeerRecordMatches.find(peer);
+		if (records != m_PeerRecordMatches.end())
+			for (auto record = records->second.upper_bound(verified); record != records->second.end() && record->first <= frame; ++record)
+				if (!record->second) { firstDiffering = record->first; return ChecksumCause::Continuation; }
+		// Every frame still kept since the last match is known to be the same record before the hash is called a desync.
+		const uint64_t kept = m_Stats.nextFrame > NetHostMigrationCodec::c_PeerHistoryFrames ? m_Stats.nextFrame - NetHostMigrationCodec::c_PeerHistoryFrames : 0;
+		for (uint64_t at = std::max({verified + 1, kept, m_Config.startFrame}); at <= frame; ++at)
+			if (records == m_PeerRecordMatches.end() || !records->second.contains(at)) return ChecksumCause::Undecided;
+		return ChecksumCause::Desync;
+	}
+
+	void NetLockstepCoordinator::RecheckDeferredChecksums() {
+		for (const uint64_t frame: std::vector<uint64_t>(m_DeferredChecksumFrames.begin(), m_DeferredChecksumFrames.end())) {
+			if (!m_LocalChecksums.contains(frame) || !m_RemoteChecksums.contains(frame)) { m_DeferredChecksumFrames.erase(frame); continue; }
+			CompareChecksums(frame);
+		}
+	}
+
 	bool NetLockstepCoordinator::HoldsOtherContinuation(uint64_t frame) const {
 		const uint32_t members = PeerFrameMembersAt(frame);
 		return std::any_of(m_PeerOtherContinuations.begin(), m_PeerOtherContinuations.end(), [&](const auto& other) { return (members & SeatBit(other.first)) != 0; });
@@ -688,6 +715,8 @@ namespace RTE {
 		m_PeerInputSentAtMs.erase(m_PeerInputSentAtMs.begin(), m_PeerInputSentAtMs.lower_bound(kept));
 		m_PeerPreparedPrefixes.erase(m_PeerPreparedPrefixes.begin(), m_PeerPreparedPrefixes.lower_bound(kept));
 		m_PeerFrameWitnesses.erase(m_PeerFrameWitnesses.begin(), m_PeerFrameWitnesses.lower_bound(kept));
+		for (auto& [peer, records]: m_PeerRecordMatches) records.erase(records.begin(), records.lower_bound(kept));
+		RecheckDeferredChecksums();
 		m_PeerTailVotes.erase(m_PeerTailVotes.begin(), m_PeerTailVotes.lower_bound(m_Stats.nextFrame));
 		// The split in force keeps its name and its decision however long it lasts.
 		const uint64_t historyFloor = std::min(kept, PeerSplitEpoch(kept));
