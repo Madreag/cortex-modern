@@ -1551,6 +1551,7 @@ namespace RTE {
 		bool m_PeriodicOwnWriterWaited = false; //!< Host: this machine's own writer was busy while the due periodic capture waited.
 		uint64_t m_OwnLateCaptureTick = 0; //!< Host: the capture named late for its own writer, until it is taken.
 		bool m_SaverOverdue = false; //!< The overdue state last given this machine's saver.
+		uint64_t m_SaverOverdueTick = 0; //!< The tick that state was given at.
 		/// Gives the saver its overdue state and logs each change, with the tick it changed at.
 		void SetSaverOverdue(bool overdue, uint64_t tick);
 		int64_t m_LastAutosaveSimTime = -1;

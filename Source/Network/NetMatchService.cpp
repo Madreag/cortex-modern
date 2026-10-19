@@ -3906,11 +3906,13 @@ static std::string ResyncSaveName() {
 	void NetMatchService::SetSaverOverdue(bool overdue, uint64_t tick) {
 		if (overdue != m_SaverOverdue) System::PrintDiagnosticLine(std::format("[autosave] saver overdue={} tick={}", overdue ? 1 : 0, tick));
 		m_SaverOverdue = overdue;
+		m_SaverOverdueTick = tick;
 		SaverThreads::SetOverdue(overdue);
 	}
 
 	void NetMatchService::ResetCheckpointSchedule() {
-		SetSaverOverdue(false, static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
+		// A service reset outside a running round has no clock to read: the change is logged at the last tick it was given.
+		SetSaverOverdue(false, m_SaverOverdueTick);
 		m_ScheduledCaptures.clear();
 		m_PeriodicWaitSince = 0;
 		m_PeriodicOwnWriterWaited = false;
