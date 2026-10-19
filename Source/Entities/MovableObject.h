@@ -1242,37 +1242,9 @@ namespace RTE {
 			std::atomic<long>* m_PreviousRegistration;
 		};
 
-		/// Numbers what the tasks of one parallel per-state pass create. A task takes its IDs from its own lane - its k-th is the
-		/// pass's base + k * lanes + lane + 1 - so the order the tasks happen to run in never numbers an object; the counter
-		/// resumes past the longest lane when the pass ends.
-		class UniqueIDLanes {
-		public:
-			explicit UniqueIDLanes(size_t lanes);
-			~UniqueIDLanes();
-			UniqueIDLanes(const UniqueIDLanes&) = delete;
-			UniqueIDLanes& operator=(const UniqueIDLanes&) = delete;
-
-			/// Gives this thread's new IDs to one lane while it lives.
-			class Lane {
-			public:
-				Lane(UniqueIDLanes& lanes, size_t lane);
-				~Lane();
-				Lane(const Lane&) = delete;
-				Lane& operator=(const Lane&) = delete;
-			private:
-				UniqueIDLanes* m_PreviousLanes;
-				size_t m_PreviousLane;
-			};
-
-		private:
-			friend class MovableObject;
-			long m_Base;
-			std::vector<long> m_Taken; //!< Each lane's count so far, written only by its own task.
-		};
-
-		/// Returns the next unique id for MO's and increments unique ID counter; inside a parallel per-state pass, the next of the task's lane.
+		/// Returns the next unique id for MO's and increments unique ID counter
 		/// @return Returns the next unique id.
-		static long GetNextUniqueID();
+		static long GetNextUniqueID() { return ++MutableCheckpointCounters().uid; }
 
 		/// Pins the unique ID counter to a fixed base so a deterministic match hands out the same
 		/// IDs on every peer regardless of how many MOs each process created beforehand.
@@ -1545,8 +1517,6 @@ namespace RTE {
 		static std::unique_ptr<CheckpointCounters> s_OwnedCheckpointCounters;
 		static thread_local std::atomic<long>* s_PrivateUID;
 		static thread_local std::atomic<long>* s_PrivateRegistration;
-		static thread_local UniqueIDLanes* s_UniqueIDLanes; //!< The pass whose lane this thread's new IDs come from, if any.
-		static thread_local size_t s_UniqueIDLane;
 		static CounterReferences MutableCheckpointCounters();
 		static FrozenCounters FrozenCheckpointCounters();
 		static std::atomic<long> m_UniqueIDCounter;
