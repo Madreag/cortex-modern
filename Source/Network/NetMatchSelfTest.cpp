@@ -19517,6 +19517,7 @@ namespace RTE {
 		if (!TestReservedSeatDirectoryResolve(&error)) return fail(error);
 		if (!TestRelayOfferRefresh(&error)) return fail(error);
 		if (!TestRefusedRelayMintRetriesWhenAllowed(&error)) return fail(error);
+		if (!TestInternetTicketRecovery(&error)) return fail(error);
 		if (!TestIceConnectionFallback(&error)) return fail(error);
 		if (!TestInternetMenuJoinUsesSession(&error)) return fail(error);
 		if (!TestLobbyRefusesDivergentRosterOrder(&error)) return fail(error);
