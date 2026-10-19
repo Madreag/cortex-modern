@@ -9315,9 +9315,15 @@ bool LuaStateWrapper::CapturePreparedScriptGraphs(const CheckpointLua::Boundary&
 				if (s_SerialBeforeCapture.contains(state)) ScriptGraphEndCapture(state);
 				throw std::runtime_error(lua_tostring(state, -1) ? lua_tostring(state, -1) : "saved script graph capture failed");
 			}
+			const size_t earlier = problems.size();
 			CollectStrings(state, -1, problems);
 			CheckpointText* text = ScriptGraphCapturedText(state, -2);
-			if (!text) throw std::runtime_error("saved script graph returned no owned text");
+			// A serializer that failed hands back its error as a problem and no text: the failure names that error.
+			if (!text) {
+				std::string reason = problems.size() > earlier ? problems[earlier] : std::string();
+				std::replace(reason.begin(), reason.end(), '\n', ' ');
+				throw std::runtime_error(reason.empty() ? "saved script graph returned no owned text" : "saved script graph returned no owned text: " + reason);
+			}
 			const auto finishStarted = RTE::SteadyClock::now();
 			const uint64_t finishCpu = CheckpointThreadCpuUnits();
 			CheckpointNativeSnapshot::ReadScope nativeValues(snapshot.get());
