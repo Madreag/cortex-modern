@@ -10,9 +10,13 @@
 #include <unordered_map>
 
 #include <cstddef>
+#include <cstdlib>
 #include <cstring>
+#include <format>
+#include <iostream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
 extern "C" {
 #include "lj_dispatch.h"
@@ -128,6 +132,17 @@ namespace RTE::CheckpointLua {
 			if (!m_Values.Remembered(DefaultMembers(source))) m_Values.Remember(DefaultMembers(source), -1);
 			lua_settop(m_State, destination);
 		}
+		// Test lever CC_TEST_CAPTURE_NATIVE_TRACE=1: what reached the handle being copied.
+		struct TracedReach { std::string className; const void* native = nullptr; const char* part = "-"; };
+		static bool TraceHandles() {
+			static const bool trace = [] { const char* value = std::getenv("CC_TEST_CAPTURE_NATIVE_TRACE"); return value && std::string_view(value) == "1"; }();
+			return trace;
+		}
+		static inline thread_local const TracedReach* s_Reach = nullptr;
+		struct ReachScope {
+			const TracedReach* outer = s_Reach;
+			~ReachScope() { s_Reach = outer; }
+		};
 		void PushObject(const TValue& value) {
 			const auto* source = m_Bindings.Object(udataV(&value));
 			if (!source || !source->crep()) {
@@ -138,6 +153,16 @@ namespace RTE::CheckpointLua {
 			PushClass(type);
 			auto* targetClass = static_cast<luabind::detail::class_rep*>(lua_touserdata(m_State, -1));
 			lua_pop(m_State, 1);
+			const ReachScope reachScope;
+			TracedReach reach;
+			if (TraceHandles()) {
+				const bool finalized = (m_Heap.Read(udataV(&value)).marked & LJ_GC_FINALIZED) != 0;
+				std::cout << std::format("[capture-handle] class={} native={} owner={} finalized={} via={}@{}:{}", m_Bindings.Class(source->crep())->name(), source->ptr(),
+										 (source->flags() & luabind::detail::object_rep::owner) != 0, finalized, s_Reach ? s_Reach->className : "table",
+										 s_Reach ? s_Reach->native : nullptr, s_Reach ? s_Reach->part : "-") << std::endl;
+				reach = {m_Bindings.Class(source->crep())->name(), source->ptr(), "metatable"};
+				s_Reach = &reach;
+			}
 			void* native = source->ptr() ? CopyNative(source->crep(), source->ptr(), (source->flags() & luabind::detail::object_rep::owner) != 0) : nullptr;
 			void* storage = lua_newuserdata(m_State, sizeof(luabind::detail::object_rep));
 			auto* target = new(storage) luabind::detail::object_rep(native, targetClass, source->flags() & ~luabind::detail::object_rep::checkpoint_trap, [](void*) {});
@@ -148,8 +173,10 @@ namespace RTE::CheckpointLua {
 				TValue token; setgcVraw(&token, const_cast<GCobj*>(meta), LJ_TTAB);
 				m_Values.Push(token); lua_setmetatable(m_State, destination);
 			}
+			reach.part = "fields";
 			const TValue fields = m_Bindings.Instance(udataV(&value));
 			if (!tvisnil(&fields)) { m_Values.Push(fields); target->get_lua_table().set(m_State); }
+			reach.part = "dependencies";
 			const TValue dependencies = m_Heap.RegistryValue(source->get_dependencies().checkpoint_reference());
 			if (tvistab(&dependencies)) {
 				m_Values.Push(dependencies);

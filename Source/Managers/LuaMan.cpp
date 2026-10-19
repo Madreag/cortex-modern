@@ -9208,7 +9208,7 @@ bool LuaStateWrapper::CapturePreparedScriptGraphs(const CheckpointLua::Boundary&
 				} cost{part, started, CheckpointThreadCpuUnits()};
 				// Test lever CC_TEST_CAPTURE_NATIVE_TRACE=1: each native a script holds, named before the saver copies it.
 				static const bool trace = [] { const char* value = std::getenv("CC_TEST_CAPTURE_NATIVE_TRACE"); return value && std::string_view(value) == "1"; }();
-				if (trace) std::cout << std::format("[capture-native] class={} owned={} at={} retained={}", bindings.Class(type)->name(), owned, pointer, Entity::RetainedMemoryHolds(pointer, 1)) << std::endl;
+				if (trace) std::cout << std::format("[capture-native] state={} class={} owned={} at={} retained={}", index, bindings.Class(type)->name(), owned, pointer, Entity::RetainedMemoryHolds(pointer, 1)) << std::endl;
 				if (bindings.Class(type)->type() == LUABIND_TYPEID(LuaStateWrapper)) return &worker;
 				if (const auto offset = bindings.BaseOffset(type, "Entity")) {
 					const auto* entity = reinterpret_cast<const Entity*>(static_cast<const char*>(pointer) + *offset);
@@ -9221,6 +9221,7 @@ bool LuaStateWrapper::CapturePreparedScriptGraphs(const CheckpointLua::Boundary&
 					// An activity the world no longer has (a rejoin's image load replaced it) can stay in the capture helper's own maps,
 					// which the copy carries and the serializer skips; it is never read.
 					if (!owned && bindings.DerivesFrom(type, "Activity") && !LuaScriptGraphNativeCaptureScope::Current()->LiveActivity(entity)) return nullptr;
+					if (trace) std::cout << std::format("[capture-native-read] class={} at={} freed_at_fence={}", bindings.Class(type)->name(), static_cast<const void*>(entity), PieEntityFreed(bindings.Class(type)->name(), entity)) << std::endl;
 					try {
 						void* result = reinterpret_cast<char*>(snapshot->Object(entity)) - *offset;
 						if (bindings.DerivesFrom(type, "PieSlice") || bindings.DerivesFrom(type, "PieMenu")) return LuaScriptGraphNativeCaptureScope::Current()->NoteSliceCopy(result, pointer);
