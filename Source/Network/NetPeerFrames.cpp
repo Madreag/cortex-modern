@@ -296,7 +296,9 @@ namespace RTE {
 				if (m_GrantedSimulationTick) continue;
 				m_Stats.nextFrame = GetResumeFrame();
 				m_ReadyFrames.clear();
-				m_LocalSeatHeld = true; m_LocalHoldFrame = m_Stats.nextFrame;
+				// This branch's world parted from the ruling half's after the split's last common frame, so it returns through the
+				// image, never by replaying the ruling half's frames over its own.
+				m_LocalSeatHeld = true; m_LocalHoldFrame = std::min<uint64_t>(m_Stats.nextFrame, split + 1);
 				m_State = NetLockstepState::Stopped;
 				m_Stats.timeoutReason = m_Config.frameTieReferee ? "PeerHeld:the directory selected the other split; returning through a private image" :
 				    "PeerHeld:the healed histories selected the other split; returning through a private image";
