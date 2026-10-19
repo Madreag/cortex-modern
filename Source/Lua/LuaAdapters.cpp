@@ -225,7 +225,10 @@ LuaEntityCastFunctionsDefinitionsForType(PieMenu);
 	void LuaAdaptersPropertyOwnershipSafetyFaker::OBJECTTYPE##SETTERFUNCTION(OBJECTTYPE* luaSelfObject, SoundContainer* objectToSet) { \
 		SoundContainer* replaced = luaSelfObject->GETTERFUNCTION(); \
 		luaSelfObject->SETTERFUNCTION(objectToSet ? dynamic_cast<SoundContainer*>(objectToSet->Clone()) : nullptr); \
-		if (replaced != luaSelfObject->GETTERFUNCTION()) SoundContainer::ReleaseUnowned(replaced); \
+		if (replaced != luaSelfObject->GETTERFUNCTION()) { \
+			g_AudioMan.NoteReleasedSoundProperty(#OBJECTTYPE "." #SETTERFUNCTION, replaced); \
+			SoundContainer::ReleaseUnowned(replaced); \
+		} \
 	}
 
 LuaSoundPropertyOwnershipSafetyFakerFunctionDefinition(MOSRotating, SetGibSound, GetGibSound);

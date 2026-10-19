@@ -2487,9 +2487,30 @@ size_t AudioMan::LiveSoundContainerCount() const {
 	return WithCheckpointRegistry([](const auto& values) { return values.m_LiveCheckpointSoundContainers.size(); });
 }
 
+namespace {
+	const bool s_SoundNamesLever = std::getenv("CC_TEST_SOUND_NAMES") != nullptr;
+	std::mutex s_ReleasedSoundPropertiesMutex;
+	std::map<std::string, uint64_t> s_ReleasedSoundProperties;
+}
+
+void AudioMan::NoteReleasedSoundProperty(const char* property, const SoundContainer* replaced) {
+	if (!s_SoundNamesLever || !replaced) return;
+	std::string key = std::string(property) + "|" + replaced->GetPresetName();
+	std::replace(key.begin(), key.end(), ' ', '_');
+	std::lock_guard<std::mutex> lock(s_ReleasedSoundPropertiesMutex);
+	++s_ReleasedSoundProperties[key];
+}
+
 std::string AudioMan::LiveSoundNames() const {
-	static const bool enabled = std::getenv("CC_TEST_SOUND_NAMES") != nullptr;
-	if (!enabled) return {};
+	if (!s_SoundNamesLever) return {};
+	std::string released;
+	{
+		std::lock_guard<std::mutex> lock(s_ReleasedSoundPropertiesMutex);
+		std::vector<std::pair<uint64_t, std::string>> sorted;
+		for (const auto& [key, count]: s_ReleasedSoundProperties) sorted.emplace_back(count, key);
+		std::sort(sorted.rbegin(), sorted.rend());
+		for (size_t i = 0; i < std::min<size_t>(sorted.size(), 8); ++i) released += (i ? ";" : "") + sorted[i].second + ":" + std::to_string(sorted[i].first);
+	}
 	auto lock = RegistryLock();
 	return WithCheckpointRegistry([](const auto& values) {
 		std::map<std::string, int> all, newest;
@@ -2511,7 +2532,7 @@ std::string AudioMan::LiveSoundNames() const {
 			return text;
 		};
 		return " live_names=" + top(all) + " newest_names=" + top(newest);
-	});
+	}) + " released_by=" + (released.empty() ? std::string("none") : released);
 }
 
 void AudioMan::PauseIngameSounds(bool pause) {

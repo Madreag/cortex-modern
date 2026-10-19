@@ -99,8 +99,13 @@ namespace RTE {
 
 		/// The voices and audibility records the manager keeps and their counts, for the memory census.
 		std::string Census() const;
-		/// Test lever CC_TEST_SOUND_NAMES: the live sound containers' most common preset names, of all and of the newest, for the memory census.
+		/// Test lever CC_TEST_SOUND_NAMES: the live sound containers' most common preset names, of all and of the newest, and the sound
+		/// properties whose Lua sets let a container go, for the memory census.
 		std::string LiveSoundNames() const;
+		/// Test lever CC_TEST_SOUND_NAMES: counts a Lua set of a sound property that let a container go, by property and preset.
+		/// @param property The property's setter.
+		/// @param replaced The container the set let go, or nullptr.
+		void NoteReleasedSoundProperty(const char* property, const SoundContainer* replaced);
 		/// The sound containers alive and registered for checkpoints.
 		size_t LiveSoundContainerCount() const;
 		/// This peer's actual audibility of every live shared sound it answers for, sampled at the input boundary; only changed readings ride.
