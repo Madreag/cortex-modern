@@ -69,9 +69,9 @@ def join_own_lobby():
     return ["wait_file {PROBE_DIR_host}/lobby.json 90", f"wait_row {OWN_LOBBY} 90", f"click_row {OWN_LOBBY}"]
 
 
-def join_setup(connected=2):
+def join_setup(connected=2, name="Joiner"):
     return ["wait_ms 1800", "activate ButtonMainToMultiplayer", "wait_ms 600", "assert_substate Landing",
-            "settext TextMultiplayerName Joiner", "activate ButtonMultiplayerJoinGame",
+            f"settext TextMultiplayerName {name}", "activate ButtonMultiplayerJoinGame",
             "wait_ms 600", "assert_substate JoinSetup",
             *join_own_lobby(),
             "assert_label LabelJoinSelected internet",
@@ -941,6 +941,140 @@ def hosting_page_scene():
          host, joiner, done, done, checks, timeout=300)
 
 
+def apply_for_held_seat_scene():
+    """G5: a newcomer finds the match full, applies for the seat a leaver holds, and the host decides by hand: Decline, then Let join."""
+    number = 21
+    name = f"fight15-s{number:02d}"
+    if SELECTED is not None and name not in SELECTED:
+        return
+    host_menu = host_setup() + ["wait_remote_ready 90", "activate ButtonMultiplayerStart", "wait_file {PROBE_DIR}/done.json 600", "wait_ms 1400", "exit"]
+    leaver_menu = join_setup(name="Leaver") + ["activate ButtonMultiplayerReady", "wait_file {PROBE_DIR}/done.json 600", "wait_ms 1400", "exit"]
+    # The newcomer comes once the leaver has gone, reads the full match in the list, and applies with the landing's own button.
+    apply = ["wait_label LabelMultiplayerLandingStatus Apply to substitute", "assert_label ButtonMultiplayerReconnect Apply to Substitute",
+             "assert_text_fits LabelMultiplayerLandingStatus", "activate ButtonMultiplayerReconnect"]
+    newcomer_menu = ["wait_ms 1800", "wait_file {PROBE_DIR_leaver}/left.json 300", "activate ButtonMainToMultiplayer", "wait_ms 600", "assert_substate Landing",
+                     "settext TextMultiplayerName Newcomer", "activate ButtonMultiplayerJoinGame", "wait_ms 600", "assert_substate JoinSetup", *join_own_lobby(),
+                     "activate ButtonMultiplayerConnect", "video_mark newcomer-refused", *apply, "video_mark newcomer-applied",
+                     "wait_label LabelMultiplayerLandingStatus The host removed you from this session", "video_mark newcomer-declined",
+                     "touch_file {PROBE_DIR}/declined.json", "activate ButtonMultiplayerJoinGame", "wait_ms 600", *join_own_lobby(), "activate ButtonMultiplayerConnect",
+                     *apply, "video_mark newcomer-applied-again", "wait_file {PROBE_DIR}/done.json 600", "wait_ms 1400", "exit"]
+    seat_row = lambda part: f"NetworkSeat{part}@Leaver"
+    press = lambda control: [dict(op="mouse_down", control=control), wait(control=control, equals=dict(pushed=True)), dict(op="mouse_up", control=control),
+                             wait(renders=4)]
+    host = place("host") + key("F6") + [wait(panel_open=True), wait(held_peer="Leaver", within_ms=90000)]
+    host += capture("leaver-held-host") + [dict(op="assert_control", control=seat_row("Detail"), text_contains="Left ", fits=True, inside="NetworkSeats")]
+    host += [wait(control=seat_row("Applicant"), text_contains="Newcomer", within_ms=180000)] + capture("newcomer-asks-host")
+    # Decline: the first press names what the second does.
+    host += press(seat_row("DeclineApplicant")) + [dict(op="assert_control", control=seat_row("DeclineApplicant"), text_contains="Confirm: decline")]
+    host += press(seat_row("DeclineApplicant")) + capture("declined-host")
+    host += [dict(op="wait_file", path="{PROBE_DIR_newcomer}/declined.json", within_ms=120000),
+             wait(control=seat_row("Applicant"), text_contains="Newcomer", within_ms=180000)]
+    host += [dict(op="mouse_down", control=seat_row("Applicant"), item=0), wait(control=seat_row("Applicant"), equals=dict(selected=0)),
+             dict(op="mouse_up", control=seat_row("Applicant"), item=0), wait(renders=4),
+             dict(op="assert_control", control=seat_row("Substitute"), equals=dict(enabled=True), text_contains="Let Newcomer join")]
+    host += press(seat_row("Substitute")) + [dict(op="assert_control", control=seat_row("Substitute"), text_contains="Confirm: let Newcomer join")]
+    host += press(seat_row("Substitute")) + capture("newcomer-let-in-host")
+    host += key("F6") + [wait(panel_open=False), wait(sim_advanced=600, within_ms=120000)] + capture("newcomer-playing-host")
+    host += [dict(op="assert", equals=dict(service="Running", local_actor_alive=True)), dict(op="assert_relay")] + pause_end() + [lobby_wait("host"), dict(op="finish")]
+    leaver = place("joiner") + key("Escape") + [wait(screen="Pause"), menu("activate ButtonLeaveMatch"), wait(screen="PauseLeaveConfirm"),
+                                                menu("activate ButtonLeaveConfirm"), wait(screen="MultiplayerScreen", scope="menu"),
+                                                dict(op="signal", name="left", scope="menu")]
+    leaver += capture("leaver-landing", "MultiplayerScreen")
+    leaver += [dict(op="wait_file", path="{PROBE_DIR_host}/done.json", scope="menu", within_ms=900000), dict(op="finish")]
+    newcomer = [wait(service="Running", within_ms=600000), wait(sim_advanced=300, within_ms=120000), dict(op="assert", equals=dict(service="Running")),
+                dict(op="assert_relay")]
+    newcomer += capture("newcomer-playing") + [wait(scope="menu", screen="MultiplayerScreen", within_ms=300000), dict(op="finish")]
+    peers = []
+    scripts = {}
+    for role, display, menu_lines, steps in (("host", "Captain", host_menu, host), ("leaver", "Leaver", leaver_menu, leaver), ("newcomer", "Newcomer", newcomer_menu, newcomer)):
+        scripts[f"{role}.menu"] = "\n".join(menu_lines) + "\n"
+        scripts[f"{role}.probe"] = game_probe(steps, 900000) if role != "newcomer" else menu_probe(steps, 900000)
+        peers.append(dict(name=role, menu_script=f"{role}.menu", probe=f"{role}.probe", env=dict(CCCP_TEST_READBACK_TIMING="1"),
+                          settings=dict(SETTINGS, NetworkDisplayName=display)))
+    checks = scene_checks("host", host) + scene_checks("leaver", leaver) + scene_checks("newcomer", newcomer)
+    checks += [dict(id=mark, peer="newcomer", mark=mark, screen="MultiplayerScreen", what="The newcomer reads the full match, applies by hand and is answered.",
+                    events=[f"^video_mark {mark}"]) for mark in ("newcomer-refused", "newcomer-applied", "newcomer-declined", "newcomer-applied-again")]
+    document = dict(schema=1, name=name, title="A newcomer applies for a held seat; the host declines, then lets them in",
+                    port_base=49410 + number * 2, size="960x540", timeout_s=960, public_directory=True, peers=peers, scripts=scripts, checklist=checks)
+    (ROOT / f"{name}.json").write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8", newline="\n")
+
+
+# The editor's pie slice that opens its object picker (PieSliceType::EditorPick).
+EDITOR_PICK_SLICE = 26
+
+
+def pick_brain_by_hand(peer):
+    """The brain chosen as a player chooses it: a held right click opens the editor's pie, Pick is pointed at and released, and the
+    picker's group and object rows are clicked, every press held across frames."""
+    player = 0 if peer == "host" else 1
+    return [dict(op="game_mouse", button="right", down=True), wait(renders=6, sim_advanced=2),
+            dict(op="pie_point", input_player=0, editor=True, command=EDITOR_PICK_SLICE), wait(renders=4),
+            dict(op="game_mouse", button="right", down=False), wait(renders=4),
+            wait(picker_open=True, player=player, within_ms=20000), wait(renders=10, elapsed_ms=800)] + capture(f"picker-open-{peer}") + [
+            dict(op="picker_pick", input_player=0, group="Brains", preset="Base.rte/Brain Case", within_ms=30000),
+            wait(picker_open=False, player=player, within_ms=20000)]
+
+
+def picker_placement_scene():
+    """G3: each player picks the brain in the editor's own picker by hand, then places it with a held click."""
+    sides = {}
+    for peer in ("host", "joiner"):
+        steps = place(peer)
+        at = next(index for index, step in enumerate(steps) if step.get("op") == "editor_pick")
+        steps[at:at + 1] = pick_brain_by_hand(peer)
+        sides[peer] = steps + complete_live_scene(peer, 19)
+    checks = scene_checks("host", sides["host"]) + scene_checks("joiner", sides["joiner"])
+    emit(19, "Each player picks the brain in the editor's own picker by hand and places it with a held click",
+         game_menu("host"), game_menu("joiner"), game_probe(sides["host"]), game_probe(sides["joiner"]), checks)
+
+
+def emit_players(number, title, roles, checklist, timeout=420):
+    """A scene of more than two players: roles are (role, display name, menu lines, probe text) with the host first."""
+    name = f"fight15-s{number:02d}"
+    if SELECTED is not None and name not in SELECTED:
+        return
+    peers, scripts = [], {}
+    for role, display, menu_lines, probe_text in roles:
+        scripts[f"{role}.menu"] = "\n".join(menu_lines) + "\n"
+        scripts[f"{role}.probe"] = probe_text
+        peers.append(dict(name=role, menu_script=f"{role}.menu", probe=f"{role}.probe", env=dict(CCCP_TEST_READBACK_TIMING="1"),
+                          settings=dict(SETTINGS, NetworkDisplayName=display)))
+    document = dict(schema=1, name=name, title=title, port_base=49410 + number * 2, size="960x540", timeout_s=timeout, public_directory=True,
+                    peers=peers, scripts=scripts, checklist=checklist)
+    (ROOT / f"{name}.json").write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8", newline="\n")
+
+
+def three_player_countdown_scene():
+    """G2: in a three-player lobby a Ready taken back during the countdown does not stop it; at zero the match starts with everyone."""
+    host = host_setup(players=3)
+    host[host.index("wait_connected 2 90")] = "wait_connected 3 90"
+    host += ["wait_label LabelMultiplayerStatus Waiting for Joiner and Joiner2 to press Ready", "activate ButtonMultiplayerStart",
+             "wait_label LabelMultiplayerStatus Starting in", "assert_label ButtonMultiplayerStart Cancel Start", "video_mark countdown-host",
+             "wait_file {PROBE_DIR_joiner}/ready.json 60", "wait_label LabelMultiplayerStatus waiting for Joiner2 to press Ready",
+             "video_mark one-ready-host", "wait_file {PROBE_DIR_joiner}/cancelled.json 60",
+             "wait_label LabelMultiplayerStatus waiting for Joiner and Joiner2 to press Ready", "assert_label LabelMultiplayerStatus Starting in",
+             "assert_label ButtonMultiplayerStart Cancel Start", "video_mark ready-taken-back-host"] + lobby_exit()
+    joiner = join_setup(connected=3) + ["wait_label LabelMultiplayerStatus The host is starting the match in", "activate ButtonMultiplayerReady",
+              "wait_label ButtonMultiplayerReady Cancel Ready", "touch_file {PROBE_DIR}/ready.json", "video_mark ready-joiner", "wait_ms 2500",
+              "activate ButtonMultiplayerReady", "wait_label ButtonMultiplayerReady Ready", "wait_label LabelMultiplayerStatus The host is starting the match in",
+              "assert_label LabelMultiplayerStatus press Ready", "touch_file {PROBE_DIR}/cancelled.json", "video_mark ready-taken-back-joiner"] + lobby_exit()
+    joiner2 = join_setup(connected=3, name="Joiner2") + ["wait_label LabelMultiplayerStatus The host is starting the match in",
+               "video_mark countdown-joiner2", "assert_label ButtonMultiplayerReady Ready"] + lobby_exit()
+    def started(peer, ends):
+        steps = [wait(editing=True, within_ms=90000), dict(op="assert", equals=dict(service="Running")), dict(op="assert_relay")]
+        steps += capture(f"started-{peer}") + (pause_end() if ends else []) + [wait(scope="menu", screen="MultiplayerScreen", within_ms=120000), dict(op="finish")]
+        return steps
+    sides = {"host": started("host", True), "joiner": started("joiner", False), "joiner2": started("joiner2", False)}
+    checks = [dict(id=mark, peer=peer, mark=mark, screen="MultiplayerScreen", what="A Ready taken back left the countdown running for everyone.",
+                   events=[f"^video_mark {mark}"]) for peer, mark in (("host", "countdown-host"), ("host", "one-ready-host"), ("host", "ready-taken-back-host"),
+                                                                      ("joiner", "ready-joiner"), ("joiner", "ready-taken-back-joiner"), ("joiner2", "countdown-joiner2"))]
+    for peer, steps in sides.items():
+        checks += scene_checks(peer, steps)
+    emit_players(29, "Three players: a Ready taken back does not stop the countdown, and zero starts the match",
+                 [("host", "Captain", host, game_probe(sides["host"])), ("joiner", "Joiner", joiner, game_probe(sides["joiner"])),
+                  ("joiner2", "Joiner2", joiner2, game_probe(sides["joiner2"]))], checks)
+
+
 def menu_scenes():
     own_seat_held_scene()
     seat_dialog_scene()
@@ -954,6 +1088,9 @@ def menu_scenes():
     setup_doors_scene()
     timing_page_scene()
     hosting_page_scene()
+    apply_for_held_seat_scene()
+    picker_placement_scene()
+    three_player_countdown_scene()
 
 
 def main(argv):
