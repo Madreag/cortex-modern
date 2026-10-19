@@ -401,6 +401,18 @@ namespace RTE::MenuAutomation {
 			return std::nullopt;
 		}
 
+		/// Whether the screen shows a control it has not drawn since its last pass ended: a slow frame or a screen that just opened.
+		bool Unseen(GUIControl* control) { return control && control->GetPanel() && Enabled(control) && !PanelDrawnInLatestPass(control->GetPanel(), c_DrawWindowSeconds); }
+
+		/// A hand looks before it reaches: it waits, a drawn frame at a time, until the screen shows the control.
+		void AppendSight(std::vector<Phase>& phases, GUIControlManager* manager, std::string name) {
+			phases.push_back([manager, name](std::string& note) {
+				if (!Unseen(manager->GetControl(name))) return Beat::Next;
+				note = name + " is not on the screen";
+				return Beat::Again;
+			});
+		}
+
 		void Start(std::string name, std::vector<Phase> phases) {
 			s_Result.reset();
 			s_Gesture = Gesture{std::move(name), std::move(phases)};
@@ -916,11 +928,13 @@ namespace RTE::MenuAutomation {
 
 	bool HandClick(GUIControlManager* manager, const std::string& name, GUIControl* modal, std::string& observation, int presses) {
 		std::string why;
-		if (!manager || !Hand::Target(manager, manager->GetControl(name), modal, why)) {
+		const bool unseen = manager && Hand::Unseen(manager->GetControl(name));
+		if (!manager || (!unseen && !Hand::Target(manager, manager->GetControl(name), modal, why))) {
 			observation = name + " " + why;
 			return false;
 		}
 		std::vector<Hand::Phase> phases;
+		if (unseen) Hand::AppendSight(phases, manager, name);
 		Hand::AppendClick(phases, manager, name, modal, presses);
 		Hand::Start((presses > 1 ? "double-click " : "click ") + name, std::move(phases));
 		NoteReached(name);
@@ -978,20 +992,26 @@ namespace RTE::MenuAutomation {
 
 	bool HandPoint(GUIControlManager* manager, const std::string& name, std::string& observation) {
 		std::string why;
-		const auto target = manager ? Hand::Target(manager, manager->GetControl(name), nullptr, why) : std::nullopt;
-		if (!target) {
+		const bool unseen = manager && Hand::Unseen(manager->GetControl(name));
+		if (!manager || (!unseen && !Hand::Target(manager, manager->GetControl(name), nullptr, why))) {
 			observation = name + " " + why;
 			return false;
 		}
 		auto* box = dynamic_cast<GUITextBox*>(manager->GetControl(name));
 		std::vector<Hand::Phase> phases;
+		if (unseen) Hand::AppendSight(phases, manager, name);
 		if (box) {
 			// A hand gives a box the keyboard by clicking into it.
 			Hand::AppendClick(phases, manager, name, nullptr);
 		} else {
-			const std::pair<int, int> point = *target;
-			phases.push_back([point](std::string&) {
-				Hand::Move(point.first, point.second);
+			phases.push_back([manager, name](std::string& note) {
+				std::string why;
+				const auto point = Hand::Target(manager, manager->GetControl(name), nullptr, why);
+				if (!point) {
+					note = name + " " + why;
+					return Hand::Beat::Fail;
+				}
+				Hand::Move(point->first, point->second);
 				return Hand::Beat::Next;
 			});
 			phases.push_back([](std::string&) { return Hand::Beat::Next; });
@@ -1005,11 +1025,13 @@ namespace RTE::MenuAutomation {
 	bool HandType(GUIControlManager* manager, const std::string& name, const std::string& text, bool enter, std::string& observation, const std::string& enterWith) {
 		auto* box = manager ? dynamic_cast<GUITextBox*>(manager->GetControl(name)) : nullptr;
 		std::string why;
-		if (!box || !Hand::Target(manager, box, nullptr, why)) {
+		const bool unseen = Hand::Unseen(box);
+		if (!box || (!unseen && !Hand::Target(manager, box, nullptr, why))) {
 			observation = name + (box ? " " + why : " is not a text box");
 			return false;
 		}
 		std::vector<Hand::Phase> phases;
+		if (unseen) Hand::AppendSight(phases, manager, name);
 		Hand::AppendClick(phases, manager, name, nullptr);
 		const bool credential = Credential(box) || CredentialName(name);
 		phases.push_back([manager, box](std::string& note) {
@@ -1082,11 +1104,13 @@ namespace RTE::MenuAutomation {
 			return false;
 		}
 		std::string why;
-		if (!combo->IsDropped() && !Hand::Target(manager, combo, nullptr, why)) {
+		const bool unseen = !combo->IsDropped() && Hand::Unseen(combo);
+		if (!combo->IsDropped() && !unseen && !Hand::Target(manager, combo, nullptr, why)) {
 			observation = name + " " + why;
 			return false;
 		}
 		std::vector<Hand::Phase> phases;
+		if (unseen) Hand::AppendSight(phases, manager, name);
 		if (!combo->IsDropped()) Hand::AppendClick(phases, manager, name, nullptr);
 		phases.push_back([combo](std::string& note) {
 			if (combo->IsDropped()) return Hand::Beat::Next;
@@ -1136,7 +1160,8 @@ namespace RTE::MenuAutomation {
 		GUIControl* control = manager ? manager->GetControl(listName) : nullptr;
 		auto* list = dynamic_cast<GUIListPanel*>(control);
 		std::string why;
-		if (!list || !Hand::Target(manager, control, modal, why)) {
+		const bool unseen = list && Hand::Unseen(control);
+		if (!list || (!unseen && !Hand::Target(manager, control, modal, why))) {
 			observation = listName + (list ? " " + why : " is not a list");
 			return false;
 		}
@@ -1146,6 +1171,7 @@ namespace RTE::MenuAutomation {
 		}
 		auto point = std::make_shared<std::pair<int, int>>();
 		std::vector<Hand::Phase> phases;
+		if (unseen) Hand::AppendSight(phases, manager, listName);
 		phases.push_back([manager, list, index, point](std::string& note) { return Hand::ReachRow(manager, list, index, *point, note); });
 		phases.push_back([point](std::string&) {
 			Hand::Move(point->first, point->second);
@@ -1174,7 +1200,8 @@ namespace RTE::MenuAutomation {
 	bool HandDrag(GUIControlManager* manager, const std::string& name, int value, std::string& observation) {
 		auto* slider = manager ? dynamic_cast<GUISlider*>(manager->GetControl(name)) : nullptr;
 		std::string why;
-		if (!slider || !Hand::Target(manager, slider, nullptr, why)) {
+		const bool unseen = Hand::Unseen(slider);
+		if (!slider || (!unseen && !Hand::Target(manager, slider, nullptr, why))) {
 			observation = name + (slider ? " " + why : " is not a slider");
 			return false;
 		}
@@ -1191,6 +1218,7 @@ namespace RTE::MenuAutomation {
 		auto tries = std::make_shared<int>(0);
 		auto stage = std::make_shared<int>(0);
 		std::vector<Hand::Phase> phases;
+		if (unseen) Hand::AppendSight(phases, manager, name);
 		phases.push_back([manager, slider, value, horizontal, r, length, offset, tries, stage](std::string& note) {
 			const int x = horizontal ? r[0] + *offset : r[0] + r[2] / 2, y = horizontal ? r[1] + r[3] / 2 : r[1] + *offset;
 			switch ((*stage)++) {
