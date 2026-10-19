@@ -1009,8 +1009,9 @@ namespace RTE {
 		// Seat 1 held seat 3 at its bound at frame 150 while seat 2 had already played seat 3's input there. A witness of a frame both
 		// applied shows the other continuation: the member is held at the next frame, the groups are disjoint, and the healed
 		// histories or the directory choose between them. A directory decision naming seats of both continuations is the asker's.
-		// A seat whose group is smaller than half of the seats that played together before the split only queries the referee: a lone
-		// seat on a lossy link must not make the healthy seats rewind by asking first. Arms: the lone seat, the three that held it, a half.
+		// A seat whose group is smaller than half of the seats that played together before the split only queries the referee until its
+		// tie deadline: a lone seat on a lossy link must not make the healthy seats rewind by asking first, yet asks for itself when no
+		// larger half did. Arms: the lone seat, the three that held it, a half.
 		static bool AMinorityGroupOnlyQueriesTheReferee(std::string* error) {
 			struct Arm { uint8_t local; uint32_t group; bool query; };
 			for (const Arm arm: {Arm{2, 2, true}, Arm{1, 13, false}, Arm{1, 3, false}}) {
@@ -1031,6 +1032,12 @@ namespace RTE {
 					*error = arm.query ? "a seat smaller than half of its round asked the referee to rule for it: group=" + std::to_string(arm.group) :
 					                     "a group of half or more of its round never asked the referee: group=" + std::to_string(arm.group) + " asked=" + std::to_string(asked);
 					return false;
+				}
+				if (arm.query) {
+					peer.PollPeerFrameTies(6000 + c_NetMinorityTieGraceMs);
+					if (peer.m_PeerSplitArbitrations.empty() || peer.m_PeerSplitArbitrations.begin()->second.request.queryOnly) {
+						*error = "a smaller group never asked for itself after the referee's deadline with its split still open"; return false;
+					}
 				}
 			}
 			return true;
