@@ -194,6 +194,9 @@ namespace {
 		FinishPoolTasks(tasks);
 	}
 
+	std::unordered_set<const Actor*> s_LockstepLocalActors; //!< The actors this machine produces input for in this tick's controller pass.
+	std::vector<std::vector<Actor*>> s_AIStateActors; //!< Per threaded state, the actors its AI task runs this tick.
+
 	class ScopedAIActor {
 	public:
 		explicit ScopedAIActor(Actor* actor) noexcept : m_Previous(g_CurrentAIActor) { g_CurrentAIActor = actor; }
@@ -8473,8 +8476,10 @@ void MovableMan::UpdateControllers() {
 		ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " lockstep stopped: " + (reason.empty() ? "coordinator not running" : reason));
 		return;
 	}
+	// Under lockstep the actors this machine runs are read from the network plane once, below, before the pass produces anything.
+	s_LockstepLocalActors.clear();
 	auto isLocalControllerActor = [&](const Actor* actor) {
-		return !ScenarioRunner::WorldCatchUpActive() && (!lockstepActive || (!ScenarioRunner::IsHostMigrationCatchUp() && IsLockstepLocalActor(actor)));
+		return !ScenarioRunner::WorldCatchUpActive() && (!lockstepActive || s_LockstepLocalActors.contains(actor));
 	};
 	// Release last tick's quarantined joiners here, where the controller wire takes over;
 	// a same-tick joiner stays held through its join tick and a corpse stays disabled.
@@ -8526,6 +8531,15 @@ void MovableMan::UpdateControllers() {
 	// The pass that samples this machine's seats and runs its AI owns the input it produces; the sim keeps
 	// the frame the wire committed for this tick until the frames are snapshotted.
 	std::vector<long int> producingActors;
+	if (lockstepActive) {
+		// One answer per actor for the whole pass: every step agrees on it, and the AI tasks never wait on the plane's lock.
+		NetLockstepPlaneGuard plane;
+		if (!ScenarioRunner::IsHostMigrationCatchUp()) {
+			for (const Actor* actor: CheckpointActorValues().m_Actors) {
+				if (IsLockstepLocalActor(actor)) s_LockstepLocalActors.insert(actor);
+			}
+		}
+	}
 	if (lockstepActive) {
 		producingActors = BeginLockstepProducingPass(CheckpointActorValues().m_Actors, isLocalControllerActor);
 	}
@@ -8675,14 +8689,21 @@ void MovableMan::UpdateControllers() {
 
 		// The AI hooks run one task per state at once: what they decide leaves this machine only as its controllers and commands.
 		LuaStatesArray& luaStates = g_LuaMan.GetThreadedScriptStates();
+		// Each task walks only its own state's actors that this machine runs, in actor order.
+		s_AIStateActors.resize(luaStates.size());
+		for (std::vector<Actor*>& stateActors: s_AIStateActors) stateActors.clear();
+		for (Actor* actor: CheckpointActorValues().m_Actors) {
+			const int stateIndex = g_LuaMan.GetStateIndex(actor->GetLuaState());
+			if (stateIndex > 0 && isLocalControllerActor(actor)) s_AIStateActors[stateIndex - 1].push_back(actor);
+		}
 		RunStateTasks(luaStates.size(), [&](int start, int end) {
 			RTEAssert(start + 1 == end, "Threaded script state being updated across multiple threads!");
 			LuaStateWrapper& luaState = luaStates[start];
 			LuaMan::ScopedThreadLuaStateOverride stateOverride(&luaState, true);
 			PoolUpdateTaskProbe probe;
 			probe.FailIfRequested(static_cast<size_t>(start), luaStates.size());
-			for (Actor* actor: CheckpointActorValues().m_Actors) {
-				if (actor->GetLuaState() == &luaState && actor->ObjectScriptsInitialized() && isLocalControllerActor(actor) && actor->GetController()->ShouldUpdateAIThisFrame()) {
+			for (Actor* actor: s_AIStateActors[start]) {
+				if (actor->ObjectScriptsInitialized() && actor->GetController()->ShouldUpdateAIThisFrame()) {
 					ScopedAIActor actorContext(actor);
 					actor->RunScriptedFunctionInAppropriateScripts("ThreadedUpdateAI", false, true, {}, {}, {});
 				}
