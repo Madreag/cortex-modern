@@ -1554,6 +1554,7 @@ namespace RTE {
 				return {};
 			}
 			std::vector<bool> waitPlaying, imageReading, imageNeeded, imageWithoutHeadroom;
+			std::array<std::set<uint8_t>, 4> abandonedDonors; //!< The donors each seat's image return gave up when their own continuation was set aside.
 			std::vector<ImageReturnTask> imageTasks;
 			std::vector<bool> splitParticipant;
 			std::vector<uint32_t> observedSplit;
@@ -2506,7 +2507,8 @@ namespace RTE {
 			if (base) for (uint8_t peer: survivors)
 				if (fixture.worlds[peer - 1].hashes.at(base) != replay.hashes.at(base)) co_return fail("the image capture already has different playing-seat histories");
 			DiagnosticLine() << "[session-plane-image] seed=0 seats=" << static_cast<unsigned>(seats) << " rtt_ms=" << rttMs
-			                 << " capture=" << base << " playing_committed_through=" << common << std::endl;
+			                 << " capture=" << base << " playing_committed_through=" << common << " returner=" << unsigned(seat) << " donor=" << unsigned(donor)
+			                 << " donor_members=" << members << " now_ms=" << fixture.hub.now << std::endl;
 			auto config = fixture.peers[seat - 1]->GetConfig();
 			// The image's seat state and the committed tail go through the same replay coordinator as a real private return.
 			auto replayConfig = config;
@@ -2612,6 +2614,15 @@ namespace RTE {
 								for (const auto& [peer, frame]: ready.committedPeerLeaves) text += " leave" + std::to_string(peer) + "@" + std::to_string(frame);
 								text += " leaves=" + std::to_string(ready.committedPeerLeaves.size()) + " waivers=" + std::to_string(ready.committedFrameWaivers.size()) +
 								        " inputs=" + std::to_string(ready.remoteFrames.size() + ready.localFrames.size()) + " commands=" + std::to_string(ready.remoteCommands.size() + ready.localCommands.size());
+								const NetLockstepFrame packed = PackWorldJoinReadyFrame(ready);
+								std::vector<uint8_t> record;
+								(void)EncodeCommittedJoinFrame(packed, record);
+								uint32_t digest = 2166136261U;
+								for (uint8_t byte: record) digest = (digest ^ byte) * 16777619U;
+								text += " packed_frames=" + std::to_string(packed.frames.size()) + " packed_commands=" + std::to_string(packed.commands.size()) +
+								        " observations=" + std::to_string(packed.observations.size()) + "/" + std::to_string(packed.valueObservations.size()) +
+								        " record_bytes=" + std::to_string(record.size()) + " record_fnv=" + std::to_string(digest) + " update_authority=" + std::to_string(packed.replayUpdateAuthorityPeerId);
+								for (const auto& input: packed.frames) text += " actor" + std::to_string(input.actorUniqueID) + ":" + std::to_string(input.stateMask);
 								return text;
 							};
 							const auto replayed = replayedFrames.find(proof->boundary);
@@ -2677,6 +2688,15 @@ namespace RTE {
 				}
 				co_await std::suspend_always{};
 				if (!fixture.CheckBound(error)) co_return false;
+				// As the donor's service drops every return it serves when its own round is set aside, a donor that starts its own image
+				// return before this return is agreed ends it, and the seat asks again from the ruling half.
+				if (!proposed && fixture.imageReading[donor - 1]) {
+					DiagnosticLine() << "[session-plane-image-donor-lost] returner=" << unsigned(seat) << " donor=" << unsigned(donor)
+					                 << " replay_applied=" << replay.applied << " now_ms=" << fixture.hub.now << std::endl;
+					fixture.imageReading[seat - 1] = false;
+					fixture.abandonedDonors[seat - 1].insert(donor);
+					co_return true;
+				}
 				if (!liveStarted && fixture.peers[seat - 1]->IsStopped()) {
 					for (auto* wire: fixture.hub.wires) if (wire->owner == seat) {
 						wire->keepReturnCertificates = true;
@@ -2686,6 +2706,8 @@ namespace RTE {
 				for (auto* wire: fixture.hub.wires) if (wire->owner == seat) {
 					while (!wire->receivedImageTail.empty()) {
 						const auto delivery = std::move(wire->receivedImageTail.front()); wire->receivedImageTail.pop_front();
+						// A donor this seat gave up keeps its datagrams in flight; the reader serves only its current session.
+						if (delivery.donor != donor && fixture.abandonedDonors[seat - 1].contains(delivery.donor)) continue;
 						if (!ReadImageTail(delivery, donor, round, replay.applied, partialTail, receivedTail, error)) co_return fail(error);
 					}
 				}
