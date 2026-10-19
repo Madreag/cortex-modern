@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <limits>
 #include <map>
+#include <numeric>
 #include <optional>
 #include <string_view>
 
@@ -1043,6 +1044,8 @@ namespace RTE {
 		// played it, settles that frame as they played it.
 		for (const auto& [key, kept]: m_PendingPeerDecisions) if (key.first <= m_Stats.nextFrame) {
 			if (m_PeerCommittedTail.contains(m_Stats.nextFrame)) return false;
+			if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) DiagnosticLine() << "[net-peer-decision-wait] local=" << static_cast<int>(m_Config.localPeerId)
+			    << " frame=" << key.first << " kind=" << static_cast<int>(key.second) << " cause=unproven next=" << m_Stats.nextFrame << " now_ms=" << nowMs << std::endl;
 			RequestPeerCommittedTail(nowMs);
 			return true;
 		}
@@ -1085,6 +1088,10 @@ namespace RTE {
 			if (!completes) continue;
 			// The frame's committed record settles what this peer still waits on: it carries the decision if any peer certified it.
 			if (m_PeerCommittedTail.contains(m_Stats.nextFrame)) return false;
+			if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) DiagnosticLine() << "[net-peer-decision-wait] local=" << static_cast<int>(m_Config.localPeerId)
+			    << " frame=" << votes->first.first << " kind=" << static_cast<int>(votes->first.second) << " cause=open_vote required=" << required
+			    << " voted=" << std::accumulate(votes->second.begin(), votes->second.end(), 0U, [](uint32_t mask, const auto& vote) { return mask | (1U << (vote.first - 1)); })
+			    << " next=" << m_Stats.nextFrame << " now_ms=" << nowMs << std::endl;
 			// It is asked at once of the seats that have played the frame, so the wait is one trip to them.
 			RequestPeerCommittedTail(nowMs);
 			// Only its certificate, a committed frame or a proof that it cannot complete releases this promise.
