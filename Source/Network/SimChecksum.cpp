@@ -7,6 +7,8 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <map>
@@ -49,11 +51,12 @@ namespace RTE {
 		constexpr uint64_t c_FnvPrime = 0x100000001b3ull;
 		// A block is wide enough that folding it is rare work and narrow enough that a small change rebuilds little.
 		constexpr int c_RowBlockBytes = 4096;
-		// Table builds outstanding at once per key; a block past the budget folds byte by byte until its turn. Each build is
-		// 256 passes over its block, so the budget keeps the background pool from crowding the sim thread's own cores.
-		constexpr size_t c_RowBlockBuildsInFlight = 16;
-		// Calls a block must hold still through before its table is worth building.
-		constexpr uint8_t c_RowBlockStillCalls = 2;
+		// Table builds a key may have outstanding per tick since its last call; a block past the budget folds byte by byte until
+		// its turn. Each build is 256 passes over its block, so the rate keeps the background pool from crowding the sim thread's
+		// own cores, and a hash sampled every few ticks may build as many as one taken on each of them.
+		constexpr size_t c_RowBlockBuildsPerTick = 16;
+		// Ticks a block must hold still through before its table is worth building.
+		constexpr uint64_t c_RowBlockStillTicks = 2;
 		// Pool threads asked to help compare a key's blocks with the calling thread.
 		constexpr int c_CompareHelpers = 7;
 
@@ -115,13 +118,15 @@ namespace RTE {
 			uint64_t lastUse = 0;
 			size_t inFlight = 0;
 			uint64_t tableFolds = 0;
+			uint64_t byteFolds = 0;
+			uint64_t lastTick = 0; //!< The tick of the previous call.
 			std::vector<uint8_t> shadow;
 			std::vector<uint64_t> version;
 			std::vector<uint64_t> tableVersion;
 			std::vector<uint8_t> building;
 			std::vector<uint8_t> same;
 			std::vector<uint8_t> zero;
-			std::vector<uint8_t> stillCalls;
+			std::vector<uint64_t> changedTick; //!< The tick of the call that last found each block changed.
 			std::vector<std::unique_ptr<RowBlockTable>> table;
 			std::shared_ptr<RowBlockSink> sink = std::make_shared<RowBlockSink>();
 		};
@@ -225,12 +230,18 @@ namespace RTE {
 			fresh.version.assign(blocks, 0);
 			fresh.tableVersion.assign(blocks, 0);
 			fresh.building.assign(blocks, 0);
-			fresh.stillCalls.assign(blocks, 0);
+			fresh.changedTick.assign(blocks, 0);
 			fresh.zero.assign(blocks, 0);
 			fresh.table.resize(blocks);
 		}
 		RowBlockCache& cache = **found;
 		cache.lastUse = ++m_Impl->rowCacheClock;
+		const uint64_t tick = m_Impl->tick;
+		// A round that starts its ticks over leaves every block's last change in the round before.
+		if (tick < cache.lastTick) std::fill(cache.changedTick.begin(), cache.changedTick.end(), 0);
+		const uint64_t ticksSinceLast = tick > cache.lastTick ? tick - cache.lastTick : 1;
+		cache.lastTick = tick;
+		const size_t buildBudget = c_RowBlockBuildsPerTick * static_cast<size_t>(std::min<uint64_t>(ticksSinceLast, cache.version.size()));
 
 		{
 			std::lock_guard<std::mutex> sinkLock(cache.sink->mutex);
@@ -244,6 +255,12 @@ namespace RTE {
 			}
 			cache.sink->built.clear();
 		}
+
+		// Test lever CC_TEST_SIM_CHECKSUM_ROWS: each call names what its compare and its fold cost and what the fold read.
+		static const bool s_Details = std::getenv("CC_TEST_SIM_CHECKSUM_ROWS") != nullptr;
+		const auto startedAt = s_Details ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+		size_t changedBlocks = 0, byteFolds = 0;
+		const uint64_t tableFoldsBefore = cache.tableFolds;
 
 		// Which blocks still hold what they held last call; a changed block's bytes replace the remembered ones.
 		cache.same.resize(cache.version.size());
@@ -290,6 +307,7 @@ namespace RTE {
 			}
 		}
 
+		const auto comparedAt = s_Details ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 		uint64_t state = hasher->second.state;
 		std::vector<size_t> worthATable;
 		for (int y = 0; y < height; ++y) {
@@ -302,9 +320,8 @@ namespace RTE {
 				const bool same = cache.same[block] != 0;
 				if (!same) {
 					cache.version[block] = ++cache.nextVersion;
-					cache.stillCalls[block] = 0;
-				} else if (cache.stillCalls[block] < c_RowBlockStillCalls) {
-					++cache.stillCalls[block];
+					cache.changedTick[block] = tick;
+					++changedBlocks;
 				}
 				// Zero bytes only multiply FNV's state, so empty terrain needs no cold table build.
 				if (cache.zero[block]) {
@@ -320,13 +337,22 @@ namespace RTE {
 				for (size_t index = 0; index < length; ++index) {
 					state = (state ^ live[index]) * c_FnvPrime;
 				}
+				++byteFolds;
 				// A block that has held still is likely to hold still again: build its table.
-				if (same && cache.stillCalls[block] >= c_RowBlockStillCalls && !cache.building[block] && cache.inFlight + worthATable.size() < c_RowBlockBuildsInFlight) {
+				if (same && tick - cache.changedTick[block] >= c_RowBlockStillTicks && !cache.building[block] && cache.inFlight + worthATable.size() < buildBudget) {
 					worthATable.push_back(block);
 				}
 			}
 		}
 		hasher->second.state = state;
+		cache.byteFolds += byteFolds;
+		if (s_Details) {
+			const auto foldedAt = std::chrono::steady_clock::now();
+			const auto us = [](auto span) { return static_cast<long long>(std::chrono::duration_cast<std::chrono::microseconds>(span).count()); };
+			std::cout << "[sim-checksum-rows] tick=" << m_Impl->tick << " subsystem=" << name << " size=" << width << "x" << height << " blocks=" << cache.version.size()
+			          << " changed=" << changedBlocks << " byte_folds=" << byteFolds << " table_folds=" << (cache.tableFolds - tableFoldsBefore)
+			          << " compare_us=" << us(comparedAt - startedAt) << " fold_us=" << us(foldedAt - comparedAt) << std::endl;
+		}
 
 		for (const size_t block: worthATable) {
 			const size_t y = block / static_cast<size_t>(cache.blocksPerRow);
@@ -521,6 +547,36 @@ namespace RTE {
 			passed = passed && shapePassed;
 			std::cout << Tag << (shapePassed ? " PASS" : " FAIL") << " row_blocks_hash_as_rows width=" << width << " height=" << height
 			          << " ticks_matched=" << matched << "/" << c_Ticks << " table_folds=" << folds << (folds > 0 ? "" : " (the table path never ran)") << std::endl;
+		}
+		{
+			// The round's desync check hashes every 30th tick: by the third sample every block that held still folds through its table.
+			constexpr int width = 2496, height = 60;
+			std::vector<uint8_t> pixels(static_cast<size_t>(width) * height);
+			for (uint8_t& pixel: pixels) pixel = static_cast<uint8_t>(random() | 1);
+			std::vector<const uint8_t*> rows(height);
+			for (int y = 0; y < height; ++y) rows[y] = pixels.data() + static_cast<size_t>(y) * width;
+			SimChecksum byRow, byBlock;
+			byBlock.m_Impl->buildRowTablesInPlace = true;
+			bool matched = true;
+			uint64_t thirdTableFolds = 0, thirdByteFolds = 0;
+			for (uint64_t sample = 1; sample <= 3; ++sample) {
+				const uint64_t tick = sample * 30;
+				const RowBlockCache* cache = byBlock.m_Impl->rowCaches.empty() ? nullptr : byBlock.m_Impl->rowCaches.front().get();
+				const uint64_t tablesBefore = cache ? cache->tableFolds : 0, bytesBefore = cache ? cache->byteFolds : 0;
+				byRow.BeginTick(tick);
+				byBlock.BeginTick(tick);
+				for (const uint8_t* row: rows) byRow.Update("terrain", row, width);
+				byBlock.UpdateRows("terrain", pixels.data(), rows.data(), width, height);
+				const Result expected = byRow.EndTick(), actual = byBlock.EndTick();
+				matched = matched && actual.total == expected.total && actual.per_subsystem == expected.per_subsystem;
+				cache = byBlock.m_Impl->rowCaches.front().get();
+				thirdTableFolds = cache->tableFolds - tablesBefore;
+				thirdByteFolds = cache->byteFolds - bytesBefore;
+			}
+			const bool sampledPassed = matched && thirdTableFolds == static_cast<uint64_t>(height) && thirdByteFolds == 0;
+			passed = passed && sampledPassed;
+			std::cout << Tag << (sampledPassed ? " PASS" : " FAIL") << " sampled_hash_folds_still_blocks_by_table width=" << width << " height=" << height
+			          << " every=30 hashes_matched=" << matched << " third_table_folds=" << thirdTableFolds << " third_byte_folds=" << thirdByteFolds << std::endl;
 		}
 		for (const auto& [width, height]: std::array<std::pair<int, int>, 2>{{{3840, 1080}, {4097, 7}}}) {
 			std::vector<uint8_t> pixels(static_cast<size_t>(width) * height, 0);
