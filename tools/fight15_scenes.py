@@ -801,26 +801,25 @@ def countdown_zero_scene():
 
 
 def default_brain_loss_scene():
-    """G4: under the default rule a lost brain leaves its player watching while the match plays on for everyone."""
+    """G4: a brain lost under the default rule ("Keep playing, humans spectate"). With two sides the loser's side is gone, so the
+    activity settles the round on the side left standing (SkirmishDefense.lua's spectating rule); both players return to the
+    lobby, which names the loss in a player's words."""
     host = place("host", x=0.4) + buy("host", fire=False, landing_offset=-180, craft="Base.rte/Dropship MK1")
     joiner = place("joiner", x=0.48)
     host += [dict(op="aim_brain", input_player=0, target_player=1)]
     host += capture("aimed-at-brain-host") + [dict(op="game_mouse", down=True),
-             dict(op="aim_brain", input_player=0, target_player=1, until_brain_lost=True, within_ms=30000), dict(op="game_mouse", down=False)]
-    host += [wait(sim_advanced=300, elapsed_ms=5000)] + capture("brain-lost-host")
-    host += [dict(op="assert", equals=dict(service="Running", local_actor_alive=True)), dict(op="assert_scene", input_player=0, equals=dict(alive=True, brain_count=1))]
-    joiner += [dict(op="wait_scene", input_player=0, equals=dict(brain_count=1), within_ms=120000), wait(sim_advanced=300, elapsed_ms=5000)]
-    joiner += capture("watching-joiner") + [dict(op="assert", equals=dict(service="Running")), dict(op="assert_scene", input_player=0, equals=dict(brain_count=1)),
-               dict(op="assert_relay")]
+             dict(op="aim_brain", input_player=0, target_player=1, until_end=True, scope="menu", within_ms=30000), dict(op="game_mouse", down=False)]
     for peer, steps in (("host", host), ("joiner", joiner)):
-        steps += complete_live_scene(peer, 20)
+        steps += [lobby_wait(peer)] + capture(f"brain-loss-{peer}", "MultiplayerScreen")
+        steps += [menu("assert_label LabelLastMatchSummary Joiner's brain was destroyed"), menu("assert_label_absent LabelLastMatchSummary .lua"),
+                  menu("assert_text_fits LabelLastMatchSummary"), dict(op="finish")]
     checks = scene_checks("host", host) + scene_checks("joiner", joiner)
-    checks += [dict(id=f"brain-lost-plays-on-{peer}", peer=peer, mark="brain-lost-host" if peer == "host" else "watching-joiner", screen="game",
-                    what="The default rule kept the round running after Joiner's brain was destroyed; the host ended it by hand.",
+    checks += [dict(id=f"default-rule-loss-{peer}", peer=peer, mark=f"brain-loss-{peer}", screen="MultiplayerScreen",
+                    what="Under the default rule the lost brain ended the two-sided round and the lobby names it in a player's words.",
                     log_regex=[r"\[net-match\] brain lost: Joiner's Brain Case .* at tick "]) for peer in ("host", "joiner")]
-    emit(20, "A brain lost under the default rule: its player watches and the match plays on",
+    emit(20, "A brain lost under the default rule: the two-sided round settles on the side left and the lobby names the loss",
          game_menu("host"), game_menu("joiner"), game_probe(host), game_probe(joiner), checks,
-         matching_log_lines=[r"^\[net-match\] brain lost: .+$"])
+         matching_log_lines=[r"^\[net-match\] brain lost: .+$", r"^\[net-match\] activity end: .+$"])
 
 
 def second_rematch_scene():
