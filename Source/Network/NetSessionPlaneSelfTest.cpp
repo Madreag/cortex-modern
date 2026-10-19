@@ -2028,12 +2028,27 @@ namespace RTE {
 					if (peer.IsFailed()) { error = "peer " + std::to_string(id) + " failed: " + peer.GetStats().timeoutReason; return false; }
 					const bool directHostlessGroup = !hub.row.internet && sawSplit && (s_HeldSeats(peer, world.applied + 1) & 1U);
 					const bool keptDirectMigration = !hub.row.internet && sawSplit && peer.GetConfig().migrationGeneration &&
+					// Section 11.3(c): a direct group, a lone peer included, that has held the host through the hold window migrates and keeps the
+					// game. A scheduled round's window runs from when the host's seat was first held, not from a fixed row's fault.
+					// The host's silence began up to one link delay and the bound before the fixture saw its seat held.
+					const auto heldThroughWindow = [&](uint64_t since, uint64_t until) {
+						return until >= since && until - since + hub.Delay(1, id) + static_cast<uint64_t>(std::ceil(c_TestBoundTicks * c_TestTickMs)) >= c_NetHostLossSilenceMs;
+					};
+					bool heldHostWindow = hub.schedule && heldSince[1] != UINT64_MAX && heldThroughWindow(heldSince[1], hub.now);
+					if (hub.schedule) for (const auto& [since, until]: heldSpans[1]) heldHostWindow |= until != UINT64_MAX && heldThroughWindow(since, until);
+					const bool scheduledDirectMigration = !hub.row.internet && heldHostWindow && peer.GetConfig().migrationGeneration;
 					    std::any_of(firstAdminChangeMs.begin(), firstAdminChangeMs.end(), [](uint64_t at) { return at != UINT64_MAX; });
 					// The revised direct contract also migrates a hostless minority and a lone peer, on their own continuation.
-					if (!hub.row.repeatedAdministration && !directHostlessGroup && !keptDirectMigration && peer.GetHostPeerId() != 1 && (!hub.row.gapMs || hub.row.subject != 1 || hub.row.gapMs < 15000)) { error = "lag changed the lobby host"; return false; }
+					if (!hub.row.repeatedAdministration && !directHostlessGroup && !keptDirectMigration && !scheduledDirectMigration && peer.GetHostPeerId() != 1 &&
+					    (!hub.row.gapMs || hub.row.subject != 1 || hub.row.gapMs < 15000)) {
+						error = "lag changed the lobby host (host seat held since " + (heldSince[1] == UINT64_MAX ? std::string("never") : std::to_string(heldSince[1])) +
+						    " ms, migration generation " + std::to_string(peer.GetConfig().migrationGeneration) + ", peer " + std::to_string(id) + ")"; return false;
+					}
 					if (!hub.row.repeatedAdministration && peer.GetHostPeerId() != 1 && firstAdminChangeMs[id - 1] == UINT64_MAX) {
 						firstAdminChangeMs[id - 1] = hub.now;
-						if (hub.now + hub.Delay(1, id) < hub.faultAt + 15000) { error = "admin host changed before fifteen seconds of authenticated silence"; return false; }
+						if (hub.schedule ? !heldHostWindow : hub.now + hub.Delay(1, id) < hub.faultAt + 15000) {
+							error = "admin host changed before fifteen seconds of authenticated silence"; return false;
+						}
 					}
 					if (peer.IsStopped() && scheduled && peer.GetStats().timeoutReason.starts_with("Complete:")) {
 						bool alone = true;
