@@ -5562,11 +5562,16 @@ static std::string ResyncSaveName() {
 			}
 			if (!refused.empty()) m_PrivateBaseRefusal.clear();
 		}
-		// A returner whose base never comes (the round cannot capture one) is told so, never left waiting on it.
+		// A returner whose base never comes (the round cannot capture one) is told so, never left waiting on it. A base asked of
+		// this machine's busy writer, or taken and still being written, is on its way: only the time with none coming counts.
+		const bool baseComing = m_PrivateImageTask.valid() || m_PrivateBasePending || (m_PrivateBaseRequested && g_ActivityMan.AutosaveWriterBusy());
+		if (baseComing) m_PrivateBaseIdleSinceMs = 0;
+		else if (m_PrivateBaseIdleSinceMs == 0) m_PrivateBaseIdleSinceMs = nowMs;
 		std::vector<NetPeerId> unserved;
 		for (const NetWorldJoinSession& session: m_WorldJoin.Sessions()) {
-			if (session.spectator || session.phase != NetWorldJoinPhase::SnapshotTransfer || session.transferStarted || m_PrivateImageTask.valid() || session.openedAtMs == 0) continue;
-			if (m_WorldJoin.IsPrivateMatch() && nowMs > session.openedAtMs && nowMs - session.openedAtMs > 2 * c_PrivateImageWaitMs) unserved.push_back(session.connection);
+			if (session.spectator || session.phase != NetWorldJoinPhase::SnapshotTransfer || session.transferStarted || baseComing || session.openedAtMs == 0) continue;
+			const uint64_t waitingSince = std::max(session.openedAtMs, m_PrivateBaseIdleSinceMs);
+			if (m_WorldJoin.IsPrivateMatch() && nowMs > waitingSince && nowMs - waitingSince > 2 * c_PrivateImageWaitMs) unserved.push_back(session.connection);
 		}
 		for (const NetPeerId connection: unserved) {
 			System::PrintDiagnosticLine("[net-match] rejoin refused connection=" + std::to_string(connection) + ": no image could be staged for it in " + std::to_string(2 * c_PrivateImageWaitMs) + "ms" +

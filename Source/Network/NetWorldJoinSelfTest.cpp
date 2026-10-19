@@ -8543,6 +8543,41 @@ namespace RTE {
 		return true;
 	}
 
+	// A returning seat whose base was taken and is still being written waits for it however long the writer takes; once no base
+	// is on its way the seat waits the unserved bound again from that moment, and only then is it refused.
+	bool TestAReturnerWaitsForABaseOnItsWay(std::string* error) {
+		NetMatchService host;
+		host.m_IsHost = true;
+		auto config = NetMatchConfigUtil::MakeDefault(0x9A35);
+		std::string setupError;
+		if (!host.m_WorldJoin.ConfigureMatchRejoins(config, 1, 1000.0 / 60.0, &setupError) || !host.m_WorldJoin.BeginRejoin(43, 2, 2, 3, "returning", 1000, &setupError)) {
+			*error = "the base-on-its-way row could not open a rejoin: " + setupError;
+			return false;
+		}
+		constexpr uint64_t unserved = 2 * NetMatchService::c_PrivateImageWaitMs;
+		host.m_PrivateBasePending = NetWorldCheckpointImage{};
+		host.AnswerStalledReturnersLocked(1000 + 3 * unserved);
+		if (host.m_WorldJoin.FindSession(43) == nullptr) {
+			*error = "a returning seat was refused while its base was taken and still being written";
+			return false;
+		}
+		const uint64_t written = 1000 + 3 * unserved + 1;
+		host.m_PrivateBasePending.reset();
+		host.AnswerStalledReturnersLocked(written);
+		host.AnswerStalledReturnersLocked(written + unserved);
+		if (host.m_WorldJoin.FindSession(43) == nullptr) {
+			*error = "a returning seat was refused before the unserved bound passed with no base on its way";
+			return false;
+		}
+		host.AnswerStalledReturnersLocked(written + unserved + 1);
+		if (host.m_WorldJoin.FindSession(43) != nullptr) {
+			*error = "a returning seat kept waiting past the unserved bound with no base on its way";
+			return false;
+		}
+		std::cout << "[net-world-join-selftest] PASS a_returner_waits_for_a_base_on_its_way" << std::endl;
+		return true;
+	}
+
 	// F53.2, the first path: a player who leaves between rounds keeps the seat - the seat roster holds it for its return, the leave's
 	// answer tells it so, and nothing is released (A12). The decision reads the roster's stage, never the plane's live-match flag.
 	bool TestALeaveBetweenRoundsKeepsTheSeat(std::string* error) {
@@ -10329,6 +10364,7 @@ namespace RTE {
 			if (!TestAHealNamesTheNextCaptureAfresh(&error)) return Fail(error);
 			if (!TestAHealNamesACheckpointEveryPeerHolds(&error)) return Fail(error);
 			if (!TestAStuckPrivateImageIsRetakenOnceThenRefused(&error)) return Fail(error);
+			if (!TestAReturnerWaitsForABaseOnItsWay(&error)) return Fail(error);
 			if (!TestAPrivateReturnFollowsTheRoundOnTheRoster(&error)) return Fail(error);
 			if (!TestALeaveBetweenRoundsKeepsTheSeat(&error)) return Fail(error);
 			if (!TestAResumedLobbyHoldsADroppedSeat(&error)) return Fail(error);

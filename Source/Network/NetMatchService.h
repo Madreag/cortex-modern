@@ -1446,6 +1446,7 @@ namespace RTE {
 		friend bool TestAHealNamesTheNextCaptureAfresh(std::string* error);
 		friend bool TestAHealNamesACheckpointEveryPeerHolds(std::string* error);
 		friend bool TestAStuckPrivateImageIsRetakenOnceThenRefused(std::string* error);
+		friend bool TestAReturnerWaitsForABaseOnItsWay(std::string* error);
 		friend bool TestAPrivateReturnFollowsTheRoundOnTheRoster(std::string* error);
 		friend bool TestAHeldRejoinAsksItsHostAgainOffTheGameThread(std::string* error);
 		friend bool TestIceConnectingLine(std::string* error);
@@ -2000,6 +2001,7 @@ namespace RTE {
 		/// The base a returner arriving now would be served; none when it would take a new one.
 		std::optional<uint64_t> ServedReturnBaseLocked(uint64_t nowMs) const;
 		static constexpr uint64_t c_PrivateImageWaitMs = 20000; //!< How long a returning seat waits on one capture's writer.
+		uint64_t m_PrivateBaseIdleSinceMs = 0; //!< Host: since when no base has been on its way to a returner; 0 while one is.
 		static constexpr uint64_t c_PrivateBaseStageWindowMs = 4000; //!< How long a returning seat waits for a base its captures keep missing.
 		bool m_PrivateImageRecapture = false; //!< Host: the next pass takes a fresh base; the stuck writer was abandoned.
 		bool m_PrivateImageRecaptured = false; //!< Host: this wait already took its one fresh base.
