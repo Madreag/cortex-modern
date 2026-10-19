@@ -2113,8 +2113,13 @@ namespace RTE {
 					const bool atRoundRate = id == hub.row.subject && hub.row.roundRateAfterMs && hub.now >= hub.faultEnd + hub.row.roundRateAfterMs;
 					const double catchUpRate = scheduled ? capacity / 100.0 : atRoundRate ? 1.0 : hub.row.catchUpPercent && id == hub.row.subject ? hub.row.catchUpPercent / 100.0 : c_TestCatchUpRate;
 					credits[id - 1].Accrue(hub.row.stepMs, slowed ? ratePercent / 100.0 : 1, catchUpRate, !slowed && CatchUpNeeded(peer));
-					while (credits[id - 1].MayGrant(!slowed && CatchUpNeeded(peer), !slowed && CatchingUp(peer, credits[id - 1].NextOrdinaryTickInMs(hub.row.stepMs)))) {
-						const bool catchingUp = !slowed && CatchUpNeeded(peer);
+					// The game waits for a frame inside the update it already granted: that update takes the frame the moment it is ready,
+					// whatever pace the frames after it are given.
+					bool grantedUpdate = waitAt[id - 1] != 0;
+					unsigned released = 0;
+					while (grantedUpdate || credits[id - 1].MayGrant(!slowed && CatchUpNeeded(peer), !slowed && CatchingUp(peer, credits[id - 1].NextOrdinaryTickInMs(hub.row.stepMs)))) {
+						const bool catchingUp = !grantedUpdate && !slowed && CatchUpNeeded(peer);
+						grantedUpdate = false;
 						const uint64_t next = world.applied + 1;
 						if (queued[id - 1] != next && !peer.TimingDecisionPendingAt(next)) {
 							ControllerFrame input; input.actorUniqueID = 1000 + id; input.analogMoveX = id * 100;
@@ -2137,7 +2142,9 @@ namespace RTE {
 								    !peer.IsLocalPrivateReaderAt(next) && !peer.IsSeatUnderAI(id, next) &&
 								    (s_FrameMembers(peer, next) & (1U << (id - 1)));
 							}
-							peer.NoteFrameWait(next, hub.now); break;
+							// As the game's consumer does, a wait that released the frame at the engine's tick takes it at once.
+							if (peer.NoteFrameWait(next, hub.now) && ++released <= 4) { grantedUpdate = true; continue; }
+							break;
 						}
 						FinishWait(id, next);
 						peer.FinishFrameWait(hub.now);
