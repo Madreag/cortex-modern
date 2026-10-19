@@ -2122,6 +2122,8 @@ namespace RTE {
 					if ((hub.now + id * 3) % hub.row.planeIntervalMs != 0) continue;
 					if (hub.row.realFrozen && id == hub.row.subject && hub.DuringFault()) continue;
 					if (hung(id) || gone(id)) continue;
+					// Between rounds every seat's runner has left the round: its coordinator stops with its simulation.
+					if (between) continue;
 					if (stopped(id) || (hub.row.frozen && id == hub.row.subject && hub.DuringFault())) peers[id - 1]->PlaneTick(hub.now);
 					else peers[id - 1]->Tick(hub.now);
 				}
