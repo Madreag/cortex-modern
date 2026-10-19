@@ -1820,6 +1820,41 @@ namespace RTE {
 									    << (late->packet.type == NetHostMigrationMessageType::PeerReceipt ? " late_receipt_ms=" : " late_input_ms=") << late->at
 									    << " held_shown_ms=" << held.shownAt.at(frame) << " delivered_before_hold=0 lost=0" << std::endl;
 									break;
+						// Section 11.1: the side that holds a seat the other plays showed the frame without traffic the other had - an input for it, or a
+						// receipt covering it, that reached this side only afterwards: late, never lost. The two sides' own bounds parted them.
+						const std::string leftAi = left.aiAt.contains(frame) ? left.aiAt.at(frame) : "", rightAi = right.aiAt.contains(frame) ? right.aiAt.at(frame) : "";
+						const auto seatsOf = [](const std::string& list) { uint32_t mask = 0; for (char c: list) if (c >= '1' && c <= '9') mask |= 1U << (c - '1'); return mask; };
+						const uint32_t leftHeld = seatsOf(leftAi), rightHeld = seatsOf(rightAi);
+						const bool rightHolds = (l & ~r) != 0 || (rightHeld & ~leftHeld) != 0, leftHolds = (r & ~l) != 0 || (leftHeld & ~rightHeld) != 0;
+						if (left.shownAt.contains(frame) && right.shownAt.contains(frame) && (rightHolds || leftHolds)) {
+							std::string late;
+							if (rightHolds) late = hub.LateTraffic(b, frame, right.shownAt.at(frame));
+							if (late.empty() && leftHolds) late = hub.LateTraffic(a, frame, left.shownAt.at(frame));
+							if (!late.empty()) {
+								lateSplits.push_back({a, b, 0, frame, hub.now, 0});
+								sawSplit = splitHistories = true;
+								DiagnosticLine() << "[session-plane-late-input-split] frame=" << frame << " a=" << unsigned(a) << " b=" << unsigned(b) << " members=" << l << "/" << r
+								    << " ai=" << (leftAi.empty() ? "none" : leftAi) << "/" << (rightAi.empty() ? "none" : rightAi) << " " << late << " lost=0" << std::endl;
+								unexplained[a][b] = {};
+								continue;
+							}
+						}
+						// The verdict on this frame waits for an input or receipt still in flight to land, then judges it as before.
+						auto& waiting = unexplained[a][b];
+						if (waiting.first != frame) {
+							waiting = {frame, hub.now};
+							if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) {
+								std::string seen;
+								for (const auto& [at, observation]: hub.receiptEvidence) if (at + 8 >= frame && at <= frame + 8)
+									seen += " receipt@" + std::to_string(at) + ":" + std::to_string(observation.packet.senderPeerId) + ">" + std::to_string(observation.receiver) +
+									        "/succ" + std::to_string(observation.packet.successorPeerId) + (observation.impaired ? "/impaired" : "") + "@" + std::to_string(observation.at);
+								DiagnosticLine() << "[session-plane-unexplained] frame=" << frame << " a=" << unsigned(a) << " b=" << unsigned(b) << " members=" << l << "/" << r
+								    << " authors=" << unsigned(authorA) << "/" << unsigned(authorB) << " shown=" << (left.shownAt.contains(frame) ? left.shownAt.at(frame) : 0) << "/"
+								    << (right.shownAt.contains(frame) ? right.shownAt.at(frame) : 0) << " ai=" << (left.aiAt.contains(frame) ? left.aiAt.at(frame) : "none") << "/"
+								    << (right.aiAt.contains(frame) ? right.aiAt.at(frame) : "none") << seen << std::endl;
+							}
+						}
+						if (!finalVerdict && hub.now < waiting.second + c_LateEvidenceMs) { compared[a][b] = frame - 1; awaitingEvidence = true; break; }
 								}
 								inputSplits[a][b][frame] = 0; separated = frame; sawSplit = true;
 								inputSplitCauses.push_back({humanLeft ? a : b, humanLeft ? b : a, cause->packet.senderPeerId, cause->receiver,
