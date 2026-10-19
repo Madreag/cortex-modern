@@ -1402,6 +1402,35 @@ namespace RTE {
 			return true;
 		}
 
+		static bool AnOpenVoteAsksForItsFramesRecordAtOnce(std::string* error) {
+			// A frame stopped on a vote that has not completed asks a seat that played it for its record when it stops, so the wait is
+			// one trip to that seat, not a round trip and the bound before the asking even starts.
+			Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
+			peer.m_Config.peerCount = peer.m_Config.matchConfig.peerCount = 2;
+			peer.m_Config.matchConfig.players.resize(2);
+			peer.m_Config.matchConfig.successorOrder = {2};
+			peer.m_Config.peerFrameGroups = true;
+			peer.m_RoundConfigHash = NetMatchConfigUtil::HashConfig(peer.m_Config.matchConfig);
+			peer.m_MigrationPhase = NetHostMigrationPhase::None;
+			peer.m_FrameGroupMembers = 3; peer.m_FrameGroupChanges = {{1, 3}};
+			peer.m_RemotePeerIds = {1}; peer.m_RemoteTransports = {{1, 42}};
+			peer.m_MigrationHistory[4422] = {1, 2, 3};
+			auto proposal = peer.PeerFrameMessage(NetHostMigrationMessageType::PeerBridge);
+			proposal.frame = 4423; proposal.voterMask = 2; proposal.boundary = 4422; proposal.preparedFrame = 2;
+			proposal.connectedMask = 3; proposal.members = {2}; proposal.completeFrom = 3;
+			const auto prefix = peer.PeerAppliedFramePrefix(4422);
+			proposal.bytes.assign(prefix.begin(), prefix.end()); proposal.totalBytes = proposal.bytes.size();
+			peer.m_PeerBridgeVotes[{4423, 10}][2] = proposal;
+			peer.m_RemoteFrames[4423][1] = {};
+			peer.m_PeerAppliedThrough[1] = 4430;
+			const uint64_t asked = peer.m_PeerTailRequests;
+			if (!peer.TakePendingPeerDecisions(1000)) { *error = "a frame played past a delay vote that had not completed"; return false; }
+			if (peer.m_PeerTailRequests == asked || !peer.m_PeerTailRequestedUntil.contains(4423)) {
+				*error = "a frame stopped on an open vote did not ask the seat that played it for its record"; return false;
+			}
+			return true;
+		}
+
 		static bool HeldHostHashesStayPrivateInFrameGroups(std::string* error) {
 			// A frame group's held seat, host included, plays off the round until it returns; the host-routed round's held host
 			// still simulates it, so only there does its hash count.
@@ -32995,6 +33024,12 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS every_mode_sizes_live_and_return_from_the_link\n[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "open-vote-record") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::AnOpenVoteAsksForItsFramesRecordAtOnce(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS an_open_vote_asks_for_its_frames_record_at_once\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "held-host-hash") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::HeldHostHashesStayPrivateInFrameGroups(&error)) return fail(error);
@@ -33327,6 +33362,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::LinkSizingInEveryMode, "every_mode_sizes_live_and_return_from_the_link");
 		row(&SessionPlaneRecoveryTest::FixedDelayReturnFollowsTheMeasuredLink, "a_fixed_return_follows_the_measured_link");
 		row(&SessionPlaneRecoveryTest::HeldHostHashesStayPrivateInFrameGroups, "held_host_hashes_stay_private_in_frame_groups");
+		row(&SessionPlaneRecoveryTest::AnOpenVoteAsksForItsFramesRecordAtOnce, "an_open_vote_asks_for_its_frames_record_at_once");
 		row(&SessionPlaneRecoveryTest::ReaderLinksContributeToInputRunway, "reader_links_contribute_to_input_runway");
 		row(&SessionPlaneRecoveryTest::LinkRiseHasNoResizeCooldown, "link_rise_has_no_resize_cooldown");
 		row(&SessionPlaneRecoveryTest::LinkFallNeedsFiveMeasuredSeconds, "link_fall_requires_five_continuous_measured_seconds");
