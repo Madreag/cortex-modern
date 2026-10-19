@@ -2572,6 +2572,38 @@ namespace RTE {
 			return passed;
 		}
 
+		// A returning seat's members already play the round on the terms its certificate carries. Once one member's start is in, a member
+		// whose start is still late past the bound and two round trips is taken on those terms, so it neither holds the return back nor
+		// has its inputs set aside; before then, and with no member heard, the seat waits as before.
+		static bool AReturningSeatTakesItsMembersTermsAsTheirStarts(std::string* error) {
+			Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
+			peer.m_Config.peerCount = peer.m_Config.matchConfig.peerCount = 3;
+			peer.m_Config.matchConfig.players.push_back({3, 2, false, "Third"});
+			peer.m_Config.matchConfig.successorOrder = {2, 3};
+			peer.m_Config.localPeerId = 2; peer.m_Config.authorityPeerId = 1;
+			peer.m_Config.peerFrameGroups = peer.m_Config.joinsRunningRound = peer.m_Config.continuesMatch = true;
+			peer.m_Config.startFrame = 554;
+			peer.m_Config.initialSeatReclaims[2] = {2, 0, 554 * 8 + 2, 2, 554, 7, 560};
+			peer.m_Config.initialPeerStartTerms = {{1, {1, 6}}, {2, {554, 7}}, {3, {1, 8}}};
+			peer.m_RemotePeerIds = {1, 3}; peer.m_RemoteTransports = {{1, 41}, {3, 43}};
+			peer.ResetRoundState();
+			peer.m_State = NetLockstepState::WaitingForStart; peer.m_LastStartSentMs = 1000;
+			peer.Tick(1000);
+			peer.m_RemoteStartsReceived.insert(1); peer.m_RemoteStarts[1] = {};
+			peer.Tick(1100);
+			if (peer.m_RemoteStartsReceived.contains(3)) { *error = "a returning seat took a member's terms before its start was late"; return false; }
+			peer.m_RemoteStartsReceived.erase(1); peer.m_RemoteStarts.erase(1);
+			peer.Tick(2000);
+			if (peer.m_RemoteStartsReceived.contains(3) || peer.IsRunning()) { *error = "a returning seat took a member's terms before it heard any member"; return false; }
+			peer.m_RemoteStartsReceived.insert(1); peer.m_RemoteStarts[1] = {};
+			peer.Tick(2100);
+			if (!peer.m_RemoteStartsReceived.contains(3) || peer.m_RemoteStarts.at(3).inputDelayFrames != 8 || !peer.IsRunning()) {
+				*error = "a returning seat waited on a late member start its certificate's terms answer: received=" + std::to_string(peer.m_RemoteStartsReceived.contains(3)) +
+				    " running=" + std::to_string(peer.IsRunning()); return false;
+			}
+			return true;
+		}
+
 		static bool JoinStartTakesCompletedReplaySeats(std::string* error) {
 			bool passed = true;
 			for (unsigned role = 0; role < 10; ++role) {
@@ -33256,6 +33288,12 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS an_open_vote_asks_for_its_frames_record_at_once\n[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "returner-member-terms") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::AReturningSeatTakesItsMembersTermsAsTheirStarts(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS a_returning_seat_takes_its_members_terms_as_their_starts\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "minority-tie-query") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::AMinorityGroupOnlyQueriesTheReferee(&error)) return fail(error);
@@ -33611,6 +33649,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::OnlyASeatCountingThisOneIsAnotherContinuation, "only_a_seat_counting_this_one_is_another_continuation");
 		row(&SessionPlaneRecoveryTest::AStraddlingRulingIsTheOtherHalfsQuestion, "a_straddling_ruling_is_the_other_halfs_question");
 		row(&SessionPlaneRecoveryTest::AMinorityGroupOnlyQueriesTheReferee, "a_minority_group_only_queries_the_referee");
+		row(&SessionPlaneRecoveryTest::AReturningSeatTakesItsMembersTermsAsTheirStarts, "a_returning_seat_takes_its_members_terms_as_their_starts");
 		row(&SessionPlaneRecoveryTest::ReaderLinksContributeToInputRunway, "reader_links_contribute_to_input_runway");
 		row(&SessionPlaneRecoveryTest::LinkRiseHasNoResizeCooldown, "link_rise_has_no_resize_cooldown");
 		row(&SessionPlaneRecoveryTest::LinkFallNeedsFiveMeasuredSeconds, "link_fall_requires_five_continuous_measured_seconds");
