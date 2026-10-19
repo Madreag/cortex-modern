@@ -8347,7 +8347,8 @@ void MovableMan::Travel() {
 // An actor's travel and update draw from a per-actor per-tick stream, so a preview of the actor draws
 // exactly what its canonical tick will.
 void MovableMan::TravelStage(MovableObject* mo, bool actor) {
-	DeterministicMORNGScope rng(mo->GetUniqueID(), Hash("ActorTravel"), actor);
+	static const uint64_t rngPhase = Hash("ActorTravel");
+	DeterministicMORNGScope rng(mo->GetUniqueID(), rngPhase, actor);
 	static const uint64_t soundPhase = Hash("Travel");
 	SoundSimulationScope sounds(mo->GetUniqueID(), soundPhase);
 	if (!mo->IsUpdated()) {
@@ -8369,7 +8370,8 @@ void MovableMan::PreControllerStage(Actor* actor) {
 }
 
 void MovableMan::UpdateStage(MovableObject* mo, bool actor) {
-	DeterministicMORNGScope rng(mo->GetUniqueID(), Hash("ActorUpdate"), actor);
+	static const uint64_t rngPhase = Hash("ActorUpdate");
+	DeterministicMORNGScope rng(mo->GetUniqueID(), rngPhase, actor);
 	static const uint64_t soundPhase = Hash("Update");
 	SoundSimulationScope sounds(mo->GetUniqueID(), soundPhase);
 	mo->Update();
