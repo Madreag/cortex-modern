@@ -1201,6 +1201,8 @@ namespace RTE {
 		/// trailFrames: how far the returner's replay trails the round at the round's pace; its first required frame comes that much later.
 		bool SchedulePeerReclaim(uint8_t peerId, NetPeerId transport, uint32_t incarnation, uint64_t frame, std::string* error = nullptr, uint64_t trailFrames = 0);
 		bool SchedulePeerAdmission(uint8_t peerId, NetPeerId transport, uint32_t incarnation, uint64_t frame, std::string* error = nullptr, uint64_t trailFrames = 0);
+		/// The most frames a private return at the frame may trail by and still fit its neutral interval inside the future-frame skew.
+		uint64_t PeerReturnTrailRoom(uint8_t peerId, NetPeerId transport, uint64_t frame) const;
 		bool ProposeWorldAdmission(NetPeerId transport, uint32_t incarnation, const NetGameWorldTransition& transition, std::string* error = nullptr);
 		bool HasAgreedSeatReclaim(uint8_t peer, uint64_t frame) const { NET_PLANE_CHECK(); const auto it = m_ReclaimTransactions.find(peer); return it != m_ReclaimTransactions.end() && it->second.activationFrame == frame; }
 		bool HasWorldAdmission(uint8_t peer, uint64_t frame) const { NET_PLANE_CHECK(); const auto it = m_ReclaimTransactions.find(peer); return it != m_ReclaimTransactions.end() && it->second.activationFrame == frame && it->second.worldTransition.has_value(); }
@@ -2434,6 +2436,8 @@ namespace RTE {
 		uint64_t m_ReturnHistoryFloor = 0; //!< Host: the oldest frame a returning seat may still be served from.
 		/// The least delay a seat comes back or into a world at: the margin every seat's delay keeps, sized from its own link's ping.
 		uint16_t ReturnDelayFloor(uint8_t peerId, NetPeerId transport) const;
+		/// The delay and the link a frame-group private return's neutral interval covers before its trail.
+		uint64_t PeerReturnPipeline(uint8_t peer, NetPeerId transport, uint64_t frame, uint32_t* outDelay = nullptr, uint64_t* outTransit = nullptr) const;
 		uint64_t m_HostSilentReportedSecond = UINT64_MAX; //!< The second of the host's silence last reported; one line a second.
 		uint32_t m_HostSilentReports = 0;                  //!< Lines reported about a silent host, all told.
 		static constexpr uint64_t c_SeatTransitionHistoryFrames = 3600; //!< How far behind this peer's simulation the seat transitions reach.

@@ -585,6 +585,24 @@ namespace RTE {
 		return *m_LastCompletedSimulationTick + 1 < due;
 	}
 
+	uint64_t NetLockstepCoordinator::PeerReturnPipeline(uint8_t peer, NetPeerId transport, uint64_t frame, uint32_t* outDelay, uint64_t* outTransit) const {
+		const uint32_t delay = m_Config.adaptiveInputDelay ? std::min<uint16_t>(NetLockstepCodec::c_MaxPeerInputDelayFrames,
+		    std::max<uint16_t>(InputDelayAt(peer, frame), ReturnDelayFloor(peer, transport))) : PeerInputDelay(peer);
+		const auto link = m_Stats.peers.find(peer);
+		const uint64_t transit = link == m_Stats.peers.end() ? 0 : static_cast<uint64_t>(std::ceil((link->second.pingMs + link->second.jitterMs) / m_Config.simTickMs));
+		if (outDelay) *outDelay = delay;
+		if (outTransit) *outTransit = transit;
+		return delay + transit + m_Config.slowPlayerBoundTicks;
+	}
+
+	uint64_t NetLockstepCoordinator::PeerReturnTrailRoom(uint8_t peerId, NetPeerId transport, uint64_t frame) const {
+		NET_PLANE_CHECK();
+		// The ordinary activation carries any trail in its neutral frame; only a frame-group return names its interval on the wire.
+		if (!UsesPeerFrameGroups()) return UINT64_MAX;
+		const uint64_t pipeline = PeerReturnPipeline(peerId, transport, frame);
+		return pipeline >= NetLockstepCodec::c_MaxFutureFrameSkew ? 0 : NetLockstepCodec::c_MaxFutureFrameSkew - pipeline;
+	}
+
 	bool NetLockstepCoordinator::ProposePeerReclaim(uint8_t peer, NetPeerId transport, uint32_t incarnation, uint64_t frame, uint64_t trailFrames, std::string* error) {
 		// The first playing survivor serves the private return even while the administrative host is held.
 		const uint8_t returnLeader = m_FrameGroupMembers ? static_cast<uint8_t>(std::countr_zero(m_FrameGroupMembers) + 1) : 0;
@@ -608,11 +626,12 @@ namespace RTE {
 			proposal.boundary = std::min(proposal.boundary, applied->second);
 		}
 		const auto prefix = PeerAppliedFramePrefix(proposal.boundary); proposal.bytes.assign(prefix.begin(), prefix.end());
-		const uint32_t delay = m_Config.adaptiveInputDelay ? std::min<uint16_t>(NetLockstepCodec::c_MaxPeerInputDelayFrames,
-		    std::max<uint16_t>(InputDelayAt(peer, frame), ReturnDelayFloor(peer, transport))) : PeerInputDelay(peer);
-		const uint64_t transit = static_cast<uint64_t>(std::ceil((m_Stats.peers[peer].pingMs + m_Stats.peers[peer].jitterMs) / m_Config.simTickMs));
-		const uint64_t neutral = delay + transit + trailFrames + m_Config.slowPlayerBoundTicks;
-		if (neutral > NetLockstepCodec::c_MaxFutureFrameSkew) { if (error) *error = "the private return is still too far behind its activation"; return false; }
+		uint32_t delay = 0; uint64_t transit = 0;
+		const uint64_t neutral = PeerReturnPipeline(peer, transport, frame, &delay, &transit) + trailFrames;
+		if (neutral > NetLockstepCodec::c_MaxFutureFrameSkew) {
+			if (error) *error = "the private return is still too far behind its activation: delay=" + std::to_string(delay) + " transit=" + std::to_string(transit) + " trail=" + std::to_string(trailFrames);
+			return false;
+		}
 		PutSize(proposal.bytes, delay); PutSize(proposal.bytes, static_cast<uint32_t>(neutral)); PutSize(proposal.bytes, incarnation);
 		proposal.totalBytes = static_cast<uint32_t>(proposal.bytes.size()); proposal.voterMask = SeatBit(m_Config.localPeerId);
 		if (!ValidatePeerBridge(proposal)) { if (error) *error = "the private return does not match the committed boundary"; return false; }

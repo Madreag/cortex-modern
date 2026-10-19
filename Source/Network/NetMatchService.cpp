@@ -5005,6 +5005,8 @@ static std::string ResyncSaveName() {
 				(void)m_WorldJoin.BeginFinalTail(connection, m_CompletedRoundFinalFrame);
 			const auto* prior = m_WorldJoin.FindSession(connection);
 			const uint64_t previous = prior ? prior->activationTick : 0;
+			// The coordinator that proposes a return sizes how far its activation may trail the round.
+			if (prior) m_WorldJoin.NoteReturnTrailRoom(connection, m_Coordinator->PeerReturnTrailRoom(prior->assignedPeerId, connection, nowFrame));
 			if (const uint64_t announced = ApplyWorldJoinReport(lobby, m_WorldJoin, report, connection, nowFrame, nowMs); announced != 0) {
 				if (previous && previous != announced) m_Coordinator->MoveObservationEpoch(previous, announced);
 				else m_Coordinator->SetObservationEpoch(announced);
