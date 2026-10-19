@@ -190,6 +190,21 @@ namespace RTE::MenuAutomation {
 		for (auto* node = control->GetPanel(); node; node = node->GetParentPanel()) if (!node->_GetEnabled()) return false;
 		return true;
 	}
+	bool ComboShowsItem(GUIControlManager* manager, const std::string& comboName, const std::string& item, std::string& observation) {
+		auto* combo = manager ? dynamic_cast<GUIComboBox*>(manager->GetControl(comboName)) : nullptr;
+		if (!combo) {
+			observation = comboName + " is not a drop-down";
+			return false;
+		}
+		bool listed = false;
+		for (int i = 0; i < combo->GetCount(); ++i) {
+			if (const GUIListPanel::Item* entry = combo->GetItem(i)) listed = listed || entry->m_Name == item;
+		}
+		const bool shown = Enabled(combo) && PanelDrawnInLatestPass(combo->GetPanel(), c_DrawWindowSeconds);
+		observation = comboName + (shown ? " is on the screen" : " is not on the screen") + " with " + std::to_string(combo->GetCount()) + " items" +
+		              (listed ? "" : ", none of them \"" + item + "\"");
+		return shown && listed;
+	}
 	// Both settings skins name a page's tab and box after the page, so scripts address pages by name.
 	constexpr std::array<std::string_view, 6> c_SettingsPages{"Video", "Audio", "Input", "Gameplay", "Misc", "Network"};
 	// The network page's own selector names its sub-pages the same way; a script addresses

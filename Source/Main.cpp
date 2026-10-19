@@ -4243,6 +4243,16 @@ void ProcessMenuScript(bool inPlay = false) {
 			const bool found = pauseMenu ? pauseMenu->AutomationLabelText(control, actual) : g_MenuMan.GetMainMenu()->AutomationLabelText(control, actual);
 			met = found && actual.find(expected) != std::string::npos;
 			seen = " text=\"" + actual + "\"";
+		} else if (waitCond.starts_with("combo:")) {
+			// A hand picks from a list it can see: the drop-down drawn on the screen with the item in it.
+			std::istringstream combo(waitCond.substr(6));
+			std::string control, item;
+			combo >> control;
+			std::getline(combo >> std::ws, item);
+			GUIControl* modal = nullptr;
+			std::string observation;
+			met = MenuAutomation::ComboShowsItem(MenuScriptHandManager(&modal), control, item, observation);
+			seen = " " + observation;
 		} else if (waitCond.starts_with("substate:")) {
 			seen = pauseMenu ? std::string(" screen=pause") : " screen=" + g_MenuMan.GetMainMenu()->AutomationMultiplayerSubScreen();
 			met = !pauseMenu && g_MenuMan.GetMainMenu()->AutomationMultiplayerSubScreen() == waitCond.substr(9);
@@ -4463,6 +4473,13 @@ void ProcessMenuScript(bool inPlay = false) {
 		iss >> n;
 		waitCond = "members:" + std::to_string(n);
 		waitCondTimeout = 4000;
+	} else if (cmd == "wait_combo") {
+		std::string control, item;
+		iss >> control;
+		std::getline(iss >> std::ws, item);
+		if (control.empty() || item.empty()) return MenuScriptFail("wait_combo requires a drop-down and the item it must list");
+		waitCond = "combo:" + control + " " + item;
+		waitCondDeadlineMs = MenuScriptNowMs() + 60000;
 	} else if (cmd == "wait_label") {
 		std::string control, expected;
 		iss >> control;
