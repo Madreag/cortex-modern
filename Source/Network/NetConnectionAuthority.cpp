@@ -102,6 +102,9 @@ namespace RTE {
 					return "Your connection protocol is " + std::to_string(NetSeatLease::c_Version) + "; the directory uses " + std::to_string(remote) + ". Update the game or directory so the versions match.";
 				}
 				if (code == "match_ended") { refused = ended = true; return "The host ended this match. Choose another game."; }
+				// A clock refusal names the directory's time, and the next request is signed on it.
+				if (code == "connection_clock" && body.contains("directory_time") && body["directory_time"].is_number_unsigned())
+					return "This device's clock differs from the directory's. Reconnecting signs on the directory's clock; Cancel returns to Multiplayer.";
 				if (response.statusCode == 404 && code == "not_found") {
 					refused = ended = true;
 					return "This match is no longer in the directory. Choose another game.";
@@ -210,9 +213,11 @@ namespace RTE {
 		std::lock_guard lock(m_Mutex);
 		if (!m_LanBrowser) m_LanBrowser = std::make_unique<NetLanDiscovery>();
 		(void)m_LanBrowser->StartBrowser();
+		while (!baseUrl.empty() && baseUrl.back() == '/') baseUrl.pop_back();
+		if (!baseUrl.empty() && !baseUrl.starts_with("https://")) baseUrl = "https://" + baseUrl;
+		// Another directory keeps another clock.
+		if (baseUrl != m_BaseUrl) m_DirectoryClockOffset = 0;
 		m_Player = player; m_BaseUrl = std::move(baseUrl); m_InstallKey = std::move(installKey); m_CertPin = std::move(certPin);
-		while (!m_BaseUrl.empty() && m_BaseUrl.back() == '/') m_BaseUrl.pop_back();
-		if (!m_BaseUrl.empty() && !m_BaseUrl.starts_with("https://")) m_BaseUrl = "https://" + m_BaseUrl;
 		if (m_Instance == NetAuthBytes16{}) (void)GetNetAuthCrypto().RandomBytes(m_Instance.data(), m_Instance.size());
 	}
 	void NetConnectionAuthority::SetDirectory(std::string sessionId, std::string hostToken, uint32_t hostGeneration, std::string authorityKey) {
@@ -391,7 +396,25 @@ namespace RTE {
 		while (!m_TieRequests.empty() && nowMs >= m_TieRequests.front() && nowMs - m_TieRequests.front() >= 60100) m_TieRequests.pop_front();
 		return CanRequest(nowMs) && m_TieRequests.size() < c_TieRequestsPerMinute;
 	}
+	void NetConnectionAuthority::NoteDirectoryClock(const std::string& body) {
+		if (m_UnixSeconds == 0) return;
+		const auto reply = json::parse(body, nullptr, false);
+		if (!reply.is_object()) return;
+		const auto time = reply.find("directory_time");
+		if (time == reply.end() || !time->is_number_unsigned()) return;
+		const uint64_t directory = time->get<uint64_t>();
+		if (directory == 0 || directory > (uint64_t{1} << 40)) return;
+		// A second of reply delay is not a clock change; the times this clock rebases stay put.
+		const int64_t offset = static_cast<int64_t>(directory) - static_cast<int64_t>(m_UnixSeconds);
+		if (offset - m_DirectoryClockOffset >= 2 || m_DirectoryClockOffset - offset >= 2) m_DirectoryClockOffset = offset;
+	}
+	uint64_t NetConnectionAuthority::DirectoryNowLocked(uint64_t localUnixSeconds) const {
+		const int64_t shifted = static_cast<int64_t>(localUnixSeconds) + m_DirectoryClockOffset;
+		return shifted > 0 ? static_cast<uint64_t>(shifted) : 1;
+	}
+	uint64_t NetConnectionAuthority::DirectoryNow(uint64_t localUnixSeconds) const { std::lock_guard lock(m_Mutex); return DirectoryNowLocked(localUnixSeconds); }
 	uint64_t NetConnectionAuthority::FailedReply(const NetHttpClient::Response& response, NetDirectoryRetry& retry, uint64_t nowMs, const char* path) {
+		NoteDirectoryClock(response.body);
 		const uint64_t until = retry.Failed(nowMs, response.statusCode, response.body, response.retryAfter, path);
 		bool refused = false, ended = false;
 		m_Error = ReplyError(response, refused, ended);
@@ -421,6 +444,7 @@ namespace RTE {
 				if (op.request->Poll() == NetHttpClient::PollResult::Pending) { ++active; ++it; continue; }
 				const auto response = op.request->GetResponse(); op.request.reset();
 				if (response.statusCode == 200 && response.error.empty()) {
+					NoteDirectoryClock(response.body);
 					if (op.removal) {
 						const auto body = json::parse(response.body, nullptr, false);
 						std::string error;
@@ -453,6 +477,7 @@ namespace RTE {
 			if (m_Bootstrap->Poll() == NetHttpClient::PollResult::Pending) return;
 			const auto response = m_Bootstrap->GetResponse(); m_Bootstrap.reset();
 			if (response.statusCode == 200 && response.error.empty()) {
+				NoteDirectoryClock(response.body);
 				NetConnectionHost host; std::string error;
 				if (ReadHostReply(response.body, host, error)) { m_Host = std::move(host); m_BootstrapWanted = false; m_Error.clear(); m_BootstrapRetry.Succeeded(); }
 				else m_NextBootstrap = FailedReply(response, m_BootstrapRetry, steadyMs, "seat-bootstrap");
@@ -463,7 +488,7 @@ namespace RTE {
 	std::string NetConnectionAuthority::SignedSeatRequest(const std::string& operation, uint64_t unixSeconds, const NetHostChangeRequest* change, const NetFrameTieRequest* tie) {
 		NetAuthBytes16 nonce{};
 		if (!GetNetAuthCrypto().RandomBytes(nonce.data(), nonce.size())) return {};
-		json contents{{"session_id", m_SessionId}, {"seat_token", m_LocalLease->token}, {"nonce", Hex(nonce)}, {"instance", Hex(m_Instance)}, {"sent_at", unixSeconds},
+		json contents{{"session_id", m_SessionId}, {"seat_token", m_LocalLease->token}, {"nonce", Hex(nonce)}, {"instance", Hex(m_Instance)}, {"sent_at", DirectoryNowLocked(unixSeconds)},
 			{"route", {{"ice_identity", m_Route.iceIdentity}, {"ice_virtual_port", m_Route.iceVirtualPort}, {"listen_port", m_Route.listenPort}, {"listen_addrs", m_Route.listenAddrs}, {"generation", m_Route.generation}, {"state", m_Route.state}}}};
 		if (!change && !m_HostToken.empty()) contents["host"] = {{"token", m_HostToken}, {"generation", m_HostGeneration}};
 		if (change) {
@@ -488,6 +513,7 @@ namespace RTE {
 			const auto response = m_CheckIn->GetResponse(); m_CheckIn.reset();
 			m_NextCheckIn = steadyMs + 5000;
 			if (response.statusCode == 200 && response.error.empty()) {
+				NoteDirectoryClock(response.body);
 				NetSeatLease lease; std::string error;
 				if (!ReadLeaseReply(response.body, lease, error) || !lease.SameSeat(*m_LocalLease) || lease.participant != m_Player->PublicId()) { m_NextCheckIn = FailedReply(response, m_CheckInRetry, steadyMs, "seat-check-in"); return; }
 				m_LocalLease = std::move(lease); ++m_CheckIns; m_CheckedGeneration = m_CheckInGeneration; m_Error.clear();
@@ -498,7 +524,9 @@ namespace RTE {
 					if (body.contains("host")) { NetConnectionHost host; if (ReadHostReply(body.at("host").dump(), host, error)) m_Host = std::move(host); else { m_Error = error; m_Refused = !error.empty(); } }
 					if (body.contains("relay")) {
 						NetRelayConfig relay;
-						if (NetRelayConfig::FromJson(body.at("relay").dump(), relay) && relay.Usable(unixSeconds)) {
+						// The directory's expiry moves onto this machine's clock, where every reader of the login judges it.
+						if (NetRelayConfig::FromJson(body.at("relay").dump(), relay) && relay.Usable(DirectoryNowLocked(unixSeconds))) {
+							relay.expiresAt = static_cast<uint64_t>(std::max<int64_t>(1, static_cast<int64_t>(relay.expiresAt) - m_DirectoryClockOffset));
 							m_Relay = std::move(relay);
 							if (body.value("relay_current", false)) m_RelayGeneration = m_CheckInGeneration;
 						}
@@ -731,6 +759,7 @@ namespace RTE {
 			}
 		}
 		ObserveNetwork(steadyMs, unixSeconds);
+		m_UnixSeconds = unixSeconds;
 		if (m_Suspended) { PollBootstrap(steadyMs); return; }
 		// Pending frame and host decisions use the request budget before routine check-ins.
 		PollOperations(steadyMs); PollBootstrap(steadyMs); PollHostChange(steadyMs, unixSeconds); PollFrameTie(steadyMs, unixSeconds); PollCheckIn(steadyMs, unixSeconds);

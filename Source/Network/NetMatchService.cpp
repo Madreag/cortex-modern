@@ -10191,6 +10191,8 @@ static std::string ResyncSaveName() {
 		spec.remoteVirtualPort = joinVirtualPort;
 		NetRelayConfig relay = request.rejoin ? m_ConnectionAuthority.Relay() : NetRelayConfig{};
 		if (allowRelay && !request.rejoin) {
+			const uint64_t local = UnixNowMs(nullptr) / 1000;
+			browse.SetDirectoryClockOffset(static_cast<int64_t>(m_ConnectionAuthority.DirectoryNow(local)) - static_cast<int64_t>(local));
 			browse.FetchIceServers(request.sessionId);
 			const uint64_t relayDeadline = SteadyNowMs() + c_IceConnectBudgetMs;
 			const bool needsRelay = g_SettingsMan.GetNetworkConnectionMode() == SettingsMan::NetworkConnectionMode::RelayOnly || target.address.empty();

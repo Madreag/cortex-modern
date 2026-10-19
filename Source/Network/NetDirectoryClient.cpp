@@ -412,7 +412,9 @@ namespace RTE {
 		m_IceRelayRefused = reply.statusCode == 502 && reply.body.find("\"relay_provider_refused\"") != std::string::npos;
 		m_IceRetryable = false;
 		m_IceRetryDelayMs = 500;
-		if (reply.statusCode == 200 && reply.error.empty() && NetRelayConfig::FromJson(reply.body, offer) && offer.Usable(now)) {
+		const uint64_t directoryNow = static_cast<uint64_t>(std::max<int64_t>(1, static_cast<int64_t>(now) + m_DirectoryClockOffset));
+		if (reply.statusCode == 200 && reply.error.empty() && NetRelayConfig::FromJson(reply.body, offer) && offer.Usable(directoryNow)) {
+			offer.expiresAt = static_cast<uint64_t>(std::max<int64_t>(1, static_cast<int64_t>(offer.expiresAt) - m_DirectoryClockOffset));
 			m_IceServers = std::move(offer);
 			m_IceError.clear(); retry.Succeeded();
 		} else {

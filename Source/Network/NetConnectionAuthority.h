@@ -152,6 +152,8 @@ namespace RTE {
 		void Update(uint64_t steadyMs, uint64_t unixSeconds);
 		uint64_t AdmissionWaitedMs() const;
 		uint64_t AdmissionRetryMs() const;
+		/// This machine's clock moved onto the directory's, as its last reply measured it; the seat and relay times it issues are on that clock.
+		uint64_t DirectoryNow(uint64_t localUnixSeconds) const;
 
 	private:
 		friend bool TestRecoveryUsesListedMatch(std::string* error);
@@ -220,6 +222,10 @@ namespace RTE {
 		bool CanSeatRequest(uint64_t nowMs, bool decisionRequest = false);
 		bool CanTieRequest(uint64_t nowMs);
 		bool CanRequest(uint64_t nowMs) const;
+		void NoteDirectoryClock(const std::string& body);
+		uint64_t DirectoryNowLocked(uint64_t localUnixSeconds) const;
+		int64_t m_DirectoryClockOffset = 0; //!< The directory's clock minus this machine's, in seconds.
+		uint64_t m_UnixSeconds = 0; //!< This machine's clock at the last Update.
 		uint32_t m_NetworkRevision = 0;
 		uint32_t m_NativeRouteRevision = 0;
 		uint32_t m_CheckInGeneration = 0, m_CheckedGeneration = 0, m_RelayGeneration = 0;
