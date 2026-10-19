@@ -8,7 +8,6 @@ capture is taken by both peers, the manual save is saved by both writers, and th
 """
 import argparse
 from datetime import datetime, timezone
-import hashlib
 import json
 import platform
 from pathlib import Path
@@ -34,7 +33,7 @@ def main():
     a = p.parse_args()
     repo = a.repo.resolve()
     sys.path.insert(0, str(repo / 'tools'))
-    from run_sim_test import make_run, seed_settings
+    from run_sim_test import make_run, seed_settings, engine_executable, file_sha256
     out = a.out.resolve()
     out.mkdir(parents=True, exist_ok=False)
     (out / 'driver-as-run.py').write_bytes(Path(__file__).read_bytes())
@@ -86,7 +85,7 @@ def main():
               'autosave_seconds': a.autosave_seconds, 'input_delay_frames': 1, 'warmup_ticks': a.warmup_ticks,
               'settings': settings, 'environment': env,
               'source_head': subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip(),
-              'exe_sha256': hashlib.sha256((repo / 'Cortex Command.exe').read_bytes()).hexdigest(),
+              'exe_sha256': file_sha256(engine_executable(repo)),
               'started_utc': datetime.now(timezone.utc).isoformat()}
     (out / 'configuration.json').write_text(json.dumps(config, indent=2))
 

@@ -2,14 +2,13 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 from pathlib import Path
 import re
 import shutil
 import zipfile
 
-from run_sim_test import make_run, seed_settings
+from run_sim_test import make_run, seed_settings, engine_executable, file_sha256
 
 SHAPES = ("all", "actor", "device", "activity", "global", "scene", "external-object",
           "borrowed-menu", "owned-menu", "owned-slice", "preset")
@@ -94,7 +93,7 @@ def main():
                                                      r"dropped its contributed slice|stopped aliasing|lost its actor|has no device submenu|could not plant", loaded))
     result = {"pass": all(checks.values()), "shape": a.shape, "checks": checks, "capture": captured,
               "load": restored, "verified": verified,
-              "exe_sha256": hashlib.sha256((a.repo / "Cortex Command.exe").read_bytes()).hexdigest()}
+              "exe_sha256": file_sha256(engine_executable(a.repo))}
     (a.out / "result.json").write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps({k: result[k] for k in ("pass", "shape", "checks", "verified")}))
     return 0 if result["pass"] else 1
