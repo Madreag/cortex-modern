@@ -2751,8 +2751,19 @@ static std::string ResyncSaveName() {
 		}
 	}
 
+	bool NetMatchService::EverySeatChecksIn(const NetMatchConfig& config) const {
+		// The directory referees a round only when it hears every human seat: one typed-address or LAN seat puts the round on the
+		// direct-play rule, for every seat alike.
+		if (m_ConnectionAuthority.DirectorySessionId().empty()) return false;
+		const auto routes = m_ConnectionAuthority.PeerRoutes();
+		for (const NetH4Seat& seat: NetH4BuildSeatTable(config))
+			if (!seat.cpu && seat.lockstepPeerId != config.hostPeerId && seat.lockstepPeerId != 0 && !routes.contains(seat.stableSeat)) return false;
+		return true;
+	}
+
 	void NetMatchService::InstallRoundRefereesLocked(NetLockstepConfig& config) {
-		if (!m_ConnectionAuthority.DirectorySessionId().empty()) {
+		// The agreed config names the round's rule, so every seat follows the same one.
+		if (config.matchConfig.directoryArbitration && !m_ConnectionAuthority.DirectorySessionId().empty()) {
 			config.frameTieReferee = [this, seats = NetH4BuildSeatTable(config.matchConfig)](const NetFrameTieRequest& peerRequest) {
 				auto request = peerRequest;
 				const auto stable = [&](uint16_t peer) -> uint16_t {
@@ -10705,6 +10716,8 @@ static std::string ResyncSaveName() {
 		}
 		runnerConfig.sealMigration = [this](uint8_t peer, const NetHash32& hash, std::vector<uint8_t>& sealed) { return SealMigrationCapsule(peer, hash, sealed); };
 		runnerConfig.openMigration = [this](const NetLobbyMigration& capsule) { return OpenMigrationCapsule(capsule); };
+		runnerConfig.directoryArbitration = [this](const NetMatchConfig& config) { return EverySeatChecksIn(config); };
+		runnerConfig.directorySession = [this] { return !m_ConnectionAuthority.DirectorySessionId().empty(); };
 		runnerConfig.configureMigration = [this](NetLockstepConfig& config) {
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			if (config.matchConfig.successorOrder.empty())

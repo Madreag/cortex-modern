@@ -3,7 +3,9 @@
 #include "NetDirectoryCodec.h"
 #include "NetDirectorySignalChannel.h"
 #include "NetHttpClient.h"
+#include "NetLobbyProtocol.h"
 #include "NetLockstep.h"
+#include "NetMatchRunner.h"
 #include "NetMatchService.h"
 #include "NetMuxTransport.h"
 #include "AreaEditor.h"
@@ -60,6 +62,7 @@
 #include <system_error>
 #include <thread>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace RTE {
@@ -477,6 +480,42 @@ namespace RTE {
 		}
 		if (config.frameTieReferee || config.hostChangeReferee) {
 			*error = "a listed host refereed a round whose joiner holds no directory lease"; return false;
+		}
+		// A round the agreed config puts under the directory is refereed by every seat that checks in with it.
+		NetLockstepConfig refereed;
+		refereed.matchConfig = config.matchConfig; refereed.matchConfig.directoryArbitration = true;
+		{
+			std::lock_guard<std::mutex> lock(service.m_Mutex);
+			service.InstallRoundRefereesLocked(refereed);
+		}
+		if (!refereed.frameTieReferee || !refereed.hostChangeReferee) { *error = "a seat of a round the agreed config puts under the directory has no referee"; return false; }
+		// The host puts the round under the directory only when the directory hears every human seat.
+		NetMatchConfig seats = NetMatchConfigUtil::MakeDefault(77);
+		if (service.EverySeatChecksIn(seats)) { *error = "a joiner the directory never heard put the round under the directory"; return false; }
+		{
+			std::lock_guard lock(service.m_ConnectionAuthority.m_Mutex);
+			service.m_ConnectionAuthority.m_PeerRoutes[1] = NetConnectionRoute{};
+		}
+		if (!service.EverySeatChecksIn(seats)) { *error = "a round whose every seat checks in stayed on the direct-play rule"; return false; }
+		for (auto& player: seats.players) if (player.peerId != seats.hostPeerId) player.cpu = true;
+		{
+			std::lock_guard lock(service.m_ConnectionAuthority.m_Mutex);
+			service.m_ConnectionAuthority.m_PeerRoutes.clear();
+		}
+		if (!service.EverySeatChecksIn(seats)) { *error = "a computer seat kept the round off the directory"; return false; }
+		// The rule rides the agreed config and its hash, and a peer the directory cannot hear refuses that round by name.
+		NetMatchConfig coded = NetMatchConfigUtil::MakeDefault(77);
+		coded.directoryArbitration = true;
+		std::vector<uint8_t> wire;
+		if (!NetLobbyProtocol::Encode({NetLobbyMatchConfig{coded}}, wire)) { *error = "the refereed config did not encode"; return false; }
+		const auto decoded = NetLobbyProtocol::Decode(wire);
+		const auto* carried = decoded.ok ? std::get_if<NetLobbyMatchConfig>(&decoded.message.payload) : nullptr;
+		if (!carried || carried->config != coded || NetMatchConfigUtil::HashConfig(coded) == NetMatchConfigUtil::HashConfig(NetMatchConfigUtil::MakeDefault(77))) {
+			*error = "the directory's arbitration did not ride the agreed config and its hash"; return false;
+		}
+		if (NetMatchRunner::DirectoryRuleRefusal(refereed.matchConfig, false).empty() || !NetMatchRunner::DirectoryRuleRefusal(refereed.matchConfig, true).empty() ||
+		    !NetMatchRunner::DirectoryRuleRefusal(config.matchConfig, false).empty()) {
+			*error = "a peer the directory cannot hear did not refuse its refereed round by name"; return false;
 		}
 		return true;
 	}

@@ -201,8 +201,10 @@ namespace RTE {
 		// The draft is the lobby's published config: the lobby republishes on its own (a delay re-size, a dropped seat) and a draft from an
 		// older copy would name a revision it has already passed.
 		AdoptLobbyConfig();
-		if (admission.GetRoster().revision == m_MatchConfig.seatRosterRevision || m_Lobby.IsStarted()) return;
+		const bool arbitration = m_Config.directoryArbitration && m_Config.directoryArbitration(m_Lobby.GetMatchConfig());
+		if ((admission.GetRoster().revision == m_MatchConfig.seatRosterRevision && arbitration == m_MatchConfig.directoryArbitration) || m_Lobby.IsStarted()) return;
 		NetMatchConfig stamped = m_Lobby.GetMatchConfig();
+		stamped.directoryArbitration = arbitration;
 		stamped.configRevision = m_Lobby.GetMatchConfig().configRevision + 1;
 		stamped.seatRosterRevision = admission.GetRoster().revision;
 		stamped.seatRosterHash = HashRoster(admission.GetRoster());
@@ -222,8 +224,18 @@ namespace RTE {
 		}
 	}
 
+	std::string NetMatchRunner::DirectoryRuleRefusal(const NetMatchConfig& config, bool directorySession) {
+		return config.directoryArbitration && !directorySession ? "This match is played through the online match list. Join it from the list rather than by address." : std::string();
+	}
+
 	bool NetMatchRunner::AgreeOnSeatRoster(INetTransport& transport, NetSession& session, std::string* error) {
 		m_RosterAgreedRevision = 0;
+		// A peer the directory cannot hear would decide the round's splits by another rule than the seats it refers.
+		if (const std::string refusal = DirectoryRuleRefusal(m_MatchConfig, m_Config.directorySession && m_Config.directorySession()); !refusal.empty()) {
+			SetFailed(refusal);
+			if (error) *error = m_SetupError;
+			return false;
+		}
 		if (m_Config.host || m_MatchConfig.version < NetMatchConfigUtil::c_SeatRosterVersion || m_MatchConfig.seatRosterRevision == 0) return true;
 		// A peer that joins a running round was not at its start: it holds the host's roster whole from its admission.
 		if (m_WorldJoinImage) return true;

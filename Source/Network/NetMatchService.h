@@ -665,6 +665,8 @@ namespace RTE {
 		NetHostLeaveOutcome HostLeaveOutcome() const;
 		/// The directory referees a round's splits and host changes for this peer.
 		void InstallRoundRefereesLocked(NetLockstepConfig& config);
+		/// Host: whether the directory hears every human seat of the round, which then plays under its arbitration.
+		bool EverySeatChecksIn(const NetMatchConfig& config) const;
 		/// The outcome the host's leave confirmation showed when it was pressed; the next LeaveMatch acts on it.
 		void ConfirmHostLeave(NetHostLeaveOutcome outcome);
 		/// Whether this client's leave keeps a ticket the Multiplayer screen offers back as Rejoin Match: one that loads, as the offer reads it.

@@ -155,6 +155,7 @@ namespace RTE {
 
 	private:
 		friend bool TestRecoveryUsesListedMatch(std::string* error);
+		friend bool TestRoundRefereeFollowsTheAgreedRule(std::string* error);
 		NetHash32 DirectoryMatchHash(const NetHash32& peerHash) const;
 		struct Operation {
 			std::string body;

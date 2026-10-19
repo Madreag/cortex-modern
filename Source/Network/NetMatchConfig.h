@@ -164,6 +164,9 @@ namespace RTE {
 		NetHash32 seatRosterHash{};      ///< HashRoster of that revision: a peer whose copy differs is refused at the start by name.
 		// How long a held seat's history stays on the host for a return in place; a later return loads an image.
 		uint8_t returnWindowMinutes = 5;
+		// Every seat checks in with the session directory, which then referees the round's splits and host changes. One seat
+		// without a directory lease puts the whole round on the direct-play rule.
+		bool directoryArbitration = false;
 
 		bool operator==(const NetMatchConfig&) const = default;
 	};
@@ -187,13 +190,15 @@ namespace RTE {
 		static constexpr uint16_t c_TimingOptionsVersion = 6;
 		static constexpr uint16_t c_DefaultSlowPlayerBoundTicks = c_NetSlowPlayerBoundTicks;
 		static constexpr uint16_t c_MaxSlowPlayerBoundTicks = 120;
-		// Reserved values are 1 dedicated, 2 path, 4 world (v5), 8 redundancy, 16 migration and 32 return window.
+		// Reserved values are 1 dedicated, 2 path, 4 world (v5), 8 redundancy, 16 migration, 32 return window and 64 directory arbitration.
 		static constexpr uint16_t c_ReservedDedicatedBit = 1;
 		static constexpr uint16_t c_ReservedPathHorizonBit = 2;
 		static constexpr uint16_t c_ReservedFrameRedundancyBit = 8; // A trailing U16 carries the window.
 		static constexpr uint16_t c_ReservedPersistentWorldBit = 4;
 		static constexpr uint16_t c_ReservedReturnWindowBit = 32; // A U8 of minutes trails the whole config.
-		static constexpr uint16_t c_ReservedKnownMask = c_ReservedDedicatedBit | c_ReservedPathHorizonBit | c_ReservedFrameRedundancyBit | c_MigrationConfigFlag | c_ReservedReturnWindowBit;
+		static constexpr uint16_t c_ReservedDirectoryArbitrationBit = 64; // The directory referees the round; it carries no payload.
+		static constexpr uint16_t c_ReservedKnownMask = c_ReservedDedicatedBit | c_ReservedPathHorizonBit | c_ReservedFrameRedundancyBit | c_MigrationConfigFlag |
+		    c_ReservedReturnWindowBit | c_ReservedDirectoryArbitrationBit;
 		// The default keeps five minutes of a held seat's history: past it the host frees the journal and a return loads an image.
 		static constexpr uint8_t c_DefaultReturnWindowMinutes = 5;
 		static constexpr uint8_t c_MinReturnWindowMinutes = 1;

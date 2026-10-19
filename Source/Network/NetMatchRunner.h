@@ -122,6 +122,9 @@ namespace RTE {
 		std::function<bool(uint8_t, const NetHash32&, std::vector<uint8_t>&)> sealMigration;
 		std::function<bool(const NetLobbyMigration&)> openMigration;
 		std::function<void(NetLockstepConfig&)> configureMigration;
+		// Host: whether the session directory referees a round with these seats. Every peer: whether this machine checks in with it.
+		std::function<bool(const NetMatchConfig&)> directoryArbitration;
+		std::function<bool()> directorySession;
 		// Host: the checkpoint a match resumed from disk stands on. The lobby offers it to every peer
 		// and streams its state only to those that do not already hold that archive.
 		std::string resumeMatchId;
@@ -274,6 +277,10 @@ namespace RTE {
 		bool WaitForSessionReady(INetTransport& transport, NetSession& session, uint32_t expectedReadyPeers, uint64_t maxWaitMs, std::string* error);
 		/// A round starts only on the seat roster the host agreed it on: a peer that heard another is refused by name.
 		bool AgreeOnSeatRoster(INetTransport& transport, NetSession& session, std::string* error);
+	public:
+		/// Why a peer cannot play a round the session directory referees, or empty when it can.
+		static std::string DirectoryRuleRefusal(const NetMatchConfig& config, bool directorySession);
+	private:
 		/// Stamps a moved seat roster into the open lobby's config as its next revision; a start the host asked for stays asked.
 		void StampSeatRoster(const NetReconnectHost& admission);
 		uint32_t m_RosterAgreedRevision = 0;

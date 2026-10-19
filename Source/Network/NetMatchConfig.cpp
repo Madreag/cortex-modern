@@ -802,6 +802,8 @@ namespace RTE {
 		if (config.returnWindowMinutes != c_DefaultReturnWindowMinutes) {
 			fields.emplace_back("return_window_minutes", std::to_string(config.returnWindowMinutes));
 		}
+		// And the directory's arbitration: peers that would decide a split by two rules never agree on the round.
+		if (config.directoryArbitration) fields.emplace_back("directory_arbitration", "true");
 		// The world identity is frozen for the world's life: its members' rosters change under a
 		// separate revision, so what a joiner validates against stays the same string every boot. Only
 		// a world takes the v5 domain, so every ordinary roster hashes as it always did.
