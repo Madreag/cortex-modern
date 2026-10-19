@@ -406,7 +406,10 @@ namespace RTE {
 				if (displayed > applied->second && displayed - applied->second > allowance) continue;
 				// A seat returns once its catch-up shows headroom: a machine slower than this one would only fall behind and be held again.
 				if (OwnCapacityTps() > 0) {
-					const auto rates = PeerAppliedRate(peer);
+					uint32_t lagRttMs = m_Stats.peers[peer].pingMs;
+					if (wire && wire->IsPeerPingMeasured(route)) lagRttMs = std::max(lagRttMs, wire->GetPeerPingMs(route));
+					// What the seat applied when it reported, this machine displayed one round trip before: its pace is compared with that.
+					const auto rates = PeerAppliedRate(peer, lagRttMs);
 					if (!rates) continue;
 					const auto [rate, own] = *rates;
 					// A seat that applies keeps reporting within a heartbeat; an older report is a seat that has stopped.
@@ -415,15 +418,15 @@ namespace RTE {
 					if (own <= 0 || reportAgeMs > c_NetPeerHeartbeatMs) continue;
 					// It must also close its trail by its first live frame: one still behind there is late at once and held again. A seat that keeps
 					// up still trails by the round trip its tail and its report take and by its last report's age; that lag is not trail to close.
-					uint32_t lagRttMs = m_Stats.peers[peer].pingMs;
-					if (wire && wire->IsPeerPingMeasured(route)) lagRttMs = std::max(lagRttMs, wire->GetPeerPingMs(route));
 					const uint64_t lag = static_cast<uint64_t>(std::ceil((lagRttMs + reportAgeMs) / m_Config.simTickMs));
 					const uint64_t behind = displayed > applied->second ? displayed - applied->second : 0;
 					const uint64_t trail = behind > lag ? behind - lag : 0;
 					const uint64_t horizon = m_LastQueuedTargetFrame != UINT64_MAX && m_LastQueuedTargetFrame >= displayed ? m_LastQueuedTargetFrame + 1 - displayed : 0;
 					const double toLive = static_cast<double>(horizon + delay + trail + m_Config.slowPlayerBoundTicks);
 					const bool closes = trail <= m_Config.slowPlayerBoundTicks || (rate - own) * toLive >= static_cast<double>(trail - m_Config.slowPlayerBoundTicks) * own;
-					if (rate < own - (own >= 59.5 ? 0.5 : own / 10.0) || !closes) {
+					// Slow means slower than the round, never slower than its nominal rate: a catch-up burst above it is not the bar.
+					const double bar = std::min(own, 1000.0 / m_Config.simTickMs);
+					if (rate < bar - (bar >= 59.5 ? 0.5 : bar / 10.0) || !closes) {
 						if (m_SlowMachineHolds.insert(peer).second)
 							DiagnosticLine() << "[net-lockstep] slow machine peer " << static_cast<int>(peer) << " stays held: it applied " << rate
 							                 << " ticks/s against this machine's " << own << " displayed with " << trail << " ticks to close" << std::endl;

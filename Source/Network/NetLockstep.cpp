@@ -7410,7 +7410,7 @@ namespace RTE {
 		m_ConsumerCostObservedAtMs = nowMs;
 	}
 
-	std::optional<std::pair<double, double>> NetLockstepCoordinator::PeerAppliedRate(uint8_t peerId) const {
+	std::optional<std::pair<double, double>> NetLockstepCoordinator::PeerAppliedRate(uint8_t peerId, uint64_t lagMs) const {
 		const auto found = m_PeerAppliedProgress.find(peerId);
 		const auto& shown = m_OwnDisplayProgress;
 		if (found == m_PeerAppliedProgress.end() || found->second.empty() || shown.size() < 2) return std::nullopt;
@@ -7429,7 +7429,8 @@ namespace RTE {
 			return static_cast<double>(before->second) + static_cast<double>(after->second - before->second) * static_cast<double>(ms - before->first) / static_cast<double>(after->first - before->first);
 		};
 		const double spanS = static_cast<double>(last->first - first->first) / 1000.0;
-		return std::pair{static_cast<double>(last->second - first->second) / spanS, (displayedAt(last->first) - displayedAt(first->first)) / spanS};
+		const uint64_t lag = std::min({lagMs, first->first - shown.front().first, last->first - shown.front().first});
+		return std::pair{static_cast<double>(last->second - first->second) / spanS, (displayedAt(last->first - lag) - displayedAt(first->first - lag)) / spanS};
 	}
 
 	bool NetLockstepCoordinator::CostsPastTolerance(uint8_t peerId, uint64_t frame, uint64_t nowMs, double* cost) {

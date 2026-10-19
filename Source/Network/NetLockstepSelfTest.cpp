@@ -800,6 +800,24 @@ namespace RTE {
 			return passed;
 		}
 
+		// A held seat at the head of its tail applies what this machine displayed a round trip earlier. This machine then ran a catch-up
+		// burst above the round's rate; the seat's pace is measured against what it was replaying, not against the burst.
+		static bool ReturnerPaceComparesWhatItApplied(std::string* error) {
+			Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
+			peer.m_Config.peerFrameGroups = true; peer.m_Config.localPeerId = 1; peer.m_Config.peerCount = peer.m_Config.matchConfig.peerCount = 2;
+			// Displayed: 60 a second to 2500 ms, then 70 a second to 3000 ms. The seat's reports: 60 a second from 2000 to 3000 ms.
+			for (uint64_t ms = 1000; ms <= 3000; ms += 100) peer.m_OwnDisplayProgress.push_back({ms, ms <= 2500 ? ms * 60 / 1000 : 150 + (ms - 2500) * 70 / 1000});
+			for (uint64_t ms = 2000; ms <= 3000; ms += 100) peer.m_PeerAppliedProgress[2].push_back({ms, ms * 60 / 1000 - 30});
+			const auto now = peer.PeerAppliedRate(2), lagged = peer.PeerAppliedRate(2, 500);
+			if (!now || !lagged) { *error = "the returner's pace was not measured"; return false; }
+			if (std::abs(now->first - 60) > 0.01 || std::abs(now->second - 65) > 0.01) { *error = "the unshifted window read " + std::to_string(now->first) + " against " + std::to_string(now->second); return false; }
+			if (std::abs(lagged->first - 60) > 0.01 || std::abs(lagged->second - 60) > 0.01) {
+				*error = "a seat applying the display of a round trip earlier was paced against the burst: " + std::to_string(lagged->first) + " against " + std::to_string(lagged->second);
+				return false;
+			}
+			return true;
+		}
+
 		// Two machines slowed together: the host's own hold is signed or installed, and a hold of the client crosses it. A round keeps a
 		// playing seat - that hold is neither signed nor installed, and the client plays on alone - and a held seat holds nobody.
 		static bool RoundKeepsAPlayingSeat(std::string* error) {
@@ -32455,6 +32473,12 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS a_private_reader_plays_only_the_history_it_reads\n[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "returner-pace-lag") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::ReturnerPaceComparesWhatItApplied(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS a_returners_pace_compares_what_it_applied\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "round-keeps-a-player") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::RoundKeepsAPlayingSeat(&error)) return fail(error);
@@ -32910,6 +32934,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::ForeignHistoryKeepsAnActiveContinuation, "foreign_history_keeps_an_active_continuation");
 		row(&SessionPlaneRecoveryTest::TailRetryAsksAnotherDonor, "a_tail_retry_asks_another_donor_than_the_one_that_failed");
 		row(&SessionPlaneRecoveryTest::RoundKeepsAPlayingSeat, "a_round_keeps_a_playing_seat");
+		row(&SessionPlaneRecoveryTest::ReturnerPaceComparesWhatItApplied, "a_returners_pace_compares_what_it_applied");
 		row(&SessionPlaneRecoveryTest::PrivateReaderPlaysOnlyTheHistoryItReads, "a_private_reader_plays_only_the_history_it_reads");
 		row(&SessionPlaneRecoveryTest::TailHoldSignersAreNotAnotherPlayingHalf, "tail_hold_signers_are_not_another_playing_half");
 		row(&SessionPlaneRecoveryTest::CertifiedTailKeepsItsWitnesses, "certified_tail_keeps_its_witnesses");

@@ -2104,8 +2104,9 @@ namespace RTE {
 		void AccrueConsumerWaitCost(uint64_t nowMs);
 		static constexpr uint64_t c_CapacityWindowMs = 10000;
 		/// The ticks a second a seat applied over the second of its reports before the last one this machine's display covers, and the
-		/// ticks a second this machine displayed over the same window; nothing while the reports span less than half a second.
-		std::optional<std::pair<double, double>> PeerAppliedRate(uint8_t peerId) const;
+		/// ticks a second this machine displayed over the same window, or over the window `lagMs` earlier for a seat that applies what this
+		/// machine displayed that long before; nothing while the reports span less than half a second.
+		std::optional<std::pair<double, double>> PeerAppliedRate(uint8_t peerId, uint64_t lagMs = 0) const;
 		static void NoteArrival(NetLockstepPeerStats& stats, uint64_t nowMs, uint64_t frame);
 		/// Wait for every human owner's published startup before committing the first frame.
 		void TickStartupWait(uint64_t nowMs);
