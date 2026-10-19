@@ -22,6 +22,9 @@ their mean worst-frame ratio; while a base waits the host's tick rate stays with
 seat is held no more often. The verdict against the run's own idle windows is reported beside it as in_run_checks.
 --split-cpus puts the host on one half of the logical CPUs and the client on the other, so neither engine's saver or
 startup takes the other's time, as on two machines.
+--saves-after-return N (with --client-rejoin) plays on until the host has named N periodic captures after the returner
+caught up: the returned seat writes every one of them with no failed save, and its game keeps ticking at least 600 ticks
+past the last; a returner whose game stops for 60 s while the host plays on ends the run at once.
 """
 import argparse
 from datetime import datetime, timezone
@@ -187,6 +190,7 @@ def main():
     p.add_argument('--autosave-seconds', type=int, default=90)
     p.add_argument('--periodic-captures', type=int, default=5)
     p.add_argument('--client-rejoin', type=int, default=0, help='the client drops once its game reaches this tick and rejoins')
+    p.add_argument('--saves-after-return', type=int, default=0, help='periodic captures the returned seat must write after it caught up')
     p.add_argument('--warmup-ticks', type=int, default=1200)
     p.add_argument('--limit-seconds', type=int, default=1500)
     p.add_argument('--port', type=int, default=49492)
@@ -194,6 +198,8 @@ def main():
     p.add_argument('--split-cpus', action='store_true',
                    help="the host on one half of the logical CPUs and the client, rejoined too, on the other, as on two machines")
     a = p.parse_args()
+    if a.saves_after_return and not a.client_rejoin:
+        raise SystemExit('--saves-after-return needs --client-rejoin')
     references = []
     for path in a.base:
         found = sorted(path.resolve().rglob('result.json')) if path.is_dir() else [path.resolve()]
@@ -250,7 +256,8 @@ def main():
             '\t\tScriptPath = UserScenes.rte/FeelBaseline.lua\n\t\tLuaClassName = FeelBaseline\n'
             '\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n')
     config = {'topology': 'single-box', 'proof': False, 'box': platform.node(), 'autosave_seconds': a.autosave_seconds,
-              'periodic_captures': a.periodic_captures, 'client_rejoin': a.client_rejoin, 'input_delay': 'auto', 'settings': settings,
+              'periodic_captures': a.periodic_captures, 'client_rejoin': a.client_rejoin, 'saves_after_return': a.saves_after_return,
+              'input_delay': 'auto', 'settings': settings,
               'environment': env, 'affinity_masks': {role: f'0x{mask:x}' for role, mask in masks.items()}, 'source_head': subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip(),
               'exe_sha256': file_sha256(engine_executable(repo)), 'started_utc': datetime.now(timezone.utc).isoformat(),
               'bases': [{'path': b['path'], 'exe_sha256': b['exe_sha256'], 'source_head': b['source_head']} for b in references]}
@@ -270,8 +277,23 @@ def main():
         ticks_seen = re.findall(r'^\[frame-pace\] .*? tick=(\d+) ', log(role), re.M)
         return int(ticks_seen[-1]) if ticks_seen else 0
 
+    def named_after_return():
+        # The captures the host named after its log says the returning seat is back.
+        text = log('host')
+        back = re.search(r'^\[roster\] rev=\d+ seat=\d+ CaughtUp REJOIN_CATCHUP->RUNNING', text, re.M)
+        return [int(t) for t in re.findall(r'^\[autosave\] named tick=(\d+) at=\d+ writers=\d+', text[back.end():], re.M)] if back else []
+
+    def returner_written():
+        return {int(t) for t in re.findall(r'^\[autosave\] tick=(\d+) capture_ms=', log('client-rejoined'), re.M)}
+
+    def returner_done():
+        after = named_after_return()[:a.saves_after_return]
+        return (len(after) == a.saves_after_return and set(after) <= returner_written() and
+                reached('client-rejoined') >= after[-1] + 600)
+
     failure = None
     rejoined_at = None
+    returner_progress = (0, time.monotonic())
     began = time.monotonic()
     try:
         for role in ('host', 'client'):
@@ -290,7 +312,15 @@ def main():
             # A rejoin run lasts until its base is taken and the returner is back or refused.
             rejoin_pending = bool(a.client_rejoin) and (rejoined_at is None or not re.search('private base taken', log('host')) or
                                                         not re.search(r'CaughtUp REJOIN_CATCHUP->RUNNING|rejoin refused connection=', log('host')))
-            if len(named()) >= a.periodic_captures and written('host') >= len(named()) and not rejoin_pending:
+            if a.saves_after_return and re.search(r'CaughtUp REJOIN_CATCHUP->RUNNING', log('host')):
+                # A returned seat whose game stops while the host plays on is the defect this mode looks for.
+                tick = reached('client-rejoined')
+                if tick > returner_progress[0]:
+                    returner_progress = (tick, time.monotonic())
+                elif tick and time.monotonic() - returner_progress[1] > 60 and reached('host') > tick + 600:
+                    raise RuntimeError(f'the returned seat stopped ticking at tick {tick} while the host reached {reached("host")}')
+            after_pending = bool(a.saves_after_return) and not returner_done()
+            if len(named()) >= a.periodic_captures and written('host') >= len(named()) and not rejoin_pending and not after_pending:
                 break
             if time.monotonic() > until:
                 raise RuntimeError(f'{len(named())} captures named, {written("host")} written by the host in {a.limit_seconds} s')
@@ -336,9 +366,18 @@ def main():
         from rejoin_stage_check import check as stage_check
         stage = stage_check(log('host'))
         checks['returner_caught_up_unrefused'] = stage['status'] == 'PASS' and stage['returns_caught_up'] > 0
+    returned = None
+    if a.saves_after_return:
+        # The returned seat saves every capture named after it is back, refuses none, and its game goes on past the last.
+        after = named_after_return()[:a.saves_after_return]
+        failed = re.findall(r'^\[autosave\] failed .*$', log('client-rejoined'), re.M)
+        returned = {'named_after_return': after, 'written': sorted(returner_written() & set(after)), 'failed': failed,
+                    'returner_last_tick': reached('client-rejoined'), 'host_last_tick': reached('host')}
+        checks['returner_writes_saves_after_return'] = len(after) == a.saves_after_return and set(after) <= returner_written() and not failed
+        checks['returner_keeps_ticking'] = bool(after) and returned['returner_last_tick'] >= after[-1] + 600
     in_run_checks = {f'{role}_{name}': value for role, items in in_run.items() for name, value in items.items()} if references else None
     result = {**config, 'pass': all(checks.values()), 'checks': checks, 'in_run_checks': in_run_checks, 'failure': failure, 'wall_seconds': round(time.monotonic() - began, 1),
-              'captures': named(), 'rejoined_at_host_tick': rejoined_at, 'peers': peers, 'refused': refused,
+              'captures': named(), 'rejoined_at_host_tick': rejoined_at, 'returned_seat': returned, 'peers': peers, 'refused': refused,
               'exits': {role: r.get('exit_code') for role, r in records.items()}}
     (out / 'result.json').write_text(json.dumps(result, indent=2))
     print(json.dumps({'pass': result['pass'], 'checks': checks, 'failure': failure,
