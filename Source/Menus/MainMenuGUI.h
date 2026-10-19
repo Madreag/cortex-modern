@@ -522,6 +522,7 @@ namespace RTE {
 		int m_HostSeatDlgModerationRow = -1;            //!< The dialog's row in m_ModerationUx, or -1 when the seat has none.
 		std::optional<NetH4ModerationSeat> m_HostSeatDlgRemovalSeat; //!< The seat's admission row a Kick/Ban selection rides, when published.
 		bool m_HostKickBanWatch = false;                //!< A Queued removal's applied result lands in GetLastKickBanResult.
+		bool m_HostUnbanWatch = false;                  //!< A Queued Remove ban's applied result lands there too.
 		std::string m_HostKickBanVerb;                  //!< "Kick"/"Ban" - the action the watch is reporting.
 		std::vector<NetHostActivityChoice> m_HostOptionsActivities; //!< The activities the Rules page offers: the host screen's census.
 		std::vector<NetHostSceneChoice> m_HostOptionsScenes;        //!< The scenes the Rules page offers: those the drafted activity runs.

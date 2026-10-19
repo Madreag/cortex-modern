@@ -3668,6 +3668,10 @@ void MainMenuGUI::RefreshHostBannedDialog() {
 	if (m_ActiveDialogBox != m_HostBannedDialog || !m_HostBannedPick) {
 		return;
 	}
+	if (m_HostUnbanWatch && g_NetMatchService.GetLastKickBanResult() != NetKickBanResult::Queued) {
+		m_HostUnbanWatch = false;
+		m_HostBannedStatusLabel->SetText(NetUnbanStatus(g_NetMatchService.GetLastKickBanResult()));
+	}
 	const std::vector<NetHostBanRecord> records = g_NetMatchService.GetBanRecords();
 	const uint64_t nowUnixMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
 		std::chrono::system_clock::now().time_since_epoch()).count());
@@ -3718,6 +3722,7 @@ void MainMenuGUI::ShowHostBannedDialog() {
 	m_HostBannedRecords.clear();
 	if (m_HostBannedPick) m_HostBannedPick->ClearList();
 	m_HostBannedStatusLabel->SetText("");
+	m_HostUnbanWatch = false;
 	OpenMultiplayerDialog(m_HostBannedDialog, m_HostOptionsPanel);
 	RefreshHostBannedDialog();
 	m_MainMenuButtons[MenuButton::HostBannedCloseButton]->SetFocus();
@@ -3865,7 +3870,8 @@ void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl
 		// UnbanParticipant answers Queued while the setup worker owns admission; the applied result
 		// replaces it at the next drain, and this dialog's rows re-read the store when it lands.
 		const NetKickBanResult result = g_NetMatchService.UnbanParticipant(m_HostBannedRecords[pick].identity);
-		m_HostBannedStatusLabel->SetText(std::string("Remove ban: ") + NetKickBanResultText(result));
+		m_HostUnbanWatch = result == NetKickBanResult::Queued;
+		m_HostBannedStatusLabel->SetText(NetUnbanStatus(result));
 		RefreshHostBannedDialog();
 		return;
 	}

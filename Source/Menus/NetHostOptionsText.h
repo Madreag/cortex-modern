@@ -177,7 +177,7 @@ namespace RTE {
 	inline const char* NetKickBanResultText(NetKickBanResult result) {
 		switch (result) {
 			case NetKickBanResult::Ok: return "Done.";
-			case NetKickBanResult::Queued: return "Waiting for the host to apply it...";
+			case NetKickBanResult::Queued: return "Applying...";
 			case NetKickBanResult::NotHosting: return "Only the host can do this.";
 			case NetKickBanResult::UnknownSeat: return "This seat is no longer in the lobby.";
 			case NetKickBanResult::ForbiddenTarget: return "The host's own seat cannot be removed.";
@@ -187,6 +187,11 @@ namespace RTE {
 			case NetKickBanResult::UnknownIdentity: return "This player's identity is not available yet. Try again after they join.";
 		}
 		return "The action could not be completed.";
+	}
+
+	/// What Remove ban did: a lifted ban opens the host's later games, while the match keeps the removal its ban made.
+	inline std::string NetUnbanStatus(NetKickBanResult result) {
+		return std::string("Remove ban: ") + NetKickBanResultText(result) + (result == NetKickBanResult::Ok ? " They may join your next games, not this match." : "");
 	}
 
 	inline bool NetHostRepairEnabled(const NetMatchService& service) {
