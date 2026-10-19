@@ -1616,6 +1616,18 @@ namespace RTE {
 				for (const auto& burst: hub.schedule->bursts) if (burst.seat == seat && hub.now >= burst.atMs && hub.now < burst.atMs + burst.ms) return true;
 				return false;
 			}
+			// A scheduled fault of the seat's own at a past moment: its spell or its loss burst.
+			bool OwnTroubleAt(uint8_t seat, uint64_t at) const {
+				if (!hub.schedule) return false;
+				if (hub.schedule->Active(seat, at)) return true;
+				for (const auto& burst: hub.schedule->bursts) if (burst.seat == seat && at >= burst.atMs && at < burst.atMs + burst.ms) return true;
+				return false;
+			}
+			// The observer holds the seat from inside a fault, now its own or since a hold it installed during its own or the seat's.
+			bool HoldFromOwnFault(uint8_t observer, uint8_t seat) const {
+				const uint64_t since = heldByObserver[observer][seat];
+				return OwnTrouble(observer) || (since && (OwnTroubleAt(observer, since) || OwnTroubleAt(seat, since)));
+			}
 			bool OwnMachineTrouble(uint8_t seat) const {
 				if (hub.schedule) {
 					const auto* spell = hub.schedule->Active(seat, hub.now);
@@ -2306,8 +2318,10 @@ namespace RTE {
 				std::array<bool, NetMatchConfigUtil::c_MaxPeerCount + 1> held{};
 				std::array<std::map<uint8_t, uint64_t>, NetMatchConfigUtil::c_MaxPeerCount + 1> views;
 				for (uint8_t observer = 1; observer <= hub.row.seats; ++observer) if (peers[observer - 1]->IsRunning()) views[observer] = Bridges(*peers[observer - 1]);
+				// A stopped seat keeps the hold time it had: its view is the one it stopped with.
 				for (uint8_t observer = 1; observer <= hub.row.seats; ++observer) for (uint8_t seat = 1; seat <= hub.row.seats; ++seat) {
-					const bool holds = peers[observer - 1]->IsRunning() && (views[observer].contains(seat) || peers[observer - 1]->HasHeldAISeat(seat));
+					if (!peers[observer - 1]->IsRunning()) continue;
+					const bool holds = views[observer].contains(seat) || peers[observer - 1]->HasHeldAISeat(seat);
 					auto& since = heldByObserver[observer][seat];
 					since = holds ? (since ? since : hub.now) : 0;
 				}
@@ -2760,9 +2774,12 @@ namespace RTE {
 			// return; its view of the seat is that half's, ruled at its heal. A playing survivor that has not yet applied the activation
 			// still shows the hold the return ends. Every seat playing at the activation is checked from the activation on.
 			const uint32_t playingAtActivation = s_FrameMembers(*fixture.peers[donor - 1], activation);
+			// FLAGGED fixture correction: an observer in a fault of its own (cut off, silent, hung, stopped, slow, late or lossy) holds a seat
+			// it cannot hear at its own bound, as section 11.1 has it; that view, and the hold it installed then, are its own fault's.
 			for (const uint64_t until = observationAt + 1000; fixture.hub.now <= until && !fixture.OwnTrouble(seat);) {
 				for (uint8_t peer: survivors)
-					if ((playingAtActivation & (1U << (peer - 1))) != 0 && fixture.worlds[peer - 1].applied >= activation &&
+					if ((playingAtActivation & (1U << (peer - 1))) != 0 && fixture.worlds[peer - 1].applied >= activation && fixture.peers[peer - 1]->IsRunning() &&
+					    !fixture.HoldFromOwnFault(peer, seat) &&
 					    (fixture.peers[peer - 1]->HasHeldAISeat(seat) || Bridges(*fixture.peers[peer - 1]).contains(seat)))
 						co_return fail("the image return was held again during its healthy observation: observer=" + std::to_string(peer) +
 						    " playing_at_activation=" + std::to_string((s_FrameMembers(*fixture.peers[donor - 1], activation) & (1U << (peer - 1))) != 0) +
@@ -2775,7 +2792,8 @@ namespace RTE {
 			const bool ownTrouble = fixture.OwnTrouble(seat);
 			for (uint8_t peer: survivors) {
 				const bool playing = (s_FrameMembers(*fixture.peers[donor - 1], activation) & (1U << (peer - 1))) != 0;
-				if (playing && (!fixture.peers[peer - 1]->IsRunning() || (!ownTrouble && (fixture.peers[peer - 1]->HasHeldAISeat(seat) || Bridges(*fixture.peers[peer - 1]).contains(seat)))))
+				if (playing && !fixture.HoldFromOwnFault(peer, seat) && (!fixture.peers[peer - 1]->IsRunning() || (!ownTrouble &&
+				    (fixture.peers[peer - 1]->HasHeldAISeat(seat) || Bridges(*fixture.peers[peer - 1]).contains(seat)))))
 					co_return fail("the image return was held again after its certified activation: observer=" + std::to_string(peer) +
 					            " returner_state=" + std::to_string(static_cast<int>(fixture.peers[seat - 1]->GetState())) +
 					            " starts_received=" + std::to_string(fixture.peers[seat - 1]->GetStats().startPacketsReceived));
