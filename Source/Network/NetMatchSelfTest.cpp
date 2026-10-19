@@ -798,10 +798,10 @@ namespace RTE {
 					return false;
 				}
 				invalid = bytes;
-				invalid[reservedOffset] = 64;
+				invalid[reservedOffset] = 128;
 				const auto unknown = NetLobbyProtocol::Decode(invalid);
 				if (unknown.ok || unknown.error.code != NetLobbyErrorCode::ReservedFieldNonZero) {
-					*error = "a reserved word of 64 was not refused";
+					*error = "a reserved word of 128 was not refused";
 					return false;
 				}
 				const auto hash = NetMatchConfigUtil::HashConfig(config);
@@ -2009,11 +2009,11 @@ namespace RTE {
 				return false;
 			}
 			const size_t plainSize = bytes.size();
-			// Known values are 1 dedicated, 2 path, 4 world, 8 redundancy, 16 migration and 32 return window.
-			bytes[reservedOffset] = 64;
+			// Known values are 1 dedicated, 2 path, 4 world, 8 redundancy, 16 migration, 32 return window and 64 directory arbitration.
+			bytes[reservedOffset] = 128;
 			const NetLobbyDecodeResult refused = NetLobbyProtocol::Decode(bytes);
 			if (refused.ok || refused.error.code != NetLobbyErrorCode::ReservedFieldNonZero) {
-				*error = "a reserved word of 64 was not refused";
+				*error = "a reserved word of 128 was not refused";
 				return false;
 			}
 			bytes[reservedOffset] = 0;
