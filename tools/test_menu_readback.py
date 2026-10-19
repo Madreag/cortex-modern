@@ -935,7 +935,7 @@ def sweep_options(readonly=False, live=False):
     for tab, page in OPTION_PAGES:
         # The team picker chooses whose technology and AI skill the rows under it show; picking one changes no setting.
         quiet = " quiet=ComboHostRulesTeam" if page.endswith("Rules") and not readonly else ""
-        # A page whose buttons act in place (Recalculate, Repair match now, Save diagnostics) is come back to by its own tab;
+        # A page whose buttons act in place (Repair match now, Save diagnostics) is come back to by its own tab;
         # Escape is the way back from the dialogs the Seats and Session pages open, and would leave Advanced from the others.
         in_place = page.endswith(("Timing", "Recovery", "Files"))
         back = f"back_{tab}" if in_place else "back_options"
@@ -988,7 +988,8 @@ def sweep_case(case, port, root):
                 "activate ButtonLobbyOptions\nwait_ms 400\nassert_substate HostOptions\n" + sweep_options(live=True) +
                 # Back returns to the lobby; Advanced again, and the session's own end button.
                 "activate ButtonHostOptBack\nwait 6\nassert_substate Lobby\nactivate ButtonLobbyOptions\nwait_ms 400\nassert_substate HostOptions\n"
-                "activate TabHostPageSession\nwait 4\nactivate ButtonHostSessEnd\nwait 8\nassert_substate Landing\nexit\n")
+                "activate TabHostPageSession\nwait 4\nactivate ButtonHostSessEnd\nwait 4\nassert_label ButtonHostSessEnd Confirm end\n"
+                "activate ButtonHostSessEnd\nwait 8\nassert_substate Landing\nexit\n")
     elif case == "sweep-advanced-client":
         done = probe_root(root, "host") / "client-swept.mark"
         host = (host_screen + "activate ButtonMultiplayerCreate\nwait 15\nassert_substate Lobby\nwait_connected 2 60\n" + f"wait_file {done} 300\nexit\n")
@@ -1788,6 +1789,7 @@ def scripts(case, port, root, size="960x540"):
                 "activate TabHostPageSeats\nwait 3\nassert_visible CollectionBoxHostPageSeats 1\n"
                 "activate ButtonHostSeatDetails1\nwait 3\nassert_visible HostSeatDialog 1\n"
                 "assert_enabled ButtonHostSeatDlgKick 1\nassert_enabled ButtonHostSeatDlgBan 1\n"
+                "activate ButtonHostSeatDlgKick\nwait 4\nassert_label ButtonHostSeatDlgKick Confirm kick\n"
                 "activate ButtonHostSeatDlgKick\nwait 10\n"
                 "assert_visible HostSeatDialog 0\n"
                 "assert_label LabelHostOptStatus Kick: Done.\n"
@@ -1815,6 +1817,7 @@ def scripts(case, port, root, size="960x540"):
                 "activate ButtonHostSeatDetails1\nwait 3\nassert_visible HostSeatDialog 1\n"
                 "assert_label LabelHostSeatDlgName Joiner\n"
                 "assert_enabled ButtonHostSeatDlgBan 1\n"
+                "activate ButtonHostSeatDlgBan\nwait 4\nassert_label ButtonHostSeatDlgBan Confirm ban\n"
                 "activate ButtonHostSeatDlgBan\nwait 10\n"
                 "assert_visible HostSeatDialog 0\n"
                 "assert_label LabelHostOptStatus Ban: Done.\n"

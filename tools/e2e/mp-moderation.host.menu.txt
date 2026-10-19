@@ -39,6 +39,9 @@ assert_text_fits LabelHostSeatDlgActionHint
 assert_no_overlap LabelHostSeatDlgActionHint ButtonHostSeatDlgBan
 assert_enabled ButtonHostSeatDlgKick 1
 activate ButtonHostSeatDlgKick
+wait_ms 600
+assert_label ButtonHostSeatDlgKick Confirm kick
+activate ButtonHostSeatDlgKick
 wait_ms 1200
 observe assert_visible HostSeatDialog 0
 dump_host_options
@@ -62,6 +65,9 @@ video_mark moderation-ban
 wait_ms 900
 observe assert_label LabelHostSeatDlgName ClientB
 assert_enabled ButtonHostSeatDlgBan 1
+activate ButtonHostSeatDlgBan
+wait_ms 600
+assert_label ButtonHostSeatDlgBan Confirm ban
 activate ButtonHostSeatDlgBan
 wait_ms 1200
 observe assert_visible HostSeatDialog 0
