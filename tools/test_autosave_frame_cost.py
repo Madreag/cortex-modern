@@ -3,7 +3,8 @@
 A hosted two-peer match at the host's default automatic input delay saves every --autosave-seconds. Every per-second
 [frame-pace] window of each peer is placed by its ticks: no save running (idle), inside one of this peer's saves whose own
 deadline had not yet passed (save), inside the part of a save that ran past the next deadline (overdue: the late machine
-may pay for its own save there), or, on the host, from a returning seat's base being asked to its being taken (base).
+may pay for its own save there), or, on the host, from a returning seat's base being asked to its being taken or no
+longer waited for - the returner loaded an image, dropped or was refused (base).
 --client-rejoin TICK drops the client once its game reaches TICK and starts it again with its reconnect ticket, so it
 returns through the host's image and the host asks for its base; a tick shortly after a capture meets the host's writer
 still busy with that save.
@@ -13,7 +14,8 @@ the median tick rate and the seat holds whose frame falls there. The verdict: ea
 run, whose client is replaced) and the host's frames while a base waits keep at least 95 % of the idle frame rate and at
 most 125 % of the idle worst frame interval, and the host keeps its idle tick rate within 0.5 ticks/s while a base waits;
 in a rejoin run the returner also catches up with no refusal of its base (tools/rejoin_stage_check.py).
---base names a base build's result.json (or its run folder), as often as there are base runs. The judged kinds are then
+--base names a base build's result.json (or its run folder), as often as there are base runs; each base run's logs are
+placed again by this driver's rules. The judged kinds are then
 held to the base instead of to their own idle windows: a kind's frame rate and worst frame are taken as ratios to its own
 run's idle windows, and the tip's ratio keeps at least 95 % of the base runs' mean frame-rate ratio and at most 125 % of
 their mean worst-frame ratio; while a base waits the host's tick rate stays within 0.5 ticks/s of the base's and its own
@@ -62,6 +64,10 @@ def timeline(text, host):
             asked = int(match.group(1))
         elif host and asked is not None and (match := re.search(r'private base taken at the announced tick (\d+)', line)):
             bases.append((asked, int(match.group(1))))
+            asked = None
+        elif host and asked is not None and re.search(r'^\[roster\] rev=\d+ seat=\d+ (?:ImageLoaded|LinkDropped) REJOIN_IMAGE->|^\[net-match\] rejoin refused ', line):
+            # Nobody waits on that base any more: the returner loaded an image, dropped, or was refused.
+            bases.append((asked, max(latest, asked)))
             asked = None
         elif match := re.match(r'^\[net-peer-hold-installed\] local=(\d+) peer=(\d+) frame=(\d+)', line):
             holds.append({'local': int(match.group(1)), 'peer': int(match.group(2)), 'frame': int(match.group(3))})
@@ -123,6 +129,23 @@ def ratios(kind, idle):
     return kind['fps_median'] / idle['fps_median'], kind['worst_ms_p95'] / idle['worst_ms_p95']
 
 
+def analyze(run_dir, warmup):
+    """Each peer's windows placed and summarized from a run's logs; the client follows the host's agreed deadlines."""
+    def text(role):
+        path = Path(run_dir) / role / 'stdout.log'
+        return path.read_text(errors='replace') if path.exists() else ''
+    host_dues = timeline(text('host'), True)[2]
+    peers = {}
+    for local, role in ((1, 'host'), (2, 'client')):
+        windows, saves, _, bases, holds = timeline(text(role), role == 'host')
+        kinds, overdue = classify(windows, saves, host_dues, bases, warmup)
+        peers[role] = {'kinds': summary(windows, kinds, holds, local), 'saves': saves, 'overdue_spans': overdue, 'bases': bases}
+        idle = peers[role]['kinds']['idle']
+        if idle['windows']:
+            peers[role]['ratios_to_idle'] = {k: [round(r, 3) for r in ratios(v, idle)] for k, v in peers[role]['kinds'].items() if v['windows']}
+    return peers
+
+
 def equals_base(role, name, kind, idle, bases, minimum):
     """The kind against the base runs' same kind: its ratios to idle keep 95 % of their frame-rate ratio and 125 % of their
     worst-frame ratio; while a base waits the tick rate stays within 0.5 ticks/s of theirs and the own seat is held no more."""
@@ -155,9 +178,10 @@ def main():
     references = []
     for path in a.base:
         found = sorted(path.resolve().rglob('result.json')) if path.is_dir() else [path.resolve()]
-        if not found or not found[0].exists():
-            raise SystemExit(f'no base result at {path}')
-        references.append({'path': str(found[0]), **json.loads(found[0].read_text())})
+        if not found or not (found[0].parent / 'host' / 'stdout.log').exists():
+            raise SystemExit(f'no base run at {path}')
+        # The base run's logs are placed again with this driver's own rules, never read from its stored summary.
+        references.append({'path': str(found[0]), **json.loads(found[0].read_text()), 'peers': analyze(found[0].parent, a.warmup_ticks)})
     repo = a.repo.resolve()
     sys.path.insert(0, str(repo / 'tools'))
     from run_sim_test import make_run, seed_settings, engine_executable, file_sha256
@@ -260,16 +284,11 @@ def main():
                 records[role] = runs[role].finish()
         for run in runs.values():
             run.close()
-    peers, judged, in_run = {}, {}, {}
-    host_dues = timeline(log('host'), True)[2]
-    for local, role in ((1, 'host'), (2, 'client')):
-        windows, saves, dues, bases, holds = timeline(log(role), role == 'host')
-        # The client's own deadlines follow the same agreed schedule as the host's.
-        kinds, overdue = classify(windows, saves, host_dues, bases, a.warmup_ticks)
-        peers[role] = {'kinds': summary(windows, kinds, holds, local), 'saves': saves, 'overdue_spans': overdue, 'bases': bases}
+    judged, in_run = {}, {}
+    peers = analyze(out, a.warmup_ticks)
+    for role in ('host', 'client'):
         idle, save, base = (peers[role]['kinds'][k] for k in ('idle', 'save', 'base'))
-        if idle['windows']:
-            peers[role]['ratios_to_idle'] = {k: [round(r, 3) for r in ratios(v, idle)] for k, v in peers[role]['kinds'].items() if v['windows']}
+        saves, bases = peers[role]['saves'], peers[role]['bases']
         if not a.client_rejoin:
             in_run[role] = {f'save_{name}': value for name, value in keeps(save, idle, 5).items()}
             if references:
