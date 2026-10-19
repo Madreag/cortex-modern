@@ -1090,6 +1090,74 @@ namespace RTE {
 			return passed;
 		}
 
+		// Seat 1 held seats 2 and 3 at 155 and seat 2 held seat 1 at 165. The halves meet at the heal under one split, the last
+		// frame both applied, whatever later certificate one of them saw; and they count the same owners, a returner still in
+		// its neutral interval included.
+		static bool SplitHalvesNameOneSplit(std::string* error) {
+			bool passed = true;
+			const auto check = [&](bool ok, const std::string& why) {
+				if (!ok) { passed = false; *error += why + "; "; std::cout << "[one-split-name] FAIL " << why << std::endl; }
+			};
+			const auto deliver = [&](NetLockstepCoordinator& peer, NetHostMigrationMessage message, uint64_t nowMs) {
+				std::vector<uint8_t> signedBytes; NetHostMigrationMessage authenticated;
+				return NetHostMigrationCodec::Encode(message, peer.m_Config.migrationKey, signedBytes) &&
+				    NetHostMigrationCodec::Decode(signedBytes, peer.m_Config.migrationKey, authenticated) && peer.HandlePeerFrameMessage(authenticated, nowMs);
+			};
+			// Arms: the other half saw seat 4's return land at 160, between the two holds; seat 4 is in its neutral interval here.
+			for (unsigned arm = 0; arm < 2; ++arm) {
+				Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
+				peer.m_Config.peerFrameGroups = true; peer.m_Config.localPeerId = 1; peer.m_Config.authorityPeerId = 1;
+				peer.m_Config.peerCount = peer.m_Config.matchConfig.peerCount = 4;
+				peer.m_Config.matchConfig.players.resize(2);
+				peer.m_Config.matchConfig.players.push_back({3, 2, false, "Third"}); peer.m_Config.matchConfig.players.push_back({4, 3, false, "Fourth"});
+				peer.m_RoundConfigHash = NetMatchConfigUtil::HashConfig(peer.m_Config.matchConfig);
+				peer.m_RemotePeerIds = {2, 3, 4}; peer.m_RemoteTransports = {{2, 42}, {3, 43}, {4, 44}};
+				peer.m_MigrationPhase = NetHostMigrationPhase::None;
+				if (arm == 0) {
+					peer.m_PeerBridges[4] = {100, 100, true, std::nullopt, {}, 4};
+					peer.m_PeerFrameHolds[4][100] = true;
+					peer.m_FrameGroupMembers = 7; peer.m_FrameGroupChanges = {{1, 15}, {100, 7}};
+				} else {
+					peer.m_RetiredReclaimGaps[4][120] = 200;
+					peer.m_FrameGroupMembers = 15; peer.m_FrameGroupChanges = {{1, 15}, {120, 15}};
+				}
+				// Seat 1 asks before installing its hold of seats 2 and 3 at 155.
+				const uint32_t own = arm == 0 ? 1 : 9;
+				peer.CheckPeerFrameTie(155, own, 1000);
+				for (uint8_t seat: {uint8_t(2), uint8_t(3)}) { peer.m_PeerBridges[seat] = {155, 155, true, std::nullopt, {}, seat}; peer.m_PeerFrameHolds[seat][155] = true; }
+				peer.m_FrameGroupMembers = own; peer.m_FrameGroupChanges[155] = own;
+				for (auto& [split, arbitration]: peer.m_PeerSplitArbitrations) arbitration.holdFrame = 155;
+				peer.m_LastCompletedSimulationTick = peer.m_LastDeliveredFrame = 170; peer.m_Stats.nextFrame = 171;
+				const uint64_t remoteSplit = arm == 0 ? 160 : 120;
+				const auto heartbeat = [&](uint64_t split, std::vector<uint8_t> owners, uint32_t seen) {
+					auto message = peer.PeerFrameMessage(NetHostMigrationMessageType::PeerHeartbeat);
+					message.senderPeerId = message.successorPeerId = 2;
+					message.connectedMask = arm == 0 ? 14 : 6; message.frame = split; message.boundary = 165; message.members = std::move(owners);
+					message.appliedFrame = message.preparedFrame = 175; message.voterMask = seen;
+					message.bytes.assign(40, 0); std::fill(message.bytes.begin() + 8, message.bytes.end(), 0x6a);
+					message.totalBytes = static_cast<uint32_t>(message.bytes.size());
+					return message;
+				};
+				// The other half names the split from its own state first; once it has heard this half, from the last frame both applied.
+				if (!deliver(peer, heartbeat(remoteSplit, {1, 2, 3, 4}, 0), 1100)) { check(false, "arm " + std::to_string(arm) + ": the first heartbeat was refused"); continue; }
+				const uint64_t common = arm == 0 ? 154 : 120;
+				if (!deliver(peer, heartbeat(common, arm == 0 ? std::vector<uint8_t>{1, 2, 3} : std::vector<uint8_t>{1, 2, 3, 4}, 1), 1200)) {
+					check(false, "arm " + std::to_string(arm) + ": the second heartbeat was refused"); continue;
+				}
+				if (arm == 0) {
+					check(peer.IsStopped() && peer.GetStats().timeoutReason.starts_with("PeerHeld:") && peer.m_LocalHoldFrame == 155,
+					    "halves naming the split from different later certificates never decided it: state=" + std::string(NetLockstepCoordinator::StateName(peer.GetState())) +
+					    " hold=" + std::to_string(peer.m_LocalHoldFrame));
+				} else {
+					const auto decision = peer.m_PeerFrameTieWinners.find(120);
+					check(peer.IsRunning() && decision != peer.m_PeerFrameTieWinners.end() && decision->second == 9,
+					    "halves counting a neutral returner differently never decided the split: decided=" +
+					    std::to_string(decision == peer.m_PeerFrameTieWinners.end() ? 0 : decision->second));
+				}
+			}
+			return passed;
+		}
+
 		// A reader's subscription went to a donor whose link then lost most packets, and a repair asked the other donor for an earlier
 		// range. The retry of the lost frames goes to the donor that was not asked for them.
 		static bool TailRetryAsksAnotherDonor(std::string* error) {
@@ -32701,6 +32769,12 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS another_continuation_in_a_group_becomes_a_split\n[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "one-split-name") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::SplitHalvesNameOneSplit(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS split_halves_name_one_split\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "tail-retry-donor") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::TailRetryAsksAnotherDonor(&error)) return fail(error);
@@ -33153,6 +33227,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::HeldSeatWithNoDonorPlaysOn, "a_held_seat_with_no_donor_plays_on");
 		row(&SessionPlaneRecoveryTest::NewHostTimedFromItsOwnTraffic, "a_new_host_is_timed_from_its_own_traffic");
 		row(&SessionPlaneRecoveryTest::OtherContinuationBecomesASplit, "another_continuation_in_a_group_becomes_a_split");
+		row(&SessionPlaneRecoveryTest::SplitHalvesNameOneSplit, "split_halves_name_one_split");
 		row(&SessionPlaneRecoveryTest::ReturnerPaceComparesWhatItApplied, "a_returners_pace_compares_what_it_applied");
 		row(&SessionPlaneRecoveryTest::PrivateReaderPlaysOnlyTheHistoryItReads, "a_private_reader_plays_only_the_history_it_reads");
 		row(&SessionPlaneRecoveryTest::TailHoldSignersAreNotAnotherPlayingHalf, "tail_hold_signers_are_not_another_playing_half");
