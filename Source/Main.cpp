@@ -100,7 +100,9 @@ extern "C" {
 #include "GUIDrawRecord.h"
 #ifdef __APPLE__
 #include "AppleApplication.h"
+#include <cstddef>
 #include <mach/mach.h>
+#include <malloc/malloc.h>
 #elif defined(__linux__)
 #include <unistd.h>
 #if defined(__GLIBC__)
@@ -490,7 +492,18 @@ static std::string ProcessHeapCensus([[maybe_unused]] std::string& costs) {
 	mach_task_basic_info_data_t info{};
 	mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
 	if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, reinterpret_cast<task_info_t>(&info), &count) != KERN_SUCCESS) return {};
-	return std::format(" resident_mb={}", info.resident_size >> 20);
+	// What the allocator hands out and keeps, and what the graphics driver holds, so a resident climb names its owner.
+	malloc_statistics_t heap{};
+	malloc_zone_statistics(nullptr, &heap);
+	std::string footprint;
+	task_vm_info_data_t vm{};
+	mach_msg_type_number_t vmCount = TASK_VM_INFO_COUNT;
+	if (task_info(mach_task_self(), TASK_VM_INFO, reinterpret_cast<task_info_t>(&vm), &vmCount) == KERN_SUCCESS) {
+		footprint = std::format(" footprint_mb={}", vm.phys_footprint >> 20);
+		if (vmCount * sizeof(natural_t) >= offsetof(task_vm_info_data_t, ledger_tag_graphics_footprint) + sizeof(vm.ledger_tag_graphics_footprint))
+			footprint += std::format(" graphics_mb={}", vm.ledger_tag_graphics_footprint >> 20);
+	}
+	return std::format(" resident_mb={}{} heap_in_use_mb={} heap_allocated_mb={}", info.resident_size >> 20, footprint, heap.size_in_use >> 20, heap.size_allocated >> 20);
 #elif defined(__linux__)
 	unsigned long long pages = 0, resident = 0;
 	std::ifstream statm("/proc/self/statm");
