@@ -1676,6 +1676,15 @@ static void NoteTickCostDetails(const char* tag, uint64_t round, uint64_t tick, 
 	long long tickUs = 0;
 	for (long long phase: phases) tickUs += phase;
 	window.ownUs.push_back(tickUs - nested[3]);
+	// CC_TEST_TICK_COST_FILE=<path>: every tick's phases on a line of its own, for attributing single ticks.
+	static FILE* const tickFile = [] { const char* path = std::getenv("CC_TEST_TICK_COST_FILE"); return path ? std::fopen(path, "w") : nullptr; }();
+	if (tickFile) {
+		std::fprintf(tickFile, "%s %llu", tag, static_cast<unsigned long long>(tick));
+		for (long long phase: phases) std::fprintf(tickFile, " %lld", phase);
+		for (long long part: nested) std::fprintf(tickFile, " %lld", part);
+		std::fputc('\n', tickFile);
+		if (tick % 600 == 0) std::fflush(tickFile);
+	}
 	if (window.ticks < 600) return;
 	static constexpr std::array<const char*, 7> phaseNames{"before_world", "world", "audio", "late", "hash", "collection", "finish"};
 	static constexpr std::array<const char*, PerformanceMan::PerfCounterCount> counterNames{
