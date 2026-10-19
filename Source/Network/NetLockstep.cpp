@@ -3536,7 +3536,8 @@ namespace RTE {
 				const uint32_t electorate = MigrationElectorate();
 				for (uint8_t peer: m_Config.matchConfig.successorOrder)
 					if (electorate & (1u << (peer - 1))) { choice.host = peer; break; }
-				if (choice.host == UINT16_MAX || std::popcount(electorate) < 2) { StopHostUnreachable(); return false; }
+				// A host that announced its leave has no other continuation: one survivor takes the round, as a dropped host's would.
+				if (choice.host == UINT16_MAX || std::popcount(electorate) < (m_MigrationHostAnnounced ? 1 : 2)) { StopHostUnreachable(); return false; }
 				for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer)
 					if (electorate & (1u << (peer - 1))) choice.members.push_back(peer);
 				choice.generation = m_MigrationGeneration;
@@ -3656,7 +3657,7 @@ namespace RTE {
 		const uint32_t electorate = MigrationElectorate();
 		return message.connectedMask != 0 && (message.connectedMask & ~roster) == 0 && (message.voterMask & ~message.connectedMask) == 0 &&
 		    (message.connectedMask & electorate) == electorate && (message.voterMask & (1u << (message.successorPeerId - 1))) != 0 &&
-		    std::popcount(message.connectedMask) >= 2 && message.voterMask == message.connectedMask;
+		    std::popcount(message.connectedMask) >= (m_MigrationHostAnnounced ? 1 : 2) && message.voterMask == message.connectedMask;
 	}
 
 	bool NetLockstepCoordinator::MigrationQuorum(NetHostMigrationReach& reach) {
@@ -3673,7 +3674,7 @@ namespace RTE {
 		m_MigrationQuorumMask = electorate;
 		m_MigrationVoterMask = voters;
 		reach = {static_cast<size_t>(std::popcount(voters & electorate)), static_cast<size_t>(std::popcount(electorate))};
-		return (MigrationUsesDirectory() ? reach.seats >= 1 : reach.seats >= 2) && reach.votes == reach.seats;
+		return (MigrationUsesDirectory() || m_MigrationHostAnnounced ? reach.seats >= 1 : reach.seats >= 2) && reach.votes == reach.seats;
 	}
 
 	void NetLockstepCoordinator::StopHostUnreachable() {

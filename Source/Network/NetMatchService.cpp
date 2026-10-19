@@ -2813,6 +2813,7 @@ static std::string ResyncSaveName() {
 	NetHostLeaveOutcome NetMatchService::HostLeaveOutcome() const {
 		// The frame's menus call this inside the plane's window, and it reads the round without the plane's lock.
 		NetLockstepPlane::Gap plane("host leave outcome");
+		// A leave is a drop: the round goes to a lone survivor too, which plays on as a dropped host's would.
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			if (!m_IsHost || !m_Coordinator || !m_Coordinator->IsRunning() || m_Coordinator->GetConfig().matchConfig.successorOrder.empty()) {
@@ -2828,7 +2829,7 @@ static std::string ResyncSaveName() {
 			const auto view = GetSeatView(member.peerId);
 			return view ? view->seat.owner != 0 && view->seat.link == NetSeatLink::Connected : member.connected;
 		});
-		return survivors >= 2 ? NetHostLeaveOutcome::HandsOver : NetHostLeaveOutcome::EndsMatch;
+		return survivors >= 1 ? NetHostLeaveOutcome::HandsOver : NetHostLeaveOutcome::EndsMatch;
 	}
 
 	void NetMatchService::ConfirmHostLeave(NetHostLeaveOutcome outcome) {
