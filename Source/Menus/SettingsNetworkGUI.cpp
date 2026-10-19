@@ -263,6 +263,7 @@ SettingsNetworkGUI::SettingsNetworkGUI(GUIControlManager* parentControlManager) 
 
 	m_AutosaveLabel = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetAutosave"));
 	m_AutosaveIntervalLabel = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetAutosaveInterval"));
+	m_AutosaveHostLabel = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetAutosaveHost"));
 	m_AutosaveInfoLabel = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetAutosaveInfo"));
 	m_AutosavesKeptLabel = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetAutosavesKeptTitle"));
 	m_AutosavesKeptHintLabel = dynamic_cast<GUILabel*>(m_GUIControlManager->GetControl("LabelNetAutosavesKeptHint"));
@@ -476,9 +477,18 @@ void SettingsNetworkGUI::UpdateStatusLines() {
 	m_RejoinButton->SetEnabled(reconnect.GetOffer() == NetReconnectOffer::Available || reconnect.GetOffer() == NetReconnectOffer::Dismissed || reconnect.CanRetryManually());
 	m_CancelRecoveryButton->SetEnabled(reconnect.CanCancel());
 
-	const uint32_t autosaveSeconds = g_SettingsMan.GetAutosaveSeconds();
-	m_AutosaveLabel->SetText(autosaveSeconds > 0 ? "Enabled" : "Disabled");
-	m_AutosaveIntervalLabel->SetText(autosaveSeconds > 0 ? std::to_string(autosaveSeconds) + " s" : "-");
+	// In a match its host's announced cadence is the one that saves; outside one, the cadence this computer hosts with.
+	const NetMatchServiceState state = g_NetMatchService.GetState();
+	const bool inMatch = state != NetMatchServiceState::Idle && state != NetMatchServiceState::Failed;
+	uint32_t autosaveSeconds = g_SettingsMan.GetAutosaveSeconds();
+	if (inMatch) {
+		autosaveSeconds = NetMatchService::MatchAutosaveSeconds(g_NetMatchService.GetLobbyMatchConfig());
+	} else if (NetHostDefaultsTemplate saved; NetHostDefaults::Load(saved, nullptr)) {
+		autosaveSeconds = saved.autosaveEnabled ? saved.autosaveIntervalSeconds : 0;
+	}
+	m_AutosaveLabel->SetText(autosaveSeconds > 0 ? "On" : "Off");
+	m_AutosaveIntervalLabel->SetText(autosaveSeconds > 0 ? "Every " + NetAutosaveIntervalText(autosaveSeconds) : "-");
+	m_AutosaveHostLabel->SetText(!inMatch ? "Your hosting default" : g_NetMatchService.IsHost() ? "Set by you as the host" : "Set by the host");
 	const std::string latestSave = LatestFileName(AutosavesDirectory(), ".ccsave");
 	m_AutosaveInfoLabel->SetText("Latest: " + (latestSave.empty() ? std::string("-") : latestSave));
 

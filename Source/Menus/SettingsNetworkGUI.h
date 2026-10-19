@@ -105,6 +105,7 @@ namespace RTE {
 		// Files page.
 		GUILabel* m_AutosaveLabel;
 		GUILabel* m_AutosaveIntervalLabel;
+		GUILabel* m_AutosaveHostLabel;
 		GUILabel* m_AutosaveInfoLabel;
 		GUILabel* m_AutosavesKeptLabel;
 		GUILabel* m_AutosavesKeptHintLabel;
