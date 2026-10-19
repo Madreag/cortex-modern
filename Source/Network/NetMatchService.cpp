@@ -9816,13 +9816,12 @@ static std::string ResyncSaveName() {
 		}
 		const uint32_t revision = m_ConnectionAuthority.NetworkRevision();
 		const bool changed = revision != m_ConnectionNetworkRevision;
-		const bool refresh = changed && m_ConnectionNetworkRevision != 0;
-		const bool applied = !refresh || m_State != NetMatchServiceState::Running || !m_Coordinator || m_Coordinator->NoteLocalRouteChanged();
-		if (refresh && applied) {
+		// The seat keeps playing: its next check-in carries the new route, and only a failed link to the host rejoins it.
+		if (changed && m_ConnectionNetworkRevision != 0) {
 			System::PrintDiagnosticLine("[net-connection] network changed; refreshing the same seat's route");
 			if (m_IsHost && s_PortMapRequested) { ReleaseHostPortMap(); RequestHostPortMap(m_BeaconGamePort, nullptr); }
 		}
-		if (applied) m_ConnectionNetworkRevision = revision;
+		m_ConnectionNetworkRevision = revision;
 		if (changed || nowMs >= m_ConnectionRouteAtMs) {
 			m_ConnectionRouteAtMs = nowMs + 1000;
 			NetConnectionRoute route;
