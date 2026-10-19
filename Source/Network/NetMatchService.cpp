@@ -2751,6 +2751,54 @@ static std::string ResyncSaveName() {
 		}
 	}
 
+	void NetMatchService::InstallRoundRefereesLocked(NetLockstepConfig& config) {
+		if (!m_ConnectionAuthority.DirectorySessionId().empty()) {
+			config.frameTieReferee = [this, seats = NetH4BuildSeatTable(config.matchConfig)](const NetFrameTieRequest& peerRequest) {
+				auto request = peerRequest;
+				const auto stable = [&](uint16_t peer) -> uint16_t {
+					const auto seat = std::find_if(seats.begin(), seats.end(), [&](const auto& slot) { return slot.lockstepPeerId == peer; });
+					return seat == seats.end() ? UINT16_MAX : seat->stableSeat;
+				};
+				request.host = stable(request.host);
+				for (auto& member: request.members) member = stable(member);
+				for (auto& owner: request.owners) owner = stable(owner);
+				std::sort(request.members.begin(), request.members.end()); std::sort(request.owners.begin(), request.owners.end());
+				auto reply = m_ConnectionAuthority.QueryFrameTie(request);
+				if (reply.state == NetFrameTieReply::State::Decided) {
+					for (auto& member: reply.members) {
+						const auto seat = std::find_if(seats.begin(), seats.end(), [&](const auto& slot) { return slot.stableSeat == member; });
+						member = seat == seats.end() ? UINT16_MAX : seat->lockstepPeerId;
+					}
+					std::sort(reply.members.begin(), reply.members.end());
+				}
+				return reply;
+			};
+			config.hostChangeReferee = [this, seats = NetH4BuildSeatTable(config.matchConfig)](const NetHostChangeRequest& peerRequest) {
+				auto request = peerRequest;
+				const auto stable = [&](uint16_t peer) -> uint16_t {
+					const auto seat = std::find_if(seats.begin(), seats.end(), [&](const auto& slot) { return slot.lockstepPeerId == peer; });
+					return seat == seats.end() ? UINT16_MAX : seat->stableSeat;
+				};
+				const auto peer = [&](uint16_t stableSeat) -> uint16_t {
+					const auto seat = std::find_if(seats.begin(), seats.end(), [&](const auto& slot) { return slot.stableSeat == stableSeat; });
+					return seat == seats.end() ? UINT16_MAX : seat->lockstepPeerId;
+				};
+				if (request.agreedHost != UINT16_MAX) {
+					request.agreedHost = stable(request.agreedHost);
+					for (auto& member: request.agreedMembers) member = stable(member);
+					std::sort(request.agreedMembers.begin(), request.agreedMembers.end());
+				}
+				auto reply = m_ConnectionAuthority.QueryHostChange(request);
+				if (reply.state == NetHostChangeReply::State::Decided) {
+					reply.host = peer(reply.host); reply.donor = peer(reply.donor);
+					for (auto& member: reply.members) member = peer(member);
+					std::sort(reply.members.begin(), reply.members.end());
+				}
+				return reply;
+			};
+		}
+	}
+
 	NetHostLeaveOutcome NetMatchService::HostLeaveOutcome() const {
 		// The frame's menus call this inside the plane's window, and it reads the round without the plane's lock.
 		NetLockstepPlane::Gap plane("host leave outcome");
@@ -10679,51 +10727,7 @@ static std::string ResyncSaveName() {
 				ice = m_MigrationIce.route;
 			}
 			config.migrationTransportFactory = [this, ice] { return MakeMigrationTransport(ice); };
-			if (!m_ConnectionAuthority.DirectorySessionId().empty()) {
-				config.frameTieReferee = [this, seats = NetH4BuildSeatTable(config.matchConfig)](const NetFrameTieRequest& peerRequest) {
-					auto request = peerRequest;
-					const auto stable = [&](uint16_t peer) -> uint16_t {
-						const auto seat = std::find_if(seats.begin(), seats.end(), [&](const auto& slot) { return slot.lockstepPeerId == peer; });
-						return seat == seats.end() ? UINT16_MAX : seat->stableSeat;
-					};
-					request.host = stable(request.host);
-					for (auto& member: request.members) member = stable(member);
-					for (auto& owner: request.owners) owner = stable(owner);
-					std::sort(request.members.begin(), request.members.end()); std::sort(request.owners.begin(), request.owners.end());
-					auto reply = m_ConnectionAuthority.QueryFrameTie(request);
-					if (reply.state == NetFrameTieReply::State::Decided) {
-						for (auto& member: reply.members) {
-							const auto seat = std::find_if(seats.begin(), seats.end(), [&](const auto& slot) { return slot.stableSeat == member; });
-							member = seat == seats.end() ? UINT16_MAX : seat->lockstepPeerId;
-						}
-						std::sort(reply.members.begin(), reply.members.end());
-					}
-					return reply;
-				};
-				config.hostChangeReferee = [this, seats = NetH4BuildSeatTable(config.matchConfig)](const NetHostChangeRequest& peerRequest) {
-					auto request = peerRequest;
-					const auto stable = [&](uint16_t peer) -> uint16_t {
-						const auto seat = std::find_if(seats.begin(), seats.end(), [&](const auto& slot) { return slot.lockstepPeerId == peer; });
-						return seat == seats.end() ? UINT16_MAX : seat->stableSeat;
-					};
-					const auto peer = [&](uint16_t stableSeat) -> uint16_t {
-						const auto seat = std::find_if(seats.begin(), seats.end(), [&](const auto& slot) { return slot.stableSeat == stableSeat; });
-						return seat == seats.end() ? UINT16_MAX : seat->lockstepPeerId;
-					};
-					if (request.agreedHost != UINT16_MAX) {
-						request.agreedHost = stable(request.agreedHost);
-						for (auto& member: request.agreedMembers) member = stable(member);
-						std::sort(request.agreedMembers.begin(), request.agreedMembers.end());
-					}
-					auto reply = m_ConnectionAuthority.QueryHostChange(request);
-					if (reply.state == NetHostChangeReply::State::Decided) {
-						reply.host = peer(reply.host); reply.donor = peer(reply.donor);
-						for (auto& member: reply.members) member = peer(member);
-						std::sort(reply.members.begin(), reply.members.end());
-					}
-					return reply;
-				};
-			}
+			InstallRoundRefereesLocked(config);
 			config.migrationEndpoint = [this, seats = NetH4BuildSeatTable(config.matchConfig)](const NetMatchMigrationPeer& agreed) {
 				if (m_ConnectionAuthority.DirectorySessionId().empty()) return agreed;
 				NetMatchMigrationPeer current = agreed;

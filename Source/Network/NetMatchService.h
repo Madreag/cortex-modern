@@ -663,6 +663,8 @@ namespace RTE {
 		/// players still in the round with their link up at the current frame, held ones included, since they answer it. A lone
 		/// survivor of an announced leave ends the match, so a handover takes two. LeaveMatch acts on the same answer.
 		NetHostLeaveOutcome HostLeaveOutcome() const;
+		/// The directory referees a round's splits and host changes for this peer.
+		void InstallRoundRefereesLocked(NetLockstepConfig& config);
 		/// The outcome the host's leave confirmation showed when it was pressed; the next LeaveMatch acts on it.
 		void ConfirmHostLeave(NetHostLeaveOutcome outcome);
 		/// Whether this client's leave keeps a ticket the Multiplayer screen offers back as Rejoin Match: one that loads, as the offer reads it.
@@ -1391,6 +1393,7 @@ namespace RTE {
 		friend bool TestEndedWorldLateAdmission(std::string* error);
 		friend bool TestRecoveredDirectoryBinding(std::string* error);
 		friend bool TestLobbyDirectoryLeaseRecovery(std::string* error);
+		friend bool TestRoundRefereeFollowsTheAgreedRule(std::string* error);
 		friend bool TestLobbyDirectoryStatus(std::string* error);
 		friend bool TestJoiningFailureDetail(std::string* error);
 		friend bool TestLobbyPingReadout(std::string* error);

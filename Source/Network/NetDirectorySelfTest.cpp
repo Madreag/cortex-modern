@@ -3,6 +3,7 @@
 #include "NetDirectoryCodec.h"
 #include "NetDirectorySignalChannel.h"
 #include "NetHttpClient.h"
+#include "NetLockstep.h"
 #include "NetMatchService.h"
 #include "NetMuxTransport.h"
 #include "AreaEditor.h"
@@ -49,6 +50,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <mutex>
 #include <future>
 #include <deque>
 #include <iostream>
@@ -459,6 +461,23 @@ namespace RTE {
 		const std::string reason = NetIceResolveSessionRow({row}, local, newId, &target, &local);
 		if (!reason.empty() || target.identity != NetIceHostIdentity(oldId)) { *error = "F2: a joiner on the changed row id dialed a different world listener: " + reason; return false; }
 		std::cout << "[net-directory-selftest] PASS recovered_directory_binding" << std::endl;
+		return true;
+	}
+
+	// A listed host whose joiner came by typed address plays one rule with it: the direct-play rule, with no referee.
+	bool TestRoundRefereeFollowsTheAgreedRule(std::string* error) {
+		NetMatchService service;
+		service.m_ConnectionAuthority.SetDirectory("7b8c9d2e-1111-4222-8333-444455556666", "host-token", 1);
+		NetLockstepConfig config;
+		config.matchConfig = NetMatchConfigUtil::MakeDefault(77);
+		config.matchConfig.successorOrder = {2};
+		{
+			std::lock_guard<std::mutex> lock(service.m_Mutex);
+			service.InstallRoundRefereesLocked(config);
+		}
+		if (config.frameTieReferee || config.hostChangeReferee) {
+			*error = "a listed host refereed a round whose joiner holds no directory lease"; return false;
+		}
 		return true;
 	}
 
@@ -3974,7 +3993,7 @@ namespace RTE {
 				if (selected) { std::cout << "[net-directory-selftest] PASS" << std::endl; return 0; }
 			}
 #endif
-			for (const auto& test : std::vector<std::pair<const char*, bool (*)(std::string*)>>{{"LJ", TestJoiningProgress}, {"L7", TestLobbyDepartureNotice}, {"L2", TestAreaEditorCancel}, {"L5", TestJoiningFailureDetail}, {"L10", TestLobbyPingReadout}, {"L1", TestLobbyDirectoryLeaseRecovery}, {"L3", TestLobbyDirectoryStatus}, {"T1", TestDirectoryErrorSnapshot}, {"T2", TestDirectoryCapacityFallback}, {"F1", TestListedRefusalsKeepRetrying}, {"F2", TestRecoveredDirectoryBinding}, {"F5", TestSignalPumpInitialCredential}, {"F7", TestSignalRebindKeepsQueuedPosts}, {"S5", TestWorldProofSurvivesOneRefusal}}) {
+			for (const auto& test : std::vector<std::pair<const char*, bool (*)(std::string*)>>{{"LJ", TestJoiningProgress}, {"L7", TestLobbyDepartureNotice}, {"L2", TestAreaEditorCancel}, {"L5", TestJoiningFailureDetail}, {"L10", TestLobbyPingReadout}, {"L1", TestLobbyDirectoryLeaseRecovery}, {"RA", TestRoundRefereeFollowsTheAgreedRule}, {"L3", TestLobbyDirectoryStatus}, {"T1", TestDirectoryErrorSnapshot}, {"T2", TestDirectoryCapacityFallback}, {"F1", TestListedRefusalsKeepRetrying}, {"F2", TestRecoveredDirectoryBinding}, {"F5", TestSignalPumpInitialCredential}, {"F7", TestSignalRebindKeepsQueuedPosts}, {"S5", TestWorldProofSurvivesOneRefusal}}) {
 				if (!selected || std::string(selected) == test.first || (std::string(selected) == "U5" && std::string(test.first) == "T2")) {
 					if (!test.second(&error)) return fail(error);
 					if (selected) { std::cout << "[net-directory-selftest] PASS" << std::endl; return 0; }
