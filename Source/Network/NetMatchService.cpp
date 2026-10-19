@@ -7848,7 +7848,7 @@ static std::string ResyncSaveName() {
 		std::fill(plaintext.begin(), plaintext.end(), 0);
 		if (admissionState.empty()) return refuse("the admission file carries no admission state");
 		// The resumed lobby republishes the same roster as a new revision, so every peer acks it again.
-		config.configRevision += 1;
+		NetMatchConfigUtil::PrepareResumedConfig(config);
 		request.resumeConfig = config;
 		request.resumeTick = checkpoint->savedTick;
 		request.activityPreset = config.activityPreset;
@@ -12022,8 +12022,7 @@ static std::string ResyncSaveName() {
 			// The rest of the host's saved session options ride the same config to every peer.
 			config.delayPolicy = request.delayPolicy.value_or(config.delayPolicy);
 			config.slowPlayerBoundTicks = request.slowPlayerBoundTicks.value_or(config.slowPlayerBoundTicks);
-			// Only the default policy is offered, whatever a saved preset carries: the others do not yet keep a dropped player's seat.
-			config.slowPlayerPolicy = NetSlowPlayerPolicy::Substitute;
+			NetMatchConfigUtil::KeepOfferedSlowPlayerPolicy(config);
 			config.idleWaitMinutes = request.idleWaitMinutes.value_or(config.idleWaitMinutes);
 			config.automaticRepair = request.automaticRepair.value_or(config.automaticRepair);
 			config.pathHorizonTicks = request.pathHorizonTicks.value_or(config.pathHorizonTicks);
@@ -12066,7 +12065,7 @@ static std::string ResyncSaveName() {
 		// The host's accepted Advanced draft is the lobby's setup, every field of its list; the request keeps the session's identity.
 		if (request.hostDraft && !world) {
 			NetMatchConfigUtil::CopyHostDraft(*request.hostDraft, config);
-			config.slowPlayerPolicy = NetSlowPlayerPolicy::Substitute;
+			NetMatchConfigUtil::KeepOfferedSlowPlayerPolicy(config);
 		}
 		if (world && rosterHumans == 0) {
 			for (uint8_t peerId = firstHumanPeer; peerId <= config.peerCount; ++peerId) {

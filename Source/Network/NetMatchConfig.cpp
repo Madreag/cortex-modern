@@ -503,6 +503,17 @@ namespace RTE {
 		return true;
 	}
 
+	void NetMatchConfigUtil::KeepOfferedSlowPlayerPolicy(NetMatchConfig& config) {
+		// The other policies do not yet keep a dropped player's seat; a legacy config has no policy of its own to choose.
+		if (config.version >= c_TimingOptionsVersion) config.slowPlayerPolicy = NetSlowPlayerPolicy::Substitute;
+	}
+
+	void NetMatchConfigUtil::PrepareResumedConfig(NetMatchConfig& config) {
+		config.configRevision += 1;
+		// A save from a build that still offered another policy resumes on the one this build offers.
+		KeepOfferedSlowPlayerPolicy(config);
+	}
+
 	bool NetMatchConfigUtil::ValidateLocalAlpha(const NetMatchConfig& config, std::string* error) {
 		if (config.version < 2 || config.version > c_PersistentWorldVersion) {
 			if (error) *error = "match config version is unsupported";

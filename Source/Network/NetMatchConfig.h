@@ -231,6 +231,10 @@ namespace RTE {
 		/// which seats start present is the host's to name in activePeerIds.
 		static bool DeriveRematchConfig(const NetMatchConfig& previous, NetMatchConfig& outConfig, std::string* error = nullptr);
 		static bool ValidateLocalAlpha(const NetMatchConfig& config, std::string* error = nullptr);
+		/// Puts a config with timing options on the one slow-player policy this version offers, whatever a saved preset carries.
+		static void KeepOfferedSlowPlayerPolicy(NetMatchConfig& config);
+		/// Readies a saved config for its resumed lobby: a new revision every peer acks again, on the slow-player policy this version offers.
+		static void PrepareResumedConfig(NetMatchConfig& config);
 		/// Whether the text is a canonical lowercase 8-4-4-4-12 UUID, the only shape a world id may take.
 		static bool IsWorldId(const std::string& text);
 		/// The rules the config hash has followed. A stored hash names the rule that made it, so a checkpoint an
