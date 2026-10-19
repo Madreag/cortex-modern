@@ -892,6 +892,61 @@ namespace RTE {
 			return passed;
 		}
 
+		// A held seat whose history comes from nobody - the seat that held it silent past the host-loss window, or held itself - takes its
+		// seat back and plays on alone; one that a playing seat still feeds waits for it, and of two held seats only the host plays on.
+		static bool HeldSeatWithNoDonorPlaysOn(std::string* error) {
+			bool passed = true;
+			const auto check = [&](bool ok, const std::string& why) {
+				if (!ok) { passed = false; *error += why + "; "; std::cout << "[lone-seat] FAIL " << why << std::endl; }
+			};
+			// Two seats; the local one held at 140 by the other, which plays.
+			const auto reader = [](NetLockstepCoordinator& peer, Wire& wire, uint8_t local) {
+				Configure(peer, wire);
+				peer.m_Config.peerFrameGroups = true; peer.m_Config.localPeerId = local; peer.m_Config.authorityPeerId = 1;
+				peer.m_Config.peerCount = peer.m_Config.matchConfig.peerCount = 2;
+				peer.m_Config.matchConfig.players.resize(2); peer.m_Config.matchConfig.successorOrder = {2};
+				peer.m_RoundConfigHash = NetMatchConfigUtil::HashConfig(peer.m_Config.matchConfig);
+				const uint8_t other = local == 1 ? 2 : 1;
+				peer.m_RemotePeerIds = {other}; peer.m_RemoteTransports = {{other, 40 + other}};
+				peer.m_MigrationPhase = NetHostMigrationPhase::None;
+				peer.m_PeerBridges[local] = {140, 140, true, std::nullopt, {}, 1U << (other - 1)};
+				peer.m_PeerFrameHolds[local][140] = true;
+				peer.m_FrameGroupChanges = {{1, 3}, {140, 1U << (other - 1)}}; peer.m_FrameGroupMembers = 1U << (other - 1);
+				peer.m_Stats.nextFrame = 150; peer.m_LastCompletedSimulationTick = 149;
+				peer.m_MigrationHistory[149] = {1, 2, 3};
+			};
+			const auto lone = [](NetLockstepCoordinator& peer, uint64_t nowMs) {
+				const bool first = peer.TakeLoneSeat(nowMs);
+				return first || peer.TakeLoneSeat(nowMs + 1000);
+			};
+			{
+				// The host stopped answering 16 s ago: the client plays on alone and the AI takes the host's seat.
+				Wire wire; NetLockstepCoordinator client; reader(client, wire, 2);
+				client.m_PeerLastHeardMs[1] = 4000; client.m_PeerAppliedThrough[1] = 160; client.m_PeerReportedMembers[1] = 1;
+				const bool took = lone(client, 20000);
+				check(took && !client.IsLocalPrivateReaderAt(150) && client.PeerFrameMembersAt(150) == 2 && client.IsSeatUnderAI(1, 150),
+				    "a held seat with no seat left to give its history still waited: took=" + std::to_string(took) + " reader=" +
+				    std::to_string(client.IsLocalPrivateReaderAt(150)) + " members=" + std::to_string(client.PeerFrameMembersAt(150)));
+			}
+			{
+				// The host still plays and has applied past this frame: the client waits for its history.
+				Wire wire; NetLockstepCoordinator client; reader(client, wire, 2);
+				client.m_PeerLastHeardMs[1] = 19900; client.m_PeerAppliedThrough[1] = 160; client.m_PeerReportedMembers[1] = 1;
+				check(!lone(client, 20000) && client.IsLocalPrivateReaderAt(150), "a held seat a playing seat still feeds took its seat back");
+			}
+			{
+				// Both seats hold themselves and each waits on the other: the host plays on, the client keeps reading.
+				Wire wireHost, wireClient; NetLockstepCoordinator host, client; reader(host, wireHost, 1); reader(client, wireClient, 2);
+				host.m_PeerLastHeardMs[2] = 19900; host.m_PeerAppliedThrough[2] = 149; host.m_PeerReportedMembers[2] = 1;
+				client.m_PeerLastHeardMs[1] = 19900; client.m_PeerAppliedThrough[1] = 149; client.m_PeerReportedMembers[1] = 2;
+				check(!lone(client, 20000) && client.IsLocalPrivateReaderAt(150), "the client took its seat back while the host waited too");
+				const bool took = lone(host, 20000);
+				check(took && host.PeerFrameMembersAt(150) == 1 && host.IsSeatUnderAI(2, 150),
+				    "of two held seats waiting on each other the host did not play on: took=" + std::to_string(took) + " members=" + std::to_string(host.PeerFrameMembersAt(150)));
+			}
+			return passed;
+		}
+
 		// A reader's subscription went to a donor whose link then lost most packets, and a repair asked the other donor for an earlier
 		// range. The retry of the lost frames goes to the donor that was not asked for them.
 		static bool TailRetryAsksAnotherDonor(std::string* error) {
@@ -32485,6 +32540,12 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS a_round_keeps_a_playing_seat\n[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "lone-seat") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::HeldSeatWithNoDonorPlaysOn(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS a_held_seat_with_no_donor_plays_on\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "tail-retry-donor") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::TailRetryAsksAnotherDonor(&error)) return fail(error);
@@ -32934,6 +32995,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::ForeignHistoryKeepsAnActiveContinuation, "foreign_history_keeps_an_active_continuation");
 		row(&SessionPlaneRecoveryTest::TailRetryAsksAnotherDonor, "a_tail_retry_asks_another_donor_than_the_one_that_failed");
 		row(&SessionPlaneRecoveryTest::RoundKeepsAPlayingSeat, "a_round_keeps_a_playing_seat");
+		row(&SessionPlaneRecoveryTest::HeldSeatWithNoDonorPlaysOn, "a_held_seat_with_no_donor_plays_on");
 		row(&SessionPlaneRecoveryTest::ReturnerPaceComparesWhatItApplied, "a_returners_pace_compares_what_it_applied");
 		row(&SessionPlaneRecoveryTest::PrivateReaderPlaysOnlyTheHistoryItReads, "a_private_reader_plays_only_the_history_it_reads");
 		row(&SessionPlaneRecoveryTest::TailHoldSignersAreNotAnotherPlayingHalf, "tail_hold_signers_are_not_another_playing_half");

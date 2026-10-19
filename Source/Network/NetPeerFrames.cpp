@@ -182,6 +182,8 @@ namespace RTE {
 	bool NetLockstepCoordinator::PeerGroupHasAuthority(uint32_t voters, uint64_t frame, PeerVotingScope scope) const {
 		// A decision is judged at its own frame: a peer still behind the split it names would otherwise look up another split's answer.
 		const uint64_t at = frame == UINT64_MAX ? m_Stats.nextFrame : frame;
+		// A seat no other seat can reach answers alone for its own return as the round's lone player.
+		if (m_LoneSeatInstalling && voters == SeatBit(m_Config.localPeerId)) return true;
 		const uint32_t owners = PeerVotingOwners(voters, at, scope);
 		if (owners == 0) return false;
 		if (m_PeerAdminFrameMembers != 0 && voters == m_PeerAdminFrameMembers) return true;

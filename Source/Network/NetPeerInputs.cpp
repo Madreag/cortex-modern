@@ -518,6 +518,7 @@ namespace RTE {
 			}
 			m_Stats.peers[message.senderPeerId].pingMs = rtt; m_Stats.peers[message.senderPeerId].jitterMs = jitter;
 			m_PeerAdminReady[message.senderPeerId] = {message.completeFrom, nowMs};
+			m_PeerReportedMembers[message.senderPeerId] = message.connectedMask;
 			m_Stats.peers[message.senderPeerId].pingMeasured = rtt != 0;
 			CheckDirectPeerHistory(message, nowMs);
 			if (m_State == NetLockstepState::Stopped) return true;

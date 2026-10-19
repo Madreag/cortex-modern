@@ -1753,6 +1753,10 @@ namespace RTE {
 		void SendPeerCommittedTail(uint8_t peer, uint64_t fromFrame);
 		void FlushPeerCommittedTails(uint64_t nowMs);
 		void RequestPeerCommittedTail(uint64_t nowMs);
+		/// A held seat that no seat can give its next frame - every other seat silent past the host-loss window or held itself - takes its
+		/// seat back and holds the others at that frame, so its player plays on alone; of several such seats only the original host, else
+		/// the lowest, does, and the rest read its history. Whether this seat did.
+		bool TakeLoneSeat(uint64_t nowMs);
 		NetHash32 PeerFramePrefix(uint64_t frame) const;
 		NetHash32 PeerAppliedFramePrefix(uint64_t frame) const;
 		NetHash32 CommittedFramePrefix(const NetLockstepReadyFrame& ready) const;
@@ -1829,6 +1833,9 @@ namespace RTE {
 		std::optional<uint64_t> m_PeerHistoryQuestion; //!< Last direct question advertised; rotate retained epochs without adding heartbeat traffic.
 		uint64_t m_PeerTailRequestAtMs = 0;
 		uint8_t m_PeerTailDonor = 0;
+		std::map<uint8_t, uint32_t> m_PeerReportedMembers; //!< The seats each seat last reported playing at its applied frame.
+		std::optional<uint64_t> m_PeerNoDonorSinceMs; //!< Since when no seat could give this held seat its next frame.
+		bool m_LoneSeatInstalling = false; //!< This seat's own return as the round's lone player is being installed.
 		uint64_t m_PeerTailDuplicateFrames = 0;
 		std::map<uint64_t, uint64_t> m_PeerTailRequestedUntil;
 		std::map<uint64_t, uint8_t> m_PeerTailRequestedOf; //!< The donor each pending frame was last asked of.

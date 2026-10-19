@@ -10,6 +10,7 @@
 #include "lz4.h"
 
 #include <algorithm>
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -289,6 +290,74 @@ namespace RTE {
 			    << " donor_applied=" << m_PeerTailThrough.value_or(0) << " certified_ahead=" << m_PeerCommittedTail.size()
 			    << " requests=" << m_PeerTailRequests << std::endl;
 		}
+	}
+
+	bool NetLockstepCoordinator::TakeLoneSeat(uint64_t nowMs) {
+		const uint64_t frame = m_Stats.nextFrame;
+		const uint8_t local = m_Config.localPeerId;
+		if (!IsLocalPrivateReaderAt(frame) || !m_LastCompletedSimulationTick || m_GrantedSimulationTick || m_PeerCommittedTail.contains(frame) ||
+		    !m_MigrationHistory.contains(*m_LastCompletedSimulationTick)) { m_PeerNoDonorSinceMs.reset(); return false; }
+		// A seat heard within the host-loss window gives this frame when it has applied it or still plays: wait for it. The rest are
+		// gone, or held and waiting like this one.
+		uint32_t waiting = SeatBit(local);
+		uint64_t roundTripMs = 0;
+		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
+			if (peer == local || m_RemovedPeers.contains(peer) || IsSeatReleased(peer)) continue;
+			const uint64_t heard = LastAuthenticatedTraffic(peer);
+			if (nowMs >= heard && nowMs - heard >= c_NetHostLossSilenceMs) continue;
+			const auto applied = m_PeerAppliedThrough.find(peer);
+			const auto reported = m_PeerReportedMembers.find(peer);
+			if ((applied != m_PeerAppliedThrough.end() && applied->second >= frame) || reported == m_PeerReportedMembers.end() || (reported->second & SeatBit(peer)) != 0) {
+				m_PeerNoDonorSinceMs.reset();
+				return false;
+			}
+			waiting |= SeatBit(peer);
+			roundTripMs = std::max<uint64_t>(roundTripMs, m_Stats.peers[peer].pingMs);
+		}
+		if (!m_PeerNoDonorSinceMs) m_PeerNoDonorSinceMs = nowMs;
+		// One waiting seat plays on, the one the heal would rule for: the original host, else the lowest seat. The others read its history.
+		const uint8_t host = m_Config.matchConfig.hostPeerId;
+		const uint8_t chosen = (waiting & SeatBit(host)) != 0 ? host : static_cast<uint8_t>(std::countr_zero(waiting) + 1);
+		// The others' reports are a round trip and two heartbeats old at most before this seat acts on them.
+		if (chosen != local || nowMs - *m_PeerNoDonorSinceMs < 2 * c_NetPeerHeartbeatMs + roundTripMs) return false;
+		const uint64_t displayed = *m_LastCompletedSimulationTick;
+		const auto certify = [&](NetHostMigrationMessage decision) {
+			decision.successorPeerId = local; decision.voterMask = SeatBit(local); decision.totalBytes = static_cast<uint32_t>(decision.bytes.size());
+			std::vector<uint8_t> vote;
+			if (!NetHostMigrationCodec::Encode(decision, m_Config.migrationKey, vote)) return false;
+			auto certificate = decision;
+			certificate.type = NetHostMigrationMessageType::PeerBridgeCommit;
+			certificate.bytes = {1};
+			PutSize(certificate.bytes, static_cast<uint32_t>(vote.size()));
+			certificate.bytes.insert(certificate.bytes.end(), vote.begin(), vote.end());
+			certificate.totalBytes = static_cast<uint32_t>(certificate.bytes.size());
+			InstallPeerBridge(certificate, nowMs);
+			return m_PeerBridgeCertificates.contains({frame, DecisionKind(certificate)});
+		};
+		// Its own return at this frame, its input neutral through its delay and the bound.
+		auto back = PeerFrameMessage(NetHostMigrationMessageType::PeerBridge);
+		back.frame = frame; back.boundary = displayed; back.preparedFrame = 1; back.members = {local}; back.connectedMask = SeatBit(local);
+		const auto applied = PeerAppliedFramePrefix(displayed);
+		back.bytes.assign(applied.begin(), applied.end());
+		const uint16_t delay = InputDelayAt(local, frame);
+		PutSize(back.bytes, delay); PutSize(back.bytes, delay + m_Config.slowPlayerBoundTicks);
+		PutSize(back.bytes, std::max<uint32_t>(1, m_Config.peerIncarnations[local]));
+		m_LoneSeatInstalling = true;
+		const bool returned = certify(back);
+		m_LoneSeatInstalling = false;
+		if (!returned) return false;
+		// And a hold of every seat still playing here: none of them can reach it.
+		auto hold = PeerFrameMessage(NetHostMigrationMessageType::PeerBridge);
+		hold.frame = hold.boundary = frame; hold.preparedFrame = 0; hold.connectedMask = SeatBit(local);
+		const uint32_t others = PeerRetainedSeatsAt(frame) & ~PeerHeldSeatsAt(frame) & ~SeatBit(local);
+		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) if ((others & SeatBit(peer)) != 0) hold.members.push_back(peer);
+		const auto prepared = PeerFramePrefix(frame - 1);
+		hold.bytes.assign(prepared.begin(), prepared.end());
+		if (!hold.members.empty()) certify(hold);
+		DiagnosticLine() << "[net-peer-recovery] peer=" << static_cast<int>(local) << " now_ms=" << nowMs << " frame=" << frame
+		                 << " lone=1 waiting=" << waiting << " held=" << others << ": no seat can give this frame; this seat plays on alone" << std::endl;
+		m_PeerNoDonorSinceMs.reset();
+		return true;
 	}
 
 	bool NetLockstepCoordinator::ConfirmPeerTail(uint64_t frame, uint64_t nowMs) {
