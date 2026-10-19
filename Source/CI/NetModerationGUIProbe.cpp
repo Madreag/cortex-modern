@@ -1368,6 +1368,13 @@ namespace {
 				const std::string needle = step["text_contains"].get<std::string>();
 				Require(text.find(needle) != std::string::npos, "control text '" + text + "' does not contain '" + needle + "'");
 			}
+			if (step.contains("text_lacks")) {
+				const std::string text = value.at("text").get<std::string>();
+				const Json& needles = step["text_lacks"];
+				for (const Json& needle: needles.is_array() ? needles : Json::array({needles})) {
+					Require(text.find(needle.get<std::string>()) == std::string::npos, "control text '" + text + "' carries '" + needle.get<std::string>() + "'");
+				}
+			}
 			if (step.value("fits", false)) {
 				const auto& rect = value["rect"];
 				Require(rect[0].get<int>() >= 0 && rect[1].get<int>() >= 0 && rect[0].get<int>() + rect[2].get<int>() <= g_WindowMan.GetResX() &&
