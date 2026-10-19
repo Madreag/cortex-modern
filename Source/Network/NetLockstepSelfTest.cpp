@@ -1009,6 +1009,33 @@ namespace RTE {
 		// Seat 1 held seat 3 at its bound at frame 150 while seat 2 had already played seat 3's input there. A witness of a frame both
 		// applied shows the other continuation: the member is held at the next frame, the groups are disjoint, and the healed
 		// histories or the directory choose between them. A directory decision naming seats of both continuations is the asker's.
+		// A seat whose group is smaller than half of the seats that played together before the split only queries the referee: a lone
+		// seat on a lossy link must not make the healthy seats rewind by asking first. Arms: the lone seat, the three that held it, a half.
+		static bool AMinorityGroupOnlyQueriesTheReferee(std::string* error) {
+			struct Arm { uint8_t local; uint32_t group; bool query; };
+			for (const Arm arm: {Arm{2, 2, true}, Arm{1, 13, false}, Arm{1, 3, false}}) {
+				Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
+				peer.m_Config.peerCount = peer.m_Config.matchConfig.peerCount = 4;
+				peer.m_Config.matchConfig.players.push_back({4, 3, false, "Fourth"});
+				peer.m_Config.matchConfig.successorOrder = {2, 3, 4};
+				peer.m_Config.localPeerId = arm.local; peer.m_Config.authorityPeerId = 1;
+				peer.m_Config.peerFrameGroups = peer.m_Config.substituteSlowPeers = true;
+				peer.m_Config.frameTieReferee = [](const NetFrameTieRequest&) { return NetFrameTieReply{NetFrameTieReply::State::Waiting}; };
+				peer.m_RoundConfigHash = NetMatchConfigUtil::HashConfig(peer.m_Config.matchConfig);
+				peer.m_MigrationPhase = NetHostMigrationPhase::None;
+				peer.m_FrameGroupMembers = arm.group; peer.m_FrameGroupChanges = {{1, 15}, {339, arm.group}};
+				peer.m_LastCompletedSimulationTick = peer.m_LastDeliveredFrame = 340; peer.m_Stats.nextFrame = 341;
+				peer.CheckPeerFrameTie(339, arm.group, 6000);
+				const bool asked = peer.m_PeerFrameTie.has_value();
+				if (!asked || peer.m_PeerFrameTie->queryOnly != arm.query) {
+					*error = arm.query ? "a seat smaller than half of its round asked the referee to rule for it: group=" + std::to_string(arm.group) :
+					                     "a group of half or more of its round never asked the referee: group=" + std::to_string(arm.group) + " asked=" + std::to_string(asked);
+					return false;
+				}
+			}
+			return true;
+		}
+
 		static bool AStraddlingRulingIsTheOtherHalfsQuestion(std::string* error) {
 			// The directory rules for a split's first question. A seat held while it still counted a seat of this group asks with
 			// that seat named, so the ruling names seats of both continuations; a seat whose own question it is not lost it, wherever
@@ -33222,6 +33249,12 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS an_open_vote_asks_for_its_frames_record_at_once\n[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "minority-tie-query") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::AMinorityGroupOnlyQueriesTheReferee(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS a_minority_group_only_queries_the_referee\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "straddling-ruling") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::AStraddlingRulingIsTheOtherHalfsQuestion(&error)) return fail(error);
@@ -33570,6 +33603,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::ADirectMigrationNeedsThisSeatsGroup, "a_direct_migration_needs_this_seats_group");
 		row(&SessionPlaneRecoveryTest::OnlyASeatCountingThisOneIsAnotherContinuation, "only_a_seat_counting_this_one_is_another_continuation");
 		row(&SessionPlaneRecoveryTest::AStraddlingRulingIsTheOtherHalfsQuestion, "a_straddling_ruling_is_the_other_halfs_question");
+		row(&SessionPlaneRecoveryTest::AMinorityGroupOnlyQueriesTheReferee, "a_minority_group_only_queries_the_referee");
 		row(&SessionPlaneRecoveryTest::ReaderLinksContributeToInputRunway, "reader_links_contribute_to_input_runway");
 		row(&SessionPlaneRecoveryTest::LinkRiseHasNoResizeCooldown, "link_rise_has_no_resize_cooldown");
 		row(&SessionPlaneRecoveryTest::LinkFallNeedsFiveMeasuredSeconds, "link_fall_requires_five_continuous_measured_seconds");
