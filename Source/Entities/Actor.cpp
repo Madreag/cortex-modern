@@ -365,6 +365,7 @@ void Actor::Clear() {
 	m_MoveVector.Reset();
 	m_MovePath.clear();
 	m_UpdateMovePath = false;
+	m_AIMovePathPending.store(false, std::memory_order_relaxed);
 	m_MoveProximityLimit = 20.0F;
 	m_AIBaseDigStrength = c_PathFindingDefaultDigStrength;
 	m_BaseMass = std::numeric_limits<float>::infinity();
@@ -2339,9 +2340,12 @@ void Actor::UpdateMovePath() {
 			}
 		}
 	}
+	// Under lockstep only this machine's AI has writes on the wire, so only its own call waits for them, in its own flag: a shared
+	// call takes the same branch on every peer.
+	const bool aiOwnRequest = lockstep && g_CurrentAIActor;
 	// The add is still on the wire; keep the request until it lands.
-	if (lockstep && m_MovePath.empty() && !g_MovableMan.ValidMO(m_pMOMoveTarget) && m_Waypoints.size() <= loaded && writesInFlight) {
-		m_UpdateMovePath = true;
+	if (aiOwnRequest && m_MovePath.empty() && !g_MovableMan.ValidMO(m_pMOMoveTarget) && m_Waypoints.size() <= loaded && writesInFlight) {
+		m_AIMovePathPending.store(true, std::memory_order_relaxed);
 		return;
 	}
 
@@ -2395,7 +2399,11 @@ void Actor::UpdateMovePath() {
 		}
 	}
 
-	m_UpdateMovePath = false;
+	if (aiOwnRequest) {
+		m_AIMovePathPending.store(false, std::memory_order_relaxed);
+	} else {
+		m_UpdateMovePath = false;
+	}
 }
 
 float Actor::EstimateDigStrength() const {
@@ -2485,6 +2493,19 @@ void Actor::PreControllerUpdate() {
 	// In future maybe we can move this back, but it doesn't make much difference
 	if (m_UpdateMovePath) {
 		UpdateMovePath();
+	}
+	// The update this machine's AI parked is that AI's own request, made where it runs; it never reaches the shared horizon.
+	if (m_AIMovePathPending.load(std::memory_order_relaxed)) {
+		if (ScenarioRunner::IsLockstepControllerSyncActive() && ScenarioRunner::IsLockstepLocalActor(static_cast<int64_t>(GetUniqueID()), m_Team, !m_Controller.IsPlayerControlled())) {
+			struct RunningAI {
+				Actor* previous = g_CurrentAIActor;
+				explicit RunningAI(Actor* actor) { g_CurrentAIActor = actor; }
+				~RunningAI() { g_CurrentAIActor = previous; }
+			} runningAI(this);
+			UpdateMovePath();
+		} else {
+			m_AIMovePathPending.store(false, std::memory_order_relaxed);
+		}
 	}
 }
 

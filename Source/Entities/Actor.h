@@ -11,6 +11,7 @@
 #include "PathFinder.h"
 
 #include <array>
+#include <atomic>
 #include <optional>
 
 namespace RTE {
@@ -858,8 +859,8 @@ namespace RTE {
 		/// current waypoint, if any.
 		void SetMovePathToUpdate() { if (m_UpdateMovePath != true) TouchCheckpoint(); m_UpdateMovePath = true; }
 
-		/// Gets whether a move-path update is still armed.
-		bool IsMovePathUpdatePending() const { return m_UpdateMovePath; }
+		/// Gets whether a move-path update is still armed, the shared one or the one this machine's AI parked.
+		bool IsMovePathUpdatePending() const { return m_UpdateMovePath || m_AIMovePathPending.load(std::memory_order_relaxed); }
 
 		/// Starts updating this Actor's movepath.
 		virtual void UpdateMovePath();
@@ -870,7 +871,7 @@ namespace RTE {
 
 		/// Returns whether we're waiting on a new pending movepath.
 		/// @return Whether we're waiting on a new pending movepath.
-		bool IsWaitingOnNewMovePath() const { return m_PathRequest != nullptr || m_UpdateMovePath; }
+		bool IsWaitingOnNewMovePath() const { return m_PathRequest != nullptr || IsMovePathUpdatePending(); }
 
 		/// Returns whether this is still waiting to start the move it was ordered to make. The move path is
 		/// this machine's own pathfinder answer, so under lockstep the ordered waypoints answer instead.
@@ -1338,6 +1339,8 @@ namespace RTE {
 		std::shared_ptr<volatile PathRequest> m_PathRequest;
 		// Whether it's time to update the path
 		bool m_UpdateMovePath;
+		// A path update this machine's AI asked for while its waypoint writes were on the wire; it answers on this machine alone.
+		std::atomic<bool> m_AIMovePathPending{false};
 		// The minimum range to consider having reached a move target is considered
 		float m_MoveProximityLimit;
 		// Current movement state.
