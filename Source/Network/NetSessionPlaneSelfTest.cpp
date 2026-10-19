@@ -2555,7 +2555,8 @@ namespace RTE {
 			unsigned reportsRead = 0;
 			double credit = 0, maximumReplayCapacity = 0;
 			bool proposed = false, agreed = false;
-			bool liveStarted = false, certificateReported = false;
+			bool liveStarted = false, certificateReported = false, refusalReported = false;
+			std::map<uint64_t, NetLockstepReadyFrame> replayedFrames; //!< The replay's own frames, named when its certificate is refused.
 			std::string lastRefusal;
 			const auto startLive = [&] {
 				// The real service starts live play from the winning replay's configuration, including authority and every member's start terms.
@@ -2583,7 +2584,28 @@ namespace RTE {
 						    << " boundary=" << proof->boundary << " replay_start=" << replayCoordinator.GetConfig().startFrame << " replay_applied=" << replay.applied << std::endl;
 						certificateReported = true;
 					}
-					if (!replayCoordinator.AdoptPeerReturn(config, replayCoordinator, *proof, activation, &lastRefusal)) return true;
+					if (!replayCoordinator.AdoptPeerReturn(config, replayCoordinator, *proof, activation, &lastRefusal)) {
+						if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS") && !refusalReported) {
+							refusalReported = true;
+							const auto describe = [](const NetLockstepReadyFrame& ready) {
+								std::string text = "authority=" + std::to_string(ready.authorityPeerId) + "/" + std::to_string(ready.updateAuthorityPeerId) + " departed=";
+								for (uint8_t peer: ready.departedPeerIds) text += std::to_string(peer);
+								text += " ai="; for (uint8_t peer: ready.aiHeldPeerIds) text += std::to_string(peer);
+								text += " reclaimed="; for (uint8_t peer: ready.reclaimedPeerIds) text += std::to_string(peer);
+								text += " local=" + std::to_string(ready.localPeerId) + ":" + std::to_string(ready.localFrames.size()) + " remote=";
+								for (const auto& [peer, count]: ready.remoteFrameCounts) text += std::to_string(peer) + ":" + std::to_string(count) + ",";
+								for (const auto& [peer, frame]: ready.committedPeerLeaves) text += " leave" + std::to_string(peer) + "@" + std::to_string(frame);
+								text += " leaves=" + std::to_string(ready.committedPeerLeaves.size()) + " waivers=" + std::to_string(ready.committedFrameWaivers.size()) +
+								        " inputs=" + std::to_string(ready.remoteFrames.size() + ready.localFrames.size()) + " commands=" + std::to_string(ready.remoteCommands.size() + ready.localCommands.size());
+								return text;
+							};
+							const auto replayed = replayedFrames.find(proof->boundary);
+							const auto donated = fixture.committed[donor - 1].find(proof->boundary);
+							DiagnosticLine() << "[session-plane-image-adoption] refusal=" << lastRefusal << " boundary=" << proof->boundary << " replay={" << (replayed != replayedFrames.end() ? describe(replayed->second) : std::string("none"))
+							    << "} donor" << unsigned(donor) << "={" << (donated != fixture.committed[donor - 1].end() ? describe(donated->second) : std::string("none")) << "}" << std::endl;
+						}
+						return true;
+					}
 				} else {
 					const auto found = fixture.wires[seat - 1]->receivedTimingReturns.find({activation, seat});
 					if (found == fixture.wires[seat - 1]->receivedTimingReturns.end()) return true;
@@ -2673,6 +2695,7 @@ namespace RTE {
 					if (!replayCoordinator.PopReadyFrame(ready)) co_return fail("the private coordinator did not consume committed frame " +
 					    std::to_string(recorded.targetFrame) + ": state=" + std::to_string(static_cast<int>(replayCoordinator.GetState())) +
 					    " next=" + std::to_string(replayCoordinator.GetStats().nextFrame) + " reason=" + replayCoordinator.GetStats().timeoutReason);
+					if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) replayedFrames[ready.frame] = ready;
 					if (!replay.Apply(ready, error)) co_return false;
 					replayCoordinator.FinishSimulationTick(ready.frame);
 					if (liveStarted) fixture.peers[seat - 1]->AdoptReplayedSeatTransitions(replayCoordinator, replay.applied);
@@ -4093,7 +4116,8 @@ namespace RTE {
 					++failedCount;
 					groups[failureGroup(index)].push_back(index);
 					// Each failing round's own finding, so a run names every seed's cause and not only its group's smallest.
-					lines.push_back("random_seed_finding seed=" + std::to_string(schedules[index].seed) + " group=" + failureGroup(index) + ": " + results[index]->detail.substr(0, 320));
+					lines.push_back("random_seed_finding seed=" + std::to_string(schedules[index].seed) + " group=" + failureGroup(index) + ": " + results[index]->detail.substr(0, 320) +
+					                " schedule=" + FormatSchedule(schedules[index]));
 				}
 				std::map<std::string, std::string> minimized;
 				size_t done = 0;
