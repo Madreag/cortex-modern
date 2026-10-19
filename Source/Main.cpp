@@ -4253,6 +4253,15 @@ void ProcessMenuScript(bool inPlay = false) {
 			std::string observation;
 			met = MenuAutomation::ComboShowsItem(MenuScriptHandManager(&modal), control, item, observation);
 			seen = " " + observation;
+		} else if (waitCond.starts_with("nolabel:")) {
+			// A hand waits for a line to go away before it acts, as it waits for one to appear.
+			std::istringstream label(waitCond.substr(8));
+			std::string control, unexpected, actual;
+			label >> control;
+			std::getline(label >> std::ws, unexpected);
+			const bool found = pauseMenu ? pauseMenu->AutomationLabelText(control, actual) : g_MenuMan.GetMainMenu()->AutomationLabelText(control, actual);
+			met = found && actual.find(unexpected) == std::string::npos;
+			seen = " text=\"" + actual + "\"";
 		} else if (waitCond.starts_with("substate:")) {
 			seen = pauseMenu ? std::string(" screen=pause") : " screen=" + g_MenuMan.GetMainMenu()->AutomationMultiplayerSubScreen();
 			met = !pauseMenu && g_MenuMan.GetMainMenu()->AutomationMultiplayerSubScreen() == waitCond.substr(9);
@@ -4479,6 +4488,13 @@ void ProcessMenuScript(bool inPlay = false) {
 		std::getline(iss >> std::ws, item);
 		if (control.empty() || item.empty()) return MenuScriptFail("wait_combo requires a drop-down and the item it must list");
 		waitCond = "combo:" + control + " " + item;
+		waitCondDeadlineMs = MenuScriptNowMs() + 60000;
+	} else if (cmd == "wait_label_absent") {
+		std::string control, unexpected;
+		iss >> control;
+		std::getline(iss >> std::ws, unexpected);
+		if (control.empty() || unexpected.empty()) return MenuScriptFail("wait_label_absent requires a control and nonempty text");
+		waitCond = "nolabel:" + control + " " + unexpected;
 		waitCondDeadlineMs = MenuScriptNowMs() + 60000;
 	} else if (cmd == "wait_label") {
 		std::string control, expected;
