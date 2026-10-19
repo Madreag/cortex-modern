@@ -944,6 +944,16 @@ namespace RTE {
 				check(took && host.PeerFrameMembersAt(150) == 1 && host.IsSeatUnderAI(2, 150),
 				    "of two held seats waiting on each other the host did not play on: took=" + std::to_string(took) + " members=" + std::to_string(host.PeerFrameMembersAt(150)));
 			}
+			{
+				// The client still reports the frame it applied while held, but it is reading toward its agreed return: the host waits for it.
+				Wire wire; NetLockstepCoordinator host; reader(host, wire, 1);
+				host.m_PeerLastHeardMs[2] = 20000; host.m_PeerAppliedThrough[2] = 149; host.m_PeerReportedMembers[2] = 1;
+				host.m_PeerAppliedAtMs[2] = 19900;
+				const bool first = host.TakeLoneSeat(20000);
+				host.m_PeerAppliedAtMs[2] = 20900;
+				const bool second = host.TakeLoneSeat(21000);
+				check(!first && !second && host.IsLocalPrivateReaderAt(150), "a held seat took its seat back from a seat still reading toward its return");
+			}
 			return passed;
 		}
 

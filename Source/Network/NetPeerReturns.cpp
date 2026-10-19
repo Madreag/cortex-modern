@@ -297,8 +297,8 @@ namespace RTE {
 		const uint8_t local = m_Config.localPeerId;
 		if (!IsLocalPrivateReaderAt(frame) || !m_LastCompletedSimulationTick || m_GrantedSimulationTick || m_PeerCommittedTail.contains(frame) ||
 		    !m_MigrationHistory.contains(*m_LastCompletedSimulationTick)) { m_PeerNoDonorSinceMs.reset(); return false; }
-		// A seat heard within the host-loss window gives this frame when it has applied it or still plays: wait for it. The rest are
-		// gone, or held and waiting like this one.
+		// A seat heard within the host-loss window gives this frame when it has applied it, still plays, or is still reading toward its
+		// own return: wait for it. The rest are gone, or held and waiting like this one.
 		uint32_t waiting = SeatBit(local);
 		uint64_t roundTripMs = 0;
 		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
@@ -307,7 +307,10 @@ namespace RTE {
 			if (nowMs >= heard && nowMs - heard >= c_NetHostLossSilenceMs) continue;
 			const auto applied = m_PeerAppliedThrough.find(peer);
 			const auto reported = m_PeerReportedMembers.find(peer);
-			if ((applied != m_PeerAppliedThrough.end() && applied->second >= frame) || reported == m_PeerReportedMembers.end() || (reported->second & SeatBit(peer)) != 0) {
+			const auto rose = m_PeerAppliedAtMs.find(peer);
+			const uint64_t settleMs = 2 * c_NetPeerHeartbeatMs + m_Stats.peers[peer].pingMs;
+			if ((applied != m_PeerAppliedThrough.end() && applied->second >= frame) || reported == m_PeerReportedMembers.end() || (reported->second & SeatBit(peer)) != 0 ||
+			    (rose != m_PeerAppliedAtMs.end() && (nowMs < rose->second || nowMs - rose->second < settleMs))) {
 				m_PeerNoDonorSinceMs.reset();
 				return false;
 			}
