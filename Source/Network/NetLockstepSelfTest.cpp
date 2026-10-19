@@ -1401,6 +1401,8 @@ namespace RTE {
 				NetLockstepCoordinator peer; ConfigureDelay(peer, wire, mode, 1);
 				if (started) peer.m_PeersPlayedThisRound.insert(2);
 				const uint64_t frame = peer.m_Stats.nextFrame;
+				// The round's own consumer waits on this frame from 1000.
+				peer.m_ConsumerWaitingFrame = frame; peer.m_ConsumerWaitStartMs = 1000;
 				peer.m_PeerLastHeardMs[2] = 1049;
 				if (peer.ProposePeerHold(2, 1049) || peer.DeclareOverdueInputs(frame, 1049, 1000, {2}) || peer.HasHeldAISeat(2)) {
 					*error = "a live legacy seat was held before its combat deadline"; return false;
@@ -1414,6 +1416,19 @@ namespace RTE {
 				const auto fact = peer.LastHoldOf(2);
 				if (!fact || fact->frame != frame || fact->cause != "combat_bridge" || fact->boundMs != 50) {
 					*error = "the combat hold lost its exact frame, cause or configured bound"; return false;
+				}
+			}
+			// A seat yet to play owes nothing to a bound while it is still loading behind the start barrier, or for a frame prepared ahead
+			// of the round's display that its consumer does not yet wait on.
+			for (unsigned mode: {1U, 2U}) for (bool loading: {true, false}) {
+				DelayWire wire; wire.rtt = 2;
+				NetLockstepCoordinator peer; ConfigureDelay(peer, wire, mode, 1);
+				const uint64_t frame = peer.m_Stats.nextFrame;
+				if (loading) { peer.m_RemoteStartsReceived.clear(); peer.m_ConsumerWaitingFrame = frame; peer.m_ConsumerWaitStartMs = 1000; }
+				peer.m_PeerLastHeardMs[2] = 1050;
+				if (peer.DeclareOverdueInputs(frame, 1050, 1000, {2}) || peer.HasHeldAISeat(2)) {
+					*error = std::string(loading ? "a loading seat whose start has not arrived" : "a seat yet to play, for a frame no consumer waits on,") +
+					    " was held at the combat bound: mode=" + std::to_string(mode); return false;
 				}
 			}
 			return true;
