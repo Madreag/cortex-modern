@@ -2552,11 +2552,15 @@ void NetModerationGUI::DrawMatchToasts(const std::string& screenLine) {
 	const uint8_t localPeer = ScenarioRunner::GetLockstepLocalPeerId();
 	const PauseMenuGUI* pauseMenu = g_MenuMan.GetActivePauseMenu();
 	const std::string menuSaveLine = pauseMenu ? pauseMenu->GetShownSaveLine() : std::string();
+	// The status box drew this frame before the band; what it already says, the band does not say again.
+	std::string statusShown = m_StatusRect.visible && m_NetStatus ? m_NetStatus->GetText() : std::string();
+	std::replace(statusShown.begin(), statusShown.end(), '\n', ' ');
 	for (size_t index = 0; index < queued.size(); ++index) {
 		if (!ToastStillApplies(queued[index])) continue;
 		// A seat's toast reads its current state, so two events about one seat can read alike: the band shows that line once.
 		std::string line = ToastText(queued[index]);
 		if (std::find(lines.begin(), lines.end(), line) != lines.end()) continue;
+		if (!statusShown.empty() && statusShown.find(sentence(line)) != std::string::npos) continue;
 		// The screen beneath shows its own line; the band does not read it out again, nor this seat's own state when that is the line.
 		const bool ownSeat = queued[index].senderPeerId == 0 || queued[index].senderPeerId == localPeer;
 		// The wait's own screen already says this seat is on its way back.
