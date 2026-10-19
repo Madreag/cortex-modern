@@ -1716,6 +1716,8 @@ namespace RTE {
 		bool PeerFrameGroupConfirms(uint32_t agreeing, uint32_t members, uint64_t frame) const;
 		void SendForwardedPeerInput(const NetLockstepFrame& input, uint8_t onlyPeer);
 		void CheckPeerFrameTie(uint64_t frame, uint32_t members, uint64_t nowMs);
+		void AskPeerFrameTie(uint64_t split, uint64_t frame, uint32_t members, uint64_t nowMs);
+		void DerivePeerCommonSplit(const NetHostMigrationMessage& message, uint64_t nowMs);
 		void PollPeerFrameTies(uint64_t nowMs);
 		bool ProposePeerBridge(uint64_t frame, uint64_t nowMs, bool returningOnly = false);
 		bool ValidatePeerBridge(const NetHostMigrationMessage& proposal) const;
