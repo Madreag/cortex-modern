@@ -819,6 +819,35 @@ namespace RTE {
 				}
 				return impaired && humanHas && !heldHas ? impaired : nullptr;
 			}
+			// The owner's input for the frame reached the human side before it showed the frame and the held side only after it showed it:
+			// late, never lost. Section 11.1's local hold then splits the two sides at their own bounds.
+			const InputWireObservation* LateInput(uint8_t owner, uint8_t human, uint8_t held, uint64_t frame, uint64_t humanAt, uint64_t heldAt) const {
+				if (owner == held) return nullptr;
+				const InputWireObservation* late = nullptr;
+				bool humanHas = human == owner;
+				for (auto it = inputEvidence.lower_bound(frame); it != inputEvidence.end() && it->first - frame < NetLockstepCodec::c_PeerInputWindowTicks; ++it) {
+					const auto& observation = it->second;
+					if (observation.impaired || (observation.receiver != human && observation.receiver != held) || !InputWindowContains(observation.packet, owner, frame)) continue;
+					if (observation.receiver == human && observation.at <= humanAt) humanHas = true;
+					if (observation.receiver == held) {
+						if (observation.at <= heldAt) return nullptr;
+						if (!late || observation.at < late->at) late = &observation;
+					}
+				}
+				return humanHas ? late : nullptr;
+			}
+			// The acceptor's receipt covering the held seat's own input at the frame reached the held seat only after it showed the frame.
+			const InputWireObservation* LateReceipt(uint8_t acceptor, uint8_t held, uint64_t frame, uint64_t heldAt) const {
+				if (acceptor == held) return nullptr;
+				const InputWireObservation* late = nullptr;
+				for (auto it = receiptEvidence.upper_bound(frame); it != receiptEvidence.end(); ++it) {
+					const auto& observation = it->second;
+					if (observation.impaired || observation.receiver != held || observation.packet.senderPeerId != acceptor || observation.packet.successorPeerId != held) continue;
+					if (observation.at <= heldAt) return nullptr;
+					if (!late || observation.at < late->at) late = &observation;
+				}
+				return late;
+			}
 			std::string returnInsideInputs;
 			// The random driver's round: its schedule decides every link, rate and reachability below.
 			const Schedule* schedule = nullptr;
@@ -1514,6 +1543,20 @@ namespace RTE {
 			std::array<std::array<std::map<uint64_t, uint64_t>, 5>, 5> inputSplits;
 			struct InputSplitCause { uint8_t human, held, sender, receiver; uint64_t faultAt, observedAt; };
 			std::vector<InputSplitCause> inputSplitCauses;
+			// A divergence from an input or receipt that arrived late, not lost: accepted only while the engine arbitrates it, and closed
+			// when either side's image return reconverges them.
+			struct LateSplit { uint8_t a = 0, b = 0, owner = 0; uint64_t frame = 0, observedAt = 0, resolvedAt = 0; };
+			std::vector<LateSplit> lateSplits;
+			const LateSplit* OpenLateSplit(uint8_t a, uint8_t b) const {
+				for (const auto& late: lateSplits) if (!late.resolvedAt && ((late.a == a && late.b == b) || (late.a == b && late.b == a))) return &late;
+				return nullptr;
+			}
+			std::string UnresolvedLateSplits() const {
+				for (const auto& late: lateSplits) if (!late.resolvedAt)
+					return "histories differ at displayed frame " + std::to_string(late.frame) + ": peers " + std::to_string(late.a) + " and " + std::to_string(late.b) +
+					       " parted on seat " + std::to_string(late.owner) + "'s late input at " + std::to_string(late.observedAt) + " ms and were never reconverged by an image return";
+				return {};
+			}
 			std::vector<bool> waitPlaying, imageReading, imageNeeded, imageWithoutHeadroom;
 			std::vector<ImageReturnTask> imageTasks;
 			std::vector<bool> splitParticipant;
@@ -1529,6 +1572,7 @@ namespace RTE {
 			uint64_t freezeWallMs = 0;
 			std::vector<FixtureTickCredit> credits;
 			std::vector<uint64_t> queued, waitAt, maxWait, caughtAt;
+			std::vector<uint64_t> releasedAt; //!< The engine's tick that released each seat's waited frame, which the bound is judged at.
 			std::vector<uint64_t> displayedAt, blackoutGap, returnedAt, postReturnWait, imageAt;
 			std::vector<uint64_t> firstDisplayedAt;
 			std::vector<uint64_t> startupFinishAt;
@@ -1572,7 +1616,6 @@ namespace RTE {
 			// Any spell of the seat's own or a loss burst on its own links: the schedule's cause rule charges each to the seat.
 			bool OwnTrouble(uint8_t seat) const {
 				if (OwnMachineTrouble(seat)) return true;
-			std::vector<uint64_t> releasedAt; //!< The engine's tick that released each seat's waited frame, which the bound is judged at.
 				if (!hub.schedule) return false;
 				if (hub.schedule->Active(seat, hub.now)) return true;
 				for (const auto& burst: hub.schedule->bursts) if (burst.seat == seat && hub.now >= burst.atMs && hub.now < burst.atMs + burst.ms) return true;
@@ -1671,15 +1714,19 @@ namespace RTE {
 				}
 				return true;
 			}
+			// The game takes a frame the engine releases inside the update that waited for it: the wait ends at that tick, not at the
+			// fixture's next step.
+			uint64_t WaitEnd(size_t index) const { return index < releasedAt.size() && releasedAt[index] ? releasedAt[index] : hub.now; }
 			void FinishWait(uint8_t seat, uint64_t frame) {
 				const size_t index = seat - 1;
 				if (!waitAt[index]) return;
 				const uint64_t endAt = WaitEnd(index), duration = endAt - waitAt[index];
 				maxWait[index] = std::max(maxWait[index], duration);
 				if (waitPlaying[index]) playingMaxWait[index] = std::max(playingMaxWait[index], duration);
-				if (duration > static_cast<uint64_t>(std::ceil(c_TestBoundTicks * c_TestTickMs))) waits.push_back({seat, waitAt[index], hub.now, frame, waitPlaying[index]});
+				if (duration > static_cast<uint64_t>(std::ceil(c_TestBoundTicks * c_TestTickMs))) waits.push_back({seat, waitAt[index], endAt, frame, waitPlaying[index]});
 				if (returnedAt[index]) postReturnWait[index] = std::max(postReturnWait[index], duration);
 				waitAt[index] = 0;
+				if (index < releasedAt.size()) releasedAt[index] = 0;
 			}
 			void ObserveBoundRole(size_t index, bool playing) {
 				if (!waitAt[index] || !waitPlaying[index] || (playing && !OwnMachineTrouble(static_cast<uint8_t>(index + 1)))) return;
@@ -1711,12 +1758,10 @@ namespace RTE {
 			}
 			// An image return replaces the seat's history: every comparison with it starts again.
 			void ForgetComparisons(uint8_t seat) {
+				for (auto& late: lateSplits) if (!late.resolvedAt && (late.a == seat || late.b == seat)) late.resolvedAt = hub.now;
 				for (uint8_t other = 1; other <= hub.row.seats; ++other) {
 					compared[std::min(seat, other)][std::max(seat, other)] = 0; pairSeparatedFrom[std::min(seat, other)][std::max(seat, other)] = 0;
 				}
-			// The game takes a frame the engine releases inside the update that waited for it: the wait ends at that tick, not at the
-			// fixture's next step.
-			uint64_t WaitEnd(size_t index) const { return index < releasedAt.size() && releasedAt[index] ? releasedAt[index] : hub.now; }
 			}
 			bool InputSplitCausedHold(uint8_t seat, uint64_t since, uint64_t until, uint8_t troubled, uint64_t from, uint64_t to) const {
 				return std::any_of(inputSplitCauses.begin(), inputSplitCauses.end(), [&](const InputSplitCause& cause) {
@@ -1726,7 +1771,6 @@ namespace RTE {
 			}
 			bool CompareHistories(std::string& error) {
 				for (uint8_t a = 1; a <= hub.row.seats; ++a) for (uint8_t b = a + 1; b <= hub.row.seats; ++b) {
-				if (index < releasedAt.size()) releasedAt[index] = 0;
 					const auto& left = worlds[a - 1]; const auto& right = worlds[b - 1];
 					const uint64_t common = std::min(left.applied, right.applied);
 					for (uint64_t frame = compared[a][b] + 1; frame <= common; ++frame) {
@@ -1738,6 +1782,7 @@ namespace RTE {
 							pairSeparatedFrom[a][b] = 0;
 							continue;
 						}
+						if (const auto* late = OpenLateSplit(a, b); late && frame >= late->frame) { splitHistories = true; continue; }
 						const bool authors = authorA && authorA <= hub.row.seats && authorB && authorB <= hub.row.seats && authorA != authorB;
 						uint64_t separated = authors ? splitFrom[std::min(authorA, authorB)][std::max(authorA, authorB)] : 0;
 						if (!separated && pairSeparatedFrom[a][b] && frame >= pairSeparatedFrom[a][b]) separated = pairSeparatedFrom[a][b];
@@ -1764,7 +1809,18 @@ namespace RTE {
 								const bool heldInHuman = ((humanLeft ? l : r) & (1U << ((humanLeft ? b : a) - 1))) != 0;
 								const auto* cause = hub.InputPartition(owner, humanLeft ? a : b, humanLeft ? b : a, frame, human.shownAt.at(frame), held.shownAt.at(frame));
 								if (!cause && heldInHuman) cause = hub.ReceiptPartition(owner, humanLeft ? b : a, frame, held.shownAt.at(frame));
-								if (!cause) continue;
+								if (!cause) {
+									const auto* late = hub.LateInput(owner, humanLeft ? a : b, humanLeft ? b : a, frame, human.shownAt.at(frame), held.shownAt.at(frame));
+									if (!late && heldInHuman) late = hub.LateReceipt(owner, humanLeft ? b : a, frame, held.shownAt.at(frame));
+									if (!late) continue;
+									lateSplits.push_back({a, b, owner, frame, hub.now, 0});
+									sawSplit = splitHistories = true;
+									DiagnosticLine() << "[session-plane-late-input-split] frame=" << frame << " owner=" << unsigned(owner)
+									    << " human_author=" << unsigned(humanLeft ? a : b) << " held_author=" << unsigned(humanLeft ? b : a)
+									    << (late->packet.type == NetHostMigrationMessageType::PeerReceipt ? " late_receipt_ms=" : " late_input_ms=") << late->at
+									    << " held_shown_ms=" << held.shownAt.at(frame) << " delivered_before_hold=0 lost=0" << std::endl;
+									break;
+								}
 								inputSplits[a][b][frame] = 0; separated = frame; sawSplit = true;
 								inputSplitCauses.push_back({humanLeft ? a : b, humanLeft ? b : a, cause->packet.senderPeerId, cause->receiver,
 								    cause->at, std::max(human.shownAt.at(frame), held.shownAt.at(frame))});
@@ -1773,6 +1829,7 @@ namespace RTE {
 								    << (cause->packet.type == NetHostMigrationMessageType::PeerReceipt ? " exact_impaired_receipt=1" : " exact_impaired_input=1") << " delivered_before_hold=0" << std::endl;
 								break;
 							}
+							if (const auto* late = OpenLateSplit(a, b); late && late->frame == frame) continue;
 						}
 						if (separated && frame >= separated && (l & first) && (r & second) && l != r) {
 							if (!pairSeparatedFrom[a][b]) pairSeparatedFrom[a][b] = frame;
@@ -1980,7 +2037,8 @@ namespace RTE {
 						if (heldSince[id] != UINT64_MAX) { heldSpans[id].push_back({heldSince[id], hub.now}); heldSince[id] = UINT64_MAX; }
 					}
 					hashedThrough = 0; sharedDigests.clear(); roundStartMs = hub.now;
-					compared = {}; splitFrom = {}; inputSplits = {}; inputSplitCauses.clear(); sawSplit = splitHistories = false;
+					if (const auto unresolved = UnresolvedLateSplits(); !unresolved.empty()) { error = unresolved + " before the round ended"; return false; }
+					compared = {}; splitFrom = {}; inputSplits = {}; inputSplitCauses.clear(); lateSplits.clear(); sawSplit = splitHistories = false;
 					imageTasks.clear(); imageTasks.resize(hub.row.seats);
 					directRuling = 0;
 					std::fill(lostAt.begin(), lostAt.end(), 0); std::fill(lostFrame.begin(), lostFrame.end(), 0);
@@ -2150,6 +2208,8 @@ namespace RTE {
 						FinishWait(id, next);
 						peer.FinishFrameWait(hub.now);
 						if (!CheckCommittedInputs(ready, id, error) || !world.Apply(ready, error, hub.now)) return false;
+						// As the game does, every thirtieth applied frame's hash goes to the round's live desync check.
+						if (ready.frame % 30 == 0) (void)peer.SubmitLocalChecksum(ready.frame, world.hashes.at(ready.frame));
 						frameMembers[id - 1].push_back(s_FrameMembers(peer, ready.frame));
 						// FLAGGED fixture departure: a held reader copies a witnessed committer's history; it does not author that continuation.
 						frameAuthors[id - 1].push_back(s_FrameAuthor(peer, ready));
@@ -2273,6 +2333,7 @@ namespace RTE {
 				if (row.refaultPercent && !hub.refaultEnd) { error = "the subject never came back, so its second slowdown never began"; return false; }
 				while (hub.refaultEnd && hub.now <= hub.refaultEnd + c_TestReturnAllowanceMs + 4000) if (!Step(error) || !CheckBound(error) || !RecoverImages(error)) return false;
 				if (!FinishImageReturns(error)) return false;
+				if (error = UnresolvedLateSplits(); !error.empty()) return false;
 				if (row.hung && row.subject == 1 && row.gapMs > 15000)
 					for (uint8_t seat = 2; seat <= row.seats; ++seat) if (firstAdminChangeMs[seat - 1] == UINT64_MAX) {
 						error = "authority ruling: a hung host outlasted the hold window without roster administration migrating"; return false;
@@ -3532,6 +3593,7 @@ namespace RTE {
 			while (hub.now <= schedule.endMs && !fixture.roundOver)
 				if (!fixture.Step(error) || !fixture.CheckBound(error) || !fixture.RecoverImages(error)) return failed(error + " at " + std::to_string(hub.now) + " ms");
 			if (!fixture.FinishImageReturns(error)) return failed(error);
+			if (const auto unresolved = fixture.UnresolvedLateSplits(); !unresolved.empty()) return failed(unresolved);
 			const uint64_t end = hub.now;
 			for (uint8_t seat = 1; seat <= schedule.seats; ++seat) {
 				if (fixture.heldSince[seat] != UINT64_MAX) fixture.heldSpans[seat].push_back({fixture.heldSince[seat], UINT64_MAX});
@@ -3583,6 +3645,13 @@ namespace RTE {
 					for (const auto& cut: schedule.cuts) {
 						if (cut.atMs > lookTo || cut.atMs + cut.ms + 3000 < lookFrom) continue;
 						caused |= cut.atMs <= since; troubleEnd = std::max(troubleEnd, cut.atMs + cut.ms); backlog += cut.ms;
+					}
+					// Section 11.1: the seat whose input arrived late past one side's bound is held there, and the side the round's arbitration
+					// sets aside is held until its image return; both holds are that late input's, from it to the reconverging return.
+					for (const auto& late: fixture.lateSplits) {
+						const uint64_t settled = late.resolvedAt ? late.resolvedAt : end;
+						if ((late.a != seat && late.b != seat && late.owner != seat) || since + 3000 < late.observedAt || since > settled) continue;
+						caused = true; troubleEnd = std::max(troubleEnd, settled);
 					}
 					if (!caused) {
 						const bool again = index > 0;
@@ -3982,6 +4051,8 @@ namespace RTE {
 					if (!results[index]) continue;
 					++failedCount;
 					groups[failureGroup(index)].push_back(index);
+					// Each failing round's own finding, so a run names every seed's cause and not only its group's smallest.
+					lines.push_back("random_seed_finding seed=" + std::to_string(schedules[index].seed) + " group=" + failureGroup(index) + ": " + results[index]->detail.substr(0, 320));
 				}
 				std::map<std::string, std::string> minimized;
 				size_t done = 0;
@@ -4050,8 +4121,6 @@ namespace RTE {
 					if (!host.BeginRejoin(12, 1, 2, 3 + attempt, "Returner", returned.nowMs, &error)) return false;
 				}
 				return true;
-					// Each failing round's own finding, so a run names every seed's cause and not only its group's smallest.
-					lines.push_back("random_seed_finding seed=" + std::to_string(schedules[index].seed) + " group=" + failureGroup(index) + ": " + results[index]->detail.substr(0, 320));
 			}
 			if (!host.NoteTransferComplete(12, 8, &error)) return false;
 			host.NoteRejoinLinkFit(12, true); host.NoteTailLinkRtt(12, rttMs);
