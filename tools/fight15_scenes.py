@@ -623,8 +623,17 @@ def seat_dialog_parts():
     # The list shows the freed seat once the directory has the host's next listing; a hand waits to read it before Connect.
     rejoin = ["activate ButtonMultiplayerJoinGame", "wait_ms 600", "assert_substate JoinSetup", *join_own_lobby(), "wait_label LabelJoinSelected 1/2 players",
               "activate ButtonMultiplayerConnect"]
-    done = probe([dict(op="wait_file", path="{PROBE_DIR}/scene-end.json", scope="menu", within_ms=400000), dict(op="assert_relay", scope="menu"), dict(op="finish")], 400000)
+    # The relay is read while both players are seated; the removal comes after both have read it.
+    done = probe([dict(op="wait_file", path="{PROBE_DIR}/relay-check.json", scope="menu", within_ms=300000), dict(op="assert_relay", scope="menu"),
+                  dict(op="signal", name="relay-ok", scope="menu"), dict(op="wait_file", path="{PROBE_DIR}/scene-end.json", scope="menu", within_ms=400000),
+                  dict(op="finish")], 400000)
     return seat, rejoin, done
+
+
+def seated_for_removal(host, joiner):
+    """Both sides read their relay route before the host removes the joined player."""
+    host += ["touch_file {PROBE_DIR}/relay-check.json", "wait_file {PROBE_DIR}/relay-ok.json 60", "wait_file {PROBE_DIR_joiner}/relay-ok.json 60"]
+    joiner += ["touch_file {PROBE_DIR}/relay-check.json"]
 
 
 def seat_dialog_checks(marks):
@@ -638,14 +647,16 @@ def seat_dialog_scene():
     """D3, D9 and G6: Kick in the lobby seat dialog asks for a second press that names what it does, removes the connected
     player, and the removed player stays refused for the match by name."""
     seat, rejoin, done = seat_dialog_parts()
-    host = host_setup() + seat + ["video_mark seat-dialog-host", "assert_enabled ButtonHostSeatDlgKick 1", "assert_enabled ButtonHostSeatDlgBan 1",
+    host, joiner = host_setup(), join_setup()
+    seated_for_removal(host, joiner)
+    host += seat + ["video_mark seat-dialog-host", "assert_enabled ButtonHostSeatDlgKick 1", "assert_enabled ButtonHostSeatDlgBan 1",
             "assert_text_fits LabelHostSeatDlgActionHint", "assert_no_overlap LabelHostSeatDlgActionHint ButtonHostSeatDlgBan"]
     host += ["activate ButtonHostSeatDlgKick", "wait_ms 600", "video_mark kick-confirm-host", "assert_visible HostSeatDialog 1",
              "assert_label ButtonHostSeatDlgKick Confirm kick", "assert_label LabelHostSeatDlgActionHint Press Confirm kick to remove Joiner from this session",
              "assert_text_fits LabelHostSeatDlgActionHint", "assert_text_fits ButtonHostSeatDlgKick", "activate ButtonHostSeatDlgKick", "wait_ms 1200",
              "assert_visible HostSeatDialog 0", "activate ButtonHostOptBack", "wait_substate Lobby 30", "wait_label LabelLobbyPlayer1 Open seat",
              "video_mark kicked-host", "wait_file {PROBE_DIR_joiner}/kick-refused.json 120"] + lobby_exit()
-    joiner = join_setup() + ["video_mark seated-joiner", "wait_label LabelMultiplayerLandingStatus The host removed you from this session",
+    joiner += ["video_mark seated-joiner", "wait_label LabelMultiplayerLandingStatus The host removed you from this session",
               "video_mark kicked-joiner", "assert_text_fits LabelMultiplayerLandingStatus"]
     joiner += rejoin + ["wait_label LabelJoinSelected The host removed you from this session", "video_mark kick-refused-joiner",
                "touch_file {PROBE_DIR}/kick-refused.json"] + lobby_exit()
@@ -660,7 +671,9 @@ def ban_scene():
     """D3, D9 and G6: Ban in the lobby seat dialog asks first and bans the connected player; Banned players lists the ban and
     Remove ban lifts it, saying the player may join the host's next games and stays out of this match."""
     seat, rejoin, done = seat_dialog_parts()
-    host = host_setup() + seat + ["video_mark seat-dialog-host", "assert_enabled ButtonHostSeatDlgKick 1", "assert_enabled ButtonHostSeatDlgBan 1"]
+    host, joiner = host_setup(), join_setup()
+    seated_for_removal(host, joiner)
+    host += seat + ["video_mark seat-dialog-host", "assert_enabled ButtonHostSeatDlgKick 1", "assert_enabled ButtonHostSeatDlgBan 1"]
     host += ["activate ButtonHostSeatDlgBan", "wait_ms 600", "video_mark ban-confirm-host", "assert_visible HostSeatDialog 1",
              "assert_label ButtonHostSeatDlgBan Confirm ban", "assert_label LabelHostSeatDlgActionHint Press Confirm ban to ban Joiner from this session",
              "assert_text_fits LabelHostSeatDlgActionHint", "activate ButtonHostSeatDlgBan", "wait_ms 1200", "assert_visible HostSeatDialog 0",
@@ -670,7 +683,7 @@ def ban_scene():
              "wait_label LabelHostBannedStatus Remove ban: Done. They may join your next games, not this match.", "assert_text_fits LabelHostBannedStatus",
              "assert_label_absent LabelHostBannedList Joiner", "touch_file {PROBE_DIR}/unbanned.json", "activate ButtonHostBannedClose", "wait_ms 600",
              "activate ButtonHostOptBack", "wait_substate Lobby 30", "wait_file {PROBE_DIR_joiner}/still-refused.json 120"] + lobby_exit()
-    joiner = join_setup() + ["video_mark seated-joiner", "wait_label LabelMultiplayerLandingStatus The host banned you from this session",
+    joiner += ["video_mark seated-joiner", "wait_label LabelMultiplayerLandingStatus The host banned you from this session",
               "video_mark banned-joiner", "assert_text_fits LabelMultiplayerLandingStatus"]
     joiner += rejoin + ["wait_label LabelJoinSelected The host banned you from this session", "video_mark ban-refused-joiner", "touch_file {PROBE_DIR}/refused.json",
                "wait_file {PROBE_DIR_host}/unbanned.json 120", "activate ButtonMultiplayerConnect",
