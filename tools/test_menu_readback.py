@@ -1021,7 +1021,7 @@ def sweep_case(case, port, root):
 # A match field rides the lobby's config to every peer; a computer field is this machine's own. Order matters only where one
 # field opens another: the mode and the activity before the seats and the rules they seed, the count before the seat it
 # opens, Fixed before a seat's delay,
-# autosave on before its interval.
+# autosave's interval before autosave is turned off (it starts on, every five minutes).
 def draft_fields(port):
     match = (
         ("mode", "Rules", hand_pick("ComboHostRulesMode", "Players and AI opponents"), "assert_label ComboHostRulesMode Players and AI opponents\n"),
@@ -1047,8 +1047,8 @@ def draft_fields(port):
         ("input_delay", "Timing", "settext TextHostNetMinDelay 5\nwait 4\n", "assert_label TextHostNetMinDelay 5\n"),
         ("seat_delay", "Timing", "settext TextHostNetPeerDelay2 6\nwait 4\n", "assert_label TextHostNetPeerDelay2 6\n"),
         ("repair", "Recovery", "setcheck CheckHostRecRepair 0\nwait 4\n", "assert_checked CheckHostRecRepair 0\n"),
-        ("autosave", "Recovery", "setcheck CheckHostRecAutosave 1\nwait 4\n", "assert_checked CheckHostRecAutosave 1\n"),
         ("autosave_interval", "Recovery", hand_pick("ComboHostRecAutosaveInterval", "2 minutes"), "assert_label ComboHostRecAutosaveInterval 2 minutes\n"),
+        ("autosave", "Recovery", "setcheck CheckHostRecAutosave 0\nwait 4\n", "assert_checked CheckHostRecAutosave 0\n"),
         ("return_window", "Recovery", hand_pick("ComboHostRecReturnWindow", "10 minutes"), "assert_label ComboHostRecReturnWindow 10 minutes\n"),
         ("idle_wait", "Session", hand_pick("ComboHostSessIdle", "20 minutes"), "assert_label ComboHostSessIdle 20 minutes\n"),
     )
@@ -1078,6 +1078,8 @@ def third_pass_case(case, port, root, size):
     setup = LANDING + "activate ButtonMultiplayerHostGame\nwait_ms 400\nassert_substate HostSetup\n" + f"setup_host_port {port}\n"
     match, computer = draft_fields(port)
     if case == "host-draft-roundtrip":
+        # Autosave turned off closes its interval, so the round trip keeps it on and follows the interval; host-draft-apply turns it off.
+        match = tuple(field for field in match if field[0] != "autosave")
         # Set by hand, Apply, Back, reopened: the controls show every value; Create Lobby carries every match value into the lobby
         # (the host's own live view reads the adopted config) and the joined player's read-only view shows each one.
         host = setup + advanced + "".join(page(tab) + change for _, tab, change, _ in match + computer)
