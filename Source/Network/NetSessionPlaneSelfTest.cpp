@@ -1843,7 +1843,6 @@ namespace RTE {
 				auto match = NetMatchConfigUtil::MakeDefault(0xF001);
 				match.peerCount = row.seats; match.players.clear(); match.successorOrder.clear(); match.migrationPeers.clear();
 				match.inputDelayFrames = 1; match.peerInputDelayFrames.assign(row.seats, 1); match.roundId = roundId;
-				if (row.mode == 1) match.slowPlayerPolicy = NetSlowPlayerPolicy::Pause;
 				if (row.mode >= 2) match.dedicated = true;
 				if (row.mode == 3) {
 					match.version = NetMatchConfigUtil::c_PersistentWorldVersion;
@@ -2028,6 +2027,7 @@ namespace RTE {
 					if (peer.IsFailed()) { error = "peer " + std::to_string(id) + " failed: " + peer.GetStats().timeoutReason; return false; }
 					const bool directHostlessGroup = !hub.row.internet && sawSplit && (s_HeldSeats(peer, world.applied + 1) & 1U);
 					const bool keptDirectMigration = !hub.row.internet && sawSplit && peer.GetConfig().migrationGeneration &&
+					    std::any_of(firstAdminChangeMs.begin(), firstAdminChangeMs.end(), [](uint64_t at) { return at != UINT64_MAX; });
 					// Section 11.3(c): a direct group, a lone peer included, that has held the host through the hold window migrates and keeps the
 					// game. A scheduled round's window runs from when the host's seat was first held, not from a fixed row's fault.
 					// The host's silence began up to one link delay and the bound before the fixture saw its seat held.
@@ -2037,7 +2037,6 @@ namespace RTE {
 					bool heldHostWindow = hub.schedule && heldSince[1] != UINT64_MAX && heldThroughWindow(heldSince[1], hub.now);
 					if (hub.schedule) for (const auto& [since, until]: heldSpans[1]) heldHostWindow |= until != UINT64_MAX && heldThroughWindow(since, until);
 					const bool scheduledDirectMigration = !hub.row.internet && heldHostWindow && peer.GetConfig().migrationGeneration;
-					    std::any_of(firstAdminChangeMs.begin(), firstAdminChangeMs.end(), [](uint64_t at) { return at != UINT64_MAX; });
 					// The revised direct contract also migrates a hostless minority and a lone peer, on their own continuation.
 					if (!hub.row.repeatedAdministration && !directHostlessGroup && !keptDirectMigration && !scheduledDirectMigration && peer.GetHostPeerId() != 1 &&
 					    (!hub.row.gapMs || hub.row.subject != 1 || hub.row.gapMs < 15000)) {
@@ -2986,6 +2985,34 @@ namespace RTE {
 			}
 			return true;
 		}
+		// The Pause and Wait policies are hidden in V1: no host can choose one, and no agreed config, a resumed save's included, carries one.
+		bool CheckPauseNeverAgreed(std::string& error) {
+			NetMatchServiceRequest request;
+			request.host = true; request.slowPlayerPolicy = NetSlowPlayerPolicy::Pause;
+			NetMatchConfig configured;
+			if (!NetMatchService::BuildMatchConfig(request, 0x9F03, configured, &error)) { error = "a host request naming the Pause policy built no match: " + error; return false; }
+			if (configured.slowPlayerPolicy != NetSlowPlayerPolicy::Substitute) { error = "a host request naming the Pause policy agreed it"; return false; }
+			NetMatchConfig draft = NetMatchConfigUtil::MakeDefault(0x9F04);
+			draft.slowPlayerPolicy = NetSlowPlayerPolicy::Pause;
+			request.slowPlayerPolicy.reset(); request.hostDraft = draft;
+			if (!NetMatchService::BuildMatchConfig(request, 0x9F04, configured, &error)) { error = "a host draft naming the Pause policy built no match: " + error; return false; }
+			if (configured.slowPlayerPolicy != NetSlowPlayerPolicy::Substitute) { error = "a host draft naming the Pause policy agreed it"; return false; }
+			NetMatchConfig resumed = NetMatchConfigUtil::MakeDefault(0x9F05);
+			resumed.slowPlayerPolicy = NetSlowPlayerPolicy::Pause;
+			const uint64_t savedRevision = resumed.configRevision;
+			NetMatchConfigUtil::PrepareResumedConfig(resumed);
+			if (resumed.slowPlayerPolicy != NetSlowPlayerPolicy::Substitute) { error = "a resumed save naming the Pause policy kept it"; return false; }
+			if (resumed.configRevision != savedRevision + 1 || !NetMatchConfigUtil::ValidateLocalAlpha(resumed, &error)) {
+				error = "a resumed save lost its new revision or its validity: " + error; return false;
+			}
+			NetMatchConfig legacy = NetMatchConfigUtil::MakeDefault(0x9F06);
+			legacy.version = NetMatchConfigUtil::c_TimingOptionsVersion - 1; legacy.slowPlayerPolicy = NetSlowPlayerPolicy::Pause;
+			legacy.slowPlayerBoundTicks = NetMatchConfigUtil::c_DefaultSlowPlayerBoundTicks;
+			NetMatchConfigUtil::KeepOfferedSlowPlayerPolicy(legacy);
+			if (legacy.slowPlayerPolicy != NetSlowPlayerPolicy::Pause) { error = "a legacy config without timing options was given a policy it cannot carry"; return false; }
+			return true;
+		}
+
 		bool CheckAuthorityOracle(std::string& error) {
 			Case authorityRow{"oracle_directory_services"}; authorityRow.seats = 2; authorityRow.internet = true;
 			Fixture authority;
@@ -5405,7 +5432,6 @@ namespace RTE {
 		auto silentVoterFar = silentVoter; silentVoterFar.name = "held_seat_return_meets_a_silent_voter_over_100ms"; silentVoterFar.rttMs = silentVoterFar.otherRttMs = 100; rows.push_back(silentVoterFar);
 		auto tieThenDropFar = tieThenDrop; tieThenDropFar.name = "refereed_2_2_split_then_a_second_drop_in_the_same_hold_over_100ms"; tieThenDropFar.rttMs = tieThenDropFar.otherRttMs = 100; rows.push_back(tieThenDropFar);
 		for (const auto& [name, mode, stage]: std::vector<std::tuple<const char*, uint8_t, uint8_t>>{
-		    {"pause_policy_stopped_joiner_keeps_the_survivor_bound", 1, 0},
 		    {"dedicated_match_stopped_joiner_keeps_the_survivor_bound", 2, 0},
 		    {"persistent_world_stopped_joiner_keeps_the_survivor_bound", 3, 0},
 		    {"agreed_start_gate_stopped_joiner_keeps_the_survivor_bound", 0, 1},
@@ -5457,12 +5483,14 @@ namespace RTE {
 				return ok ? 0 : 1;
 			}
 		}
-		DiagnosticLine() << "[net-session-plane-selftest] topology=single-box proof=false forced_rows=" << (selected ? 1 : rows.size() + 44 + FixedScheduleRows().size()) << std::endl;
+		DiagnosticLine() << "[net-session-plane-selftest] topology=single-box proof=false forced_rows=" << (selected ? 1 : rows.size() + 45 + FixedScheduleRows().size()) << std::endl;
 		// Every row runs on a pool of worker threads: a named row keeps its engine lines and is printed as soon as it ends, the longest
 		// rows started first; the random driver's rounds follow them in the same pool.
 		QuietLines quiet(std::cout);
 		struct RowRun { std::string name; std::function<bool(std::string&)> check; std::string error, lines; bool ok = false; uint64_t cost = 0; };
 		std::vector<RowRun> named;
+		if (!selected || std::string_view(selected) == "pause_policy_is_never_offered_or_agreed")
+			named.push_back({"pause_policy_is_never_offered_or_agreed", CheckPauseNeverAgreed});
 		if (!selected || std::string_view(selected) == "authority_fixture_checks_each_half_and_never_waives_the_bound")
 			named.push_back({"authority_fixture_checks_each_half_and_never_waives_the_bound", CheckAuthorityOracle});
 		// FLAGGED fixture departure: an exact input lost on one wire can create two continuations without a total transport cut.
