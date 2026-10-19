@@ -976,6 +976,120 @@ namespace RTE {
 			return true;
 		}
 
+		// Seat 1 held seat 3 at its bound at frame 150 while seat 2 had already played seat 3's input there. A witness of a frame both
+		// applied shows the other continuation: the member is held at the next frame, the groups are disjoint, and the healed
+		// histories or the directory choose between them. A directory decision naming seats of both continuations is the asker's.
+		static bool OtherContinuationBecomesASplit(std::string* error) {
+			bool passed = true;
+			const auto check = [&](bool ok, const std::string& why) {
+				if (!ok) { passed = false; *error += why + "; "; std::cout << "[other-continuation] FAIL " << why << std::endl; }
+			};
+			ControllerFrame first, second, third; first.actorUniqueID = 1001; second.actorUniqueID = 1002; third.actorUniqueID = 1003;
+			const auto record = [&](const NetLockstepCoordinator& peer, uint64_t frame, bool withThird) {
+				NetLockstepReadyFrame ready; ready.frame = frame; ready.localPeerId = peer.m_Config.localPeerId; ready.authorityPeerId = ready.updateAuthorityPeerId = 1;
+				for (uint8_t seat = 1; seat <= 3; ++seat) {
+					if (seat == 3 && !withThird) continue;
+					const auto& input = seat == 1 ? first : seat == 2 ? second : third;
+					if (seat == ready.localPeerId) { ready.localFrames = {input}; ready.hasLocalInput = true; }
+					else { ready.remoteFrameCounts[seat] = 1; ready.remoteFrames.push_back(input); }
+				}
+				std::vector<uint8_t> bytes;
+				peer.EncodeMigrationFrame(ready, bytes);
+				return bytes;
+			};
+			// The referee answers a split's first question, as the directory does.
+			auto decided = std::make_shared<std::map<uint64_t, std::vector<uint16_t>>>();
+			const auto referee = [decided](const NetFrameTieRequest& request) {
+				const auto [answer, inserted] = decided->try_emplace(request.frame, request.members);
+				NetFrameTieReply reply{NetFrameTieReply::State::Decided};
+				reply.members = answer->second;
+				return reply;
+			};
+			// Arms: seat 1's other continuation in direct play; the same history; seat 1 asked the decided question; seat 2 did not.
+			for (unsigned arm = 0; arm < 4; ++arm) {
+				Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
+				const uint8_t local = arm == 3 ? 2 : 1, other = arm == 3 ? 1 : 2;
+				peer.m_Config.peerFrameGroups = true; peer.m_Config.localPeerId = local; peer.m_Config.authorityPeerId = 1;
+				peer.m_Config.peerCount = peer.m_Config.matchConfig.peerCount = 3;
+				peer.m_Config.matchConfig.players.resize(2); peer.m_Config.matchConfig.players.push_back({3, 2, false, "Third"});
+				peer.m_RoundConfigHash = NetMatchConfigUtil::HashConfig(peer.m_Config.matchConfig);
+				peer.m_RemotePeerIds = local == 1 ? std::vector<uint8_t>{2, 3} : std::vector<uint8_t>{1, 3};
+				peer.m_RemoteTransports = {{other, 40 + other}, {3, 43}};
+				peer.m_MigrationPhase = NetHostMigrationPhase::None;
+				if (arm >= 2) {
+					decided->clear();
+					if (arm == 3) (*decided)[1] = {1, 2};
+					peer.m_Config.frameTieReferee = referee;
+				}
+				// Seat 1 asked its question before installing the hold of seat 3 at its bound; seat 2 played seat 3 on.
+				peer.m_FrameGroupMembers = 7; peer.m_FrameGroupChanges = {{1, 7}};
+				if (local == 1) {
+					peer.CheckPeerFrameTie(150, 3, 1000);
+					peer.m_PeerBridges[3] = {150, 150, true, std::nullopt, {}, 3};
+					peer.m_PeerFrameHolds[3][150] = true;
+					peer.m_FrameGroupMembers = 3; peer.m_FrameGroupChanges[150] = 3;
+					if (const auto split = peer.m_PeerSplitArbitrations.find(1); split != peer.m_PeerSplitArbitrations.end()) split->second.holdFrame = 150;
+				}
+				for (uint64_t frame = 140; frame <= 160; ++frame) peer.StoreMigrationFrame(frame, record(peer, frame, local != 1));
+				peer.m_LastCompletedSimulationTick = peer.m_LastDeliveredFrame = 160; peer.m_Stats.nextFrame = 161;
+				for (uint8_t seat = 1; seat <= 3; ++seat) {
+					if (seat == 3 && local == 1) continue;
+					NetLockstepFrame input; input.senderPeerId = seat; input.roundId = 77; input.targetFrame = 161;
+					input.frames = {seat == 1 ? first : seat == 2 ? second : third};
+					peer.m_PeerSourceInputs[161][seat] = input;
+					if (seat == local) peer.m_LocalFrames[161] = input.frames; else peer.m_RemoteFrames[161][seat] = input.frames;
+					for (uint8_t reader = 1; reader <= 3; ++reader) peer.m_PeerInputReceipts[seat][reader] = 162;
+				}
+				// The other seat's witness of frame 155: its record keeps seat 3 when its history is the other continuation.
+				Wire otherWire; NetLockstepCoordinator witnessPeer; Configure(witnessPeer, otherWire);
+				witnessPeer.m_Config.peerFrameGroups = true; witnessPeer.m_Config.localPeerId = other;
+				witnessPeer.m_Config.peerCount = witnessPeer.m_Config.matchConfig.peerCount = 3;
+				witnessPeer.m_Config.matchConfig.players.resize(2); witnessPeer.m_Config.matchConfig.players.push_back({3, 2, false, "Third"});
+				const bool diverged = arm != 1;
+				witnessPeer.StoreMigrationFrame(155, record(witnessPeer, 155, diverged ? local == 1 : false));
+				const auto applied = witnessPeer.PeerAppliedFramePrefix(155);
+				auto witness = peer.PeerFrameMessage(NetHostMigrationMessageType::PeerReceipt);
+				witness.senderPeerId = witness.successorPeerId = other;
+				witness.preparedFrame = UINT64_MAX; witness.frame = witness.appliedFrame = 155;
+				witness.voterMask = diverged && local == 1 ? 7 : 3;
+				witness.bytes.assign(applied.begin(), applied.end()); witness.bytes.insert(witness.bytes.end(), applied.begin(), applied.end());
+				witness.totalBytes = static_cast<uint32_t>(witness.bytes.size());
+				std::vector<uint8_t> signedBytes; NetHostMigrationMessage authenticated;
+				if (!NetHostMigrationCodec::Encode(witness, peer.m_Config.migrationKey, signedBytes) ||
+				    !NetHostMigrationCodec::Decode(signedBytes, peer.m_Config.migrationKey, authenticated) || !peer.HandlePeerFrameMessage(authenticated, 1200)) {
+					check(false, "arm " + std::to_string(arm) + ": the witness did not traverse the authenticated peer wire"); continue;
+				}
+				if (local == 2) peer.CheckPeerFrameTie(161, 6, 1200);
+				(void)peer.ProposePeerBridge(161, 1200);
+				const bool held = (peer.PeerFrameMembersAt(161) & (1U << (other - 1))) == 0;
+				check(held == diverged, "arm " + std::to_string(arm) + (diverged ? ": a member playing another continuation stayed in this group" :
+				    ": a member with the same history was held") + " members=" + std::to_string(peer.PeerFrameMembersAt(161)));
+				if (!diverged || !held) continue;
+				peer.m_LastCompletedSimulationTick = peer.m_LastDeliveredFrame = 165; peer.m_Stats.nextFrame = 166; peer.m_ReadyFrames.clear();
+				if (arm == 0) {
+					// The other half reports its continuation, held from 162, with this one's history acknowledged.
+					auto heartbeat = peer.PeerFrameMessage(NetHostMigrationMessageType::PeerHeartbeat);
+					heartbeat.senderPeerId = heartbeat.successorPeerId = 2;
+					heartbeat.connectedMask = 6; heartbeat.frame = 1; heartbeat.boundary = 162; heartbeat.members = {1, 2, 3};
+					heartbeat.appliedFrame = heartbeat.preparedFrame = 170; heartbeat.voterMask = 1;
+					heartbeat.bytes.assign(40, 0); std::fill(heartbeat.bytes.begin() + 8, heartbeat.bytes.end(), 0x6a);
+					heartbeat.totalBytes = static_cast<uint32_t>(heartbeat.bytes.size());
+					if (!NetHostMigrationCodec::Encode(heartbeat, peer.m_Config.migrationKey, signedBytes) ||
+					    !NetHostMigrationCodec::Decode(signedBytes, peer.m_Config.migrationKey, authenticated) || !peer.HandlePeerFrameMessage(authenticated, 1300)) {
+						check(false, "the heal history did not traverse the authenticated peer wire"); continue;
+					}
+					check(peer.IsStopped() && peer.GetStats().timeoutReason.starts_with("PeerHeld:"),
+					    "the healed histories did not return the lone continuation through the image: state=" + std::string(NetLockstepCoordinator::StateName(peer.GetState())));
+				} else {
+					peer.PollPeerFrameTies(1300);
+					const bool lost = peer.IsStopped() && peer.GetStats().timeoutReason.starts_with("PeerHeld:");
+					check(lost == (arm == 3), arm == 3 ? "a seat that did not ask the decided question played on with a member of the other continuation" :
+					    "the seat whose question the directory decided stopped");
+				}
+			}
+			return passed;
+		}
+
 		// A reader's subscription went to a donor whose link then lost most packets, and a repair asked the other donor for an earlier
 		// range. The retry of the lost frames goes to the donor that was not asked for them.
 		static bool TailRetryAsksAnotherDonor(std::string* error) {
@@ -32581,6 +32695,12 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS a_new_host_is_timed_from_its_own_traffic\n[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "other-continuation") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::OtherContinuationBecomesASplit(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS another_continuation_in_a_group_becomes_a_split\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "tail-retry-donor") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::TailRetryAsksAnotherDonor(&error)) return fail(error);
@@ -33032,6 +33152,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::RoundKeepsAPlayingSeat, "a_round_keeps_a_playing_seat");
 		row(&SessionPlaneRecoveryTest::HeldSeatWithNoDonorPlaysOn, "a_held_seat_with_no_donor_plays_on");
 		row(&SessionPlaneRecoveryTest::NewHostTimedFromItsOwnTraffic, "a_new_host_is_timed_from_its_own_traffic");
+		row(&SessionPlaneRecoveryTest::OtherContinuationBecomesASplit, "another_continuation_in_a_group_becomes_a_split");
 		row(&SessionPlaneRecoveryTest::ReturnerPaceComparesWhatItApplied, "a_returners_pace_compares_what_it_applied");
 		row(&SessionPlaneRecoveryTest::PrivateReaderPlaysOnlyTheHistoryItReads, "a_private_reader_plays_only_the_history_it_reads");
 		row(&SessionPlaneRecoveryTest::TailHoldSignersAreNotAnotherPlayingHalf, "tail_hold_signers_are_not_another_playing_half");
