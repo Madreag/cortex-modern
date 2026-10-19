@@ -636,7 +636,9 @@ def seat_dialog_scene():
              "touch_file {PROBE_DIR}/unbanned.json", "activate ButtonHostBannedClose", "wait_ms 600", "activate ButtonHostOptBack",
              "wait_substate Lobby 30", "wait_connected 2 120", "wait_label LabelLobbyPlayer1 Joiner", "video_mark readmitted-after-ban-host"]
     host += lobby_exit()
-    rejoin = ["activate ButtonMultiplayerJoinGame", "wait_ms 600", "assert_substate JoinSetup", *join_own_lobby(), "activate ButtonMultiplayerConnect"]
+    # The list shows the freed seat once the directory has the host's next listing; a hand waits to read it before Connect.
+    rejoin = ["activate ButtonMultiplayerJoinGame", "wait_ms 600", "assert_substate JoinSetup", *join_own_lobby(), "wait_label LabelJoinSelected 1/2 players",
+              "activate ButtonMultiplayerConnect"]
     joiner = join_setup() + ["video_mark seated-joiner", "wait_label LabelMultiplayerLandingStatus The host removed you from this session",
               "video_mark kicked-joiner", "assert_text_fits LabelMultiplayerLandingStatus", "touch_file {PROBE_DIR}/kicked.json"]
     joiner += rejoin + ["wait_connected 2 90", "wait_substate Lobby 90", "video_mark readmitted-after-kick-joiner",
