@@ -3505,30 +3505,24 @@ class ConnectionAuthorityTests(unittest.TestCase):
         envelope.update(operation="frame-tie", signed_request=base64.b64encode(raw).decode(), signature=self.referee_players[seat][0].sign(REQUEST_DOMAIN + raw).hex())
         return self.store.connection_request(self.sid, envelope, self.now, INSTALL_KEY)
 
-    def test_frame_tie_decides_once_no_unheard_group_could_win(self):
+    def test_frame_tie_first_check_in_keeps_the_split_at_once(self):
         self.referee_fixture()
         started = time.monotonic()
-        # Two of four seats without the host: the host's pair, not heard yet, could still win the even split.
         answer = self.frame_check_in(2, [2, 3])
-        self.assertEqual(answer["status"], "waiting")
-        self.assertNotIn("members", answer)
+        self.assertEqual((answer["status"], answer["members"]), ("decided", [2, 3]))
         self.assertLess(time.monotonic() - started, 0.25)
-        self.assertEqual(self.frame_check_in(2, [2, 3], query_only=True)["status"], "waiting")
-        # The host's pair wins the even split the moment it is heard, and every later answer names it.
-        self.assertEqual(self.frame_check_in(0, [0, 1])["members"], [0, 1])
-        self.assertEqual(self.frame_check_in(2, [2, 3])["members"], [0, 1])
-        self.assertEqual(self.frame_check_in(0, [2, 3], query_only=True)["members"], [0, 1])
-        # Heard first, the host's pair needs nobody else: no pair of the other seats could beat it.
-        self.assertEqual(self.frame_check_in(0, [0, 1], frame=89)["members"], [0, 1])
+        self.assertEqual(self.frame_check_in(2, [2, 3], query_only=True)["members"], [2, 3])
+        self.assertEqual(self.frame_check_in(0, [2, 3], query_only=True)["members"], [2, 3])
+        self.assertEqual(self.frame_check_in(0, [0, 1])["members"], [2, 3])
 
     def test_frame_tie_later_half_learns_the_first_and_keeps_admin_generation(self):
         self.referee_fixture()
         self.assertEqual(self.frame_check_in(0, [0, 1])["members"], [0, 1])
         self.assertEqual(self.frame_check_in(2, [2, 3])["members"], [0, 1])
-        self.assertEqual(self.frame_check_in(2, [2, 3], frame=89)["status"], "waiting")
+        self.assertEqual(self.frame_check_in(2, [2, 3], frame=89)["members"], [2, 3])
         self.now += 0.3; self.wall += 0.3
-        self.assertEqual(self.frame_check_in(0, [0, 1], frame=89)["members"], [0, 1])
-        self.assertEqual(self.frame_check_in(2, [2, 3], frame=89, query_only=True)["members"], [0, 1])
+        self.assertEqual(self.frame_check_in(0, [0, 1], frame=89)["members"], [2, 3])
+        self.assertEqual(self.frame_check_in(2, [2, 3], frame=89, query_only=True)["members"], [2, 3])
         self.assertEqual(self.store.connection_bootstrap(self.sid, self.now)["host_generation"], 0)
 
     def test_frame_tie_query_never_confirms_a_missing_side(self):
@@ -3543,30 +3537,28 @@ class ConnectionAuthorityTests(unittest.TestCase):
     def test_frame_tie_cannot_omit_retained_seats_and_keeps_its_first_group(self):
         self.referee_fixture()
         with self.assertRaises(ConnectionErrorReply): self.frame_check_in(0, [0], owners=[0, 1])
-        self.assertEqual(self.frame_check_in(1, [1, 2, 3], frame=89)["members"], [1, 2, 3])
-        self.assertEqual(self.frame_check_in(0, [0], frame=89)["members"], [1, 2, 3])
+        self.assertEqual(self.frame_check_in(1, [1, 2], frame=89)["members"], [1, 2])
+        self.assertEqual(self.frame_check_in(0, [0, 1], frame=89)["members"], [1, 2])
         for seat in (0, 1):
-            self.assertEqual(self.frame_check_in(seat, [1, 2, 3], frame=89, query_only=True)["members"], [1, 2, 3])
+            self.assertEqual(self.frame_check_in(seat, [1, 2], frame=89, query_only=True)["members"], [1, 2])
 
-    def test_frame_tie_two_seats_go_to_the_host_seat(self):
+    def test_frame_tie_two_seats_first_check_in_decides(self):
         self.referee_fixture(seats=2)
         self.assertEqual(self.frame_check_in(0, [0])["members"], [0])
         self.assertEqual(self.frame_check_in(1, [1])["members"], [0])
-        # The other seat heard first waits for the host's, which wins the even split.
-        self.assertEqual(self.frame_check_in(1, [1], frame=89)["status"], "waiting")
-        self.assertEqual(self.frame_check_in(0, [0], frame=89)["members"], [0])
-        self.assertEqual(self.frame_check_in(0, [1], frame=89, query_only=True)["members"], [0])
+        self.assertEqual(self.frame_check_in(1, [1], frame=89)["members"], [1])
+        self.assertEqual(self.frame_check_in(0, [0], frame=89)["members"], [1])
+        self.assertEqual(self.frame_check_in(0, [1], frame=89, query_only=True)["members"], [1])
         for seat in (0, 1):
             self.assertEqual(self.frame_check_in(seat, [1 - seat], frame=91, query_only=True)["status"], "waiting")
         ties = dict(self.store.connections.records())[self.sid]["frame_ties"]
         self.assertEqual(len(ties), 2)
 
-    def test_frame_tie_three_seats_keep_the_larger_group_without_rewriting_history(self):
+    def test_frame_tie_three_seats_arbitrates_either_size_without_rewriting_history(self):
         self.referee_fixture(seats=3)
-        # A lone seat heard first never decides for the pair: it waits, and the pair keeps its history.
-        self.assertEqual(self.frame_check_in(2, [2])["status"], "waiting")
-        self.assertEqual(self.frame_check_in(0, [0, 1])["members"], [0, 1])
-        self.assertEqual(self.frame_check_in(1, [2], query_only=True)["members"], [0, 1])
+        self.assertEqual(self.frame_check_in(2, [2])["members"], [2])
+        self.assertEqual(self.frame_check_in(0, [0, 1])["members"], [2])
+        self.assertEqual(self.frame_check_in(1, [2], query_only=True)["members"], [2])
         self.assertEqual(self.frame_check_in(0, [0, 1], frame=89)["members"], [0, 1])
         self.assertEqual(self.frame_check_in(2, [2], frame=89)["members"], [0, 1])
         self.assertEqual(self.store.connection_bootstrap(self.sid, self.now)["host_generation"], 0)
@@ -3583,8 +3575,8 @@ class ConnectionAuthorityTests(unittest.TestCase):
         self.assertEqual(self.frame_check_in(0, [1, 2, 3], query_only=True)["status"], "waiting")
         self.assertEqual(self.frame_check_in(3, [1, 2, 3])["members"], [1, 2, 3])
         self.assertEqual(self.frame_check_in(0, [0])["members"], [1, 2, 3])
-        self.assertEqual(self.frame_check_in(0, [0], frame=89)["status"], "waiting")
-        self.assertEqual(self.frame_check_in(2, [1, 2, 3], frame=89)["members"], [1, 2, 3])
+        self.assertEqual(self.frame_check_in(0, [0], frame=89)["members"], [0])
+        self.assertEqual(self.frame_check_in(2, [1, 2, 3], frame=89)["members"], [0])
 
     def test_frame_tie_decision_survives_later_ties_and_reload(self):
         self.referee_fixture()
@@ -3593,7 +3585,7 @@ class ConnectionAuthorityTests(unittest.TestCase):
             # Cross the old 64-tie retention limit without also exhausting
             # the independent 64-request replay/rate window for one seat.
             self.now += 3; self.wall += 3
-            self.assertEqual(self.frame_check_in(2, [1, 2, 3], frame=frame)["members"], [1, 2, 3])
+            self.assertEqual(self.frame_check_in(2, [2, 3], frame=frame)["members"], [2, 3])
         self.assertEqual(self.frame_check_in(2, [2, 3])["members"], [0, 1])
         record = dict(self.store.connections.records())[self.sid]
         self.assertEqual(len(record["frame_ties"]), 66)
