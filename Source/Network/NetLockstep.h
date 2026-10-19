@@ -1171,6 +1171,8 @@ namespace RTE {
 		};
 		std::optional<HoldFact> LastHoldOf(uint8_t peerId) const { NET_PLANE_CHECK(); const auto fact = m_HoldFacts.find(peerId); return fact == m_HoldFacts.end() ? std::nullopt : std::optional(fact->second); }
 		bool IsSeatHoldVisible(uint8_t peerId, uint64_t nowMs = UINT64_MAX) const;
+		/// Whether a seat's player said it left the round while its link stays open.
+		bool HasDeclaredLeave(uint8_t peerId) const { NET_PLANE_CHECK(); const auto ended = m_PeerRoundEnds.find(peerId); return ended != m_PeerRoundEnds.end() && !ended->second.closedLink; }
 		std::map<uint8_t, uint64_t> SeatBridgeTimes() const { NET_PLANE_CHECK(); return m_SeatBridgeSinceMs; }
 		bool TimingDecisionPendingAt(uint64_t frame) const;
 		/// Names every decision holding a frame's production, for a wait that has lasted long enough to be a defect.

@@ -827,7 +827,8 @@ namespace RTE {
 
 	namespace {
 		bool IsInPlaceCause(NetSeatHoldCause cause) {
-			return cause == NetSeatHoldCause::Capacity || cause == NetSeatHoldCause::LateStream || cause == NetSeatHoldCause::Quiet || cause == NetSeatHoldCause::TimingAck || cause == NetSeatHoldCause::OwnSeat;
+			return cause == NetSeatHoldCause::Capacity || cause == NetSeatHoldCause::LateStream || cause == NetSeatHoldCause::Quiet || cause == NetSeatHoldCause::TimingAck || cause == NetSeatHoldCause::OwnSeat ||
+			       cause == NetSeatHoldCause::Leave;
 		}
 	}
 
