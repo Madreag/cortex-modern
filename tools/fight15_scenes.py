@@ -32,7 +32,7 @@ def host_setup(players=2, cpu=False, brain_loss=False):
         "wait_ms 1800", "activate ButtonMainToMultiplayer", "wait_ms 600", "assert_substate Landing",
         "settext TextMultiplayerName Captain", "activate ButtonMultiplayerHostGame",
         "wait_ms 500", "assert_substate HostSetup",
-        "combo_select ComboHostActivity Skirmish Defense", "combo_select ComboHostScene Grasslands",
+        "combo_select ComboHostActivity Skirmish Defense", "wait_combo ComboHostScene Grasslands", "combo_select ComboHostScene Grasslands",
         "setup_host_port {PORT}", f"combo_select ComboHostPlayers {players}",
         "activate ButtonHostOptions", "wait_ms 500", "assert_substate HostOptions", "activate TabHostPageConnection",
         "combo_select ComboHostNetVisibility Public (default)",
@@ -1075,6 +1075,31 @@ def three_player_countdown_scene():
                   ("joiner2", "Joiner2", joiner2, game_probe(sides["joiner2"]))], checks)
 
 
+def end_session_scene():
+    """D9: End session asks for a second press that names its consequence, and the second press ends the game for both players."""
+    host = host_setup() + [
+        "activate ButtonLobbyOptions", "wait_ms 600", "assert_substate HostOptions", "activate TabHostPageSession", "wait_ms 600",
+        "activate ButtonHostSessEnd", "wait_ms 600", "assert_substate HostOptions", "assert_label ButtonHostSessEnd Confirm end",
+        "assert_label LabelHostSessEndHint Press Confirm end to close the game for every player", "assert_text_fits LabelHostSessEndHint",
+        "video_mark end-armed-host", "touch_file {PROBE_DIR}/armed.json",
+        # Both probes read the relay route while the session still stands; then the second press ends it.
+        "wait_file {PROBE_DIR}/done.json 120", "wait_file {PROBE_DIR_joiner}/done.json 120",
+        "activate ButtonHostSessEnd", "wait_substate Landing 60", "video_mark session-ended-host", "wait_ms 1400", "exit"]
+    joiner = join_setup() + [
+        "wait_file {PROBE_DIR_host}/armed.json 180", "touch_file {PROBE_DIR}/armed.json",
+        "wait_substate Landing 180", "video_mark session-ended-joiner", "wait_ms 1400", "exit"]
+    sides = probe([dict(op="wait_file", path="{PROBE_DIR}/armed.json", scope="menu", within_ms=300000), dict(op="assert_relay", scope="menu"),
+                   dict(op="finish")], 320000)
+    checks = [marked("end-armed-host", "host", "The first press of End session asks for Confirm end and names who it closes the game for.",
+                     ["^assert_label ButtonHostSessEnd \"Confirm end\".*PASS",
+                      "^assert_label LabelHostSessEndHint \"Press Confirm end to close the game for every player\".*PASS"]),
+              marked("session-ended-host", "host", "The second press ends the session and the host is back at the multiplayer menu.",
+                     ["^video_mark session-ended-host"]),
+              marked("session-ended-joiner", "joiner", "The joiner is back at the multiplayer menu when the host ends the session.",
+                     ["^video_mark session-ended-joiner"])]
+    emit(30, "Ending the session asks first, then closes the game for every player", host, joiner, sides, sides, checks, timeout=300)
+
+
 def menu_scenes():
     own_seat_held_scene()
     seat_dialog_scene()
@@ -1091,6 +1116,7 @@ def menu_scenes():
     apply_for_held_seat_scene()
     picker_placement_scene()
     three_player_countdown_scene()
+    end_session_scene()
 
 
 def main(argv):

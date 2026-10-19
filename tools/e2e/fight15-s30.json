@@ -1,0 +1,84 @@
+{
+  "schema": 1,
+  "name": "fight15-s30",
+  "title": "Ending the session asks first, then closes the game for every player",
+  "port_base": 49470,
+  "size": "960x540",
+  "timeout_s": 300,
+  "public_directory": true,
+  "peers": [
+    {
+      "name": "host",
+      "menu_script": "host.menu",
+      "probe": "host.probe",
+      "env": {
+        "CCCP_TEST_READBACK_TIMING": "1"
+      },
+      "settings": {
+        "SessionDirectoryUrl": "directory.broserver.com",
+        "NetworkHostRelayMode": "Directory",
+        "NetworkConnectionMode": "RelayOnly",
+        "NetworkIceEnable": 1,
+        "NetworkPortMapEnable": 0,
+        "NetworkMatchStatusMode": "Always",
+        "NetworkDisplayName": "Captain"
+      }
+    },
+    {
+      "name": "joiner",
+      "menu_script": "joiner.menu",
+      "probe": "joiner.probe",
+      "env": {
+        "CCCP_TEST_READBACK_TIMING": "1"
+      },
+      "settings": {
+        "SessionDirectoryUrl": "directory.broserver.com",
+        "NetworkHostRelayMode": "Directory",
+        "NetworkConnectionMode": "RelayOnly",
+        "NetworkIceEnable": 1,
+        "NetworkPortMapEnable": 0,
+        "NetworkMatchStatusMode": "Always",
+        "NetworkDisplayName": "Joiner"
+      }
+    }
+  ],
+  "scripts": {
+    "host.menu": "wait_ms 1800\nactivate ButtonMainToMultiplayer\nwait_ms 600\nassert_substate Landing\nsettext TextMultiplayerName Captain\nactivate ButtonMultiplayerHostGame\nwait_ms 500\nassert_substate HostSetup\ncombo_select ComboHostActivity Skirmish Defense\nwait_combo ComboHostScene Grasslands\ncombo_select ComboHostScene Grasslands\nsetup_host_port {PORT}\ncombo_select ComboHostPlayers 2\nactivate ButtonHostOptions\nwait_ms 500\nassert_substate HostOptions\nactivate TabHostPageConnection\ncombo_select ComboHostNetVisibility Public (default)\ncombo_select ComboHostNetRelay Game service (default)\nassert_label ComboHostNetVisibility Public (default)\nassert_label ComboHostNetRelay Game service (default)\nactivate ButtonHostOptBack\nwait_ms 500\nactivate ButtonMultiplayerCreate\nwait_substate Lobby 90\nwrite_lobby {PROBE_DIR}/lobby.json 90\nvideo_mark fight15-host-listening\nwait_connected 2 90\nwait_ms 1200\nactivate ButtonLobbyOptions\nwait_ms 600\nassert_substate HostOptions\nactivate TabHostPageSession\nwait_ms 600\nactivate ButtonHostSessEnd\nwait_ms 600\nassert_substate HostOptions\nassert_label ButtonHostSessEnd Confirm end\nassert_label LabelHostSessEndHint Press Confirm end to close the game for every player\nassert_text_fits LabelHostSessEndHint\nvideo_mark end-armed-host\ntouch_file {PROBE_DIR}/armed.json\nwait_file {PROBE_DIR}/done.json 120\nwait_file {PROBE_DIR_joiner}/done.json 120\nactivate ButtonHostSessEnd\nwait_substate Landing 60\nvideo_mark session-ended-host\nwait_ms 1400\nexit\n",
+    "joiner.menu": "wait_ms 1800\nactivate ButtonMainToMultiplayer\nwait_ms 600\nassert_substate Landing\nsettext TextMultiplayerName Joiner\nactivate ButtonMultiplayerJoinGame\nwait_ms 600\nassert_substate JoinSetup\nwait_file {PROBE_DIR_host}/lobby.json 90\nwait_row PublicGameRowLobby:{PROBE_DIR_host}/lobby.json 90\nclick_row PublicGameRowLobby:{PROBE_DIR_host}/lobby.json\nassert_label LabelJoinSelected internet\nassert_enabled ButtonMultiplayerConnect 1\nactivate ButtonMultiplayerConnect\nwait_connected 2 90\nwait_substate Lobby 90\nwait_ms 1200\nwait_file {PROBE_DIR_host}/armed.json 180\ntouch_file {PROBE_DIR}/armed.json\nwait_substate Landing 180\nvideo_mark session-ended-joiner\nwait_ms 1400\nexit\n",
+    "host.probe": "{\n  \"schema\": 1,\n  \"timeout_ms\": 320000,\n  \"step_timeout_ms\": 60000,\n  \"label_dump\": {\n    \"every_ms\": 5000\n  },\n  \"steps\": [\n    {\n      \"op\": \"wait_file\",\n      \"path\": \"{PROBE_DIR}/armed.json\",\n      \"scope\": \"menu\",\n      \"within_ms\": 300000\n    },\n    {\n      \"op\": \"assert_relay\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"signal\",\n      \"name\": \"done\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"finish\"\n    }\n  ]\n}\n",
+    "joiner.probe": "{\n  \"schema\": 1,\n  \"timeout_ms\": 320000,\n  \"step_timeout_ms\": 60000,\n  \"label_dump\": {\n    \"every_ms\": 5000\n  },\n  \"steps\": [\n    {\n      \"op\": \"wait_file\",\n      \"path\": \"{PROBE_DIR}/armed.json\",\n      \"scope\": \"menu\",\n      \"within_ms\": 300000\n    },\n    {\n      \"op\": \"assert_relay\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"signal\",\n      \"name\": \"done\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"finish\"\n    }\n  ]\n}\n"
+  },
+  "checklist": [
+    {
+      "id": "end-armed-host",
+      "peer": "host",
+      "mark": "end-armed-host",
+      "screen": "MultiplayerScreen",
+      "what": "The first press of End session asks for Confirm end and names who it closes the game for.",
+      "events": [
+        "^assert_label ButtonHostSessEnd \"Confirm end\".*PASS",
+        "^assert_label LabelHostSessEndHint \"Press Confirm end to close the game for every player\".*PASS"
+      ]
+    },
+    {
+      "id": "session-ended-host",
+      "peer": "host",
+      "mark": "session-ended-host",
+      "screen": "MultiplayerScreen",
+      "what": "The second press ends the session and the host is back at the multiplayer menu.",
+      "events": [
+        "^video_mark session-ended-host"
+      ]
+    },
+    {
+      "id": "session-ended-joiner",
+      "peer": "joiner",
+      "mark": "session-ended-joiner",
+      "screen": "MultiplayerScreen",
+      "what": "The joiner is back at the multiplayer menu when the host ends the session.",
+      "events": [
+        "^video_mark session-ended-joiner"
+      ]
+    }
+  ]
+}
