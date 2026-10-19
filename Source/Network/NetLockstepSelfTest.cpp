@@ -1402,6 +1402,45 @@ namespace RTE {
 			return true;
 		}
 
+		static bool ADirectMigrationNeedsThisSeatsGroup(std::string* error) {
+			// In direct play a migration that a group this seat does not play in certified belongs to that continuation; the heal, not
+			// its certificate, decides between them. One the seat's own group signed is taken.
+			for (bool ours: {false, true}) {
+				Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
+				peer.m_Config.peerFrameGroups = true;
+				peer.m_MigrationPhase = NetHostMigrationPhase::None; peer.m_MigrationSuccessor = 0;
+				peer.m_RemotePeerIds = {1, 3}; peer.m_RemoteTransports = {{1, 41}, {3, 43}};
+				const uint32_t group = ours ? 6 : 2;
+				peer.m_FrameGroupMembers = group; peer.m_FrameGroupChanges = {{1, 7}, {4400, group}};
+				peer.m_PeerBridges[1] = {4400, 4400, true, std::nullopt, {}, group};
+				if (!ours) peer.m_PeerBridges[3] = {4400, 4400, true, std::nullopt, {}, group};
+				peer.m_MigrationHistory[4422] = {1, 2, 3};
+				auto vote = peer.PeerFrameMessage(NetHostMigrationMessageType::PeerBridge);
+				vote.senderPeerId = vote.successorPeerId = 3; vote.frame = 4430; vote.boundary = 4422; vote.preparedFrame = 3;
+				vote.completeFrom = peer.m_Config.migrationGeneration + 1;
+				vote.connectedMask = ours ? 6 : 4; vote.members = ours ? std::vector<uint8_t>{2, 3} : std::vector<uint8_t>{3};
+				const auto prefix = peer.PeerAppliedFramePrefix(4422); vote.bytes.assign(prefix.begin(), prefix.end()); vote.totalBytes = vote.bytes.size();
+				auto certificate = vote; certificate.type = NetHostMigrationMessageType::PeerBridgeCommit; certificate.voterMask = vote.connectedMask;
+				certificate.bytes = {static_cast<uint8_t>(vote.members.size())};
+				for (uint8_t signer: vote.members) {
+					auto signedBy = vote; signedBy.senderPeerId = signer; signedBy.voterMask = 1U << (signer - 1);
+					std::vector<uint8_t> signedVote;
+					if (!NetHostMigrationCodec::Encode(signedBy, peer.m_Config.migrationKey, signedVote)) return false;
+					for (unsigned shift = 0; shift < 32; shift += 8) certificate.bytes.push_back(static_cast<uint8_t>(signedVote.size() >> shift));
+					certificate.bytes.insert(certificate.bytes.end(), signedVote.begin(), signedVote.end());
+				}
+				certificate.totalBytes = certificate.bytes.size();
+				peer.InstallPeerBridge(certificate, 1000);
+				const bool taken = peer.m_AuthorityEvents.contains(4430) && peer.m_MigrationSuccessor == 3;
+				std::cout << "[direct-migration-scope] own_group=" << ours << " taken=" << taken << std::endl;
+				if (taken != ours) {
+					*error = ours ? "a direct seat refused a migration its own group certified" : "a direct seat took a migration certified only by a group it does not play in";
+					return false;
+				}
+			}
+			return true;
+		}
+
 		static bool AnOpenVoteAsksForItsFramesRecordAtOnce(std::string* error) {
 			// A frame stopped on a vote that has not completed asks a seat that played it for its record when it stops, so the wait is
 			// one trip to that seat, not a round trip and the bound before the asking even starts.
@@ -33023,6 +33062,12 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS every_mode_sizes_live_and_return_from_the_link\n[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "direct-migration-scope") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::ADirectMigrationNeedsThisSeatsGroup(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS a_direct_migration_needs_this_seats_group\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "open-vote-record") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::AnOpenVoteAsksForItsFramesRecordAtOnce(&error)) return fail(error);
@@ -33362,6 +33407,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::FixedDelayReturnFollowsTheMeasuredLink, "a_fixed_return_follows_the_measured_link");
 		row(&SessionPlaneRecoveryTest::HeldHostHashesStayPrivateInFrameGroups, "held_host_hashes_stay_private_in_frame_groups");
 		row(&SessionPlaneRecoveryTest::AnOpenVoteAsksForItsFramesRecordAtOnce, "an_open_vote_asks_for_its_frames_record_at_once");
+		row(&SessionPlaneRecoveryTest::ADirectMigrationNeedsThisSeatsGroup, "a_direct_migration_needs_this_seats_group");
 		row(&SessionPlaneRecoveryTest::ReaderLinksContributeToInputRunway, "reader_links_contribute_to_input_runway");
 		row(&SessionPlaneRecoveryTest::LinkRiseHasNoResizeCooldown, "link_rise_has_no_resize_cooldown");
 		row(&SessionPlaneRecoveryTest::LinkFallNeedsFiveMeasuredSeconds, "link_fall_requires_five_continuous_measured_seconds");
