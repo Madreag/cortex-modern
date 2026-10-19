@@ -501,7 +501,14 @@ namespace RTE {
 			if (m_Config.simTickMs <= 0 || applied == m_PeerAppliedThrough.end() || observed == m_PeerAppliedAtMs.end() ||
 			    m_TimingNowMs < observed->second || m_TimingNowMs - observed->second > freshnessMs) return std::nullopt;
 			const double transit = measured ? wire->GetPeerPingMs(route) / 2.0 : 0.0;
-			const uint64_t elapsed = static_cast<uint64_t>((m_TimingNowMs - observed->second + transit) / m_Config.simTickMs);
+			// A group stopped for one missing input stops together: a seat's clock is not run on through time this machine itself
+			// stood waiting for its frame.
+			const double sentAt = static_cast<double>(observed->second) - transit, now = static_cast<double>(m_TimingNowMs);
+			const auto stoodBetween = [&](double from, double to) { return std::max(0.0, std::min(to, now) - std::max(from, sentAt)); };
+			double stood = m_ConsumerWaitingFrame ? stoodBetween(static_cast<double>(m_ConsumerWaitStartMs), now) : 0.0;
+			if (m_LastConsumerWaitMs.second > m_LastConsumerWaitMs.first)
+				stood += stoodBetween(static_cast<double>(m_LastConsumerWaitMs.first), static_cast<double>(m_LastConsumerWaitMs.second));
+			const uint64_t elapsed = static_cast<uint64_t>(std::max(0.0, now - sentAt - stood) / m_Config.simTickMs);
 			return applied->second > next || elapsed > next - std::min(applied->second, next);
 		};
 		// A future return certificate does not end private replay before its activation tick.

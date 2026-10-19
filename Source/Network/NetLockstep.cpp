@@ -5402,7 +5402,7 @@ namespace RTE {
 		m_ConsumerWaitingFrame.reset();
 		m_FirstMissingFrame.reset();
 		m_LastDeliveredFrame.reset();
-		m_ConsumerWaitStartMs = 0;
+		m_ConsumerWaitStartMs = 0; m_LastConsumerWaitMs = {0, 0};
 		m_ConsumerCostObservedAtMs.reset();
 		m_ConsumerCostPeers.clear();
 		m_ConsumerWaitCounted = false;
@@ -7383,6 +7383,7 @@ namespace RTE {
 		if (m_ConsumerWaitingFrame && nowMs >= m_ConsumerWaitStartMs) {
 			m_Stats.longestStallMs = std::max(m_Stats.longestStallMs, nowMs - m_ConsumerWaitStartMs);
 			if (nowMs > m_ConsumerWaitStartMs) {
+				m_LastConsumerWaitMs = {m_ConsumerWaitStartMs, nowMs};
 				if (!m_ConsumerWaitCounted) { ++m_Stats.blockingFrameWaits; ++m_Stats.missingFrameStalls; }
 				DiagnosticLine waited;
 				waited << "[net-frame-wait] frame=" << *m_ConsumerWaitingFrame << " wait_ms=" << nowMs - m_ConsumerWaitStartMs << " on=" << m_Stats.lastMissingPeers << " local=" << static_cast<int>(m_Config.localPeerId);
