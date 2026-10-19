@@ -5747,7 +5747,7 @@ namespace RTE {
 					t_RowLines = nullptr;
 					{ std::lock_guard lock(doneMutex); finished.push_back(order[item]); }
 					doneSignal.notify_all();
-				} else { t_QuietLines = true; driver.RunOne(item - named.size()); t_QuietLines = false; }
+				} else { t_QuietLines = !selected; driver.RunOne(item - named.size()); t_QuietLines = false; }
 			}
 		});
 		for (size_t printed = 0; printed < named.size(); ++printed) {
