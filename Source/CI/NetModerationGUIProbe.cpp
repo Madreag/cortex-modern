@@ -1252,10 +1252,11 @@ namespace {
 			auto* game = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity());
 			auto* editor = game ? game->GetEditorGUI(LocalPlayer(step)) : nullptr;
 			ObjectPickerGUI* picker = editor ? editor->GetCheckpointPicker() : nullptr;
-			Require(picker && picker->IsVisible(), "the editor's picker is not open");
+			Require(editor != nullptr, "the editor's picker is not open");
 			const std::string preset = step.at("preset");
 			const auto picked = [editor, preset] { return editor->GetCurrentObject() && editor->GetCurrentObject()->GetModuleAndPresetName() == preset; };
 			bool passed = false; std::string detail;
+			// A finished press is read first: the pick itself closes the picker.
 			if (probe.handIndex == probe.index) {
 				if (!MenuAutomation::HandFinished(passed, detail)) return false;
 				Require(passed, "the picker row refused its held click: " + detail);
@@ -1266,7 +1267,9 @@ namespace {
 				}
 				probe.pickerGroupDone = false;
 				return picked();
-			} else if (MenuAutomation::HandBusy() || !picker->IsOpen()) return false;
+			}
+			Require(picker && picker->IsVisible(), "the editor's picker is not open");
+			if (MenuAutomation::HandBusy() || !picker->IsOpen()) return false;
 			GUIControlManager* manager = picker->AutomationManager();
 			if (step.contains("group") && !probe.pickerGroupDone) {
 				auto* groups = dynamic_cast<GUIListBox*>(manager->GetControl("GroupsLB"));
