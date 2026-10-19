@@ -5343,7 +5343,7 @@ namespace RTE {
 		m_ReplayOpeningGeneration = m_Config.migrationGeneration;
 		m_AuthorityEvents.clear();
 		m_LocalPreparedFrame.reset(); m_LastPreparedSentFrame.reset(); m_HostOrderedFrame.reset(); m_PreparedFrameReceipts.clear(); m_LastPreparedSentMs = 0;
-		m_PeerAdmissions.clear();
+		m_PeerAdmissions.clear(); m_ReturnStartWaitSinceMs.reset();
 		m_LeavesHeardAhead.clear();
 		m_PeerDeviceClasses.fill(0);
 		m_HostAcceptedLocalFrames.clear();
@@ -10210,6 +10210,44 @@ namespace RTE {
 		for (auto& [peer, pending]: m_MigrationOutbox)
 			while (!pending.empty() && m_Transport->Send(peer, NetTransportLane::ControlReliable, pending.front()))
 				pending.pop_front();
+		// A returning seat's members already play the round on the terms its certificate carries. Once one member's start is in and
+		// another's is still missing past the bound and two of its round trips, those terms stand in for it, so a member whose start is
+		// late on its reliable lane never holds the return back.
+		if (m_State == NetLockstepState::WaitingForStart && UsesPeerFrameGroups() && m_Config.joinsRunningRound && m_ReclaimTransactions.contains(m_Config.localPeerId)) {
+			if (!m_ReturnStartWaitSinceMs) m_ReturnStartWaitSinceMs = nowMs;
+			uint64_t roundTripMs = 0;
+			for (uint8_t peer: m_RemotePeerIds) roundTripMs = std::max<uint64_t>(roundTripMs, m_Stats.peers[peer].pingMs);
+			const uint64_t graceMs = std::max<uint64_t>(c_StartRetransmitMs, static_cast<uint64_t>(std::ceil(m_Config.slowPlayerBoundTicks * m_Config.simTickMs)) + 2 * roundTripMs);
+			const bool heardMember = std::any_of(m_RemotePeerIds.begin(), m_RemotePeerIds.end(), [&](uint8_t peer) { return m_RemoteStartsReceived.contains(peer); });
+			if (heardMember && nowMs >= *m_ReturnStartWaitSinceMs + graceMs) {
+				for (uint8_t peer: m_RemotePeerIds) {
+					const auto terms = m_PeerAdmissions.find(peer);
+					if ((PeerFrameMembersAt(m_Config.startFrame) & (1U << (peer - 1))) == 0 || terms == m_PeerAdmissions.end() || m_RemoteStartsReceived.contains(peer)) continue;
+					NetLockstepStart standIn;
+					standIn.sessionId = m_Config.sessionId;
+					standIn.startFrame = terms->second.frame;
+					standIn.inputDelayFrames = terms->second.delay;
+					standIn.controllerFrameVersion = ControllerFrame::c_Version;
+					standIn.controllerFrameEncodedSize = static_cast<uint16_t>(ControllerFrame::c_EncodedSize);
+					standIn.localPeerId = peer;
+					standIn.peerCount = m_Config.peerCount;
+					standIn.scenario = m_Config.scenario;
+					standIn.ownershipPolicy = m_Config.ownershipPolicy;
+					standIn.roundId = m_RoundId;
+					m_RemoteStarts[peer] = standIn;
+					m_RemoteStartsReceived.insert(peer);
+					DiagnosticLine() << "[lockstep] returning seat takes the certified terms of peer " << static_cast<int>(peer) << " for its late start: frame=" << standIn.startFrame
+					                 << " delay=" << standIn.inputDelayFrames << " waited_ms=" << nowMs - *m_ReturnStartWaitSinceMs << std::endl;
+					FlushPreStart(peer, nowMs);
+				}
+				if (AllRemoteStartsReceived() && !m_AgreedStartApplied && !m_RequirePublishedStart) {
+					m_State = NetLockstepState::Running;
+					auto timing = std::move(m_PreStartTiming); m_PreStartTiming.clear();
+					for (const auto& [decision, source]: timing) HandleTiming(decision, nowMs, source);
+					m_WaitingFrame = std::numeric_limits<uint64_t>::max();
+				}
+			}
+		}
 		// A start sent while a peer was between rounds is gone; repeat it until every start is in.
 		if (m_State == NetLockstepState::WaitingForStart) {
 			if (m_LastStartSentMs == UINT64_MAX) {
