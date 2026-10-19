@@ -1381,8 +1381,6 @@ namespace RTE {
 		bool BeginHostMigration(uint64_t nowMs);
 		bool MigrationUsesDirectory() const { return m_MigrationChoice && m_MigrationChoice->state == NetHostChangeReply::State::Decided; }
 		void NoteDirectorySuperseded(uint64_t generation) { NET_PLANE_CHECK(); m_CertifiedSupersedingGeneration = std::max(m_CertifiedSupersedingGeneration, generation); NoteSuperseded(generation); }
-		/// A changed local route rejoins its seat; false leaves an already granted tick to finish first.
-		bool NoteLocalRouteChanged();
 		/// The handover's vote as this peer last saw it: the successor's own tally, or the one its roll call told a voter.
 		NetHostMigrationReach GetMigrationReach() const { NET_PLANE_CHECK(); return m_MigrationReach; }
 		bool BeginHostMigrationAfterHeal(uint64_t nowMs);

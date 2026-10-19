@@ -358,6 +358,7 @@ namespace RTE {
 	/// NetSession feeds it messages and time and sends whatever it produces.
 	class NetReconnectHost {
 		friend struct NetReconnectSessionSelfTestAccess;
+		friend struct NetConnectionSelfTestAccess;
 	public:
 		// P3: each handshake step retransmits at the codebase's existing cadence and gives up inside
 		// the session heartbeat timeout, so the handshake fails before - not because of - the transport.
@@ -850,6 +851,7 @@ namespace RTE {
 	/// challenge from the stored credential, and clears the record on exactly two events - an
 	/// acknowledged leave and a confirmed hosted-session end.
 	class NetReconnectClient {
+		friend struct NetConnectionSelfTestAccess;
 	public:
 		// P21: an unacknowledged leave is an ambiguous loss, so the ladder gives up inside the same
 		// budget every other handshake step uses and the record survives.

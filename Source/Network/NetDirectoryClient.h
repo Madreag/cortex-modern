@@ -126,6 +126,8 @@ namespace RTE {
 		/// Requests or retrieves the held session's short-lived relay offer without blocking a frame.
 		bool RequestIceServers(const std::string& matchId, uint32_t ttl, const NetRelayConfig* fixed = nullptr);
 		bool FetchIceServers(const std::string& sessionId);
+		/// The directory's clock minus this machine's, as the connection authority measured it; a fetched login's expiry moves onto this clock.
+		void SetDirectoryClockOffset(int64_t seconds) { m_DirectoryClockOffset = seconds; }
 		bool IceRequestPending() const { return m_IceRequest != nullptr; }
 		uint64_t IceReplies() const { return m_IceReplies; }
 		const NetRelayConfig& IceServers() const { return m_IceServers; }
@@ -277,6 +279,7 @@ namespace RTE {
 		std::unique_ptr<Transport> m_Request;
 		std::unique_ptr<Transport> m_IceRequest;
 		NetRelayConfig m_IceServers;
+		int64_t m_DirectoryClockOffset = 0;
 		std::string m_IceError; bool m_IceRelayRefused = false;
 		bool m_IceRetryable = false;
 		bool m_IceHostRequest = false;

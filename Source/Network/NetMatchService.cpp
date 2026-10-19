@@ -9879,13 +9879,12 @@ static std::string ResyncSaveName() {
 		}
 		const uint32_t revision = m_ConnectionAuthority.NetworkRevision();
 		const bool changed = revision != m_ConnectionNetworkRevision;
-		const bool refresh = changed && m_ConnectionNetworkRevision != 0;
-		const bool applied = !refresh || m_State != NetMatchServiceState::Running || !m_Coordinator || m_Coordinator->NoteLocalRouteChanged();
-		if (refresh && applied) {
+		// The seat keeps playing: its next check-in carries the new route, and only a failed link to the host rejoins it.
+		if (changed && m_ConnectionNetworkRevision != 0) {
 			System::PrintDiagnosticLine("[net-connection] network changed; refreshing the same seat's route");
 			if (m_IsHost && s_PortMapRequested) { ReleaseHostPortMap(); RequestHostPortMap(m_BeaconGamePort, nullptr); }
 		}
-		if (applied) m_ConnectionNetworkRevision = revision;
+		m_ConnectionNetworkRevision = revision;
 		if (changed || nowMs >= m_ConnectionRouteAtMs) {
 			m_ConnectionRouteAtMs = nowMs + 1000;
 			NetConnectionRoute route;
@@ -10088,6 +10087,16 @@ static std::string ResyncSaveName() {
 #endif
 	}
 
+	void NetMatchService::ReadRejoinCheckIn(const NetConnectionAuthority& authority, bool allowRelay, bool relayOnly, const std::optional<NetConnectionHost>& host,
+	                                       uint64_t localUnixSeconds, bool& checkedIn, bool& relayReady) {
+		const auto lease = authority.LocalLease();
+		// The seat is judged on the directory's clock, which issued it; the authority keeps its relay login on this one.
+		const uint64_t directoryNow = authority.DirectoryNow(localUnixSeconds);
+		checkedIn = authority.RouteCheckedIn() && lease && lease->Usable(directoryNow);
+		// Automatic dials direct with whatever login it holds and takes a renewal live; only Relay only needs one to dial.
+		relayReady = !allowRelay || !relayOnly || (host && !host->relayEnabled) || authority.RelayRefreshed() || authority.Relay().Usable(localUnixSeconds);
+	}
+
 	bool NetMatchService::SetUpIceTransport(const NetMatchServiceRequest& request, const NetIdentityManifest& manifest, NetMuxTransport& mux, NetSessionConfig& sessionConfig, std::string& joinAddress, NetIceJoinTarget& target, std::string* error) {
 #ifndef CCCP_WITH_GNS
 		(void)request; (void)manifest; (void)mux; (void)sessionConfig; (void)joinAddress; (void)target;
@@ -10167,9 +10176,9 @@ static std::string ResyncSaveName() {
 			m_ConnectionAuthority.Update(nowMs, UnixNowMs(nullptr) / 1000);
 			if (m_ConnectionAuthority.Refused()) { if (error) *error = m_ConnectionAuthority.Error(); return false; }
 			connectionHost = m_ConnectionAuthority.Host();
-			checkedIn = !request.rejoin || (m_ConnectionAuthority.RouteCheckedIn() && m_ConnectionAuthority.LocalLease() &&
-				m_ConnectionAuthority.LocalLease()->Usable(UnixNowMs(nullptr) / 1000));
-			relayReady = !request.rejoin || !allowRelay || (connectionHost && !connectionHost->relayEnabled) || m_ConnectionAuthority.RelayRefreshed();
+			if (request.rejoin)
+				ReadRejoinCheckIn(m_ConnectionAuthority, allowRelay, g_SettingsMan.GetNetworkConnectionMode() == SettingsMan::NetworkConnectionMode::RelayOnly,
+				    connectionHost, UnixNowMs(nullptr) / 1000, checkedIn, relayReady);
 			if (connectionHost && checkedIn && relayReady && nowMs >= connectionHost->directoryReadyMs) break;
 			{
 				std::lock_guard<std::mutex> lock(m_Mutex);
@@ -10254,6 +10263,8 @@ static std::string ResyncSaveName() {
 		spec.remoteVirtualPort = joinVirtualPort;
 		NetRelayConfig relay = request.rejoin ? m_ConnectionAuthority.Relay() : NetRelayConfig{};
 		if (allowRelay && !request.rejoin) {
+			const uint64_t local = UnixNowMs(nullptr) / 1000;
+			browse.SetDirectoryClockOffset(static_cast<int64_t>(m_ConnectionAuthority.DirectoryNow(local)) - static_cast<int64_t>(local));
 			browse.FetchIceServers(request.sessionId);
 			const uint64_t relayDeadline = SteadyNowMs() + c_IceConnectBudgetMs;
 			const bool needsRelay = g_SettingsMan.GetNetworkConnectionMode() == SettingsMan::NetworkConnectionMode::RelayOnly || target.address.empty();
@@ -11539,7 +11550,8 @@ static std::string ResyncSaveName() {
 		NetMatchServiceRequest request = BuildTicketRejoinRequest(record, playerName, liveWorldTarget);
 		if (!liveRoute.host && (!liveRoute.address.empty() || !liveRoute.sessionId.empty())) {
 			request.address = liveRoute.address;
-			request.sessionId = liveRoute.sessionId;
+			// An ICE route signals through the directory, so it keeps the seat's session unless it names its own; a direct route needs none.
+			if (!liveRoute.sessionId.empty() || !liveRoute.address.starts_with("ice:")) request.sessionId = liveRoute.sessionId;
 			request.port = liveRoute.port;
 		}
 		return request;
