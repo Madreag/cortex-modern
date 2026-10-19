@@ -7204,6 +7204,69 @@ _CaptureWindow.liveSlice.Enabled = enabled
 	return passed;
 }
 
+// A script keeps its holder's slices of a device's sub-menu, as the Coalition grenade launcher's does, the device leaves the
+// holder's hands and the next devices are made before a save: every kept handle still names its own slice's memory, the save
+// carries it as gone instead of refusing it, and the memory returns once the handles go.
+static bool RunKeptSliceCases(LuaStateWrapper& lua) {
+	lua_State* const L = lua.GetLuaState();
+	const Entity::ClassInfo* sliceType = Entity::ClassInfo::GetClass("PieSlice");
+	const size_t sliceBytes = sliceType ? sliceType->CheckpointInstanceBytes() : 0;
+	const bool planted = sliceBytes && lua.RunScriptString(R"lua(
+_KeptSlices = {}
+local holder = CreateAHuman("Green Dummy", "Base.rte")
+holder.Pos = Vector(980, 200)
+MovableMan:AddActor(holder)
+holder:AddInventoryItem(CreateHDFirearm("Constructor", "Base.rte"))
+holder:EquipFirearm(true)
+_KeptSlices.holder = holder
+local options = holder.PieMenu:GetFirstPieSliceByPresetName("Constructor Options")
+assert(options and options.SubPieMenu, "a held Constructor put no options sub-menu into its holder's menu")
+_KeptSlices.kept = { options }
+for slice in options.SubPieMenu.PieSlices do _KeptSlices.kept[#_KeptSlices.kept + 1] = slice end
+)lua") == 0;
+	std::vector<const void*> kept;
+	if (planted) {
+		lua_getglobal(L, "_KeptSlices");
+		lua_getfield(L, -1, "kept");
+		for (int index = 1; lua_istable(L, -1); ++index) {
+			lua_rawgeti(L, -1, index);
+			const auto* rep = luabind::detail::is_class_object(L, -1);
+			const bool end = lua_isnil(L, -1);
+			if (rep && rep->ptr()) kept.push_back(rep->ptr());
+			lua_pop(L, 1);
+			if (end) break;
+		}
+		lua_pop(L, 2);
+	}
+	// A kept slice's memory is its own while it is retained for the handles or back in its pool; anything else took it.
+	const auto ownMemory = [sliceBytes](const void* address) { return MovableObject::RetainedMemoryHolds(address, sliceBytes) || PieSliceFreed(address); };
+	bool dropped = false;
+	size_t taken = 0;
+	if (planted && !kept.empty()) {
+		dropped = lua.RunScriptString(R"lua(
+_KeptSlices.holder:UnequipArms()
+_KeptSlices.spares = {}
+for index = 1, 24 do _KeptSlices.spares[index] = CreateHDFirearm("Constructor", "Base.rte") end
+)lua") == 0;
+		for (const void* address: kept) if (!ownMemory(address)) ++taken;
+	}
+	std::vector<std::string> problems;
+	const bool captured = dropped && g_ActivityMan.RunWorldCaptureWindow([] {}, [] {}, problems);
+	lua.RunScriptString("if _KeptSlices then MovableMan:RemoveActor(_KeptSlices.holder) end; _KeptSlices = nil; collectgarbage('collect')");
+	LuabindObjectWrapper::ApplyQueuedEntityDeletions();
+	LuabindObjectWrapper::ApplyQueuedDeletions();
+	size_t leaked = 0;
+	for (const void* address: kept) if (MovableObject::RetainedMemoryHolds(address, sliceBytes)) ++leaked;
+	if (!planted || !dropped || kept.empty()) std::cout << "[capture-window-selftest] FAIL: kept-slice-fixture: the held device's sub-menu slices could not be kept and dropped" << std::endl;
+	if (taken > 0) std::cout << "[capture-window-selftest] FAIL: kept-slice-memory-taken: " << taken << " of " << kept.size() << " slice handles kept past their device name memory the next devices took before the save" << std::endl;
+	for (const std::string& problem: problems) std::cout << "[capture-window-selftest] FAIL: kept-slice-save-refused: " << problem << std::endl;
+	if (dropped && !captured && problems.empty()) std::cout << "[capture-window-selftest] FAIL: kept-slice-save-failed: the save with kept slices did not complete and named no problem" << std::endl;
+	if (leaked > 0) std::cout << "[capture-window-selftest] FAIL: kept-slice-memory-leaked: " << leaked << " slices' memory stayed out of the pool after their handles were collected" << std::endl;
+	const bool passed = planted && dropped && !kept.empty() && taken == 0 && captured && problems.empty() && leaked == 0;
+	if (passed) std::cout << "[capture-window-selftest] PASS a_slice_kept_past_its_device_keeps_its_memory_and_saves_as_gone kept=" << kept.size() << std::endl;
+	return passed;
+}
+
 static int ScriptGraphGlobalScript(lua_State* L) {
 	const auto* activity = dynamic_cast<const GAScripted*>(g_ActivityMan.GetActivity());
 	const int index = luaL_checkinteger(L, 1);
@@ -11161,7 +11224,11 @@ static bool RunStoredCallbackStateCloseSelfTest() {
 	return made && released && safe;
 }
 
-bool LuaMan::RunCaptureWindowSelfTest() { return RunCaptureWindowCases(m_MasterScriptState); }
+bool LuaMan::RunCaptureWindowSelfTest() {
+	const bool window = RunCaptureWindowCases(m_MasterScriptState);
+	const bool kept = RunKeptSliceCases(m_MasterScriptState);
+	return window && kept;
+}
 
 bool LuaMan::RunScriptGraphSelfTest() {
 	lua_State* state = m_MasterScriptState.GetLuaState();
