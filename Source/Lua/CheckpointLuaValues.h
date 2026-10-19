@@ -29,6 +29,7 @@ namespace RTE::CheckpointLua {
 	public:
 		using Native = std::function<void(lua_State*, const TValue&)>;
 		SavedValues(lua_State* state, Snapshot heap, Native native) : m_State(state), m_Heap(std::move(heap)), m_Prototypes(m_Heap), m_Native(std::move(native)) {
+			NoteQueuedFinalizers();
 			PrepareStrings();
 			const luaJIT_SavedKeys keys{state, this, KeyHash};
 			m_PreviousKeys = luaJIT_set_saved_keys(&keys);
@@ -69,7 +70,12 @@ namespace RTE::CheckpointLua {
 			}
 		}
 		bool Remembered(const TValue& value) const { return tvisgcv(&value) && m_Values.contains(gcval(&value)); }
-		void UseHeap(Snapshot heap) { m_Heap = std::move(heap); m_Prototypes = PrototypeCapture(m_Heap); }
+		// A userdata whose finalizer ran had its handle destroyed with its native; only a weak key still names it, until the next
+		// collection clears the entry. A queued finalizer has not run, so its native still lives.
+		bool FinalizerRan(const TValue& value) const {
+			return tvisudata(&value) && (m_Heap.Read(&udataV(&value)->marked) & LJ_GC_FINALIZED) && !m_QueuedFinalizers.contains(gcval(&value));
+		}
+		void UseHeap(Snapshot heap) { m_Heap = std::move(heap); m_Prototypes = PrototypeCapture(m_Heap); NoteQueuedFinalizers(); }
 		void FillTable(const TValue& source, int destination) {
 			if (!tvistab(&source) || !lua_istable(m_State, destination)) throw std::logic_error("saved table copy needs two tables");
 			destination = Absolute(destination);
@@ -299,11 +305,24 @@ assert(coroutine.resume(savedOrderThread))
 		std::unordered_map<const GCobj*, TValue> m_Originals;
 		std::unordered_map<const GCobj*, int> m_Returned;
 		std::unordered_set<const GCtab*> m_SavedTables;
+		std::unordered_set<const GCobj*> m_QueuedFinalizers;
 		luaJIT_SavedKeys m_PreviousKeys{};
 		struct Cell { int function; int index; };
 		std::unordered_map<const GCupval*, Cell> m_Cells;
 		std::unordered_map<const GCupval*, std::vector<Cell>> m_CellUses;
 		int Absolute(int index) const { return index < 0 ? lua_gettop(m_State) + index + 1 : index; }
+		void NoteQueuedFinalizers() {
+			m_QueuedFinalizers.clear();
+			const auto state = m_Heap.Read(m_Heap.State());
+			const auto global = m_Heap.Read(mref(state.glref, global_State));
+			if (const GCobj* const last = gcref(global.gc.mmudata)) {
+				const GCobj* object = last;
+				do {
+					object = gcref(m_Heap.Read(&object->gch.nextgc));
+					if (!object || !m_QueuedFinalizers.insert(object).second) throw std::runtime_error("invalid frozen finalizer GC chain");
+				} while (object != last);
+			}
+		}
 		static uint32_t KeyHash(void* owner, const void* table, uint64_t key, uint32_t ordinary) noexcept {
 			const auto& values = *static_cast<const SavedValues*>(owner);
 			if (!values.m_SavedTables.contains(static_cast<const GCtab*>(table))) return ordinary;
@@ -446,7 +465,7 @@ assert(coroutine.resume(savedOrderThread))
 			const Node* nodes = noderef(table.node);
 			for (MSize index = 0; index <= table.hmask; ++index) {
 				const Node node = m_Heap.Read(nodes + index);
-				if (!tvisnil(&node.val)) { Push(node.key); PushUnder(node.val, [&] { return KeyName(node.key); }); lua_rawset(m_State, destination); }
+				if (!tvisnil(&node.val) && !FinalizerRan(node.key)) { Push(node.key); PushUnder(node.val, [&] { return KeyName(node.key); }); lua_rawset(m_State, destination); }
 			}
 			if (const GCobj* meta = gcref(table.metatable)) {
 				TValue token; setgcVraw(&token, const_cast<GCobj*>(meta), LJ_TTAB); Push(token); lua_setmetatable(m_State, destination);
@@ -468,12 +487,12 @@ assert(coroutine.resume(savedOrderThread))
 				Node* const nodes = noderef(target->node);
 				for (MSize index = 0; index <= source.hmask; ++index) {
 					const Node node = m_Heap.Read(original + index);
-					if (!tvisnil(&node.val)) {
+					if (!tvisnil(&node.val) && !FinalizerRan(node.key)) {
 						Push(node.key); PushUnder(node.val, [&] { return KeyName(node.key); });
 						nodes[index].key = *(m_State->top - 2); nodes[index].val = *(m_State->top - 1);
 						lj_gc_anybarriert(m_State, target); lua_pop(m_State, 2);
 					} else {
-						// A nil slot may retain a dead key; it must never be dereferenced.
+						// A nil slot may retain a dead key, as a slot the collector clears next does; it must never be dereferenced.
 						nodes[index].key = node.key; setnilV(&nodes[index].val);
 						if (Remembered(node.key)) { Push(node.key); nodes[index].key = *(m_State->top - 1); lua_pop(m_State, 1); }
 					}
