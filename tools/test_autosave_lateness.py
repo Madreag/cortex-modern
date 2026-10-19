@@ -6,6 +6,11 @@ through the held host's agreed base. A saver that only gets the leftovers of a m
 longer than an interval to write one save, and every later deadline then meets a busy writer. The run passes only when
 every gap between two periodic captures stays within an interval and a half, nothing is refused, and both peers exit.
 The host's sim-thread cost per capture (capture_ms) is reported against the 2 ms budget.
+Each peer's frame pacing is reported for the [frame-pace] windows where no save of that peer is overdue (the frame-cost
+detector's classification): the median frame rate, the 95th and 99th percentiles of the per-window worst frame interval
+and the peer's holds of its own seat there. --base names a base build's run of this detector (its folder or result.json);
+each peer then keeps at least 95 % of the base's frame rate and at most 125 % of its worst frame interval there, and holds
+its own seat no more often than the base did.
 """
 import argparse
 from datetime import datetime, timezone
@@ -23,6 +28,32 @@ def parse_fields(line):
     return {key: int(value) for key, value in re.findall(r'(\w+)=(-?\d+)\b', line)}
 
 
+def frame_pacing(run_dir, warmup):
+    """Each peer's frames in the windows where no save of that peer is overdue."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import test_autosave_frame_cost as fc
+    def text(role):
+        path = run_dir / role / 'stdout.log'
+        return path.read_text(errors='replace') if path.exists() else ''
+    # The client's own deadlines follow the same agreed schedule as the host's.
+    dues = fc.timeline(text('host'), True)[2]
+    out = {}
+    for local, role in ((1, 'host'), (2, 'client')):
+        windows, saves, _, bases, holds = fc.timeline(text(role), role == 'host')
+        kinds, _ = fc.classify(windows, saves, dues, bases, warmup)
+        chosen = [w for w, k in zip(windows, kinds) if k in ('idle', 'save', 'edge')]
+        if not chosen:
+            out[role] = {'windows': 0}
+            continue
+        worst = [w['worst_ms'] for w in chosen]
+        out[role] = {'windows': len(chosen), 'overdue_windows': kinds.count('overdue'),
+                     'fps_median': round(statistics.median(w['fps'] for w in chosen), 2),
+                     'worst_ms_p95': round(fc.percentile(worst, 0.95), 2), 'worst_ms_p99': round(fc.percentile(worst, 0.99), 2),
+                     'own_seat_holds': sum(1 for h in holds if h['local'] == local and h['peer'] == local and
+                                           any(w['first'] <= h['frame'] <= w['last'] for w in chosen))}
+    return out
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--repo', type=Path, required=True)
@@ -33,7 +64,14 @@ def main():
     p.add_argument('--warmup-ticks', type=int, default=600)
     p.add_argument('--limit-seconds', type=int, default=900)
     p.add_argument('--port', type=int, default=49484)
+    p.add_argument('--base', type=Path, help="a base build's run of this detector (its folder or result.json)")
     a = p.parse_args()
+    base_dir = None
+    if a.base:
+        found = [a.base.resolve()] if a.base.is_file() else sorted(a.base.resolve().rglob('result.json'))
+        if not found or not (found[0].parent / 'host' / 'stdout.log').exists():
+            raise SystemExit(f'no base run at {a.base}')
+        base_dir = found[0].parent
     repo = a.repo.resolve()
     sys.path.insert(0, str(repo / 'tools'))
     from run_sim_test import make_run, seed_settings, engine_executable, file_sha256
@@ -86,7 +124,7 @@ def main():
               'host_sim_cost_us': a.host_sim_cost_us, 'input_delay_frames': 1, 'settings': settings, 'environment': env,
               'source_head': subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip(),
               'exe_sha256': file_sha256(engine_executable(repo)),
-              'started_utc': datetime.now(timezone.utc).isoformat()}
+              'started_utc': datetime.now(timezone.utc).isoformat(), 'base_run': str(base_dir) if base_dir else None}
     (out / 'configuration.json').write_text(json.dumps(config, indent=2))
 
     def log(role):
@@ -132,7 +170,17 @@ def main():
               'periodic_captures_taken': len(captures) >= a.periodic_captures + 1,
               'every_gap_within_an_interval_and_a_half': bool(gaps) and max(gaps) <= interval_ticks * 3 // 2,
               'no_capture_refused': all(not refused[role] for role in started)}
+    pacing = frame_pacing(out, a.warmup_ticks)
+    base_pacing = frame_pacing(base_dir, a.warmup_ticks) if base_dir else None
+    if base_pacing:
+        for role in ('host', 'client'):
+            mine, theirs = pacing[role], base_pacing[role]
+            enough = mine['windows'] >= 10 and theirs['windows'] >= 10
+            checks[f'{role}_frames_equal_to_base'] = enough and mine['fps_median'] >= 0.95 * theirs['fps_median']
+            checks[f'{role}_worst_frame_equal_to_base'] = enough and mine['worst_ms_p95'] <= 1.25 * theirs['worst_ms_p95']
+            checks[f'{role}_own_seat_holds_equal_to_base'] = enough and mine['own_seat_holds'] <= theirs['own_seat_holds']
     result = {**config, 'pass': all(checks.values()), 'checks': checks, 'failure': failure, 'wall_seconds': round(time.monotonic() - began, 1),
+              'frame_pacing': pacing, 'base_frame_pacing': base_pacing,
               'interval_ticks': interval_ticks, 'captures': captures, 'gaps': gaps, 'max_gap': max(gaps) if gaps else None,
               'late_ticks': [row.get('late_ticks') for row in lateness], 'waited_ticks': [row.get('waited_ticks') for row in lateness],
               'held': [row.get('held') for row in lateness],
@@ -140,7 +188,8 @@ def main():
               'capture_ms': capture_ms, 'graph_walk_ms': [round(us / 1000, 1) for us in walks], 'refused': refused,
               'exits': {role: r.get('exit_code') for role, r in records.items()}}
     (out / 'result.json').write_text(json.dumps(result, indent=2))
-    print(json.dumps({k: result[k] for k in ('pass', 'checks', 'failure', 'max_gap', 'interval_ticks', 'late_ticks', 'capture_ms_median', 'capture_ms_max')}))
+    print(json.dumps({k: result[k] for k in ('pass', 'checks', 'failure', 'max_gap', 'interval_ticks', 'late_ticks', 'capture_ms_median', 'capture_ms_max',
+                                              'frame_pacing', 'base_frame_pacing')}))
     return 0 if result['pass'] else 1
 
 
