@@ -1045,18 +1045,11 @@ def apply_for_held_seat_scene():
     (ROOT / f"{name}.json").write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8", newline="\n")
 
 
-# The editor's pie slice that opens its object picker (PieSliceType::EditorPick).
-EDITOR_PICK_SLICE = 26
-
-
 def pick_brain_by_hand(peer):
-    """The brain chosen as a player chooses it: a held right click opens the editor's pie, Pick is pointed at and released, and the
-    picker's group and object rows are clicked, every press held across frames."""
+    """The brain chosen as a player chooses it: the placement editor opens on its own object picker, and the picker's group and
+    object rows are clicked by hand, every press held across frames."""
     player = 0 if peer == "host" else 1
-    return [dict(op="game_mouse", button="right", down=True), wait(renders=6, sim_advanced=2),
-            dict(op="pie_point", input_player=0, editor=True, command=EDITOR_PICK_SLICE), wait(renders=4),
-            dict(op="game_mouse", button="right", down=False), wait(renders=4),
-            wait(picker_open=True, player=player, within_ms=20000), wait(renders=10, elapsed_ms=800)] + capture(f"picker-open-{peer}") + [
+    return [wait(picker_open=True, player=player, within_ms=20000), wait(renders=10, elapsed_ms=800)] + capture(f"picker-open-{peer}") + [
             dict(op="picker_pick", input_player=0, group="Brains", preset="Base.rte/Brain Case", within_ms=30000),
             wait(picker_open=False, player=player, within_ms=20000)]
 
