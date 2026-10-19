@@ -5491,7 +5491,7 @@ namespace RTE {
 		m_PeerArrivalLatencyMs.clear(); m_PeerForwardedInputs.clear(); m_PeerInputDecodes.clear(); m_PeerAcceptedThrough.clear(); m_PeerInputReceipts.clear(); m_PeerAcceptedAhead.clear(); m_PeerSourceInputs.clear();
 		m_PeerOwnReceiptProgress.clear(); m_PeerReceiptSampleFloorMs.clear(); m_PeerReceiptRepairs = 0;
 		m_PeerCommittedTail.clear(); m_PeerFrameIncoming.clear(); m_PeerTailThrough.reset(); m_PeerAppliedThrough.clear(); m_PeerAppliedAtMs.clear();
-		m_PeerReportedMembers.clear(); m_PeerNoDonorSinceMs.reset();
+		m_PeerReportedMembers.clear(); m_PeerOtherContinuations.clear(); m_PeerNoDonorSinceMs.reset();
 		m_PeerAppliedPrefixes.clear();
 		m_PeerAppliedProgress.clear(); m_OwnDisplayProgress.clear();
 		m_PeerTailRequestedUntil.clear(); m_PeerTailRequestedOf.clear(); m_PeerTailLastSentMs.clear(); m_PeerTailResendFrames.clear(); m_PeerTailSendRanges.clear();
@@ -13466,6 +13466,8 @@ namespace RTE {
 					m_AdvanceBlock = "private-peer-tail";
 					break;
 				}
+				// A member seen playing another continuation is held at this frame, so the groups part and the heal or the directory decides.
+				if (HoldsOtherContinuation(m_Stats.nextFrame) && ProposePeerBridge(m_Stats.nextFrame, nowMs)) continue;
 				(void)ProposePeerBridge(m_Stats.nextFrame, nowMs, true);
 			}
 			if (m_RecoveryDrainThrough) {

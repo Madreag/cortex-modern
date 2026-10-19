@@ -1708,6 +1708,9 @@ namespace RTE {
 		bool PeerGroupNeedsArbitration(uint32_t voters, uint64_t frame = UINT64_MAX) const;
 		/// The frame from which the whole group last played together at or before frame: the name every half gives the split after it.
 		uint64_t PeerSplitEpoch(uint64_t frame) const;
+		/// A member whose committed record of a frame this seat also applied differs plays another continuation.
+		void NotePeerContinuation(uint8_t peer, uint64_t frame, const NetHash32& applied);
+		bool HoldsOtherContinuation(uint64_t frame) const;
 		/// Whether these seats confirm a frame the given group of members played: a majority of them, or on a tie the half the round's tie
 		/// rule names, as for every other decision of that group.
 		bool PeerFrameGroupConfirms(uint32_t agreeing, uint32_t members, uint64_t frame) const;
@@ -1834,6 +1837,7 @@ namespace RTE {
 		uint64_t m_PeerTailRequestAtMs = 0;
 		uint8_t m_PeerTailDonor = 0;
 		std::map<uint8_t, uint32_t> m_PeerReportedMembers; //!< The seats each seat last reported playing at its applied frame.
+		std::map<uint8_t, uint64_t> m_PeerOtherContinuations; //!< Members seen playing another continuation, from the frame whose records differed.
 		std::optional<uint64_t> m_PeerNoDonorSinceMs; //!< Since when no seat could give this held seat its next frame.
 		bool m_LoneSeatInstalling = false; //!< This seat's own return as the round's lone player is being installed.
 		uint64_t m_PeerTailDuplicateFrames = 0;
@@ -1866,6 +1870,7 @@ namespace RTE {
 			uint32_t historiesSeen = 0; //!< Direct heartbeat acknowledgement of independently committed continuations in this epoch.
 			std::optional<NetHostMigrationMessage> offeredHold; //!< Another continuation's local hold, not authority to suspend this one.
 			std::optional<uint64_t> readerHoldFrame; //!< The bilateral exchange confirmed no local continuation past this hold.
+			uint32_t asked = 0; //!< The seats this seat itself first asked the referee to rule for.
 		};
 		std::map<uint64_t, PeerSplitArbitration> m_PeerSplitArbitrations;
 		uint64_t m_TestBlackoutFrame = UINT64_MAX, m_TestBlackoutDurationMs = 0;

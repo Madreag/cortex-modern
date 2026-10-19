@@ -221,6 +221,25 @@ namespace RTE {
 		return name;
 	}
 
+	void NetLockstepCoordinator::NotePeerContinuation(uint8_t peer, uint64_t frame, const NetHash32& applied) {
+		if (!UsesPeerFrameGroups() || m_Playback || !IsRunning() || peer == 0 || peer > m_Config.peerCount || peer == m_Config.localPeerId ||
+		    m_PeerOtherContinuations.contains(peer) || applied == NetHash32{} || !m_LastCompletedSimulationTick || frame > *m_LastCompletedSimulationTick ||
+		    !m_MigrationHistory.contains(frame) || IsLocalPrivateReaderAt(frame)) return;
+		// Both seats showed the frame in this seat's group and the member still plays here: a record that differs is another history.
+		const uint32_t members = PeerFrameMembersAt(frame);
+		if ((members & SeatBit(peer)) == 0 || (members & SeatBit(m_Config.localPeerId)) == 0 || (PeerFrameMembersAt(m_Stats.nextFrame) & SeatBit(peer)) == 0) return;
+		const auto own = PeerAppliedFramePrefix(frame);
+		if (own == NetHash32{} || own == applied) return;
+		m_PeerOtherContinuations[peer] = frame;
+		DiagnosticLine() << "[net-peer-continuation] local=" << static_cast<int>(m_Config.localPeerId) << " peer=" << static_cast<int>(peer) << " frame=" << frame
+		    << " next=" << m_Stats.nextFrame << " displayed=" << *m_LastCompletedSimulationTick << " now_ms=" << m_TimingNowMs << std::endl;
+	}
+
+	bool NetLockstepCoordinator::HoldsOtherContinuation(uint64_t frame) const {
+		const uint32_t members = PeerFrameMembersAt(frame);
+		return std::any_of(m_PeerOtherContinuations.begin(), m_PeerOtherContinuations.end(), [&](const auto& other) { return (members & SeatBit(other.first)) != 0; });
+	}
+
 	void NetLockstepCoordinator::CheckPeerFrameTie(uint64_t frame, uint32_t members, uint64_t nowMs) {
 		// The groups name a split by the last frame the whole group played, so every check-in of one split meets one decision.
 		const uint64_t split = PeerSplitEpoch(frame);
@@ -260,6 +279,7 @@ namespace RTE {
 		// Preserve the pre-hold electorate. Once the local hold is installed its absent seats no longer vote, but the outstanding
 		// directory question still refers to the original split and must keep being polled while the survivors play.
 		auto [question, inserted] = m_PeerSplitArbitrations.try_emplace(split, PeerSplitArbitration{request, owners, {}});
+		if (question->second.asked == 0 && !request.queryOnly) question->second.asked = voting & owners;
 		// Poll the current request for this split, including a reader's query of the other half. Retain the original
 		// electorate and installed hold boundary: changing the request must neither displace its answer nor rename history.
 		if (!inserted) question->second.request = request;
@@ -292,7 +312,12 @@ namespace RTE {
 			// Later local holds can shrink this continuation before the heal. Its first hold's membership may still name a
 			// peer that never joined its history; judge the actual completed continuation, as the history exchange does.
 			const uint32_t playing = PeerFrameMembersAt(m_LastCompletedSimulationTick.value_or(*arbitration.holdFrame)) & owners;
-			if ((winner & local) == 0 && (playing & local) != 0 && (playing & winner) == 0) {
+			// A decision naming members of two continuations is the question one of them asked. A seat that holds a member it names
+			// as another continuation, and did not ask that question itself, lost it.
+			uint32_t other = 0;
+			for (const auto& [peer, since]: m_PeerOtherContinuations) other |= SeatBit(peer);
+			const bool askerElsewhere = (winner & other) != 0 && (winner & local) != 0 && arbitration.asked != winner;
+			if (((winner & local) == 0 || askerElsewhere) && (playing & local) != 0 && ((playing & winner) == 0 || askerElsewhere)) {
 				// Preparation may lead the displayed world by several ticks. Finish any granted tick, then discard that
 				// unplayed preparation: the private image replaces this branch at its actual completed boundary.
 				if (m_GrantedSimulationTick) continue;

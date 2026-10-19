@@ -78,6 +78,11 @@ namespace RTE {
 		witness.bytes.assign(applied.begin(), applied.end()); witness.bytes.insert(witness.bytes.end(), prepared.begin(), prepared.end());
 		m_PeerFrameWitnesses[frame][m_Config.localPeerId] = witness;
 		SendPeerFrameMessage(std::move(witness), m_Config.frameLane);
+		for (const auto& [peer, other]: m_PeerFrameWitnesses[frame]) if (peer != m_Config.localPeerId && other.bytes.size() >= NetHash32{}.size()) {
+			NetHash32 prefix{};
+			std::copy_n(other.bytes.begin(), prefix.size(), prefix.begin());
+			NotePeerContinuation(peer, frame, prefix);
+		}
 	}
 
 	void NetLockstepCoordinator::SendPeerCommittedTail(uint8_t peer, uint64_t fromFrame) {
