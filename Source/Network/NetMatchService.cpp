@@ -73,8 +73,14 @@ namespace RTE {
 		return text.str();
 	}
 
+	std::string NetMatchSummary::PlayerText() const {
+		const std::string& shown = shownResult.empty() ? result : shownResult;
+		return playerReason.empty() ? shown : shown + " - " + playerReason;
+	}
+
 	std::string NetMatchSummary::LineText() const {
-		std::string text = "Last match: " + (winnerTeam < 0 ? (result == "Match complete" || result == "Match over: draw" ? std::string("draw") : std::string("No result - ") + result) : "Team " + std::to_string(winnerTeam + 1) + " wins");
+		const std::string& shown = shownResult.empty() ? result : shownResult;
+		std::string text = "Last match: " + (winnerTeam < 0 ? (shown == "Match complete" || shown == "Match over: draw" ? std::string("draw") : std::string("No result - ") + shown) : "Team " + std::to_string(winnerTeam + 1) + " wins");
 		text += " | " + DurationText() + " | ";
 		for (size_t i = 0; i < peers.size(); ++i) text += (i ? ", " : "") + peers[i].name;
 		std::replace_if(text.begin(), text.end(), [](unsigned char c) { return c < 32 || c == 127; }, ' ');
@@ -229,6 +235,11 @@ namespace RTE {
 		UpdateSummarySeatsLocked();
 		m_CurrentMatchSummary.result = result.empty() ? "Match complete" : result;
 		const auto* activity = dynamic_cast<const GameActivity*>(g_ActivityMan.GetActivity());
+		// The activity's own end reason names a script line and ticks: it stays in the result for the details and the log.
+		const std::string internal = activity && !activity->GetMatchEndReason().empty() ? " - " + activity->GetMatchEndReason() : std::string();
+		const std::string& full = m_CurrentMatchSummary.result;
+		m_CurrentMatchSummary.shownResult = !internal.empty() && full.ends_with(internal) ? full.substr(0, full.size() - internal.size()) : full;
+		m_CurrentMatchSummary.playerReason = activity ? activity->GetMatchEndPlayerReason() : std::string();
 		m_CurrentMatchSummary.winnerTeam = m_ReceivedEndWinner ? *m_ReceivedEndWinner : activity ? activity->GetWinnerTeam() : Activity::NoTeam;
 		m_CurrentMatchSummary.runningTicks = m_ReceivedEndWinner ? m_CompletedRoundFinalFrame : ScenarioRunner::GetLockstepAppliedFrame();
 		m_CurrentMatchSummary.paceJson = ::BuildLoopPaceJson();
@@ -2719,7 +2730,7 @@ static std::string ResyncSaveName() {
 			const std::string ended = m_HostEndReason.empty() ? result : std::exchange(m_HostEndReason, std::string());
 			displayResult = ended;
 			CaptureMatchSummaryLocked(ended);
-			if (m_LastMatchSummary) displayResult = m_LastMatchSummary->result;
+			if (m_LastMatchSummary) displayResult = m_LastMatchSummary->PlayerText();
 			m_HeldRejoinDriving = false;
 			heldSeatNeedsAnswer = m_IsHost && m_Coordinator && m_Coordinator->AnyHeldAISeat();
 			if (m_IsHost) m_ReconnectHost.SetMatchEnded();
@@ -2805,7 +2816,7 @@ static std::string ResyncSaveName() {
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			CaptureMatchSummaryLocked(result);
 			RememberTicketRoutesLocked(true, handover);
-			if (m_LastMatchSummary) displayResult = m_LastMatchSummary->result;
+			if (m_LastMatchSummary) displayResult = m_LastMatchSummary->PlayerText();
 			if (m_IsHost && !handover) {
 				m_ReconnectHost.SetMatchEnded();
 				if (m_MatchWasRunning) NoteHostEndedTheMatchLocked();

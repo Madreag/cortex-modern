@@ -286,7 +286,9 @@ void GameActivity::Clear() {
 	m_LockstepPlacementSeeded = false;
 	m_MatchLostBrainIDs.clear();
 	m_MatchBrainLosses.clear();
+	m_MatchBrainLossOwners.clear();
 	m_MatchEndReason.clear();
+	m_MatchEndPlayerReason.clear();
 	m_LockstepPlacementUidBase = 0;
 
 	m_StartingGold = 0;
@@ -1320,6 +1322,7 @@ void GameActivity::NoteMatchBrainLoss(const Actor& brain, const char* cause) {
 		std::lock_guard lock(m_MatchBrainLossMutex);
 		if (!m_MatchLostBrainIDs.insert(brain.GetUniqueID()).second) return;
 		m_MatchBrainLosses.push_back(line.str());
+		m_MatchBrainLossOwners.push_back(owner);
 	}
 	System::PrintDiagnosticLine("[net-match] brain lost: " + line.str());
 	g_ConsoleMan.PrintString("NETWORK: " + line.str());
@@ -1341,8 +1344,10 @@ void GameActivity::End() {
 		}
 		m_MatchEndReason = GetPresetName() + " ended at tick " + std::to_string(g_TimerMan.GetSimUpdateCount()) + " by " + rule;
 		if (m_WinnerTeam != Teams::NoTeam) m_MatchEndReason += "; team " + std::to_string(m_WinnerTeam + 1) + " wins";
-		std::vector<std::string> losses;
-		{ std::lock_guard lock(m_MatchBrainLossMutex); losses = m_MatchBrainLosses; }
+		std::vector<std::string> losses, owners;
+		{ std::lock_guard lock(m_MatchBrainLossMutex); losses = m_MatchBrainLosses; owners = m_MatchBrainLossOwners; }
+		// The players read whose brain went, never the rule's script line.
+		for (const std::string& owner: owners) m_MatchEndPlayerReason += (m_MatchEndPlayerReason.empty() ? "" : ", ") + owner + "'s brain was destroyed";
 		std::sort(losses.begin(), losses.end());
 		for (const std::string& loss: losses) m_MatchEndReason += "; " + loss;
 		System::PrintDiagnosticLine("[net-match] activity end: " + m_MatchEndReason);

@@ -4398,11 +4398,8 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	const bool lobby = m_MultiplayerSubScreen == MultiplayerSubScreen::Lobby;
 	const auto summary = g_NetMatchService.GetLastMatchSummary();
 	std::string summaryText = summary ? summary->LineText() : "";
-	if (summary && summary->winnerTeam >= 0) {
-		// The compact result names the winner; keep the reason for that result visible too.
-		const size_t reason = summary->result.find(" - ");
-		if (reason != std::string::npos) summaryText += "\n" + summary->result.substr(reason + 3);
-	}
+	// The compact result names the winner; the reason for it follows in the players' words.
+	if (summary && !summary->playerReason.empty()) summaryText += "\n" + summary->playerReason;
 	m_LastMatchSummaryLabel->SetText(summaryText);
 	m_LastMatchSummaryLabel->SetVisible(lobby && summary.has_value());
 	m_MainMenuButtons[MenuButton::LastMatchDetailsButton]->SetVisible(lobby && summary.has_value());
