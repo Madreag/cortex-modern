@@ -3471,10 +3471,10 @@ class ConnectionAuthorityTests(unittest.TestCase):
         self.route = dict(ice_identity="str:player-route", ice_virtual_port=41012, listen_port=41012,
             listen_addrs=["192.0.2.2", "2001:db8::2"], generation=1, state="connected")
 
-    def envelope(self, *, key=None, token=None, instance="30" * 16, route=None, host=None, nonce=None):
+    def envelope(self, *, key=None, token=None, instance="30" * 16, route=None, host=None, nonce=None, sent_at=None):
         key = key or self.player
         data = dict(session_id=self.sid, seat_token=token or self.lease["seat_token"], instance=instance,
-            nonce=nonce or uuid.uuid4().hex, sent_at=int(self.wall), route=route or self.route)
+            nonce=nonce or uuid.uuid4().hex, sent_at=int(self.wall) if sent_at is None else sent_at, route=route or self.route)
         if host is not None:
             data["host"] = host
         raw = json.dumps(data, separators=(",", ":")).encode()
@@ -3777,6 +3777,17 @@ class ConnectionAuthorityTests(unittest.TestCase):
         self.assertIn("Original player", banned.exception.body["message"])
         with self.assertRaises(ConnectionErrorReply):
             self.store.connection_request(self.sid, self.issue, self.now, INSTALL_KEY)
+
+    def test_a_clock_refusal_names_the_directory_time(self) -> None:
+        self.assertEqual(self.check()["directory_time"], int(self.wall))
+        self.assertEqual(self.store.connection_bootstrap(self.sid, self.now)["directory_time"], int(self.wall))
+        with self.assertRaises(ConnectionErrorReply) as refused:
+            self.store.connection_request(self.sid, self.envelope(sent_at=int(self.wall) - 120), self.now, INSTALL_KEY)
+        self.assertEqual((refused.exception.status, refused.exception.body["error"], refused.exception.body.get("directory_time")),
+                         (409, "connection_clock", int(self.wall)))
+        # A request signed on the time the refusal named is accepted.
+        signed = self.envelope(sent_at=refused.exception.body["directory_time"])
+        self.assertEqual(self.store.connection_request(self.sid, signed, self.now, INSTALL_KEY)["seat"], 1)
 
     def test_a_fetch_lends_its_own_login_never_a_seat_one(self) -> None:
         seat = self.check(host={"token": self.row["token"], "generation": 0})

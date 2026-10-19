@@ -769,7 +769,7 @@ class SessionDirectory:
                 ice_identity=sess.fields.get("ice_identity", ""), ice_virtual_port=sess.fields.get("ice_virtual_port", 0),
                 listen_addrs=sess.fields["listen_addrs"], listen_port=sess.fields["listen_port"], join_mode=sess.fields["join_mode"],
                 state=sess.state, name=sess.fields["name"], session=sess.as_list_row(now), relay_enabled=sess.ice_offer is not None,
-                host_retry_after_s=max(0, int(sess.host_signal_retry_until - now + .999)))
+                host_retry_after_s=max(0, int(sess.host_signal_retry_until - now + .999)), directory_time=int(time.time()))
 
     def connection_request(self, session_id: str, data: dict[str, Any], now: float, install_key: str) -> dict[str, Any]:
         connection_version(data)
