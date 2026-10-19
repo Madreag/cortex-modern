@@ -1660,6 +1660,7 @@ static void NoteTickCostDetails(const char* tag, uint64_t round, uint64_t tick, 
 		std::array<long long, 7> phases{};
 		std::array<long long, 8> nested{};
 		std::array<uint64_t, PerformanceMan::PerfCounterCount> counters{};
+		std::vector<long long> ownUs;
 	};
 	static Window window;
 	if (window.round != round || (window.tag && std::strcmp(window.tag, tag) != 0)) window = {};
@@ -1671,6 +1672,10 @@ static void NoteTickCostDetails(const char* tag, uint64_t round, uint64_t tick, 
 	for (size_t i = 0; i < nested.size(); ++i) window.nested[i] += nested[i];
 	for (int i = 0; i < PerformanceMan::PerfCounterCount; ++i)
 		window.counters[i] += g_PerformanceMan.GetPerformanceCounterSample(static_cast<PerformanceMan::PerformanceCounters>(i));
+	// A tick's own cost leaves out the wait for the round's inputs, which another machine sets.
+	long long tickUs = 0;
+	for (long long phase: phases) tickUs += phase;
+	window.ownUs.push_back(tickUs - nested[3]);
 	if (window.ticks < 600) return;
 	static constexpr std::array<const char*, 7> phaseNames{"before_world", "world", "audio", "late", "hash", "collection", "finish"};
 	static constexpr std::array<const char*, PerformanceMan::PerfCounterCount> counterNames{
@@ -1689,6 +1694,10 @@ static void NoteTickCostDetails(const char* tag, uint64_t round, uint64_t tick, 
 	for (size_t i = 0; i < window.nested.size(); ++i) line << ' ' << nestedNames[i] << "_us=" << window.nested[i];
 	// These existing counters describe work within the phases; nested counters are not additive.
 	for (size_t i = 0; i < window.counters.size(); ++i) line << ' ' << counterNames[i] << "_us=" << window.counters[i];
+	std::vector<long long> sorted = window.ownUs;
+	std::sort(sorted.begin(), sorted.end());
+	const auto rank = [&sorted](size_t permille) { return sorted[std::min(sorted.size() - 1, sorted.size() * permille / 1000)]; };
+	line << " own_p50_us=" << rank(500) << " own_p95_us=" << rank(950) << " own_p99_us=" << rank(990) << " own_max_us=" << sorted.back();
 	line << " actors=" << g_MovableMan.GetActorCount() << " particles=" << g_MovableMan.GetParticleCount();
 	System::PrintDiagnosticLine(line.str());
 	window = {};
