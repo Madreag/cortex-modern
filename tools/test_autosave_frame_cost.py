@@ -72,19 +72,24 @@ def timeline(text, host):
                 saver.append((raised, int(match.group(2))))
                 raised = None
             continue
+        if line.startswith('[harness-cost-frame] '):
+            # The exact frame the game had reached when the next line printed.
+            if match := re.search(r'"frame":(\d+)', line):
+                latest = max(latest, int(match.group(1)))
+            continue
         if line.startswith('[frame-pace] '):
             f = fields(line)
             if 'first_tick' in f and 'tick' in f and float(f.get('wall_ms', 0)) > 0:
                 window = {'first': int(f['first_tick']), 'last': int(f['tick']), 'fps': float(f['fps']),
                           'worst_ms': float(f['interval_max_ms']), 'tps': int(f.get('ticks', 0)) * 1000.0 / float(f['wall_ms'])}
                 windows.append(window)
-                latest = window['last']
+                latest = max(latest, window['last'])
         elif match := re.match(r'^\[autosave\] tick=(\d+) capture_ms=', line):
             # Printed when the save is written: its window runs from its boundary to the tick the game had reached.
             saves.append((int(match.group(1)), max(latest, int(match.group(1)))))
         elif host and (match := re.match(r'^\[autosave\] periodic due named at=(\d+) late_ticks=(-?\d+)(?:.*? own_writer=([01]))?', line)):
             dues.append(int(match.group(1)) - int(match.group(2)))
-            events['namings'].append((int(match.group(1)), match.group(3) == '1'))
+            events['namings'].append((int(match.group(1)), match.group(3) == '1', dues[-1]))
         elif match := re.match(r'^\[autosave\] manual save (?:named|taken|saved|failed) tick=(\d+)', line):
             events['manual'].append(int(match.group(1)))
         elif host and (match := re.search(r'private base asked of the checkpoint schedule at tick (\d+)', line)):
@@ -155,14 +160,18 @@ def uncaused(saver, saves, dues, events, interval=0, near=30, slack=120):
         at_deadline = any(due - 1 <= start <= due + near and any(s0 <= due + near and e0 + 60 >= due and end <= e0 + slack for s0, e0 in own)
                           for due in deadlines)
         own_late = False
-        for named, own_writer in events['namings']:
-            if not own_writer or not named - 2 <= start <= named + near:
+        for named, own_writer, due in events['namings']:
+            if not own_writer:
                 continue
+            # The naming's own-late claim, checked: the save written last before it is this peer's own and ended just before it.
             before = [save for save in saves if save[1] <= named + 60 and save[0] < named]
             last = max(before, key=lambda save: save[1]) if before else None
+            if not last or last[0] in bases or named - last[1] > slack:
+                continue
             written = [e1 for s1, e1 in saves if named <= s1 <= named + near]
-            if last and last[0] not in bases and named - last[1] <= slack and written and end <= written[0] + slack:
-                own_late = True
+            waited = due - 1 <= start and end <= named + 2
+            wrote = named - 2 <= start <= named + near and written and end <= written[0] + slack
+            own_late = own_late or waited or bool(wrote)
         manual = any(start - 600 <= tick <= end + 600 for tick in events['manual'])
         if not (at_deadline or own_late or manual):
             found.append((start, end))
