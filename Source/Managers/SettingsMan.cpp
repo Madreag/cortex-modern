@@ -829,6 +829,10 @@ int SettingsMan::RunNetworkPreferencesSelfTest() {
 		std::cout << Tag << " FAIL join-history defaults" << std::endl;
 		return 1;
 	}
+	if (settings.GetAutosaveSeconds() != 300) {
+		std::cout << Tag << " FAIL hosted autosave default is " << settings.GetAutosaveSeconds() << " s" << std::endl;
+		return 1;
+	}
 	settings.SetNetworkDisplayName("AlphaPilot");
 	settings.SetNetworkMatchStatusMode(NetworkMatchStatusMode::Always);
 	settings.SetNetworkChatDefaultScope(NetworkChatDefaultScope::Team);
