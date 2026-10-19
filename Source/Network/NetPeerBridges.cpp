@@ -1086,6 +1086,10 @@ namespace RTE {
 				completes = !heldHere && !silent && !backedAnother;
 			}
 			if (!completes) continue;
+			// Nor does one whose possible signers could never carry the group's authority: it is never certified, so its frame plays on.
+			uint32_t signers = required;
+			for (const auto& [voter, vote]: votes->second) if (SameBridge(vote, basis)) signers |= SeatBit(voter);
+			if (basis.preparedFrame != 3 && !PeerGroupHasAuthority(signers, votes->first.first)) continue;
 			// The frame's committed record settles what this peer still waits on: it carries the decision if any peer certified it.
 			if (m_PeerCommittedTail.contains(m_Stats.nextFrame)) return false;
 			if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) DiagnosticLine() << "[net-peer-decision-wait] local=" << static_cast<int>(m_Config.localPeerId)
