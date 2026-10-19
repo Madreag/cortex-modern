@@ -1142,8 +1142,11 @@ namespace RTE {
 					message.totalBytes = static_cast<uint32_t>(message.bytes.size());
 					return message;
 				};
-				// The other half names the split from its own state first; once it has heard this half, from the last frame both applied.
-				if (!deliver(peer, heartbeat(remoteSplit, {1, 2, 3, 4}, 0), 1100)) { check(false, "arm " + std::to_string(arm) + ": the first heartbeat was refused"); continue; }
+				// The other half names the split from its own state through a whole rotation of its questions; once it has heard this
+				// half, from the last frame both applied.
+				if (!deliver(peer, heartbeat(remoteSplit, {1, 2, 3, 4}, 0), 1100) || !deliver(peer, heartbeat(remoteSplit, {1, 2, 3, 4}, 0), 1150)) {
+					check(false, "arm " + std::to_string(arm) + ": the first heartbeats were refused"); continue;
+				}
 				const uint64_t common = arm == 0 ? 154 : 120;
 				if (!deliver(peer, heartbeat(common, arm == 0 ? std::vector<uint8_t>{1, 2, 3} : std::vector<uint8_t>{1, 2, 3, 4}, 1), 1200)) {
 					check(false, "arm " + std::to_string(arm) + ": the second heartbeat was refused"); continue;

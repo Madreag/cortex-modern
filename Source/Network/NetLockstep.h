@@ -1717,7 +1717,7 @@ namespace RTE {
 		void SendForwardedPeerInput(const NetLockstepFrame& input, uint8_t onlyPeer);
 		void CheckPeerFrameTie(uint64_t frame, uint32_t members, uint64_t nowMs);
 		void AskPeerFrameTie(uint64_t split, uint64_t frame, uint32_t members, uint64_t nowMs);
-		void DerivePeerCommonSplit(const NetHostMigrationMessage& message, uint64_t nowMs);
+		void DerivePeerCommonSplit(uint8_t sender, uint64_t remoteSplit, uint64_t remoteBoundary, uint64_t nowMs);
 		void PollPeerFrameTies(uint64_t nowMs);
 		bool ProposePeerBridge(uint64_t frame, uint64_t nowMs, bool returningOnly = false);
 		bool ValidatePeerBridge(const NetHostMigrationMessage& proposal) const;
@@ -1842,6 +1842,8 @@ namespace RTE {
 		std::map<uint8_t, uint64_t> m_PeerOtherContinuations; //!< Members seen playing another continuation, from the frame whose records differed.
 		struct PeerContinuationEvidence { uint64_t first = 0, last = 0; uint32_t frames = 0; };
 		std::map<uint8_t, PeerContinuationEvidence> m_PeerContinuationEvidence; //!< Differing records since a member's last matching one.
+		struct PeerQuestionHeard { uint64_t boundary = 0; uint32_t times = 0; };
+		std::map<uint8_t, std::map<uint64_t, PeerQuestionHeard>> m_PeerQuestionsHeard; //!< Each seat's split questions heard on its heartbeats.
 		std::optional<uint64_t> m_PeerNoDonorSinceMs; //!< Since when no seat could give this held seat its next frame.
 		bool m_LoneSeatInstalling = false; //!< This seat's own return as the round's lone player is being installed.
 		uint64_t m_PeerTailDuplicateFrames = 0;

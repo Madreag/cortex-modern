@@ -365,21 +365,21 @@ namespace RTE {
 		return std::countr_zero(first) < std::countr_zero(second) ? first : second;
 	}
 
-	void NetLockstepCoordinator::DerivePeerCommonSplit(const NetHostMigrationMessage& message, uint64_t nowMs) {
-		const uint32_t sender = SeatBit(message.senderPeerId);
+	void NetLockstepCoordinator::DerivePeerCommonSplit(uint8_t senderPeer, uint64_t remoteSplit, uint64_t remoteBoundary, uint64_t nowMs) {
+		const uint32_t sender = SeatBit(senderPeer);
 		for (const auto& [split, arbitration]: m_PeerSplitArbitrations) {
 			if (!arbitration.holdFrame || *arbitration.holdFrame <= m_Config.startFrame) continue;
 			const uint64_t hold = *arbitration.holdFrame;
 			// This seat's hold that parted it from the sender, and the sender's own hold, part the same two histories.
 			if ((PeerFrameMembersAt(hold - 1) & sender) == 0 || (PeerFrameMembersAt(hold) & sender) != 0) continue;
-			const uint64_t common = std::min(hold, message.boundary) - 1;
+			const uint64_t common = std::min(hold, remoteBoundary) - 1;
 			if (common < m_Config.startFrame || m_PeerSplitArbitrations.contains(common)) return;
 			uint32_t self = SeatBit(m_Config.localPeerId);
 			const uint32_t owners = PeerVotingOwners(self, common, PeerVotingScope::History);
 			const uint32_t playing = PeerFrameMembersAt(*m_LastCompletedSimulationTick) & owners;
 			if (owners == 0 || (playing & SeatBit(m_Config.localPeerId)) == 0 || (playing & sender) != 0) return;
-			DiagnosticLine() << "[net-split-common] local=" << static_cast<int>(m_Config.localPeerId) << " peer=" << static_cast<int>(message.senderPeerId)
-			    << " local_split=" << split << " remote_split=" << message.frame << " local_hold=" << hold << " remote_hold=" << message.boundary
+			DiagnosticLine() << "[net-split-common] local=" << static_cast<int>(m_Config.localPeerId) << " peer=" << static_cast<int>(senderPeer)
+			    << " local_split=" << split << " remote_split=" << remoteSplit << " local_hold=" << hold << " remote_hold=" << remoteBoundary
 			    << " common=" << common << " owners=" << owners << " playing=" << playing << std::endl;
 			if (m_Config.frameTieReferee) AskPeerFrameTie(common, common, playing, nowMs);
 			else {
@@ -401,8 +401,19 @@ namespace RTE {
 		    message.connectedMask == 0 ||
 		    (message.connectedMask & SeatBit(message.senderPeerId)) == 0 || message.bytes.size() != 8 + NetHash32{}.size()) return;
 		// Halves that named the split from different later certificates meet at the last frame both applied: the earlier hold less one.
-		if (message.boundary != 0 && message.appliedFrame >= message.boundary && !m_PeerSplitArbitrations.contains(message.frame))
-			DerivePeerCommonSplit(message, nowMs);
+		// The sender rotates its questions; only when a whole rotation names none of this seat's is the earliest of them the common one.
+		if (message.boundary != 0 && message.appliedFrame >= message.boundary) {
+			auto& heard = m_PeerQuestionsHeard[message.senderPeerId];
+			auto& question = heard[message.frame];
+			question.boundary = message.boundary; ++question.times;
+			while (heard.size() > NetMatchConfigUtil::c_MaxPeerCount * 2) heard.erase(heard.begin());
+			const bool named = std::any_of(heard.begin(), heard.end(), [&](const auto& asked) { return m_PeerSplitArbitrations.contains(asked.first); });
+			const bool rotated = std::any_of(heard.begin(), heard.end(), [](const auto& asked) { return asked.second.times >= 2; });
+			if (!named && rotated) {
+				const auto earliest = std::min_element(heard.begin(), heard.end(), [](const auto& a, const auto& b) { return a.second.boundary < b.second.boundary; });
+				DerivePeerCommonSplit(message.senderPeerId, earliest->first, earliest->second.boundary, nowMs);
+			}
+		}
 		if (m_Config.frameTieReferee) return;
 		// A reader of this history has no competing continuation, whatever its current link or roster revision.
 		bool sameHistory = false;
