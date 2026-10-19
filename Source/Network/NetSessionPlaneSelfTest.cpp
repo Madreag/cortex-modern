@@ -1538,6 +1538,7 @@ namespace RTE {
 			std::array<std::array<std::map<uint64_t, uint64_t>, 5>, 5> inputSplits;
 			struct InputSplitCause { uint8_t human, held, sender, receiver; uint64_t faultAt, observedAt; };
 			std::vector<InputSplitCause> inputSplitCauses;
+			std::array<std::array<uint32_t, 5>, 5> partitionOwners{}; //!< The owners whose partition between a pair has its proven cause.
 			// A divergence from an input or receipt that arrived late, not lost: accepted only while the engine arbitrates it, and closed
 			// when either side's image return reconverges them.
 			struct LateSplit { uint8_t a = 0, b = 0, owner = 0; uint64_t frame = 0, observedAt = 0, resolvedAt = 0; };
@@ -1804,31 +1805,43 @@ namespace RTE {
 							}
 						}
 						const uint32_t first = authors ? 1U << (authorA - 1) : 0, second = authors ? 1U << (authorB - 1) : 0;
+						// The proven cause of one owner's seat played on one side and held on the other: its input, or the receipt covering it, lost on the wire.
+						const auto recordPartition = [&](uint8_t owner) {
+							const uint32_t bit = 1U << (owner - 1);
+							if (((l ^ r) & bit) == 0) return false;
+							const bool humanLeft = (l & bit) != 0;
+							const auto& human = humanLeft ? left : right; const auto& held = humanLeft ? right : left;
+							const auto ai = held.aiAt.find(frame);
+							if (ai == held.aiAt.end() || ("," + ai->second + ",").find("," + std::to_string(owner) + ",") == std::string::npos) return false;
+							// FLAGGED fixture departure: an exact impaired receipt separates histories at the held seat's bound as an input does.
+							const bool heldInHuman = ((humanLeft ? l : r) & (1U << ((humanLeft ? b : a) - 1))) != 0;
+							const auto* cause = hub.InputPartition(owner, humanLeft ? a : b, humanLeft ? b : a, frame, human.shownAt.at(frame), held.shownAt.at(frame));
+							if (!cause && heldInHuman) cause = hub.ReceiptPartition(owner, humanLeft ? b : a, frame, held.shownAt.at(frame));
+							if (!cause) return false;
+							partitionOwners[a][b] |= bit;
+							inputSplitCauses.push_back({humanLeft ? a : b, humanLeft ? b : a, cause->packet.senderPeerId, cause->receiver,
+							    cause->at, std::max(human.shownAt.at(frame), held.shownAt.at(frame))});
+							DiagnosticLine() << "[session-plane-input-partition] frame=" << frame << " owner=" << unsigned(owner)
+							    << " human_author=" << unsigned(humanLeft ? a : b) << " held_author=" << unsigned(humanLeft ? b : a)
+							    << (cause->packet.type == NetHostMigrationMessageType::PeerReceipt ? " exact_impaired_receipt=1" : " exact_impaired_input=1") << " delivered_before_hold=0" << std::endl;
+							return true;
+						};
 						// FLAGGED fixture departure: exact wire loss can separate inputs at the local bound without a total transport cut.
 						if (!separated && authorA == a && authorB == b && authors && l != r && (l & first) && (r & second) &&
 						    left.shownAt.contains(frame) && right.shownAt.contains(frame)) {
 							for (uint8_t owner = 1; owner <= hub.row.seats; ++owner) {
-								const uint32_t bit = 1U << (owner - 1);
-								if (((l ^ r) & bit) == 0) continue;
-								const bool humanLeft = (l & bit) != 0;
-								const auto& human = humanLeft ? left : right; const auto& held = humanLeft ? right : left;
-								const auto ai = held.aiAt.find(frame);
-								if (ai == held.aiAt.end() || ("," + ai->second + ",").find("," + std::to_string(owner) + ",") == std::string::npos) continue;
-								// FLAGGED fixture departure: an exact impaired receipt separates histories at the held seat's bound as an input does.
-								const bool heldInHuman = ((humanLeft ? l : r) & (1U << ((humanLeft ? b : a) - 1))) != 0;
-								const auto* cause = hub.InputPartition(owner, humanLeft ? a : b, humanLeft ? b : a, frame, human.shownAt.at(frame), held.shownAt.at(frame));
-								if (!cause && heldInHuman) cause = hub.ReceiptPartition(owner, humanLeft ? b : a, frame, held.shownAt.at(frame));
-								if (!cause) continue;
+								if (!recordPartition(owner)) continue;
 								inputSplits[a][b][frame] = 0; separated = frame; sawSplit = true;
-								inputSplitCauses.push_back({humanLeft ? a : b, humanLeft ? b : a, cause->packet.senderPeerId, cause->receiver,
-								    cause->at, std::max(human.shownAt.at(frame), held.shownAt.at(frame))});
-								DiagnosticLine() << "[session-plane-input-partition] frame=" << frame << " owner=" << unsigned(owner)
-								    << " human_author=" << unsigned(humanLeft ? a : b) << " held_author=" << unsigned(humanLeft ? b : a)
-								    << (cause->packet.type == NetHostMigrationMessageType::PeerReceipt ? " exact_impaired_receipt=1" : " exact_impaired_input=1") << " delivered_before_hold=0" << std::endl;
 								break;
 							}
 						}
 						if (separated && frame >= separated && (l & first) && (r & second) && l != r) {
+							// FLAGGED fixture departure: each half holds the seat it cannot hear, so an owner first held on one side after the split has its own proven divergence.
+							if (authorA == a && authorB == b && frame > 0 && left.shownAt.contains(frame) && right.shownAt.contains(frame)) {
+								const uint32_t before = frameMembers[a - 1].at(frame - 1) ^ frameMembers[b - 1].at(frame - 1);
+								for (uint8_t owner = 1; owner <= hub.row.seats; ++owner)
+									if (((l ^ r) & ~before & ~partitionOwners[a][b] & (1U << (owner - 1))) != 0) (void)recordPartition(owner);
+							}
 							if (!pairSeparatedFrom[a][b]) pairSeparatedFrom[a][b] = frame;
 							splitHistories = true; continue;
 						}
@@ -2070,7 +2083,7 @@ namespace RTE {
 					}
 					hashedThrough = 0; sharedDigests.clear(); roundStartMs = hub.now;
 					if (const auto unresolved = UnresolvedLateSplits(); !unresolved.empty()) { error = unresolved + " before the round ended"; return false; }
-					compared = {}; splitFrom = {}; inputSplits = {}; inputSplitCauses.clear(); lateSplits.clear(); unexplained = {}; sawSplit = splitHistories = false;
+					compared = {}; splitFrom = {}; inputSplits = {}; inputSplitCauses.clear(); partitionOwners = {}; lateSplits.clear(); unexplained = {}; sawSplit = splitHistories = false;
 					imageTasks.clear(); imageTasks.resize(hub.row.seats);
 					directRuling = 0;
 					std::fill(lostAt.begin(), lostAt.end(), 0); std::fill(lostFrame.begin(), lostFrame.end(), 0);
@@ -2549,7 +2562,7 @@ namespace RTE {
 			uint64_t tailRecorded = base;
 			std::map<uint64_t, NetLockstepFrame> receivedTail;
 			std::vector<uint8_t> partialTail;
-			uint64_t activation = 0, reported = replay.applied, reportAt = fixture.hub.now, work = 0, workUs = 0;
+			uint64_t activation = 0, reported = replay.applied, reportAt = fixture.hub.now, work = 0, workUs = 0, reportedWork = 0;
 			struct ReplayReport { uint64_t arrival, applied, ticks, elapsed, work, workUs; };
 			std::deque<ReplayReport> reports;
 			unsigned reportsRead = 0;
@@ -2558,6 +2571,7 @@ namespace RTE {
 			bool liveStarted = false, certificateReported = false, refusalReported = false;
 			std::map<uint64_t, NetLockstepReadyFrame> replayedFrames; //!< The replay's own frames, named when its certificate is refused.
 			std::string lastRefusal;
+			const char* lastGate = nullptr;
 			const auto startLive = [&] {
 				// The real service starts live play from the winning replay's configuration, including authority and every member's start terms.
 				config = replayCoordinator.GetConfig();
@@ -2704,12 +2718,13 @@ namespace RTE {
 					// FLAGGED fixture departure: a private replay reports the same work cost as its supplied machine capacity.
 					workUs += static_cast<uint64_t>(std::ceil(c_TestTickMs * 1000 / capacity));
 				}
-				if (fixture.hub.now >= reportAt + 100) {
+				// As the service's pump does, the replay reports once a frame whenever its state moved, and every 250 ms when it stands.
+				if (fixture.hub.now >= reportAt + (work != reportedWork ? static_cast<uint64_t>(std::ceil(c_TestTickMs)) : 250)) {
 					// Flagged fixture correction: production receives this cursor after its link transit. Comparing
 					// an instantaneous callback to a transported report invents an extra half-trip of producer lag.
 					reports.push_back({fixture.hub.now + fixture.hub.Delay(seat, donor), replay.applied, replay.applied - reported,
 					                   fixture.hub.now - reportAt, work, workUs});
-					reported = replay.applied; reportAt = fixture.hub.now;
+					reported = replay.applied; reportedWork = work; reportAt = fixture.hub.now;
 				}
 				while (!reports.empty() && reports.front().arrival <= fixture.hub.now) {
 					const auto report = reports.front(); reports.pop_front();
@@ -2718,9 +2733,24 @@ namespace RTE {
 						co_return fail("the private replay claimed more capacity than its supplied tick budget: reported=" +
 						    std::to_string(join.FindSession(12)->headroom.Ratio()) + " supplied=" + std::to_string(maximumReplayCapacity));
 					uint64_t announced = 0;
+					// As the service does, the coordinator that will propose the return sizes how far it may trail.
+					const uint8_t sizing = fixture.ImageReturnProposer(donor);
+					join.NoteReturnTrailRoom(12, fixture.peers[sizing - 1]->PeerReturnTrailRoom(seat, fixture.ImageReturnRoute(sizing, seat).second, fixture.worlds[donor - 1].applied));
 					if (!join.NoteCatchUpProgress(12, report.applied, report.ticks, report.elapsed,
 					                            fixture.worlds[donor - 1].applied, &announced, &error)) co_return false;
+					if (announced && announced != activation) {
+						const auto* announcing = join.FindSession(12);
+						DiagnosticLine() << "[session-plane-image-activation] returner=" << unsigned(seat) << " announced=" << announced << " previous=" << activation
+						                 << " applied=" << report.applied << " horizon=" << fixture.worlds[donor - 1].applied << " closing_rate=" << announcing->closingRate
+						                 << " capacity_ratio=" << announcing->headroom.Ratio() << " trail=" << announcing->activationTrailFrames << " now_ms=" << fixture.hub.now << std::endl;
+					}
 					if (announced) activation = announced;
+					if (const char* gate = join.FindSession(12)->catchUpGate; gate && gate != lastGate) {
+						DiagnosticLine() << "[session-plane-image-gate] returner=" << unsigned(seat) << " gate=" << gate << " applied=" << report.applied
+						                 << " horizon=" << fixture.worlds[donor - 1].applied << " closing_rate=" << join.FindSession(12)->closingRate
+						                 << " capacity_ratio=" << join.FindSession(12)->headroom.Ratio() << " now_ms=" << fixture.hub.now << std::endl;
+						lastGate = gate;
+					}
 					join.NoteCatchUpClock(12, fixture.hub.now);
 					join.AcknowledgeTailDatagrams(12, fixture.hub.now);
 					if (reportsRead++ < 3) DiagnosticLine() << "[session-plane-image-report] returner=" << unsigned(seat)
@@ -2735,6 +2765,29 @@ namespace RTE {
 					if (!session || session->activationTick != activation) co_return fail("the image activation lost its measured session");
 					proposer = fixture.ImageReturnProposer(donor);
 					auto& coordinator = *fixture.peers[proposer - 1];
+					// As the donor's service does, the reclaim is proposed one notice ahead of the donor's head, so an activation that can still
+					// come forward or must move later is not fixed early; one the round passed or that the replay trails is announced again.
+					const auto& serving = *fixture.peers[donor - 1];
+					const uint64_t head = std::max(serving.GetStats().nextFrame, serving.SentInputThrough());
+					uint64_t noticeTicks = 1;
+					for (const auto& [peer, stats]: serving.GetStats().peers) {
+						if (peer == seat || serving.IsPeerGoneAtFrame(peer, head) || serving.IsSeatUnderAI(peer, head)) continue;
+						noticeTicks = std::max(noticeTicks, static_cast<uint64_t>(std::ceil((stats.pingMs + stats.jitterMs) / serving.GetConfig().simTickMs)));
+					}
+					if (activation > head + noticeTicks + 1) continue;
+					// The trail is judged against the same horizon the progress reports are, the donor's applied world.
+					const uint64_t roundFrame = fixture.worlds[donor - 1].applied;
+					if (activation <= head || (roundFrame > session->acknowledgedThrough ? roundFrame - session->acknowledgedThrough : 0) >
+					                              session->activationTrailFrames + serving.GetConfig().slowPlayerBoundTicks) {
+						uint64_t later = 0;
+						if (join.ReannounceActivation(12, roundFrame, &later, nullptr)) {
+							DiagnosticLine() << "[session-plane-image-activation] returner=" << unsigned(seat) << " announced=" << later << " previous=" << activation
+							                 << " waits_for_tail=1 head=" << head << " notice=" << noticeTicks << " round=" << roundFrame << " acknowledged=" << session->acknowledgedThrough
+							                 << " trail=" << session->activationTrailFrames << " replay=" << replay.applied << " now_ms=" << fixture.hub.now << std::endl;
+							activation = later;
+						}
+						continue;
+					}
 					// FLAGGED fixture departure: a refused proposal remains private and retries, as the service does.
 					std::string refusal;
 					if (!coordinator.SchedulePeerReclaim(seat, fixture.ImageReturnRoute(proposer, seat).second, incarnation, activation, &refusal, session->activationTrailFrames)) {
@@ -2743,7 +2796,8 @@ namespace RTE {
 						continue;
 					}
 					DiagnosticLine() << "[session-plane-image-reclaim] returner=" << unsigned(seat) << " activation=" << activation
-					                 << " trail=" << session->activationTrailFrames << std::endl;
+					                 << " trail=" << session->activationTrailFrames << " head=" << head << " notice=" << noticeTicks << " donor_next=" << serving.GetStats().nextFrame
+					                 << " donor_applied=" << fixture.worlds[donor - 1].applied << " acknowledged=" << session->acknowledgedThrough << " now_ms=" << fixture.hub.now << std::endl;
 					proposed = true;
 					join.MarkActivationProposed(12);
 				}
