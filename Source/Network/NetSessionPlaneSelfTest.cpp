@@ -1548,6 +1548,7 @@ namespace RTE {
 			std::vector<Wait> waits;
 			std::vector<std::vector<std::pair<uint64_t, uint64_t>>> heldSpans;
 			std::vector<uint64_t> heldSince;
+			std::array<std::array<uint64_t, NetMatchConfigUtil::c_MaxPeerCount + 1>, NetMatchConfigUtil::c_MaxPeerCount + 1> heldByObserver{}; //!< When each seat's own engine began holding each seat, its spells included.
 			uint64_t hashedThrough = 0;
 			bool leaverStopped = false;
 			// The round ended by the engine's own rule: every other seat left or was removed, and the last one completes it.
@@ -1814,7 +1815,7 @@ namespace RTE {
 				firstDisplayedAt.resize(row.seats); startupFinishAt.resize(row.seats); preFaultPaceLeadMs.resize(row.seats);
 				settledHostWaits.resize(row.seats); paceBegin.resize(row.seats); paceEnd.resize(row.seats);
 				firstAdminChangeMs.assign(row.seats, UINT64_MAX);
-				heldSpans.assign(row.seats + 1, {}); heldSince.assign(row.seats + 1, UINT64_MAX);
+				heldSpans.assign(row.seats + 1, {}); heldSince.assign(row.seats + 1, UINT64_MAX); heldByObserver = {};
 				for (uint8_t peer = 1; peer <= row.seats; ++peer) { wires.push_back(std::make_unique<Wire>(hub, peer)); peers.push_back(std::make_unique<NetLockstepCoordinator>()); }
 				if (!wires[0]->StartHost(47901, &error)) return false;
 				for (uint8_t peer = 2; peer <= row.seats; ++peer) if (!wires[peer - 1]->Connect("fixture", 47901, &error)) return false;
@@ -2036,6 +2037,8 @@ namespace RTE {
 					};
 					bool heldHostWindow = hub.schedule && heldSince[1] != UINT64_MAX && heldThroughWindow(heldSince[1], hub.now);
 					if (hub.schedule) for (const auto& [since, until]: heldSpans[1]) heldHostWindow |= until != UINT64_MAX && heldThroughWindow(since, until);
+					// The round's held view waits out an observer's own spell; the migrating seat's engine counts from the hold it installed itself.
+					if (hub.schedule && heldByObserver[id][1]) heldHostWindow |= heldThroughWindow(heldByObserver[id][1], hub.now);
 					const bool scheduledDirectMigration = !hub.row.internet && heldHostWindow && peer.GetConfig().migrationGeneration;
 					// The revised direct contract also migrates a hostless minority and a lone peer, on their own continuation.
 					if (!hub.row.repeatedAdministration && !directHostlessGroup && !keptDirectMigration && !scheduledDirectMigration && peer.GetHostPeerId() != 1 &&
@@ -2224,6 +2227,11 @@ namespace RTE {
 				std::array<bool, NetMatchConfigUtil::c_MaxPeerCount + 1> held{};
 				std::array<std::map<uint8_t, uint64_t>, NetMatchConfigUtil::c_MaxPeerCount + 1> views;
 				for (uint8_t observer = 1; observer <= hub.row.seats; ++observer) if (peers[observer - 1]->IsRunning()) views[observer] = Bridges(*peers[observer - 1]);
+				for (uint8_t observer = 1; observer <= hub.row.seats; ++observer) for (uint8_t seat = 1; seat <= hub.row.seats; ++seat) {
+					const bool holds = peers[observer - 1]->IsRunning() && (views[observer].contains(seat) || peers[observer - 1]->HasHeldAISeat(seat));
+					auto& since = heldByObserver[observer][seat];
+					since = holds ? (since ? since : hub.now) : 0;
+				}
 				for (uint8_t observer = 1; observer <= hub.row.seats; ++observer) {
 					const auto& peer = *peers[observer - 1];
 					if (!peer.IsRunning()) continue;
