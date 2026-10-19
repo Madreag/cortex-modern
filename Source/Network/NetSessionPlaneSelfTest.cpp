@@ -4051,6 +4051,8 @@ namespace RTE {
 					if (!host.BeginRejoin(12, 1, 2, 3 + attempt, "Returner", returned.nowMs, &error)) return false;
 				}
 				return true;
+					// Each failing round's own finding, so a run names every seed's cause and not only its group's smallest.
+					lines.push_back("random_seed_finding seed=" + std::to_string(schedules[index].seed) + " group=" + failureGroup(index) + ": " + results[index]->detail.substr(0, 320));
 			}
 			if (!host.NoteTransferComplete(12, 8, &error)) return false;
 			host.NoteRejoinLinkFit(12, true); host.NoteTailLinkRtt(12, rttMs);
