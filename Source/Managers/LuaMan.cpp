@@ -7166,6 +7166,52 @@ _CaptureWindow.menuHolderUID = holder.UniqueID
 	for (void* block: takenBlocks) CheckpointNativeStorage::Deallocate(block);
 	const bool deadMenuCopied = deadMenuCaptured && deadMenuProblems.empty();
 	if (!deadMenuCopied) for (const std::string& problem: deadMenuProblems) std::cout << "[capture-window-selftest] gone actor's pie menu: " << problem << std::endl;
+	// A script keeps only a slice of an actor's menu; the actor is deleted after the fence and other bytes take its memory, so
+	// the walk names the slice by an owner whose live memory is garbage: the owner is read from its bytes at the fence.
+	const bool sliceOwnerPlanted = lua.RunScriptString(R"lua(
+local holder = CreateAHuman("Green Dummy", "Base.rte")
+holder.Pos = Vector(1060, 200)
+MovableMan:AddActor(holder)
+holder:AddInventoryItem(CreateHDFirearm("Constructor", "Base.rte"))
+holder:EquipFirearm(true)
+_CaptureWindow.sliceOwnerUID = holder.UniqueID
+_CaptureWindow.ownedSlice = holder.PieMenu:GetFirstPieSliceByPresetName("Constructor Options")
+assert(_CaptureWindow.ownedSlice ~= nil, "a held Constructor put no options slice into its holder's menu")
+)lua") == 0;
+	long sliceOwnerUID = 0;
+	if (sliceOwnerPlanted) {
+		lua.RunScriptString("collectgarbage('collect')");
+		for (LuaStateWrapper& state: g_LuaMan.GetThreadedScriptStates()) state.RunScriptString("collectgarbage('collect')");
+		LuabindObjectWrapper::ApplyQueuedEntityDeletions();
+		LuabindObjectWrapper::ApplyQueuedDeletions();
+		lua_getglobal(L, "_CaptureWindow");
+		lua_getfield(L, -1, "sliceOwnerUID");
+		sliceOwnerUID = static_cast<long>(lua_tointeger(L, -1));
+		lua_pop(L, 2);
+	}
+	bool ownerAtFence = false, ownerMemoryTaken = false, ownerCaptured = false;
+	std::vector<void*> ownerBlocks;
+	std::vector<std::string> ownerProblems;
+	if (const Entity::ClassInfo* ownerType = Entity::ClassInfo::GetClass("AHuman"); sliceOwnerUID && ownerType && ownerType->CheckpointInstanceBytes()) {
+		ownerCaptured = capture([] {}, [&] {
+			auto* holder = dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(sliceOwnerUID));
+			ownerAtFence = holder != nullptr;
+			if (!holder || g_MovableMan.RemoveActor(holder) != holder) return;
+			const void* address = holder;
+			delete holder;
+			for (int attempt = 0; attempt < 64 && !ownerMemoryTaken; ++attempt) {
+				void* block = CheckpointNativeStorage::Allocate(ownerType->CheckpointInstanceBytes(), ownerType->CheckpointInstanceAlignment());
+				std::memset(block, 0xA5, ownerType->CheckpointInstanceBytes());
+				ownerBlocks.push_back(block);
+				ownerMemoryTaken = block == address;
+			}
+		}, ownerProblems);
+	}
+	for (void* block: ownerBlocks) CheckpointNativeStorage::Deallocate(block);
+	lua.RunScriptString("_CaptureWindow.ownedSlice = nil; collectgarbage('collect')");
+	const bool sliceOwnerRead = ownerCaptured && ownerProblems.empty();
+	if (!sliceOwnerRead) for (const std::string& problem: ownerProblems) std::cout << "[capture-window-selftest] gone slice owner: " << problem << std::endl;
+	if (sliceOwnerPlanted && (!ownerAtFence || !ownerMemoryTaken)) std::cout << "[capture-window-selftest] FAIL: slice-owner-fixture: the slice's owner was not deleted with its memory taken in the window (at_fence=" << ownerAtFence << " taken=" << ownerMemoryTaken << ")" << std::endl;
 	// The restore cases run last: restoring the master graph changes its owned native wrappers, whereas the earlier
 	// allocator cases deliberately collect and reuse their memory. Each assertion still runs against its own fixture.
 	const bool livePlanted = lua.RunScriptString(R"lua(
@@ -7215,11 +7261,11 @@ _CaptureWindow.liveSlice.Enabled = enabled
 	}
 	lua.RunScriptString("if _CaptureWindow then MovableMan:RemoveActor(_CaptureWindow.dropper); if _CaptureWindow.taker then MovableMan:RemoveActor(_CaptureWindow.taker) end; if _CaptureWindow.liveHolder then MovableMan:RemoveActor(_CaptureWindow.liveHolder) end end; _CaptureWindow = nil; collectgarbage()");
 	const bool passed = liveCaptures == 2 && liveRestores == 2 && recordAnswers && goneKeptAtFence && keptInWindow && goneCarried && retainedAtFence && takenInWindow && vectorCarried && liveAtFence && freedInWindow &&
-	                    unreachedRefused && menuAtFence && menuMemoryTaken && deadMenuCopied;
+	                    unreachedRefused && menuAtFence && menuMemoryTaken && deadMenuCopied && sliceOwnerPlanted && ownerAtFence && ownerMemoryTaken && sliceOwnerRead;
 	std::cout << "[capture-window-selftest] live_device_captures=" << liveCaptures << " live_device_restores=" << liveRestores << " record_answers_as_of_fence=" << recordAnswers << " planted=" << planted << " kept_at_fence=" << goneKeptAtFence << " kept_in_window=" << keptInWindow
 	          << " freed_slice_carried=" << goneCarried << " retained_at_fence=" << retainedAtFence << " retained_taken_in_window=" << takenInWindow << " gone_vector_carried=" << vectorCarried
 	          << " live_at_fence=" << liveAtFence << " gone_in_window=" << freedInWindow << " unreached_refused_by_name=" << unreachedRefused
-	          << " menu_at_fence=" << menuAtFence << " menu_memory_taken=" << menuMemoryTaken << " gone_actor_menu_copied=" << deadMenuCopied << std::endl;
+	          << " menu_at_fence=" << menuAtFence << " menu_memory_taken=" << menuMemoryTaken << " gone_actor_menu_copied=" << deadMenuCopied << " owner_at_fence=" << ownerAtFence << " owner_memory_taken=" << ownerMemoryTaken << " gone_slice_owner_read=" << sliceOwnerRead << std::endl;
 	// The suite reads the verdict from a line of its own.
 	std::cout << "[capture-window-selftest] " << (passed ? "PASS" : "FAIL") << std::endl;
 	return passed;
