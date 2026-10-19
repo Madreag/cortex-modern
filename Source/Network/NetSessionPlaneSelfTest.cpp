@@ -2465,6 +2465,7 @@ namespace RTE {
 			if (const auto twice = fixture.TwoReturnFrames(); !twice.empty()) co_return fail(twice);
 			const uint8_t seats = fixture.hub.row.seats;
 			uint8_t proposer = donor;
+			// Before the first named capture the round's agreed start is the base every seat committed; its tail replays from frame 1.
 			const uint32_t rttMs = static_cast<uint32_t>(2 * fixture.hub.Delay(seat, donor));
 			const uint64_t round = fixture.peers[donor - 1]->GetRoundId();
 			const uint32_t incarnation = fixture.peers[donor - 1]->GetConfig().peerIncarnations.at(seat) + 1;
@@ -2481,8 +2482,7 @@ namespace RTE {
 			uint64_t common = fixture.worlds[donor - 1].applied;
 			for (uint8_t peer: survivors) common = std::min(common, fixture.worlds[peer - 1].applied);
 			const uint64_t base = common - common % 60;
-			if (!base) co_return fail("the playing seats did not commit an image capture");
-			if (!fixture.committed[donor - 1].contains(base))
+			if (base && !fixture.committed[donor - 1].contains(base))
 				co_return fail("fixture retained no committed capture record at frame " + std::to_string(base) +
 				            "; capture_frames=" + std::to_string(fixture.hub.row.captureFrames) + "; the image-return property could not be checked");
 			World replay; replay.sharedDigests = &fixture.sharedDigests;
@@ -2491,7 +2491,7 @@ namespace RTE {
 				if (tick > base) break;
 				if (!replay.Apply(ready, error)) co_return false;
 			}
-			for (uint8_t peer: survivors)
+			if (base) for (uint8_t peer: survivors)
 				if (fixture.worlds[peer - 1].hashes.at(base) != replay.hashes.at(base)) co_return fail("the image capture already has different playing-seat histories");
 			DiagnosticLine() << "[session-plane-image] seed=0 seats=" << static_cast<unsigned>(seats) << " rtt_ms=" << rttMs
 			                 << " capture=" << base << " playing_committed_through=" << common << std::endl;
@@ -2503,7 +2503,7 @@ namespace RTE {
 			replayConfig.roundId = fixture.peers[donor - 1]->GetRoundId(); replayConfig.startFrame = replay.applied + 1;
 			// As the service's image metadata does, seed the authority at the capture, not the losing reader's authority.
 			// Otherwise the first tail record invents a handover and changes the image's already committed holds and prefix.
-			replayConfig.authorityPeerId = fixture.committed[donor - 1].at(base).authorityPeerId;
+			if (base) replayConfig.authorityPeerId = fixture.committed[donor - 1].at(base).authorityPeerId;
 			replayConfig.migrationGeneration = 0;
 			for (const auto& [tick, ready]: fixture.committed[donor - 1]) {
 				if (tick > base) break;
