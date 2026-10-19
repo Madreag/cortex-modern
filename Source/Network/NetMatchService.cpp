@@ -6410,7 +6410,8 @@ static std::string ResyncSaveName() {
 		if (!m_Coordinator || !m_Session || !m_Runner || member == 0 || member == m_Coordinator->GetHostPeerId() || !m_Coordinator->HasHeldAISeat(member) ||
 		    m_Coordinator->HasAgreedSeatReclaim(member)) return;
 		const auto link = std::find_if(readyPeers.begin(), readyPeers.end(), [&](const NetSessionPeerInfo& peer) { return peer.assignedPeerId + 1 == member; });
-		if (link == readyPeers.end() || m_Coordinator->UsesTransportPeer(link->transportPeerId)) return;
+		// A frame-group round keeps a held seat's own link bound to it; elsewhere a bound link is a seat still playing.
+		if (link == readyPeers.end() || (m_Coordinator->UsesTransportPeer(link->transportPeerId) && !m_Coordinator->UsesPeerFrameGroups())) return;
 		const NetPeerId connection = link->transportPeerId;
 		const auto heldSeats = m_Coordinator->HeldTransactions();
 		const auto hold = heldSeats.find(member);
