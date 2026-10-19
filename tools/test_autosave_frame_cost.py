@@ -147,14 +147,17 @@ def main():
                 'NetworkPortMapEnable': '0', 'NetworkHostVisibility': 'Unlisted', 'EnableLuaDebugging': '0',
                 'NetworkAutoReconnect': '1', 'NetworkOfferStoredRejoin': '1',
                 'ResolutionX': '960', 'ResolutionY': '540', 'EnableVSync': '0'}
-    probe_path = out / 'probe.json'
-    # Each engine leaves when the driver has seen its captures.
-    probe_path.write_text(json.dumps({'schema': 1, 'timeout_ms': (a.limit_seconds + 300) * 1000,
-                                      'steps': [{'op': 'wait_file', 'path': str(quit_path)}, {'op': 'finish', 'quit': True}]}, indent=2))
-    role_env = {**env, 'CC_TEST_NET_UI_SCRIPT': str(probe_path)}
+    def probe_env(name):
+        # Each engine leaves when the driver has seen its captures; every engine keeps its probe's results apart.
+        probe_dir = out / f'{name}-probe'
+        probe_dir.mkdir()
+        (probe_dir / 'probe.json').write_text(json.dumps({'schema': 1, 'timeout_ms': (a.limit_seconds + 300) * 1000,
+                                                          'steps': [{'op': 'wait_file', 'path': str(quit_path)}, {'op': 'finish', 'quit': True}]}, indent=2))
+        return {**env, 'CC_TEST_NET_UI_SCRIPT': str(probe_dir / 'probe.json')}
+
     runs, records, started = {}, {}, []
     for role in ('host', 'client'):
-        runs[role] = make_run(repo, argv[role], out / role, a.limit_seconds + 600, env=role_env)
+        runs[role] = make_run(repo, argv[role], out / role, a.limit_seconds + 600, env=probe_env(role))
         seed_settings(runs[role], settings)
         fixture = Path(runs[role].cwd) / 'Userdata/UserScenes.rte'
         fixture.mkdir()
@@ -200,8 +203,8 @@ def main():
                 records['client-dropped'] = runs['client'].finish()
                 runs['client-dropped'] = runs.pop('client')
                 rejoined_at = reached('host')
-                runs['client'] = make_run(repo, argv['client'], out / 'client-rejoined', a.limit_seconds + 600, env=role_env,
-                                          runtime=Path(runs['client-dropped'].cwd))
+                runs['client'] = make_run(repo, argv['client'], out / 'client-rejoined', a.limit_seconds + 600,
+                                          env=probe_env('client-rejoined'), runtime=Path(runs['client-dropped'].cwd))
                 runs['client'].start()
             rejoin_pending = bool(a.client_rejoin) and (rejoined_at is None or not re.search('private base taken', log('host')))
             if len(named()) >= a.periodic_captures and written('host') >= len(named()) and not rejoin_pending:
