@@ -1357,14 +1357,16 @@ namespace RTE::MenuAutomation {
 		if (!s_Watches.empty()) s_DrawnText.emplace_back(source, text);
 	}
 
-	double s_FrameSpanMs = c_DrawWindowSeconds * 1000;
 	RTE::SteadyClock::time_point s_LastEvaluated;
+	RTE::SteadyClock::time_point s_PreviousEvaluated;
 
-	/// Drawn during the frame being judged: since the previous frame's evaluation.
+	/// Drawn during the frame being judged: since the previous frame's evaluation began, whenever in this one it is asked.
 	bool Shown(GUIControl* control) {
 		if (!Visible(control)) return false;
 		const double age = PanelDrawAgeMs(control->GetPanel());
-		return age >= 0 && age <= s_FrameSpanMs;
+		const double sinceCheck = s_PreviousEvaluated.time_since_epoch().count() == 0 ? c_DrawWindowSeconds * 1000 :
+		                          std::chrono::duration<double, std::milli>(RTE::SteadyClock::now() - s_PreviousEvaluated).count();
+		return age >= 0 && age <= sinceCheck + 1.0;
 	}
 
 	std::vector<std::pair<std::string, GUIControlManager*>> WatchedManagersFor(GUIControlManager* menu, GUIControlManager* network, GUIControlManager* overlay) {
@@ -1671,9 +1673,8 @@ namespace RTE::MenuAutomation {
 			ReportWatches("kill");
 		}
 		const auto now = RTE::SteadyClock::now();
-		const double span = s_LastEvaluated.time_since_epoch().count() == 0 ? c_DrawWindowSeconds * 1000 : std::chrono::duration<double, std::milli>(now - s_LastEvaluated).count();
-		// Shown means drawn since the last check, which ran after the frame before: a slow frame is still one frame.
-		s_FrameSpanMs = std::max(span + 1.0, 1.0);
+		// Shown means drawn since the last check began, which ran after the frame before: a slow frame is still one frame.
+		s_PreviousEvaluated = s_LastEvaluated.time_since_epoch().count() == 0 ? now - std::chrono::milliseconds(static_cast<int>(c_DrawWindowSeconds * 1000)) : s_LastEvaluated;
 		s_LastEvaluated = now;
 		std::vector<ShownLine> lines;
 		bool linesRead = false;
