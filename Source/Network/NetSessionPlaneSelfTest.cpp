@@ -4764,7 +4764,7 @@ namespace RTE {
 			};
 		});
 		Hub hub;
-		const uint8_t count = name == "rematch-chat" || name == "rematch-redial" || name == "kick-received-two" || name == "heavy-input" || name == "leave-rejoin-two" || name == "drop-after-input" || name == "drop-before-host-input" || name == "referee-input-runway" ? 2 : 3;
+		const uint8_t count = name == "rematch-chat" || name == "rematch-redial" || name == "kick-received-two" || name == "heavy-input" || name == "leave-rejoin-two" || name == "drop-after-input" || name == "drop-before-host-input" || name == "silent-before-host-input" || name == "referee-input-runway" ? 2 : 3;
 		hub.row = Case{"scene_lifecycle"}; hub.row.seats = count; hub.row.rttMs = hub.row.otherRttMs = 100;
 		auto ip = std::make_unique<Wire>(hub, 1);
 		auto relay = std::make_unique<Wire>(hub, 1);
@@ -4823,7 +4823,7 @@ namespace RTE {
 			// An internet match's referee that has not decided a tie answers Waiting.
 			if (name == "leave-rejoin-two") config.frameTieReferee = [](const NetFrameTieRequest&) { NetFrameTieReply reply; reply.state = NetFrameTieReply::State::Waiting; return reply; };
 			// The directory, through each seat's own client: the first half to check in keeps a split, answered after the exchange.
-			if (name == "drop-after-input" || name == "drop-before-host-input" || name == "referee-input-runway") {
+			if (name == "drop-after-input" || name == "drop-before-host-input" || name == "silent-before-host-input" || name == "referee-input-runway") {
 				if (hub.directory.retained.empty()) for (uint16_t seat = 1; seat <= count; ++seat) hub.directory.retained.push_back(seat);
 				const uint8_t seat = static_cast<uint8_t>(index + 1);
 				hub.directoryClients[seat].StartRound(hub.now, (seat * 1700ULL) % 5100);
@@ -5218,6 +5218,41 @@ namespace RTE {
 			// Authority ruling: this is a dropped peer, not a split. The survivor holds it inside 50 ms without directory permission.
 			if (longestWait > 50 || hub.now - displayedAt[0] > 50 || applied[0] < before + 110 || !held) {
 				*error = "authority ruling: a joiner dropped after its last input made the host wait past its 50 ms local hold bound"; return false;
+			}
+			return true;
+		}
+		if (name == "silent-before-host-input") {
+			auto& host = *rounds[0];
+			host.m_PeerFrameTieWinners.clear();
+			hub.tieAnswersHeld = true;
+			// As a relay that stops forwarding: the host's inputs stop reaching the joiner first, so the joiner's inputs, an input delay
+			// ahead, are in hand while its receipt of the host's own input never comes; then the joiner falls silent. No close reaches the
+			// host, so the joiner keeps a route the whole time.
+			hub.dropInputsFrom = 1;
+			const auto ownWait = [&] {
+				const uint64_t next = host.GetStats().nextFrame;
+				return !host.LocalInputAccepted(next) && host.m_RemoteFrames.contains(next) && host.m_RemoteFrames.at(next).contains(2);
+			};
+			for (const uint64_t until = hub.now + 2000; hub.now < until && !ownWait();) if (!step(true)) return false;
+			const bool ahead = ownWait();
+			const uint64_t stalled = host.GetStats().nextFrame;
+			hub.dropInputsFrom = 0; hub.tieAnswersHeld = false;
+			const uint64_t begin = hub.now, before = applied[0];
+			uint64_t longestWait = 0;
+			for (; hub.now < begin + 3000;) {
+				if (!step(false)) return false;
+				if (host.m_ConsumerWaitingFrame && hub.now >= host.m_ConsumerWaitStartMs) longestWait = std::max(longestWait, hub.now - host.m_ConsumerWaitStartMs);
+			}
+			const bool held = host.m_PeerBridges.contains(2) && host.m_PeerBridges.at(2).committedHold;
+			const bool routed = host.HasPeerFrameRoute(2);
+			DiagnosticLine() << "[net-session-scene] silent-before-host-input stalled=" << stalled << " joiner_input_ahead=" << ahead << " routed=" << routed << " before=" << before
+			          << " after=" << applied[0] << " longest_wait_ms=" << longestWait << " final_wait_ms=" << hub.now - displayedAt[0] << " held=" << held
+			          << " next=" << host.GetStats().nextFrame << std::endl;
+			if (!ahead) { *error = "the host never waited on its own input with the joiner's input in hand"; return false; }
+			if (longestWait > 50 || hub.now - displayedAt[0] > 50 || applied[0] < before + 110 || !held) {
+				*error = "authority ruling: the silent joiner's missing receipt gated the host past its 50 ms local hold bound: waited " + std::to_string(longestWait) +
+				         " ms, applied " + std::to_string(applied[0] - before) + " frames in 3 s, held=" + std::to_string(held) + ", routed=" + std::to_string(routed);
+				return false;
 			}
 			return true;
 		}
@@ -6008,6 +6043,7 @@ namespace RTE {
 		    {"two_seats_declared_leave_returns_through_a_private_reclaim", "leave-rejoin-two"},
 		    {"two_seats_closed_joiner_after_input_does_not_hold_up_the_host", "drop-after-input"},
 		    {"two_seats_closed_joiner_before_host_input_does_not_hold_up_the_host", "drop-before-host-input"},
+		    {"two_seats_silent_joiner_before_host_input_does_not_hold_up_the_host", "silent-before-host-input"},
 		    {"healthy_input_runway_spends_no_tie_allowance_before_a_real_cut", "referee-input-runway"},
 		    {"a_rematch_starts_without_the_ended_rounds_catch_up", "rematch-chat"},
 		    {"image_successor_capsule_sealing_refusal_is_retried", "capsule-retry"},
