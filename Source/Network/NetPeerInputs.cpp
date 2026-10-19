@@ -299,7 +299,7 @@ namespace RTE {
 		}
 		for (const auto& key: retired) {
 			m_PeerBridgeCertificates.erase(key); m_PeerBridgeVotes.erase(key); m_PendingPeerDecisions.erase(key);
-			m_PeerVotedAtMs.erase(key); m_AuthorityWaitSinceMs.erase(key); m_PeerReturnProofs.erase(key.first);
+			m_AuthorityWaitSinceMs.erase(key); m_PeerReturnProofs.erase(key.first);
 		}
 		m_PeerOwnReceiptProgress.erase(peer); m_PeerReceiptDelaySamples.erase(peer); m_PeerInputReliableThrough.erase(peer);
 		m_PeerTailSendRanges.erase(peer); m_PeerTailOutgoing.erase(peer);
@@ -447,7 +447,6 @@ namespace RTE {
 				reply.voterMask = SeatBit(m_Config.localPeerId);
 				if (reply.preparedFrame == 3) m_PeerAdminOwnVote = reply;
 				votes.insert_or_assign(m_Config.localPeerId, reply);
-				m_PeerVotedAtMs.try_emplace({reply.frame, DecisionKind(reply)}, nowMs);
 				if (reply.preparedFrame == 0) for (uint8_t peer: reply.members) {
 					m_PeerRejectedInputs[reply.frame] |= SeatBit(peer);
 					const char* cause = peer == m_Config.localPeerId ? "own_hold_consent" : "peer_hold_proposal";

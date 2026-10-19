@@ -3394,7 +3394,6 @@ namespace RTE {
 						const auto prefix = peer.PeerAppliedFramePrefix(4422);
 						proposal.bytes.assign(prefix.begin(), prefix.end()); proposal.totalBytes = proposal.bytes.size();
 						peer.m_PeerBridgeVotes[{4423, 10}][2] = proposal;
-						peer.m_PeerVotedAtMs[{4423, 10}] = 100;
 						peer.m_RemoteFrames[4423][1] = {};
 					}
 					// Local holds remain playable; an unconfirmed delay decision still fences its frame across the old timeout.

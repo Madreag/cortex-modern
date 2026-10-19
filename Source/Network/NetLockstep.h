@@ -1783,7 +1783,6 @@ namespace RTE {
 		std::map<PeerDecisionKey, std::map<uint8_t, NetHostMigrationMessage>> m_PeerBridgeVotes;
 		std::map<PeerDecisionKey, NetHostMigrationMessage> m_PeerBridgeCertificates;
 		std::map<PeerDecisionKey, std::pair<NetHostMigrationMessage, uint64_t>> m_PendingPeerDecisions; //!< Certificates that came before this peer could take them, and since when.
-		std::map<PeerDecisionKey, uint64_t> m_PeerVotedAtMs; //!< When this peer voted for, or first waited on, a decision it has not yet seen certified.
 		std::map<PeerDecisionKey, uint64_t> m_AuthorityWaitSinceMs; //!< Decisions this peer could not yet show the authority of, and since when.
 		std::map<uint64_t, NetHostMigrationMessage> m_PeerReturnProofs;
 		std::map<uint64_t, uint32_t> m_PeerRejectedInputs;

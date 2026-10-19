@@ -5485,7 +5485,7 @@ namespace RTE {
 		m_LocalStartParkMs = 0;
 		m_PeerLastHeardMs.clear();
 		m_PeerCaptureRequest.reset(); m_PeerCaptureRequested = false; m_PeerCaptureSerial = m_PeerCaptureRetryAtMs = 0; m_PeerCapturesCompleted.clear();
-		m_PeerBridges.clear(); m_PeerBridgeVotes.clear(); m_PeerBridgeCertificates.clear(); m_PendingPeerDecisions.clear(); m_PeerVotedAtMs.clear(); m_AuthorityWaitSinceMs.clear(); m_PeerRejectedInputs.clear();
+		m_PeerBridges.clear(); m_PeerBridgeVotes.clear(); m_PeerBridgeCertificates.clear(); m_PendingPeerDecisions.clear(); m_AuthorityWaitSinceMs.clear(); m_PeerRejectedInputs.clear();
 		m_PeerPendingBridgeInputs.clear();
 		m_PeerReturnProofs.clear();
 		m_PeerPreparedPrefixes.clear(); m_PeerReplayAppliedPrefixes.clear(); m_PeerFrameWitnesses.clear();
@@ -13902,7 +13902,7 @@ namespace RTE {
 		CENSUS(m_ParkCaptureHistoryMs); CENSUS(m_DropReasonsNamed); CENSUS(m_PlaneDeferredEvents); CENSUS(m_InstalledResyncTargets);
 		CENSUS(m_ResyncPrimeInputs); CENSUS(m_RetiredReclaimGaps); CENSUS(m_PreStartTiming);
 		CENSUS(m_PeerFrameHolds); CENSUS(m_PeerOwnershipChanges); CENSUS(m_PeerRemovalNotices); CENSUS(m_Config.initialPeerStartTerms);
-		CENSUS(m_PeerCapturesCompleted); CENSUS(m_PendingPeerDecisions); CENSUS(m_PeerVotedAtMs); CENSUS(m_AuthorityWaitSinceMs); CENSUS(m_PeerReturnProofs);
+		CENSUS(m_PeerCapturesCompleted); CENSUS(m_PendingPeerDecisions); CENSUS(m_AuthorityWaitSinceMs); CENSUS(m_PeerReturnProofs);
 		CENSUS(m_PeerRejectedInputs); CENSUS(m_PeerPendingBridgeInputs); CENSUS(m_PeerAcceptedAhead); CENSUS(m_PeerSourceInputs); CENSUS(m_PeerCommittedTail);
 		CENSUS(m_PeerTailPrefixes); CENSUS(m_PeerPreparedPrefixes); CENSUS(m_PeerReplayAppliedPrefixes); CENSUS(m_PeerFrameWitnesses); CENSUS(m_PeerInputDecodes);
 		CENSUS(m_PeerTailVotes); CENSUS(m_PeerTailDecisions); CENSUS(m_PeerFrameIncoming); CENSUS(m_PeerAppliedProgress); CENSUS(m_OwnDisplayProgress);
