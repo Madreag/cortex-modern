@@ -413,7 +413,8 @@ function SkirmishDefense:UpdateActivity()
 			if self.CPUTeamCount > 0 then
 				local survivedAIs = 0;
 				for team = Activity.TEAM_1, Activity.TEAM_4 do
-					if self:TeamActive(team) and self:TeamIsCPU(team) then
+					-- A team the AI holds for an absent player has no attack plan of its own.
+					if self:TeamActive(team) and self:TeamIsCPU(team) and self.AI[team] then
 						if not self.AI[team].defeated then
 							survivedAIs = survivedAIs + 1;
 						end
@@ -426,7 +427,7 @@ function SkirmishDefense:UpdateActivity()
 			end
 
 			for team = 0, Activity.MAXTEAMCOUNT - 1 do
-				if self:TeamActive(team) and self:TeamIsCPU(team) then
+				if self:TeamActive(team) and self:TeamIsCPU(team) and self.AI[team] then
 					self.LZmap:Update(); -- Update info about landing zones and player actors
 
 					-- Check if any AI actors have reached their destination
