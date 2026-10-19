@@ -1346,7 +1346,9 @@ void GameActivity::End() {
 		if (m_WinnerTeam != Teams::NoTeam) m_MatchEndReason += "; team " + std::to_string(m_WinnerTeam + 1) + " wins";
 		std::vector<std::string> losses, owners;
 		{ std::lock_guard lock(m_MatchBrainLossMutex); losses = m_MatchBrainLosses; owners = m_MatchBrainLossOwners; }
-		// The players read whose brain went, never the rule's script line.
+		// The players read whose brain went, never the rule's script line; each owner once, in the same order on every machine.
+		std::sort(owners.begin(), owners.end());
+		owners.erase(std::unique(owners.begin(), owners.end()), owners.end());
 		for (const std::string& owner: owners) m_MatchEndPlayerReason += (m_MatchEndPlayerReason.empty() ? "" : ", ") + owner + "'s brain was destroyed";
 		std::sort(losses.begin(), losses.end());
 		for (const std::string& loss: losses) m_MatchEndReason += "; " + loss;
