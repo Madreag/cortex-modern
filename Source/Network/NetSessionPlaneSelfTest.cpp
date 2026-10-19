@@ -1508,6 +1508,9 @@ namespace RTE {
 			std::vector<HoldBoundaries> installedBoundaries;
 			std::vector<std::vector<std::map<uint64_t, NetHash32>>> discardedHistories;
 			std::array<std::array<uint64_t, 5>, 5> compared{}, splitFrom{};
+			// FLAGGED fixture departure: two histories that diverged under a proven split stay apart until an image return replaces one,
+			// whoever authors their later frames - a reader of one half that returns into it carries that half's separation.
+			std::array<std::array<uint64_t, 5>, 5> pairSeparatedFrom{};
 			std::array<std::array<std::map<uint64_t, uint64_t>, 5>, 5> inputSplits;
 			struct InputSplitCause { uint8_t human, held, sender, receiver; uint64_t faultAt, observedAt; };
 			std::vector<InputSplitCause> inputSplitCauses;
@@ -1704,6 +1707,12 @@ namespace RTE {
 				// FLAGGED fixture departure: only the minimum displayed cursor is a prefix both peers committed before this cut.
 				if (!from) from = std::min(worlds[a - 1].applied, worlds[b - 1].applied) + 1;
 			}
+			// An image return replaces the seat's history: every comparison with it starts again.
+			void ForgetComparisons(uint8_t seat) {
+				for (uint8_t other = 1; other <= hub.row.seats; ++other) {
+					compared[std::min(seat, other)][std::max(seat, other)] = 0; pairSeparatedFrom[std::min(seat, other)][std::max(seat, other)] = 0;
+				}
+			}
 			bool InputSplitCausedHold(uint8_t seat, uint64_t since, uint64_t until, uint8_t troubled, uint64_t from, uint64_t to) const {
 				return std::any_of(inputSplitCauses.begin(), inputSplitCauses.end(), [&](const InputSplitCause& cause) {
 					return (seat == cause.human || seat == cause.held) && (troubled == cause.sender || troubled == cause.receiver) &&
@@ -1720,10 +1729,12 @@ namespace RTE {
 						if (left.hashes.at(frame) == right.hashes.at(frame)) {
 							if (l == r && (l & (1U << (a - 1))) && (l & (1U << (b - 1))))
 								for (auto& [from, through]: inputSplits[a][b]) if (!through && frame >= from) through = frame - 1;
+							pairSeparatedFrom[a][b] = 0;
 							continue;
 						}
 						const bool authors = authorA && authorA <= hub.row.seats && authorB && authorB <= hub.row.seats && authorA != authorB;
 						uint64_t separated = authors ? splitFrom[std::min(authorA, authorB)][std::max(authorA, authorB)] : 0;
+						if (!separated && pairSeparatedFrom[a][b] && frame >= pairSeparatedFrom[a][b]) separated = pairSeparatedFrom[a][b];
 						if (authors && !separated) {
 							const auto& intervals = inputSplits[std::min(authorA, authorB)][std::max(authorA, authorB)];
 							const auto after = intervals.upper_bound(frame);
@@ -1758,6 +1769,7 @@ namespace RTE {
 							}
 						}
 						if (separated && frame >= separated && (l & first) && (r & second) && l != r) {
+							if (!pairSeparatedFrom[a][b]) pairSeparatedFrom[a][b] = frame;
 							splitHistories = true; continue;
 						}
 						error = "histories differ at displayed frame " + std::to_string(frame) + ": peer " + std::to_string(a) + " members=" + std::to_string(l) +
@@ -2610,7 +2622,7 @@ namespace RTE {
 			fixture.committed[seat - 1].clear();
 			fixture.committed[seat - 1].insert(fixture.committed[donor - 1].begin(), fixture.committed[donor - 1].lower_bound(activation));
 			fixture.installedBoundaries[seat - 1] = fixture.installedBoundaries[donor - 1];
-			for (uint8_t other = 1; other <= seats; ++other) fixture.compared[std::min(seat, other)][std::max(seat, other)] = 0;
+			fixture.ForgetComparisons(seat);
 			fixture.imageReading[seat - 1] = fixture.imageNeeded[seat - 1] = false; ++fixture.imageReturns[seat - 1];
 			fixture.waitPlaying[seat - 1] = false;
 			if (!fixture.hub.schedule && fixture.hub.row.frozen) fixture.hub.faultEnd = fixture.hub.now;
@@ -2846,6 +2858,31 @@ namespace RTE {
 				}
 				if (variant == 0 && (!fixture.InputSplitCausedHold(2, 150, 180, 1, 40, 60) || fixture.InputSplitCausedHold(2, 150, 180, 1, 51, 60))) {
 					error = "a receipt split hold cause escaped its exact impaired link or fault interval"; return false;
+				}
+			}
+			return true;
+		}
+
+		bool CheckReturnedReaderHistoryOracle(std::string& error) {
+			// Seat 3 reads the host's half after seat 2 split from it (frame 1, authored by the host), then plays in that half itself (frame 2).
+			for (unsigned variant = 0; variant < 4; ++variant) {
+				Fixture fixture; fixture.hub.row.seats = 3;
+				fixture.worlds.resize(3);
+				fixture.frameMembers = {{0, 1, 5}, {0, 2, 2}, {0, 1, variant == 3 ? 1U : 5U}};
+				fixture.frameAuthors = {{0, 1, 1}, {0, 2, 2}, {0, 1, 3}};
+				for (uint8_t peer = 1; peer <= 3; ++peer) {
+					auto& world = fixture.worlds[peer - 1]; world.applied = 2;
+					for (uint64_t frame: {1, 2}) { world.hashes[frame] = {}; world.shownAt[frame] = 100 * frame; }
+					if (peer == 2) { world.hashes[1][0] = 1; world.hashes[2][0] = 2; }
+				}
+				fixture.worlds[1].aiAt[1] = fixture.worlds[1].aiAt[2] = "1,3";
+				if (variant != 1) fixture.splitFrom[1][2] = 1;
+				// Negatives: no proven split; the two seats of one half differing; a frame whose members omit its own author.
+				if (variant == 2) fixture.worlds[0].hashes[2][0] = 9;
+				std::string why;
+				const bool accepted = fixture.CompareHistories(why), expected = variant == 0;
+				if (accepted != expected) {
+					error = "returned-reader history oracle variant=" + std::to_string(variant) + " expected_split=" + std::to_string(expected) + ": " + why; return false;
 				}
 			}
 			return true;
@@ -5401,6 +5438,8 @@ namespace RTE {
 		// FLAGGED fixture departure: an exact input lost on one wire can create two continuations without a total transport cut.
 		if (!selected || std::string_view(selected) == "history_fixture_requires_causal_input_wire_evidence")
 			named.push_back({"history_fixture_requires_causal_input_wire_evidence", CheckInputHistoryOracle});
+		if (!selected || std::string_view(selected) == "history_fixture_keeps_a_proven_split_after_its_reader_returns")
+			named.push_back({"history_fixture_keeps_a_proven_split_after_its_reader_returns", CheckReturnedReaderHistoryOracle});
 		if (!selected || std::string_view(selected) == "history_fixture_accepts_only_exact_receipt_wire_evidence")
 			named.push_back({"history_fixture_accepts_only_exact_receipt_wire_evidence", CheckReceiptHistoryOracle});
 		if (!selected || std::string_view(selected) == "private_history_author_requires_authenticated_commit_evidence") {
