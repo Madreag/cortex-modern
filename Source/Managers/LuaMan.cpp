@@ -16739,9 +16739,11 @@ int LuaStateWrapper::RunScriptFunctionObject(const LuabindObjectWrapper* functio
 	int status = 0;
 
 	std::lock_guard<std::recursive_mutex> lock(GetMutex());
-	// Peer AI births do not advance the shared script identity sequence.
+	// Peer AI births do not advance the shared script identity sequence. A shared hook on a state already counting shared births
+	// would change nothing, so only the others ask the round, whose lock the network plane holds while it works.
 	std::optional<ScriptBirthDomainScope> birthDomain;
-	if (ScenarioRunner::IsLockstepControllerSyncActive()) birthDomain.emplace(m_State, SoundSimulationScope::Domain() == SoundExecutionDomain::LocalSimulation);
+	const bool localBirths = SoundSimulationScope::Domain() == SoundExecutionDomain::LocalSimulation;
+	if ((localBirths || luaJIT_state_serial(m_State) >= c_PeerScriptBirthBand) && ScenarioRunner::IsLockstepControllerSyncActive()) birthDomain.emplace(m_State, localBirths);
 	s_currentLuaState = this;
 	m_CurrentlyRunningScriptPath = functionObject->GetFilePath();
 
