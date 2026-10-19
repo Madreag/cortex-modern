@@ -13874,6 +13874,11 @@ namespace RTE {
 			for (const auto& [key, inner]: records) count += inner.size();
 			return count;
 		}
+		template <typename K, typename V> size_t CensusCount(const std::map<K, std::unordered_map<uint64_t, V>>& records) {
+			size_t count = 0;
+			for (const auto& [key, inner]: records) count += inner.size();
+			return count;
+		}
 	} // namespace
 
 	std::string NetLockstepCoordinator::MemoryCensus() const {
@@ -13893,6 +13898,14 @@ namespace RTE {
 		CENSUS(m_ParkCaptureHistoryMs); CENSUS(m_DropReasonsNamed); CENSUS(m_PlaneDeferredEvents); CENSUS(m_InstalledResyncTargets);
 		CENSUS(m_ResyncPrimeInputs); CENSUS(m_RetiredReclaimGaps); CENSUS(m_PreStartTiming);
 		CENSUS(m_PeerFrameHolds); CENSUS(m_PeerOwnershipChanges); CENSUS(m_PeerRemovalNotices); CENSUS(m_Config.initialPeerStartTerms);
+		CENSUS(m_PeerCapturesCompleted); CENSUS(m_PendingPeerDecisions); CENSUS(m_PeerVotedAtMs); CENSUS(m_AuthorityWaitSinceMs); CENSUS(m_PeerReturnProofs);
+		CENSUS(m_PeerRejectedInputs); CENSUS(m_PeerPendingBridgeInputs); CENSUS(m_PeerAcceptedAhead); CENSUS(m_PeerSourceInputs); CENSUS(m_PeerCommittedTail);
+		CENSUS(m_PeerTailPrefixes); CENSUS(m_PeerPreparedPrefixes); CENSUS(m_PeerReplayAppliedPrefixes); CENSUS(m_PeerFrameWitnesses); CENSUS(m_PeerInputDecodes);
+		CENSUS(m_PeerTailVotes); CENSUS(m_PeerTailDecisions); CENSUS(m_PeerFrameIncoming); CENSUS(m_PeerAppliedProgress); CENSUS(m_OwnDisplayProgress);
+		CENSUS(m_PeerTailRequestedUntil); CENSUS(m_PeerTailRequestedOf); CENSUS(m_PeerTailLastSentMs); CENSUS(m_PeerTailResendFrames); CENSUS(m_PeerTailOutgoing);
+		CENSUS(m_FrameGroupChanges); CENSUS(m_PeerSplitRenewals); CENSUS(m_PeerFrameTieWinners); CENSUS(m_PeerSplitArbitrations); CENSUS(m_PeerInputSentAtMs);
+		CENSUS(m_MigrationFrameQueue); CENSUS(m_TickCosts); CENSUS(m_OthersTickSamples); CENSUS(m_SeatReleases); CENSUS(m_CaptureExcuseUntilMs);
+		CENSUS(m_ReplayAuthorities); CENSUS(m_ReplayAuthorityHistory); CENSUS(m_AuthorityEvents);
 #undef CENSUS
 		return line.str();
 	}
