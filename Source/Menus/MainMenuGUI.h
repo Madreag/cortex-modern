@@ -448,7 +448,7 @@ namespace RTE {
 		GUITextBox* m_HostNetPortBox = nullptr;          //!< H34: the next hosted session's game port (the setup draft's).
 		GUICheckbox* m_HostRecRepairCheck = nullptr;
 		GUICheckbox* m_HostRecAutosaveCheck = nullptr;
-		GUITextBox* m_HostRecAutosaveIntervalBox = nullptr;
+		GUIComboBox* m_HostRecAutosaveIntervalCombo = nullptr;
 		GUILabel* m_HostRecLastSaveLabel = nullptr;
 		GUIComboBox* m_HostRecReturnWindowCombo = nullptr; //!< How long a held seat may come back in place.
 		GUIComboBox* m_HostRecJoinHistoryCombo = nullptr; //!< How long this host keeps a world's round history for joiners and returns.

@@ -2859,7 +2859,7 @@ namespace RTE::MenuAutomation {
 			     "A player late past 1 tick (17 ms), host too, is held to the AI while others play on. Other policies return in a later version.");
 			same("hint_bound_pause", NetSlowPlayerHint(NetSlowPlayerPolicy::Pause, 3, tickMs), "Everyone waits for a late player, host included, for up to 20 s.");
 			same("hint_auto_delay", NetAutoDelayText(3), "ping plus a 3-tick margin, raised live if inputs arrive late");
-			same("hint_autosave_range", NetAutosaveRangeHint(), "Every 60 s to 60 min, or off (default)");
+			same("hint_autosave_range", NetAutosaveRangeHint(), "1 to 60 minutes, or off");
 			same("hint_autosave_note", NetAutosaveNote(), "Every player takes each checkpoint at the same tick; a player who rejoins starts from one.");
 			same("hint_autosave_cost", NetAutosaveCostHint(), "Saving may cause a brief pause for other players on slower hosts");
 			same("hint_connection_automatic", NetConnectionModeHint(SettingsMan::NetworkConnectionMode::Automatic), "Direct first: lowest latency; relay adds a round trip if direct fails.");

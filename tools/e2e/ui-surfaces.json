@@ -181,8 +181,8 @@
       "what": "Autosave enables its interval field, clamps a typed 30 to the sixty-second minimum, then disables it when unchecked.",
       "assert": "menu assertions in the marked interval",
       "events": [
-        "assert_enabled TextHostRecAutosaveInterval expected=1 actual=1 PASS",
-        "assert_enabled TextHostRecAutosaveInterval expected=0 actual=0 PASS"
+        "assert_enabled ComboHostRecAutosaveInterval expected=1 actual=1 PASS",
+        "assert_enabled ComboHostRecAutosaveInterval expected=0 actual=0 PASS"
       ],
       "run": [
         "640x360",

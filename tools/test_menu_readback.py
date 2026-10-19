@@ -1046,7 +1046,7 @@ def draft_fields(port):
         ("seat_delay", "Timing", "settext TextHostNetPeerDelay2 6\nwait 4\n", "assert_label TextHostNetPeerDelay2 6\n"),
         ("repair", "Recovery", "setcheck CheckHostRecRepair 0\nwait 4\n", "assert_checked CheckHostRecRepair 0\n"),
         ("autosave", "Recovery", "setcheck CheckHostRecAutosave 1\nwait 4\n", "assert_checked CheckHostRecAutosave 1\n"),
-        ("autosave_interval", "Recovery", "settext TextHostRecAutosaveInterval 120\nwait 4\n", "assert_label TextHostRecAutosaveInterval 120\n"),
+        ("autosave_interval", "Recovery", hand_pick("ComboHostRecAutosaveInterval", "2 minutes"), "assert_label ComboHostRecAutosaveInterval 2 minutes\n"),
         ("return_window", "Recovery", hand_pick("ComboHostRecReturnWindow", "10 minutes"), "assert_label ComboHostRecReturnWindow 10 minutes\n"),
         ("idle_wait", "Session", hand_pick("ComboHostSessIdle", "20 minutes"), "assert_label ComboHostSessIdle 20 minutes\n"),
     )
@@ -1564,10 +1564,10 @@ def scripts(case, port, root, size="960x540"):
                         "LabelNetDiagDirTitle", "TextNetworkDiagDir", "ButtonNetOpenDiagnostics",
                         "ButtonNetCopyDiagPath", "ButtonNetSaveDiagnostics", "CheckboxNetworkRecordReplays"):
             text += checks(control, "CollectionBoxNetPageFiles")
-        # The seeded 45 is under the minute a hosted match clamps to; the page shows that 60 s.
-        text += ("assert_label LabelNetAutosave Enabled\n"
-                 "assert_label LabelNetAutosaveInterval 60 s\n"
-                 "assert_label LabelNetAutosaveHost Both set by the host\n"
+        # The seeded 45 is under the minute a hosted match clamps to; outside a match the page shows that minute as this computer's own.
+        text += ("assert_label LabelNetAutosave On\n"
+                 "assert_label LabelNetAutosaveInterval Every 1 minute\n"
+                 "assert_label LabelNetAutosaveHost Your hosting default\n"
                  "assert_label LabelNetAutosavesKeptTitle Autosaves kept:\n"
                  "assert_label LabelNetAutosavesKeptHint " + AUTOSAVES_KEPT_HINT + "\n"
                  "assert_label TextNetworkAutosavesKept " + FILES_SEED["NetworkAutosavesKept"] + "\n"
@@ -1622,9 +1622,10 @@ def scripts(case, port, root, size="960x540"):
                  "activate ButtonMultiplayerHostGame\nwait 5\n"
                  "assert_visible LabelHostInputDelayPolicy 0\nassert_visible TextHostInputDelay 0\nassert_visible TextHostPort 0\n"
                  "dump_host_options\n"
-                 # The seeded policy is automatic and Advanced's Timing page says so; autosave is off, so its interval box is off.
+                 # The seeded policy is automatic and Advanced's Timing page says so; autosave turned off by hand turns its cadence off.
                  "activate ButtonHostOptions\nwait 5\nactivate TabHostPageTiming\nwait 3\nassert_label ComboHostNetPolicy Automatic\ndump_host_options\n"
-                 "activate TabHostPageRecovery\nwait 3\nassert_enabled TextHostRecAutosaveInterval 0\ndump_host_options\n"
+                 "activate TabHostPageRecovery\nwait 3\nsetcheck CheckHostRecAutosave 0\nwait 4\nassert_checked CheckHostRecAutosave 0\n"
+                 "assert_enabled ComboHostRecAutosaveInterval 0\nassert_enabled ComboHostRecReturnWindow 1\ndump_host_options\n"
                  "activate ButtonHostOptBack\nwait 4\nassert_substate HostSetup\n"
                  f"setup_host_port {port}\ncombo_select ComboHostPlayers 2\n"
                  "activate ButtonMultiplayerCreate\nwait 15\nassert_substate Lobby\n"
@@ -2092,24 +2093,22 @@ def scripts(case, port, root, size="960x540"):
                  "assert_label ComboHostRecJoinHistory 10 minutes\n"
                  "combo_select ComboHostRecJoinLag 1 minute\nwait_ms 500\n"
                  "assert_label ComboHostRecJoinLag 1 minute\n")
-        text += ("setcheck CheckHostRecAutosave 1\nwait_ms 500\nassert_checked CheckHostRecAutosave 1\n"
-                 "assert_enabled TextHostRecAutosaveInterval 1\n"
-                 # Switching autosave on from off starts at the shortest cadence, not the off zero.
-                 "assert_label TextHostRecAutosaveInterval 60\n"
-                 "assert_label LabelHostRecLastSave Checkpoint every 60 sim seconds - none saved yet\n"
-                 # The caption follows the typed interval on the Changed notification,
-                 # before any Apply or focus loss commits it. The product bounds the interval to
-                 # every minute through every hour: 5 commits as 60, 3600 keeps, 0 stays off.
-                 "set_text TextHostRecAutosaveInterval 5\nwait_ms 500\n"
-                 "assert_label TextHostRecAutosaveInterval 60\n"
-                 "assert_label LabelHostRecLastSave Checkpoint every 60 sim seconds - none saved yet\n"
-                 "set_text TextHostRecAutosaveInterval 3600\nwait_ms 500\n"
-                 "assert_label TextHostRecAutosaveInterval 3600\n"
-                 "assert_label LabelHostRecLastSave Checkpoint every 3600 sim seconds - none saved yet\n"
-                 "set_text TextHostRecAutosaveInterval 0\nwait_ms 500\n"
+        text += ("assert_checked CheckHostRecAutosave 1\n"
+                 "assert_enabled ComboHostRecAutosaveInterval 1\n"
+                 # A hosted match checkpoints every five minutes unless its host says otherwise.
+                 "assert_label ComboHostRecAutosaveInterval 5 minutes\n"
+                 "assert_label LabelHostRecLastSave Checkpoint every 5 minutes - none saved yet\n"
+                 # The caption follows the picked cadence before any Apply: every minute through every hour.
+                 + hand_pick("ComboHostRecAutosaveInterval", "60 minutes") +
+                 "assert_label LabelHostRecLastSave Checkpoint every 60 minutes - none saved yet\n"
+                 + hand_pick("ComboHostRecAutosaveInterval", "1 minute") +
+                 "assert_label LabelHostRecLastSave Checkpoint every 1 minute - none saved yet\n"
+                 # Off is the checkbox, and the cadence goes with it.
+                 "setcheck CheckHostRecAutosave 0\nwait_ms 500\nassert_checked CheckHostRecAutosave 0\n"
+                 "assert_enabled ComboHostRecAutosaveInterval 0\n"
                  "assert_label LabelHostRecLastSave No autosaves while this is off\n"
-                 "assert_label LabelHostRecAutosaveHint Every 60 s to 60 min, or off (default)\n"
-                 # A typed 0 is off at Apply too: the service accepts off instead of refusing an enabled zero.
+                 "assert_label LabelHostRecAutosaveHint 1 to 60 minutes, or off\n"
+                 # Off is off at Apply too: the service accepts off instead of refusing an enabled zero.
                  # Apply publishes an open-seat lobby too; read the committed revision's
                  # confirmation rather than accepting a pending draft or stale edit hint.
                  "activate ButtonHostOptApply\nwait_ms 500\n"
@@ -2122,9 +2121,10 @@ def scripts(case, port, root, size="960x540"):
                  # The host's own picks stand through the Apply that republishes the lobby.
                  "assert_label ComboHostRecJoinHistory 10 minutes\n"
                  "assert_label ComboHostRecJoinLag 1 minute\n"
-                 "setcheck CheckHostRecAutosave 0\nwait_ms 500\nassert_checked CheckHostRecAutosave 0\n"
-                 "assert_enabled TextHostRecAutosaveInterval 0\n")
-        text += checks("TextHostRecAutosaveInterval", "CollectionBoxHostPageRecovery")
+                 # Switching it back on starts at the default cadence, not the off zero.
+                 "setcheck CheckHostRecAutosave 1\nwait_ms 500\nassert_checked CheckHostRecAutosave 1\n"
+                 "assert_enabled ComboHostRecAutosaveInterval 1\nassert_label ComboHostRecAutosaveInterval 5 minutes\n")
+        text += checks("ComboHostRecAutosaveInterval", "CollectionBoxHostPageRecovery")
         # H25: a lobby is not a live match, so the button is off and the hint says why.
         text += checks("ButtonHostRecRepairNow", "CollectionBoxHostPageRecovery")
         text += checks("LabelHostRecRepairHint", "CollectionBoxHostPageRecovery")
@@ -3176,9 +3176,9 @@ def run_case(options, case, root, failing=None):
                     assert all(rect[0] == column for rect in opens) and all(rect[0] == action_column for rect in copies), (opens, copies)
                     assert opens[0][2:] == opens[1][2:] and copies[0][2:] == copies[1][2:], (opens, copies)
                     assert opens[1][1] - opens[0][1] == copies[1][1] - copies[0][1] == 40, (opens, copies)
-                    # One note covers both host-set rows: it spans them, so the page never says it twice.
+                    # One note covers both autosave rows: it spans them, so the page never says it twice.
                     note, first, second = (rows[name] for name in ("LabelNetAutosaveHost", "LabelNetAutosave", "LabelNetAutosaveInterval"))
-                    assert note["text"] == "Both set by the host" and note["enabled"] is False, note
+                    assert note["text"] == "Your hosting default" and note["enabled"] is False, note
                     assert note["rect"][1] == first["rect"][1] and note["rect"][1] + note["rect"][3] == second["rect"][1] + second["rect"][3], (note, first, second)
                     assert "LabelNetAutosaveIntervalHost" not in rows, rows.get("LabelNetAutosaveIntervalHost")
                     widths = {rows[name]["rect"][2] for name in FILES_BUTTONS}
@@ -3203,8 +3203,8 @@ def run_case(options, case, root, failing=None):
                 result["saved"] = read_settings(runs["host"].cwd / "Userdata/Settings.ini", set(RECOVERY_SAVED))
                 assert result["saved"] == RECOVERY_SAVED, result["saved"]
             if case == "net-files":
-                assert rows["LabelNetAutosave"]["text"] == "Enabled", rows["LabelNetAutosave"]
-                assert rows["LabelNetAutosaveInterval"]["text"] == "60 s", rows["LabelNetAutosaveInterval"]
+                assert rows["LabelNetAutosave"]["text"] == "On", rows["LabelNetAutosave"]
+                assert rows["LabelNetAutosaveInterval"]["text"] == "Every 1 minute", rows["LabelNetAutosaveInterval"]
                 assert rows["TextNetworkDiagDir"]["text"] == FILES_SAVED["NetworkDiagnosticsDirectory"], rows["TextNetworkDiagDir"]
                 result["saved"] = read_settings(runs["host"].cwd / "Userdata/Settings.ini", set(FILES_SAVED))
                 assert result["saved"] == FILES_SAVED, result["saved"]
@@ -3274,11 +3274,10 @@ def run_case(options, case, root, failing=None):
             # The four setup rows share one value column.
             columns = {host_setup[name]["rect"][0] for name in ("ComboHostActivity", "ComboHostScene", "ComboHostMode", "ComboHostPlayers")}
             assert len(columns) == 1, columns
-            # A disabled text box's frame is DimRect at 55% of an enabled TextBox frame.
-            timing = {c["name"]: c for c in images[2]["controls"]}
+            # A disabled control's frame is DimRect at 55% of the same kind of control enabled: two drop-downs of one page.
             recovery = {c["name"]: c for c in images[3]["controls"]}
-            delay_luma = frame_luma(images[3]["png"], recovery["TextHostRecAutosaveInterval"]["rect"])
-            port_luma = frame_luma(images[2]["png"], timing["TextHostNetSlowBound"]["rect"])
+            delay_luma = frame_luma(images[3]["png"], recovery["ComboHostRecAutosaveInterval"]["rect"])
+            port_luma = frame_luma(images[3]["png"], recovery["ComboHostRecReturnWindow"]["rect"])
             result["delay_frame_luma"] = delay_luma
             result["port_frame_luma"] = port_luma
             assert port_luma > 0, (delay_luma, port_luma)

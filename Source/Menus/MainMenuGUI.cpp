@@ -1163,11 +1163,9 @@ bool MainMenuGUI::HandleInputEvents() {
 		           (guiEvent.GetMsg() == GUITextBox::Changed || guiEvent.GetMsg() == GUITextBox::Enter) &&
 		           m_MultiplayerSubScreen == MultiplayerSubScreen::HostOptions &&
 		           (guiEvent.GetControl() == m_HostNetSlowBoundBox || guiEvent.GetControl() == m_HostNetMinDelayBox ||
-		            guiEvent.GetControl() == m_HostRecAutosaveIntervalBox ||
 		            std::find(m_HostNetPeerDelayBoxes.begin(), m_HostNetPeerDelayBoxes.end(), guiEvent.GetControl()) != m_HostNetPeerDelayBoxes.end())) {
 			// The refresh rewrites every box the player is not holding, so a typed row commits as it is
-			// typed; waiting for Apply loses it the moment the click moves the focus. The Recovery
-			// caption reads the same draft, so it follows the interval as it is typed too.
+			// typed; waiting for Apply loses it the moment the click moves the focus.
 			DraftHostOptionsFromControls();
 		} else if (guiEvent.GetType() == GUIEvent::Notification && m_ActiveMenuScreen == MenuScreen::MultiplayerScreen &&
 		           m_MultiplayerSubScreen == MultiplayerSubScreen::HostOptions &&
@@ -1808,7 +1806,7 @@ void MainMenuGUI::CreateHostOptionsControls() {
 	m_HostRecRepairHintLabel = dynamic_cast<GUILabel*>(get("LabelHostRecRepairHint"));
 	m_HostRecRepairCheck = dynamic_cast<GUICheckbox*>(get("CheckHostRecRepair"));
 	m_HostRecAutosaveCheck = dynamic_cast<GUICheckbox*>(get("CheckHostRecAutosave"));
-	m_HostRecAutosaveIntervalBox = dynamic_cast<GUITextBox*>(get("TextHostRecAutosaveInterval"));
+	m_HostRecAutosaveIntervalCombo = dynamic_cast<GUIComboBox*>(get("ComboHostRecAutosaveInterval"));
 	m_HostRecLastSaveLabel = dynamic_cast<GUILabel*>(get("LabelHostRecLastSave"));
 	m_HostRecReturnWindowCombo = dynamic_cast<GUIComboBox*>(get("ComboHostRecReturnWindow"));
 	m_HostRecJoinHistoryCombo = dynamic_cast<GUIComboBox*>(get("ComboHostRecJoinHistory"));
@@ -1965,11 +1963,12 @@ void MainMenuGUI::CreateHostOptionsControls() {
 		box->SetMaxNumericValue(NetMatchConfigUtil::c_MaxInputDelayFrames);
 		box->SetMaxTextLength(2);
 	}
-	if (m_HostRecAutosaveIntervalBox) {
-		m_HostRecAutosaveIntervalBox->SetNumericOnly(true);
-		m_HostRecAutosaveIntervalBox->SetMaxNumericValue(NetMatchService::c_MaxAutosaveIntervalSeconds);
-		m_HostRecAutosaveIntervalBox->SetMinNumericValue(NetMatchService::c_MinAutosaveIntervalSeconds);
-		m_HostRecAutosaveIntervalBox->SetMaxTextLength(4);
+	if (m_HostRecAutosaveIntervalCombo) {
+		m_HostRecAutosaveIntervalCombo->ClearList();
+		for (const uint32_t minutes : {1, 2, 5, 10, 15, 20, 30, 45, 60}) {
+			const bool standard = minutes * 60 == NetMatchService::c_DefaultAutosaveIntervalSeconds;
+			m_HostRecAutosaveIntervalCombo->AddItem(NetAutosaveIntervalText(minutes * 60) + (standard ? " (default)" : ""));
+		}
 	}
 }
 
@@ -2285,6 +2284,40 @@ namespace {
 		const GUIListPanel::Item* item = combo && combo->GetSelectedIndex() >= 0 ? combo->GetItem(combo->GetSelectedIndex()) : nullptr;
 		const long minutes = item ? std::strtol(item->m_Name.c_str(), nullptr, 10) : 0;
 		return minutes >= NetMatchConfigUtil::c_MinReturnWindowMinutes && minutes <= NetMatchConfigUtil::c_MaxReturnWindowMinutes ? static_cast<uint8_t>(minutes) : 0;
+	}
+
+	/// The seconds an autosave choice's words name ("5 minutes (default)", "90 seconds"); 0 for anything else.
+	uint32_t HostOptAutosaveSecondsOf(const std::string& name) {
+		char* unit = nullptr;
+		const long count = std::strtol(name.c_str(), &unit, 10);
+		const uint32_t seconds = count <= 0 ? 0 : std::string_view(unit).starts_with(" second") ? static_cast<uint32_t>(count) : static_cast<uint32_t>(count) * 60;
+		return seconds >= NetMatchService::c_MinAutosaveIntervalSeconds && seconds <= NetMatchService::c_MaxAutosaveIntervalSeconds ? seconds : 0;
+	}
+
+	/// The seconds the picked autosave choice names; 0 when nothing is picked.
+	uint32_t HostOptAutosaveIntervalOf(GUIComboBox* combo) {
+		const GUIListPanel::Item* item = combo && combo->GetSelectedIndex() >= 0 ? combo->GetItem(combo->GetSelectedIndex()) : nullptr;
+		return item ? HostOptAutosaveSecondsOf(item->m_Name.Value()) : 0;
+	}
+
+	/// Shows an autosave cadence, offering a saved value the list lacks in its place among the others.
+	void HostOptSelectAutosaveInterval(GUIComboBox* combo, uint32_t seconds) {
+		if (!combo || combo->IsDropped() || seconds == 0) return;
+		std::vector<std::pair<uint32_t, std::string>> offered;
+		for (int i = 0; i < combo->GetCount(); ++i) {
+			const GUIListPanel::Item* item = combo->GetItem(i);
+			const uint32_t listed = item ? HostOptAutosaveSecondsOf(item->m_Name.Value()) : 0;
+			if (listed == seconds) {
+				if (combo->GetSelectedIndex() != i) combo->SetSelectedIndex(i);
+				return;
+			}
+			offered.emplace_back(listed, item ? item->m_Name.Value() : std::string());
+		}
+		const auto at = std::upper_bound(offered.begin(), offered.end(), seconds, [](uint32_t value, const auto& item) { return value < item.first; });
+		const auto inserted = offered.insert(at, {seconds, NetAutosaveIntervalText(seconds)});
+		combo->ClearList();
+		for (const auto& [listed, name] : offered) combo->AddItem(name);
+		combo->SetSelectedIndex(static_cast<int>(inserted - offered.begin()));
 	}
 
 	/// Shows a return window, offering a saved value the list lacks in its place among the others.
@@ -2690,10 +2723,9 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 	// Recovery page.
 	if (m_HostRecRepairCheck) m_HostRecRepairCheck->SetCheck(m_HostOptionsDraft.automaticRepair ? GUICheckbox::Checked : GUICheckbox::Unchecked);
 	if (m_HostRecAutosaveCheck) m_HostRecAutosaveCheck->SetCheck(m_HostOptionsDraft.autosaveEnabled ? GUICheckbox::Checked : GUICheckbox::Unchecked);
-	if (m_HostRecAutosaveIntervalBox && !HostOptBoxFocused(m_HostRecAutosaveIntervalBox)) {
-		m_HostRecAutosaveIntervalBox->SetText(std::to_string(m_HostOptionsDraft.autosaveIntervalSeconds));
-	}
-	HostOptSetEditable(m_HostRecAutosaveIntervalBox, editable && m_HostOptionsDraft.autosaveEnabled);
+	HostOptSelectAutosaveInterval(m_HostRecAutosaveIntervalCombo, m_HostOptionsDraft.autosaveEnabled ? m_HostOptionsDraft.autosaveIntervalSeconds
+	                                                                                              : NetMatchService::c_DefaultAutosaveIntervalSeconds);
+	HostOptSetEditable(m_HostRecAutosaveIntervalCombo, editable && m_HostOptionsDraft.autosaveEnabled);
 	HostOptSelectReturnWindow(m_HostRecReturnWindowCombo, m_HostOptionsDraft.returnWindowMinutes);
 	HostOptSetEditable(m_HostRecReturnWindowCombo, editable);
 	HostOptSetEditable(m_HostRecRepairCheck, editable);
@@ -2747,7 +2779,7 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 		}
 		m_HostRecLastSaveLabel->SetText(m_HostLastSaveText.empty()
 		                                  ? (m_HostOptionsDraft.autosaveEnabled && m_HostOptionsDraft.autosaveIntervalSeconds > 0
-		                                         ? "Checkpoint every " + std::to_string(m_HostOptionsDraft.autosaveIntervalSeconds) + " sim seconds - none saved yet"
+		                                         ? "Checkpoint every " + NetAutosaveIntervalText(m_HostOptionsDraft.autosaveIntervalSeconds) + " - none saved yet"
 		                                         : "No autosaves while this is off")
 		                                  : m_HostLastSaveText);
 	}
@@ -3025,28 +3057,15 @@ void MainMenuGUI::DraftHostOptionsFromControls() {
 	if (m_HostRecRepairCheck) m_HostOptionsDraft.automaticRepair = m_HostRecRepairCheck->GetCheck() == GUICheckbox::Checked;
 	const bool autosaveWasEnabled = m_HostOptionsDraft.autosaveEnabled;
 	if (m_HostRecAutosaveCheck) m_HostOptionsDraft.autosaveEnabled = m_HostRecAutosaveCheck->GetCheck() == GUICheckbox::Checked;
-	if (m_HostRecAutosaveIntervalBox) {
-		const std::string typed = m_HostRecAutosaveIntervalBox->GetText();
-		char* parsedEnd = nullptr;
-		const long parsed = std::strtol(typed.c_str(), &parsedEnd, 10);
-		// An emptied box is mid-edit and keeps the draft's interval; zero is off, and a nonzero
-		// interval clamps into the announced minute-to-hour range.
-		if (parsedEnd != typed.c_str()) {
-			m_HostOptionsDraft.autosaveIntervalSeconds = parsed <= 0 ? 0 : static_cast<uint32_t>(std::clamp<long>(parsed, NetMatchService::c_MinAutosaveIntervalSeconds, NetMatchService::c_MaxAutosaveIntervalSeconds));
-		}
+	if (m_HostOptionsDraft.autosaveEnabled) {
+		// The drop-down holds the cadence; switching autosave on starts at the default instead of reading the off zero back.
+		const uint32_t picked = autosaveWasEnabled ? HostOptAutosaveIntervalOf(m_HostRecAutosaveIntervalCombo) : 0;
+		m_HostOptionsDraft.autosaveIntervalSeconds = picked != 0 ? picked
+		                                           : m_HostOptionsDraft.autosaveIntervalSeconds != 0 ? m_HostOptionsDraft.autosaveIntervalSeconds
+		                                           : NetMatchService::c_DefaultAutosaveIntervalSeconds;
+	} else {
+		m_HostOptionsDraft.autosaveIntervalSeconds = 0;
 	}
-	if (m_HostOptionsDraft.autosaveEnabled && m_HostOptionsDraft.autosaveIntervalSeconds == 0) {
-		if (autosaveWasEnabled) {
-			// A typed 0 is off, so the checkbox, the caption and the published config agree.
-			m_HostOptionsDraft.autosaveEnabled = false;
-			if (m_HostRecAutosaveCheck) m_HostRecAutosaveCheck->SetCheck(GUICheckbox::Unchecked);
-		} else {
-			// Switching autosave on starts at the shortest cadence instead of reading the off zero back.
-			m_HostOptionsDraft.autosaveIntervalSeconds = NetMatchService::c_MinAutosaveIntervalSeconds;
-			if (m_HostRecAutosaveIntervalBox) m_HostRecAutosaveIntervalBox->SetText(std::to_string(m_HostOptionsDraft.autosaveIntervalSeconds));
-		}
-	}
-	if (!m_HostOptionsDraft.autosaveEnabled) m_HostOptionsDraft.autosaveIntervalSeconds = 0;
 	if (const uint8_t minutes = HostOptReturnWindowOf(m_HostRecReturnWindowCombo); minutes != 0) m_HostOptionsDraft.returnWindowMinutes = minutes;
 
 	// This computer's typed choices: the port and the relay's address and login.
@@ -3290,8 +3309,8 @@ void MainMenuGUI::RestoreHostOptionsPageDefaults() {
 			break;
 		case c_HostOptionsRecoveryPage:
 			m_HostOptionsDraft.automaticRepair = factory.automaticRepair;
-			m_HostOptionsDraft.autosaveEnabled = false;
-			m_HostOptionsDraft.autosaveIntervalSeconds = 0;
+			m_HostOptionsDraft.autosaveEnabled = true;
+			m_HostOptionsDraft.autosaveIntervalSeconds = NetMatchService::c_DefaultAutosaveIntervalSeconds;
 			m_HostOptionsDraft.returnWindowMinutes = NetMatchConfigUtil::c_DefaultReturnWindowMinutes;
 			m_HostComputerDraft.joinHistorySeconds = HostComputerDraft{}.joinHistorySeconds;
 			m_HostComputerDraft.joinLagSeconds = HostComputerDraft{}.joinLagSeconds;
@@ -3868,6 +3887,10 @@ void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl
 	}
 	if (guiEventControl == m_HostNetRedundancyCombo) {
 		m_HostOptionsDraft.frameRedundancyTicks = static_cast<uint8_t>(m_HostNetRedundancyCombo->GetSelectedIndex() + 1);
+		return;
+	}
+	if (guiEventControl == m_HostRecAutosaveIntervalCombo) {
+		DraftHostOptionsFromControls();
 		return;
 	}
 	if (guiEventControl == m_HostRecReturnWindowCombo) {

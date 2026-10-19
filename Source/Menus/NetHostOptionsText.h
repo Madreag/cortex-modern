@@ -33,7 +33,13 @@ namespace RTE {
 
 	/// The autosave interval row's range.
 	inline const char* NetAutosaveRangeHint() {
-		return "Every 60 s to 60 min, or off (default)";
+		return "1 to 60 minutes, or off";
+	}
+
+	/// An autosave cadence as players read it: "every 5 minutes", or seconds when it is not whole minutes.
+	inline std::string NetAutosaveIntervalText(uint32_t seconds) {
+		if (seconds % 60 != 0) return std::to_string(seconds) + (seconds == 1 ? " second" : " seconds");
+		return std::to_string(seconds / 60) + (seconds == 60 ? " minute" : " minutes");
 	}
 
 	/// What an autosave can cost the other players.
@@ -242,7 +248,7 @@ namespace RTE {
 		     std::to_string(config.slowPlayerBoundTicks) + " ticks");
 		line(std::string("When a player falls behind: ") + NetSlowPlayerPolicyText(config.slowPlayerPolicy));
 		line(config.autosaveEnabled
-		         ? "Autosaves: every " + std::to_string(config.autosaveIntervalSeconds) + " sim seconds"
+		         ? "Autosaves: every " + NetAutosaveIntervalText(config.autosaveIntervalSeconds)
 		         : "Autosaves: off");
 		line("Return window: " + NetReturnWindowText(config.returnWindowMinutes));
 		line(std::string("Idle wait: ") +

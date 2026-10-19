@@ -419,6 +419,7 @@ namespace RTE {
 		/// How long the host's Start counts down when someone in the lobby is not ready.
 		static constexpr uint32_t c_StartCountdownMs = 30000;
 		static constexpr uint32_t c_MinAutosaveIntervalSeconds = 60; // A minute is the shortest; 0 stays off.
+		static constexpr uint32_t c_DefaultAutosaveIntervalSeconds = 300; // A hosted match checkpoints every five minutes unless its host says otherwise.
 		/// The cadence a running match keeps: the command-line override when one was given, else the host's announced option.
 		static uint32_t MatchAutosaveSeconds(const NetMatchConfig& config) {
 			if (s_AutosaveSecondsOverridden) return s_AutosaveSeconds;

@@ -87,14 +87,13 @@ wait_ms 825
 observe assert_visible CollectionBoxHostPageRecovery 1
 observe setcheck CheckHostRecAutosave 1
 wait_ms 600
-observe assert_enabled TextHostRecAutosaveInterval 1
-focus TextHostRecAutosaveInterval
-observe set_text TextHostRecAutosaveInterval 30
+observe assert_enabled ComboHostRecAutosaveInterval 1
+observe combo_select ComboHostRecAutosaveInterval 1 minute
 wait_ms 500
-observe assert_label TextHostRecAutosaveInterval 60
+observe assert_label ComboHostRecAutosaveInterval 1 minute
 observe setcheck CheckHostRecAutosave 0
 wait_ms 500
-observe assert_enabled TextHostRecAutosaveInterval 0
+observe assert_enabled ComboHostRecAutosaveInterval 0
 observe assert_enabled ButtonHostRecRepairNow 0
 observe assert_label LabelHostRecRepairHint Repair is the host's call
 dump_host_options
