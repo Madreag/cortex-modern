@@ -412,6 +412,16 @@ namespace RTE {
 		    authority.m_FrameTieQuestions.front().request != rematch || authority.m_TieRequests.size() != 1) {
 			*error = "a rematch kept the previous round's questions or reset its request allowance"; return false;
 		}
+		// A smaller group's query that becomes its own question past the referee's deadline is asked afresh as a check-in.
+		auto smaller = rematch; ++smaller.frame; smaller.queryOnly = true;
+		authority.QueryFrameTie(smaller);
+		authority.m_FrameTieQuestions.back().checkedIn = true;
+		authority.m_FrameTieQuestions.back().reply = {NetFrameTieReply::State::Waiting};
+		auto own = smaller; own.queryOnly = false;
+		authority.QueryFrameTie(own);
+		if (authority.m_FrameTieQuestions.back().request != own || authority.m_FrameTieQuestions.back().checkedIn) {
+			*error = "a smaller group's question past its deadline stayed a query"; return false;
+		}
 		std::cout << "[net-directory-selftest] PASS concurrent_frame_ties_keep_their_answers" << std::endl;
 		std::cout << "[net-directory-selftest] PASS recovered_frame_tie_reads_its_decision" << std::endl;
 		std::cout << "[net-directory-selftest] PASS recovery_uses_listed_match" << std::endl;
