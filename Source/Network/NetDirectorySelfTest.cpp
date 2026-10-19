@@ -198,8 +198,10 @@ namespace RTE {
 			bool connected = false;
 			bool lobbyPublished = false, lobbyAccepted = false, lobbyReady = false, lobbyStarted = false;
 			NetMatchConfig match = NetMatchConfigUtil::MakeDefault(73);
+			NetHash32 frameKey;
 			std::vector<NetTransportEvent> pending;
 			DirectHost() {
+				frameKey.fill(0x5A);
 				match.inputDelayFrames = 1; match.delayPolicy = NetMatchDelayPolicy::Fixed;
 				match.successorOrder = {2};
 				match.migrationPeers = {{1, 47468, {"127.0.0.1"}}, {2, 47469, {"127.0.0.1"}}};
@@ -232,7 +234,7 @@ namespace RTE {
 							lobbyPublished = true;
 							NetLobbyHello hello; hello.peerId = 1; hello.displayName = "Host"; hello.desiredRole = "host";
 							NetLobbyMigration capsule; capsule.kind = 2; capsule.peerId = 2;
-							capsule.configHash = NetMatchConfigUtil::HashConfig(match); capsule.sealedState.assign(32, 0x5A);
+							capsule.configHash = NetMatchConfigUtil::HashConfig(match); capsule.sealedState.assign(frameKey.begin(), frameKey.end());
 							if (!ReplyLobby({hello}) || !ReplyLobby({NetLobbyMatchConfig{match}}) || !ReplyLobby({capsule})) return false;
 						}
 						if (const auto* ack = std::get_if<NetLobbyConfigAck>(&lobby.message.payload))
@@ -244,7 +246,10 @@ namespace RTE {
 						}
 						return true;
 					}
-					const auto round = NetLockstepCodec::Decode(bytes);
+					// A peer waiting in a mesh round publishes its start as an authenticated control, and a host answers in kind.
+					NetHostMigrationMessage control;
+					const bool meshControl = NetHostMigrationCodec::Decode(bytes, frameKey, control) && control.type == NetHostMigrationMessageType::PeerControl;
+					const auto round = NetLockstepCodec::Decode(meshControl ? control.bytes : bytes);
 					if (round.ok && std::holds_alternative<NetLockstepStart>(round.packet.payload)) {
 						auto start = std::get<NetLockstepStart>(round.packet.payload);
 						start.localPeerId = 1; start.roundId = 73;
@@ -257,6 +262,11 @@ namespace RTE {
 							start.peerInputDelays[peer] = 1;
 						}
 						if (!NetLockstepCodec::Encode({start}, reply)) return false;
+						if (meshControl) {
+							control.senderPeerId = control.successorPeerId = 1;
+							control.bytes = std::exchange(reply, {}); control.totalBytes = static_cast<uint32_t>(control.bytes.size());
+							if (!NetHostMigrationCodec::Encode(control, frameKey, reply)) return false;
+						}
 					}
 				}
 				if (!reply.empty()) pending.push_back({NetTransportEventType::PacketReceived, 1, NetTransportLane::ControlReliable, std::move(reply)});
