@@ -1898,6 +1898,18 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 		if (m_ToastRect.visible) area.occupiers.push_back({m_ToastRect.x, m_ToastRect.y, m_ToastRect.width, m_ToastRect.height});
 		const auto composeMetrics = [&](int width) {
 			std::string text = FitLine(font, headline(0), width - 12);
+			if (!diagnostics) {
+				// The words a player reads: what is happening, why, and the key to the players panel.
+				for (const std::string& line: details(width - 12)) text += "\n" + line;
+				text += "\nF6: Players";
+				if (!m_StatusProbeLine.empty()) text += "\n" + m_StatusProbeLine;
+				return WrapText(font, FitTokens(font, text, width - 12), width - 12);
+			}
+			// The reason a seat is held reads before any number.
+			if (!ownHeldCause.empty()) text += "\nYour seat: " + ownHeldCause;
+			if (!resyncing && !placing && !hostLost) {
+				for (const std::string& cause: heldCauses) text += "\n" + cause;
+			}
 			if (placing) text += "\n" + countOnly + " brains placed";
 			text += "\nInput " + std::string(metrics);
 			char pace[64];
