@@ -305,10 +305,13 @@ def score(root: Path, case_name: str, exe_sha256: str, records: dict, fullstate_
         rows = [dict(zip(("uid", "before", "after"), match)) for match in METHOD.findall(texts["host"])]
         marks = (shared_mark_rows(root / "host" / "trace.json.simdump.txt", root / "client" / "trace.json.simdump.txt", MARK) if held else
                  {who: count_rows(root / who / "trace.json.simdump.txt", MARK) for who in PEERS})
-        result["previews"] = {"hook_runs": len(rows), "rows": rows[:12], "timer_kept": sum(1 for row in rows if row["before"] == row["after"])}
+        result["previews"] = {"hook_runs": len(rows), "rows": rows[:12], "reset_own_copy": sum(1 for row in rows if float(row["after"]) == 0.0),
+                              "copied_live_start": sum(1 for row in rows if float(row["before"]) > 0.0)}
         result["commit_marks"] = marks
-        # The preview's reset and particle are dropped, and the committed hook's particles stand on both peers alike.
-        fixture_ok = bool(rows) and result["previews"]["timer_kept"] == len(rows) and marks["host"] > 0 and marks["host"] == marks["client"]
+        # The preview resets its own copy of the Timer, carried from the live one's start; the live Timer keeps its start (health
+        # follows it, so the equal hashes hold it), the preview's particle is dropped and the committed hook's stand on both peers alike.
+        fixture_ok = (bool(rows) and result["previews"]["reset_own_copy"] == len(rows) and result["previews"]["copied_live_start"] > 0 and
+                      marks["host"] > 0 and marks["host"] == marks["client"])
     elif case_name == "const":
         rows = [dict(zip(("uid", "running", "killed"), match)) for match in CONST.findall(texts["host"])]
         result["previews"] = {"hook_runs": len(rows), "rows": rows[:12],
