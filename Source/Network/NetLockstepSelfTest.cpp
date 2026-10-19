@@ -1587,6 +1587,13 @@ namespace RTE {
 			if (peer.m_PeerTailRequests == asked || !peer.m_PeerTailRequestedUntil.contains(4423)) {
 				*error = "a frame stopped on an open vote did not ask the seat that played it for its record"; return false;
 			}
+			// The other seat is held and this one plays its return's neutral frames: no seat can certify its vote, so the frame never waits on it.
+			peer.m_PeerBridges[1] = {4400, 4400, true, std::nullopt, {}, 2};
+			peer.m_PeerFrameHolds[1][4400] = true; peer.m_FrameGroupChanges[4400] = 2; peer.m_FrameGroupMembers = 2;
+			auto& reclaim = peer.m_ReclaimTransactions[2];
+			reclaim.activationFrame = 4415; reclaim.delayFrames = 8; reclaim.neutralThroughFrame = 4430;
+			peer.m_RemoteFrames.erase(4423);
+			if (peer.TakePendingPeerDecisions(1100)) { *error = "a frame waited on a vote no seat can certify"; return false; }
 			return true;
 		}
 
