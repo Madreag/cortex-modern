@@ -728,6 +728,9 @@ int MovableObject::Create(const MovableObject& reference) {
 	// A faithful clone scripts in the original's state, so its self can stand in for the original's slot.
 	if (IsFaithfulClone()) {
 		m_ThreadedLuaState = reference.m_ThreadedLuaState;
+	} else {
+		// A spawn copy's ID names the threaded state its scripts load into, so it is taken before they load.
+		m_UniqueID = MovableObject::GetNextUniqueID();
 	}
 	for (const auto& scriptPath: reference.m_AllLoadedScripts) {
 		LoadScript(scriptPath, reference.m_EnabledScripts.at(scriptPath));
@@ -816,7 +819,6 @@ int MovableObject::Create(const MovableObject& reference) {
 		}
 	} else {
 		m_FaithfulMOToNotHitUID = reference.m_FaithfulMOToNotHitUID;
-		m_UniqueID = MovableObject::GetNextUniqueID();
 		g_MovableMan.RegisterObject(this);
 	}
 
