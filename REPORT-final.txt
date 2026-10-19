@@ -1,23 +1,77 @@
-RULEBOOK-END 6405f38c5ae7
-FINDINGS
+GOAL NOT MET - the suite is 53/55: the fixture catalogue still fails on the same 44 fixed cases and 92 random schedules as before this brief (0 newly RED), and most of them wait on fixture-lane rulings only the lead can make.
 
-The relay-game gate is unmet. No assertion, bound, property or B3 envelope was loosened.
-Complete Mac suite: 50/55 GREEN. The four RED network rows are net-lockstep, net-session-plane, net-session-plane-hold-schedules and net-lockstep-seat-succession. The fifth RED is the known headed-Mac module-version timeout at 300 seconds, finding 33; it was not chased.
-All 233 fixed cases and 108 saved schedules ran: 86 GREEN/147 RED, classified 137 open engine rules, 8 fixture disagreements and 2 direct-play contract blockers. All 200 random seeds ran: 48 GREEN/152 RED in 28 exact first-failure groups. All 121 reviewer shapes map: 45 GREEN/76 RED; the signed-capacity mapping correction is not an engine gain.
-Retained root fixes: stale arbitration request polling, direct stop inside the placement barrier, GNU header byte-order marks, Linux-only measurement inventory/wrapper PID assumptions, and relative repository paths at the suite CLI boundary. Detecting RED/GREEN receipts are indexed.
-Receipt production/replay phase, split history and automatic return remain open. The confirmed-clock experiment regressed a GREEN return and was rejected; original pacing is restored. The steady 250 ms case still exceeds the 50 ms bound at 51 ms. The old pending-directory wait-floor objection is withdrawn by section 11.
-Retained direct-host trace: 939 equal client transport observations through the bound demand different actions for a fully hung host and a live-host cut. Independent liveness or an architectural ruling is still needed; this does not excuse the other engine REDS.
-D1-D3: all five fresh link detectors GREEN, including no receipt fallback for missing/zero RTT, one estimator in every mode (steady 30/200 ms = 3/13 ticks), immediate rises and five continuous measured seconds before a decrease.
-D4-D5: both non-substitute cap 1/cap 20 native controls pass 8/8, including the absent-actor completed-depth negative. D6: both watch fields supplied; all 13 combined Python tests pass.
-D7: zero machine-path/box hits in lane documents, report and changed source/tools. The whole-tree sweep retains 59 generic platform/vendor/test-negative or graphics-substring candidate files. Literal zero whole-tree matches is NOT claimed.
-B1/B2/B4: all 12 steady native observations GREEN, delay peaks 4/15 ticks at 30/200 ms, complete preview depth/counters, live delay text and duplicate checks. Every paired 1200-tick full hash history agrees.
-Cap-one live resize applies identical owner/frame/delay changes on both peers and finishes at depth 15/effective cap 15. Its 1400/372 ms maximum waits and six/three missing responses remain RED. The own-hang control has 101 active sentence frames, 1200 equal hashes and byte-identical dumps 710-790; survivor wait max 44 ms. Its held-host depth-zero/missing-input rows remain RED.
-B3 remeasured with 24 SP controls before six network pairs: SP/30 ms/200 ms medians 28.624/28.395/28.075 ms. Frozen SP bands: team 0 28.479-30.573 ms; team 1 26.168-28.812 ms. Eight of 12 aggregates and 46/60 action comparisons are outside; all 12 strict B3 rows remain RED.
-B3 stages reconstruct all 1152 responses exactly: the measured sample phase differs before the first draw; drawing adds about 0.35 ms, while the following draw interval stays about 16.67 ms. 114/576 movement markers accept sub-floor velocity changes. These are measured limitations, not a noise-only explanation or a completed fix. Software presentation, not physical scanout.
-FEEL-1: all 320 SP tick hashes, complete portable state and compared trace digest match the retained reference. Main.cpp and LocalPrediction.cpp have identical source blobs to takeover start. Both default headless-policy rows pass; the other 54 suite launches and all 42 measurement launches are headed.
-Build: complete GNU release/PCH build against the supplied v6 prefix. Engine source 3e35b69c437a6f34d7673c820c04db38f4ccc5c3; executable SHA256 9cd877ab2482d62db341c646b45ded0e4a6b2d589b8ef5272426bc0bccda44a1. Fixture c05a4ea84 and cm-dev d1cbc8e09a are ancestors; all final suite/measurement launch receipts name this executable.
-Evidence: docs/session-plane/evidence/mac-gate/README.md links every suite/fixed/random/nested verdict, stage, capture, source/dependency hash and actual launch. The original 49/55 collection and corrected same-oracle SP reference are both retained.
-Next work: resolve producer/replay pacing, split/return authority and B3 causality; resolve the named fixture contradictions without weakening properties. Improve direct-host fault discrimination with independent liveness.
-NEEDS TESTING: multi-machine relay game, Windows/MSVC dependency build, real TURN refresh/close, physical display response and the exact field-A object; runnable commands and missing data are in docs/session-plane/NEEDS-TESTING.md. No off-box run or deployment is claimed.
-Only cm-wip/relay-findings was pushed; zero cm-dev/main pushes, zero force pushes, no subagents. NOTES.md records the work. KEEP ROOT reviews/mac until the lead merges; original receipts remain there.
-Usage meter unavailable.
+VERDICT (2026-10-19, 12:4x AM to 7:3x AM)
+1. Branch cm-wip/relay-findings, final build ea95ab84 (the source of 52111a545; later commits are notes), headed Linux, single-box, proof=false. Pushed with plain pushes only: 0 pushes to cm-dev or main, 0 force pushes.
+2. Both reads: every row marked in NOTES.md. P0s A1, A2 and B2 and P1 A4 fixed, each with a RED/GREEN row. A3: bound applied on the coordinator path; the move to frame groups is not reachable in this batch. A5: engine rows added, and one of them found a real defect, now fixed. P2s: A6 and A8 fixed, A7 ruled, A9 proposed.
+3. My own gate runs found two defects in this lane's work, both fixed with rows: seed 199 (A2's rule) and straddling directory rulings (seed 198's class).
+4. Gate: D1-D7 green; B1, B2, B4 12/12; B3 re-measured (numbers below); #45 2/2; #46 Fixed 1 and Fixed 6 GREEN; FEEL-1 320/320; suite 53/55.
+5. Open: the catalogue REDs named below, plus six proposals for the lead on the fixture lane's file (A5(d), A9, (e), (f) and two notes).
+
+NOT DONE / DEVIATIONS (first, as the rules ask)
+- Suite 53/55: net-session-plane (fixed 199/243) and net-session-plane-hold-schedules (random 108/200) stay RED. Their RED sets are identical, case for case, to dev8 ef880a16's from before this brief. The gate's two clauses ("catalogue GREEN or each RED named" and "suite 55/55") cannot both hold while any case is RED; each RED is named below, so the suite clause is unmet.
+- A3: world and dedicated rounds stay on the host-routed coordinator. Why: a world round is always dedicated (NetMatchConfig.cpp:552), and a dedicated host has no seat (695-697). The round is a star: a client sends only to the host, which relays (NetLockstep.cpp:4967-4969). The config contract refuses a migration roster for both by name (608-609; PrepareMigrationRoster, NetLobbySession.cpp:1871-1873). So a hung dedicated host leaves its clients no route to each other's input, and no bound on the coordinator path can keep them playing. The move needs mesh links, admissions for new world identities, a seatless member in the groups, and a ruling on who hosts a persistent world after its server is lost. FLAGGED for the lead.
+- Row changes, all disclosed with both runs in NOTES.md:
+  - TestAnnouncedLeaveLoneOutcome was rewritten under the A4 ruling. It encoded the old rule and FAILED on 1e9fd57b; it PASSES on 07c6a5eb.
+  - legacy_combat_hold_uses_its_input_deadline now also holds a seat yet to play (A3 ruling).
+  - net-match's unknown reserved bit moved from 64 to 128, because B2 uses 64.
+  - The A8 row's own-group arm first carried one signature for two voters, a setup error. It was corrected and the RED was re-run with the final row.
+- The fixture file (NetSessionPlaneSelfTest.cpp) is the fixture lane's and was not changed. Two temporary diagnostic builds were made and discarded; their sources were restored, and nothing from them was committed.
+- find_encoders.py is the lead's tool and is not on this box. The B2 encoders were found by grep: NetLobbyProtocol encode/decode and NetMatchConfigUtil's hash fields. Older builds refuse the bit by name (ReservedFieldNonZero).
+
+RED / GREEN (row commit; RED build -> GREEN build; fix commit)
+- A1 (P0) the halves name one split. Row 85782dcad + d94d52af5: RED a2bc22f9 (both arms never decided) -> GREEN f40a3cbf / 37961ace. Fixes 42bc27e2f, 35d3a6fb1, d94d52af5.
+- A2 (P0) a member playing another continuation becomes a split. Row b7b941781 / 77c234416: RED 690c4114 ("a member playing another continuation stayed in this group") -> GREEN 8dad1961. Fixes ae8b94a62, 30a7bdb6c.
+- A2 follow-up (seed 199, which this lane's rule broke): only a seat that counts this one plays another continuation. Row c8ca94721: RED 4063f32d ("a host that had held this seat was held as another continuation inside the group still playing its input") -> GREEN 423bfe57. Fix 05b9a5ab7.
+- B2 (P0, Read B) the arbitration rule is a hashed config field. Row b311f0dbe: RED 25a5f173 ("a listed host refereed a round whose joiner holds no directory lease") -> GREEN 37961ace. Fix 5936c335f (reserved bit 0x40; a peer without a directory session refuses by name).
+- A4 (P1) a host leave hands over to one survivor. Row 0c8c6e38b: RED beff3a44 ("direct: one connected survivor does not permit handover") -> GREEN 0cbf2987. Fix 4bbf4502e.
+- A3 (P1) a seat yet to play is held at the combat bound. Row 4bba73977: RED 91e722d8 ("fresh authenticated traffic hid a missing-input combat deadline: mode=0 started=0") -> GREEN 1e9fd57b. Fix e278918ca.
+- A5 (P1) Fixed-delay return gate with measured links. Row 632a5a634: RED 94f3c27c (with #46's restart term put back: "needs 60 delay frames") -> GREEN 85ffccb9. The gate was already right; the row is the lever.
+- A5 (P1) desync path through SubmitLocalChecksum. Row 444980d6d: RED cf353f40 ("a frame group stopped for a desync on a held host's private hash") -> GREEN 1c7b10da. Fix ab0d42718.
+- A6 (P2) a stopped frame asks for its record at once. Row f2a28ff3d: RED ab8d0ba1 -> GREEN 22fe0daf. Fix ccc52861d. RULED: not lengthening the decision lead, which would put every return and every live delay raise 100 ms later for every player.
+- A7 (P2) RULED, no change. The heal already folds every history heard into its decision, and the order is total. Waiting for every owner would wait forever on one that never returns.
+- A8 (P2) direct play refuses another group's migration. Row cae9319f6: RED 50b85cdf -> GREEN b9680c0c. Fix b663cf296.
+- A9 (P2) PROPOSED: the Pause row is in the fixture file; drop it or make it a guard that Pause is never selected.
+- Catalogue class (seed 198) a group that lost a straddling ruling stops. Row c56ac5bdd: RED 5ba019ca ("a seat whose group lost the directory's ruling to the other continuation's question played on: local=4") -> GREEN ea95ab84. Fix 52111a545.
+- Read B finding 1: the branch replaces every named equal-half site (NOTES.md marking block).
+
+GATE ON THE FINAL BUILD (ea95ab84 unless named)
+- Suite 53/55 (len(SELFTESTS)=55). Network rows 11/11 apart from the catalogue rows. Catalogue identical to dev8 (0 newly RED, 0 newly GREEN).
+- FEEL-1: 320/320 tick hashes equal against the cm-dev 786ba8b5e build. The 3,617,129-byte state dump is identical and the final hash is equal. Main.cpp and LocalPrediction are unchanged since takeover.
+- D1-D3 GREEN (net-lockstep, input-acceptance). D4/D5: cap 1 and cap 20 pass 8/8. D6: 19/19 driver tests. D7: one box name in NOTES.md, replaced (ea26cb347).
+- On 423bfe57, which this build's one later change does not reach:
+  - B1, B2, B4 and the duplicate-line watch 12/12 (delay peaks 4 ticks at 30 ms, 15 at 200 ms).
+  - B3 medians: 29.7 ms single player, 30.5 ms at 30 ms, 31.3 ms at 200 ms. All 12 responses take 2 frames, as do all 48 single-player controls. 7 of 12 millisecond aggregates fall inside the frozen single-player bands (9 of 12 on 8c903518). No band was widened.
+  - #45 world join 2/2.
+  - #46 Fixed 1 and Fixed 6, each run alone. A first attempt ran both at once on this 4-core box and failed both on a 39 s writer-thread base; that was load, and it is recorded, not counted.
+
+THE CATALOGUE'S REDS, NAMED (random groups / fixed cases; details in NOTES.md)
+- histories_differ (37 random, 6 fixed). Measured cause: two survivors decide the bound on either side of an input that arrived late but was not lost. That is section 11.1's local hold; the engine resolves it as a split. The oracle accepts a divergence only with an exactly lost input or receipt. Waits on proposal A5(d).
+- Image return and catch-up:
+  - image_return 20 / 9; held_seat_returns_late 13 / 12; held_seat_never_returns 9 / 4; returned_seat_held_again 1 / 2.
+  - Open engine rules on the private return carried from before this brief: the relay lead, the different-donor capacity case, the image-return-held-again cluster, and certificate adoption after a straddling ruling.
+  - Seed 198 is the fixture's image-path model (proposal (e)).
+- loser_did_not_stop_at_decision 2 (76, 120): past the straddling fix, peer 3 is still not stopped at 485, and one seat stops away from its decision frame. Open.
+- host_changed 3 (2-seat direct): a lone-seat migration in a two-player direct match. Its section 11.3(c) reading is for the lead.
+- held_without_its_own_trouble 3; engine_rule 1 (seed 71: a split peer became a private reader before a losing decision); engine_failed 1 (seed 197: the committed tail differs from displayed history at 679); directory_refused 1 / 1. Open.
+- survivor_waits: seed 714 (51 ms; both survivors hold exactly at 50 ms, and the pop lands one fixture step later).
+- Fixed named rows:
+  - relay_link_blackout_return: pre-fault pace lead 33 ms against 60 ms.
+  - The different-donor 200 ms case: a returner at the round's rate cannot close its trail.
+  - The Pause row: A9.
+  - The dedicated and persistent-world stopped-joiner rows: they need the A3 move, proposal (f).
+  - joiner_inputs_lost_1s, declared_leave_keeps_the_round, held_host_still_serves_another_seats_image: open.
+
+PROPOSALS FOR THE LEAD (fixture lane's file; written in NOTES.md)
+- A5(d): feed the fixture worlds' hashes through SubmitLocalChecksum, and accept a within-group divergence only after the engine has arbitrated it and both sides have reconverged.
+- A9: the Pause row.
+- (e): choose the image-return replay as the service does (BeginInPlaceCatchUp refuses a sim at or past its hold frame), not by the fixture's own loser rule.
+- (f): the dedicated and world stopped-joiner rows wait on the A3 move.
+- Two notes: the first-come referee can rule for a briefly silent seat's question; and a 4x slower writer-thread base on the checkpoint seam (21 s against 5.5 s).
+
+KEEP (in .private/linux-runs):
+- suite-ea95ab84, cat-ea95ab84, suite-423bfe57, b3-423bfe57
+- feel1-control-f, feel1-tip-g, feel1-compare-g, d45-g-cap1, d45-g-cap20
+- wj45-final-1, wj45-final-2, fx46-final-d1b, fx46-final-d6b
+- sr-red, sr-green-straddling-ruling, mc-red, mc-green-mutual-continuation, dmig-red, dmig-green, openvote-red-ab8d0ba1, openvote-green, heldhash-red-cf353f40, heldhash-green, fixedret-red-94f3c27c, fixedret-85ffccb9, seed198-diag
+
+Everything else in that folder can be deleted.
