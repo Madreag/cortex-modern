@@ -1402,6 +1402,39 @@ namespace RTE {
 			return true;
 		}
 
+		static bool FixedDelayReturnFollowsTheMeasuredLink(std::string* error) {
+			// A Fixed match admits a returner whose measured link fits its delay and refuses one that does not, naming both; the
+			// returner's published restart is not link time.
+			struct Arm { uint16_t fixed; uint32_t rtt; uint16_t needs; };
+			for (unsigned mode = 0; mode != 4; ++mode) for (const Arm arm: {Arm{6, 30, 3}, Arm{6, 200, 13}, Arm{1, 0, 1}, Arm{1, 30, 3}}) {
+				DelayWire wire; wire.rtt = arm.rtt;
+				NetLockstepCoordinator peer; ConfigureDelay(peer, wire, mode, arm.fixed);
+				peer.m_Config.matchConfig.delayPolicy = NetMatchDelayPolicy::Fixed;
+				peer.m_Config.matchConfig.inputDelayFrames = arm.fixed;
+				peer.m_Stats.peers[2].startParkMs = 900;
+				peer.m_PeerStartupPublished.insert(2);
+				peer.m_AiHeldSeats[2] = 4400;
+				peer.m_LastDeliveredFrame = 4410;
+				std::string refusal;
+				const bool admitted = peer.PreparePeerRejoin(2, arm.rtt, 1000, &refusal);
+				const std::string name = "mode=" + std::to_string(mode) + " fixed=" + std::to_string(arm.fixed) + " rtt_ms=" + std::to_string(arm.rtt);
+				std::cout << "[fixed-return] " << name << " admitted=" << admitted << " refusal=" << refusal << std::endl;
+				if (admitted != (arm.needs <= arm.fixed)) {
+					*error = "a Fixed match " + std::string(admitted ? "admitted" : "refused") + " a returner whose measured link needs " + std::to_string(arm.needs) + " frames: " + name + " " + refusal;
+					return false;
+				}
+				if (!admitted && refusal != "Your connection needs " + std::to_string(arm.needs) + " delay frames; the match currently allows " + std::to_string(arm.fixed) + ". Your seat remains under AI control.") {
+					*error = "a Fixed match's refusal named the wrong need or allowance: " + name + " " + refusal;
+					return false;
+				}
+				if (DelayProposal(peer)) {
+					*error = "a Fixed match re-sized a returner's delay: " + name;
+					return false;
+				}
+			}
+			return true;
+		}
+
 		static bool ReaderLinksContributeToInputRunway(std::string* error) {
 			for (unsigned arm = 0; arm < 3; ++arm) {
 				DelayWire wire; wire.rtt = 100;
@@ -32934,6 +32967,12 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS every_mode_sizes_live_and_return_from_the_link\n[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "fixed-return-link") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::FixedDelayReturnFollowsTheMeasuredLink(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS a_fixed_return_follows_the_measured_link\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "link-immediate-rise") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::LinkRiseHasNoResizeCooldown(&error)) return fail(error);
@@ -33252,6 +33291,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::MissingInputsExcludeIncompatibleWitnesses, "missing_inputs_exclude_incompatible_witnesses");
 		row(&SessionPlaneRecoveryTest::MissingOrZeroLinkNeverUsesReceipts, "missing_or_zero_rtt_never_uses_machine_receipts");
 		row(&SessionPlaneRecoveryTest::LinkSizingInEveryMode, "every_mode_sizes_live_and_return_from_the_link");
+		row(&SessionPlaneRecoveryTest::FixedDelayReturnFollowsTheMeasuredLink, "a_fixed_return_follows_the_measured_link");
 		row(&SessionPlaneRecoveryTest::ReaderLinksContributeToInputRunway, "reader_links_contribute_to_input_runway");
 		row(&SessionPlaneRecoveryTest::LinkRiseHasNoResizeCooldown, "link_rise_has_no_resize_cooldown");
 		row(&SessionPlaneRecoveryTest::LinkFallNeedsFiveMeasuredSeconds, "link_fall_requires_five_continuous_measured_seconds");
