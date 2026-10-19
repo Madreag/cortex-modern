@@ -10025,6 +10025,16 @@ static std::string ResyncSaveName() {
 #endif
 	}
 
+	void NetMatchService::ReadRejoinCheckIn(const NetConnectionAuthority& authority, bool allowRelay, bool relayOnly, const std::optional<NetConnectionHost>& host,
+	                                       uint64_t localUnixSeconds, bool& checkedIn, bool& relayReady) {
+		const auto lease = authority.LocalLease();
+		// The seat is judged on the directory's clock, which issued it; the authority keeps its relay login on this one.
+		const uint64_t directoryNow = authority.DirectoryNow(localUnixSeconds);
+		checkedIn = authority.RouteCheckedIn() && lease && lease->Usable(directoryNow);
+		// Automatic dials direct with whatever login it holds and takes a renewal live; only Relay only needs one to dial.
+		relayReady = !allowRelay || !relayOnly || (host && !host->relayEnabled) || authority.RelayRefreshed() || authority.Relay().Usable(localUnixSeconds);
+	}
+
 	bool NetMatchService::SetUpIceTransport(const NetMatchServiceRequest& request, const NetIdentityManifest& manifest, NetMuxTransport& mux, NetSessionConfig& sessionConfig, std::string& joinAddress, NetIceJoinTarget& target, std::string* error) {
 #ifndef CCCP_WITH_GNS
 		(void)request; (void)manifest; (void)mux; (void)sessionConfig; (void)joinAddress; (void)target;
@@ -10104,9 +10114,9 @@ static std::string ResyncSaveName() {
 			m_ConnectionAuthority.Update(nowMs, UnixNowMs(nullptr) / 1000);
 			if (m_ConnectionAuthority.Refused()) { if (error) *error = m_ConnectionAuthority.Error(); return false; }
 			connectionHost = m_ConnectionAuthority.Host();
-			checkedIn = !request.rejoin || (m_ConnectionAuthority.RouteCheckedIn() && m_ConnectionAuthority.LocalLease() &&
-				m_ConnectionAuthority.LocalLease()->Usable(UnixNowMs(nullptr) / 1000));
-			relayReady = !request.rejoin || !allowRelay || (connectionHost && !connectionHost->relayEnabled) || m_ConnectionAuthority.RelayRefreshed();
+			if (request.rejoin)
+				ReadRejoinCheckIn(m_ConnectionAuthority, allowRelay, g_SettingsMan.GetNetworkConnectionMode() == SettingsMan::NetworkConnectionMode::RelayOnly,
+				    connectionHost, UnixNowMs(nullptr) / 1000, checkedIn, relayReady);
 			if (connectionHost && checkedIn && relayReady && nowMs >= connectionHost->directoryReadyMs) break;
 			{
 				std::lock_guard<std::mutex> lock(m_Mutex);
