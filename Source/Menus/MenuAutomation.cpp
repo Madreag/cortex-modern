@@ -1748,7 +1748,7 @@ namespace RTE::MenuAutomation {
 			command == "slider_set" || command == "wheel_control" || command == "model_mark" || command == "assert_model_changed" || command == "screen_mark" || command == "assert_screen_changed" ||
 			command == "assert_box_text" || command == "type_text" || command == "assert_value" || command == "assert_selected" || command == "click_row" ||
 			command == "select_settings_page" || command == "assert_settings_page" || command == "video_mark" ||
-			command == "assert_label" || command == "assert_checked" || command == "assert_vertical_scroll" ||
+			command == "assert_label" || command == "assert_label_absent" || command == "assert_no_caption" || command == "assert_checked" || command == "assert_vertical_scroll" ||
 			command == "assert_opaque_panel" || command == "dump_network_layout" || command == "dump_match_identity" ||
 			command == "assert_not_drawn" || command == "assert_toast_band" || command == "assert_word_wrap" || command == "assert_roster_fits" || command == "assert_roster_text" || command == "status_line" || command == "ghost_watch" || command == "text_watch" || command == "assert_list_rows" ||
 			command == "assert_net_label" || command == "assert_net_label_absent" || command == "push_toast" || command == "dump_seat_state" || command == "dump_world_ownership" || command == "fire_assert" || command == "fire_abort" || command == "fire_worker_throw" ||
@@ -2372,6 +2372,45 @@ namespace RTE::MenuAutomation {
 					return false;
 				}
 				return found && text.find(expected) != std::string::npos;
+			}
+			if (command == "assert_label_absent") {
+				std::string name, unexpected, text;
+				args >> name;
+				std::getline(args >> std::ws, unexpected);
+				bool found = DisplayText(manager->GetControl(name), text);
+				MainMenuGUI* main = g_MenuMan.GetMainMenu();
+				if (!found && main && manager == main->AutomationManager()) found = main->AutomationLabelText(name, text);
+				const bool credential = CredentialName(name) || Credential(manager->GetControl(name));
+				observation = name + " \"" + Captured(credential, unexpected) + "\" text=\"" + Captured(credential, text) + "\"";
+				if (GUIControl* control = manager->GetControl(name); control && !Visible(control)) {
+					observation += " (not on the screen)";
+					return false;
+				}
+				return found && !unexpected.empty() && text.find(unexpected) == std::string::npos;
+			}
+			if (command == "assert_no_caption") {
+				// No shown control inside the panel carries the words: a control that was taken away stays away.
+				std::string name, words;
+				args >> name;
+				std::getline(args >> std::ws, words);
+				GUIControl* panel = manager->GetControl(name);
+				observation = name + " \"" + words + "\"";
+				if (!panel || !Visible(panel) || words.empty()) {
+					observation += " (the panel is not on the screen)";
+					return false;
+				}
+				std::vector<GUIControl*> open{panel};
+				while (!open.empty()) {
+					GUIControl* control = open.back();
+					open.pop_back();
+					std::string text;
+					if (control != panel && Visible(control) && DisplayText(control, text) && text.find(words) != std::string::npos) {
+						observation += " shown by " + control->GetName();
+						return false;
+					}
+					if (auto* children = control->GetChildren()) for (GUIControl* child: *children) open.push_back(child);
+				}
+				return true;
 			}
 			if (command == "key_down" || command == "key_up") {
 				std::string key;

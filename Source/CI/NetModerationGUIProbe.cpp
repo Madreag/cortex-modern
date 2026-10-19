@@ -873,10 +873,14 @@ namespace {
 			Vector motion(step.value("dx", 0.0F), step.value("dy", 0.0F));
 			if (op == "aim_brain") {
 				const bool untilEnd = step.value("until_end", false);
+				const bool untilLost = step.value("until_brain_lost", false);
 				if (untilEnd && RoundEnded()) return observed["screen"] == "MultiplayerScreen";
+				// A brain lost under the keep-playing rule leaves the round running.
+				if (untilLost) Require(!RoundEnded(), "the round ended when the brain was lost");
 				auto* game = g_ActivityMan.GetActivity();
 				auto* actor = game ? dynamic_cast<AHuman*>(game->GetControlledActor(LocalPlayer(step))) : nullptr;
 				auto* brain = game ? game->GetPlayerBrain(step.value("target_player", 1)) : nullptr;
+				if (untilLost && (!brain || !g_MovableMan.ValidMO(brain) || brain->IsDead())) return true;
 				if (untilEnd && (!brain || !g_MovableMan.ValidMO(brain))) return false;
 				Require(actor && brain && g_MovableMan.ValidMO(brain), "aiming needs a living soldier and target brain");
 				const auto* gun = dynamic_cast<const HDFirearm*>(actor->GetEquippedItem());
@@ -891,7 +895,7 @@ namespace {
 				observed["aim"] = {{"device", {input.m_X, input.m_Y}}, {"target", {target.m_X, target.m_Y}},
 				    {"muzzle", {gun->GetMuzzlePos().m_X, gun->GetMuzzlePos().m_Y}}, {"ray", {ray.m_X, ray.m_Y}}, {"miss_pixels", miss},
 				    {"brain_health", brain->GetHealth()}, {"rounds", gun->GetRoundInMagCount()}};
-				if (!untilEnd && tick >= probe.aimTick + ScenarioRunner::GetLockstepLocalInputDelay() + 4 &&
+				if (!untilEnd && !untilLost && tick >= probe.aimTick + ScenarioRunner::GetLockstepLocalInputDelay() + 4 &&
 				    (target - input).GetMagnitude() < 0.01F && miss <= 2.0F && ray.m_X * distance.m_X + ray.m_Y * distance.m_Y > 0) return true;
 				// UpdateMouseInput adds three times the device motion to its analog aim.
 				motion = (target - input) * g_UInputMan.GetMouseTrapRadius() / (3.0F * g_UInputMan.GetMouseSensitivity());
