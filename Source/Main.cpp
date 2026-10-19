@@ -8729,7 +8729,8 @@ void RunGameLoop() {
 				else for (uint8_t peer = 1; peer <= match->peerCount; ++peer)
 					if (ScenarioRunner::IsLockstepPeerGone(peer, simTick) || ScenarioRunner::IsLockstepSeatReclaimGap(peer, simTick)) perturbDue = false;
 			}
-			if ((ScenarioRunner::IsActive() || s_netMatchServiceE2E) && ScenarioRunner::GetArgs().selftestPerturb && perturbDue && !s_perturbFired) {
+			// The live form waits for a running lockstep match, so it also arms in one the menus started.
+			if ((ScenarioRunner::IsActive() || s_netMatchServiceE2E || s_netPerturbWhenLive) && ScenarioRunner::GetArgs().selftestPerturb && perturbDue && !s_perturbFired) {
 				s_perturbFired = true;
 				// Named in both modes: a run's oracle excuses only the desync it can see was injected.
 				System::PrintDiagnosticLine("[net-test] live perturb frame=" + std::to_string(simTick));
