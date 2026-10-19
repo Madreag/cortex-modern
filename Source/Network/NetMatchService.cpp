@@ -8,6 +8,7 @@
 
 #include "ActivityMan.h"
 #include "MetricsCollector.h"
+#include "ThreadMan.h"
 #include "Constants.h"
 #include "GameActivity.h"
 #include "Scene.h"
@@ -3913,8 +3914,20 @@ static std::string ResyncSaveName() {
 		return finished;
 	}
 
+	void NetMatchService::SetSaverOverdue(bool overdue, uint64_t tick) {
+		if (overdue != m_SaverOverdue) System::PrintDiagnosticLine(std::format("[autosave] saver overdue={} tick={}", overdue ? 1 : 0, tick));
+		m_SaverOverdue = overdue;
+		m_SaverOverdueTick = tick;
+		SaverThreads::SetOverdue(overdue);
+	}
+
 	void NetMatchService::ResetCheckpointSchedule() {
+		// A service reset outside a running round has no clock to read: the change is logged at the last tick it was given.
+		SetSaverOverdue(false, m_SaverOverdueTick);
 		m_ScheduledCaptures.clear();
+		m_PeriodicWaitSince = 0;
+		m_PeriodicOwnWriterWaited = false;
+		m_OwnLateCaptureTick = 0;
 		m_OpenCaptureTick = 0;
 		m_CaptureWriters.clear();
 		m_CheckpointHolders.clear();
@@ -4035,6 +4048,8 @@ static std::string ResyncSaveName() {
 		if (!m_IsHost) return output;
 		if (output.capture && interval > 0 && m_NextAutosaveSimTime >= 0 && input.now >= m_NextAutosaveSimTime) {
 			m_NextAutosaveSimTime += ((input.now - m_NextAutosaveSimTime) / interval + 1) * interval;
+			m_PeriodicWaitSince = 0;
+			m_PeriodicOwnWriterWaited = false;
 		}
 		bool ask = input.manualRequested;
 		if (ask && input.hostProvisional) {
@@ -4063,9 +4078,18 @@ static std::string ResyncSaveName() {
 			m_OpenCaptureManual = false;
 		}
 		output.manualPending = ask;
-		// Publication can reach the network pump before the writer has finished releasing its capture. Its future is
-		// still the existing one-writer gate: wait before naming another command, including a requested fresher base.
-		if (input.unwritten != 0 || (m_OpenCaptureTick != 0 && (input.tick <= m_OpenCaptureTick || !m_CaptureWriters.empty()))) return output;
+		// Publication can reach the network pump before the writer has finished releasing its capture, and its future is ready
+		// before the writer has prepared the next plan: wait for both before naming another command, including a requested
+		// fresher base. The ask and the deadline stay pending, and the command is named at the first tick the writer is ready.
+		const bool writersBusy = input.unwritten != 0 || !input.writerReady || (m_OpenCaptureTick != 0 && (input.tick <= m_OpenCaptureTick || !m_CaptureWriters.empty()));
+		if (writersBusy) {
+			if (!input.paused && interval > 0 && m_NextAutosaveSimTime >= 0 && input.now + static_cast<int64_t>(input.lead) * tickLength >= m_NextAutosaveSimTime) {
+				if (m_PeriodicWaitSince == 0) m_PeriodicWaitSince = input.tick;
+				// The due capture waits on this machine's own writer, not only on another peer's report.
+				if (input.unwritten != 0 || !input.writerReady) m_PeriodicOwnWriterWaited = true;
+			}
+			return output;
+		}
 		m_OpenCaptureTick = 0;
 		m_OpenCaptureForJoin = false;
 		// Every peer keeps the schedule the host announced in the agreed config, not its own setting.
@@ -4081,16 +4105,26 @@ static std::string ResyncSaveName() {
 		// A capture is named ahead by the input delay; the interval is consumed above only after that command lands.
 		const bool periodicDue = !input.paused && interval > 0 &&
 		                         input.now + static_cast<int64_t>(input.lead) * tickLength >= m_NextAutosaveSimTime;
+		const auto notePeriodic = [&] {
+			if (!periodicDue) return;
+			output.periodicLateTicks = std::max<int64_t>(0, static_cast<int64_t>(input.lead) - (m_NextAutosaveSimTime - input.now) / tickLength);
+			output.periodicWaitedTicks = m_PeriodicWaitSince ? static_cast<int64_t>(input.tick - m_PeriodicWaitSince) : 0;
+			output.periodicOwnLate = m_PeriodicOwnWriterWaited && output.periodicLateTicks > 0;
+			m_PeriodicWaitSince = 0;
+			m_PeriodicOwnWriterWaited = false;
+		};
 		if (input.ownSeatHeld) {
 			// Playing voters agree a frame for the held host. Keep the same authorization and one-capture gate as a base
 			// request, and leave a manual ask pending until it can be carried by the host's own input.
 			output.requestPrivateBase = periodicDue || (joinCapture && m_PrivateBaseRequested && m_WorldJoin.IsPrivateMatch());
+			if (output.requestPrivateBase) notePeriodic();
 			return output;
 		}
 		if (!joinCapture && !ask && !periodicDue) return output;
 		m_OpenCaptureTick = input.tick + input.lead;
 		m_OpenCaptureApplied = false;
 		m_OpenCaptureForJoin = joinCapture;
+		notePeriodic();
 		// Test lever CC_FAULT_INJECT=join_capture_refused: the writer refuses the host's first base as it starts, where a frozen-inventory refusal comes.
 		if (joinCapture && m_IsHost && m_WorldJoin.IsPrivateMatch() && !m_InjectedJoinRefusal && FaultInjected("join_capture_refused")) {
 			m_InjectedJoinRefusal = true;
@@ -4301,15 +4335,21 @@ static std::string ResyncSaveName() {
 		for (const auto& [sender, checkpoint]: ScenarioRunner::TakeAppliedCheckpoints()) applied.push_back({sender, checkpoint.kind, checkpoint.tick});
 		// A segment held for its checkpoint opens the moment the archive thread has named the digest.
 		std::vector<uint64_t> refused;
-		const std::vector<uint64_t> finished = TakeAutosaveVerdicts(&refused);
+		// A finished capture is reported once this peer's saver has retired it and prepared the next one, so the host never names a
+		// capture a writer is still getting ready for; a saver whose preparation failed reports at once.
+		const std::vector<uint64_t> finished = g_ActivityMan.AutosaveWriterBusy() ? std::vector<uint64_t>{} : TakeAutosaveVerdicts(&refused);
 		if (ScenarioRunner::HasPendingLockstepWorldSegment()) SealWorldReplaySegment();
 		AppendCommittedJoinFrame(tick);
-		if (!ScenarioRunner::IsLockstepControllerSyncActive() || m_AutosaveMatchId.empty() || !m_Coordinator) return;
+		if (!ScenarioRunner::IsLockstepControllerSyncActive() || m_AutosaveMatchId.empty() || !m_Coordinator) {
+			SetSaverOverdue(false, tick);
+			return;
+		}
 		AutosaveTickInput input;
 		input.tick = tick;
 		input.now = g_TimerMan.GetSimTimeTicks();
 		input.paused = paused;
 		input.unwritten = g_ActivityMan.UnwrittenAutosaves();
+		input.writerReady = g_ActivityMan.AutosaveWriterReady();
 		input.applied = std::move(applied);
 		input.finished = finished;
 		input.refused = std::move(refused);
@@ -4328,6 +4368,24 @@ static std::string ResyncSaveName() {
 			input.hostProvisional = m_Coordinator->IsHostProvisional();
 		}
 		AutosaveTickOutput output = StepAutosaveSchedule(input);
+		{
+			// This machine's own save that its busy writer keeps from being named or taken: the next periodic one once its
+			// deadline passed, a periodic one its writer made late while it is written, or the host player's own manual ask. A
+			// joiner's or returner's base waits for the writer in the game's idle time, so the host never pays for another
+			// player's join or return, and a capture another peer's writer made late costs this machine nothing.
+			const int64_t interval = static_cast<int64_t>(m_MatchAutosaveSeconds) * g_TimerMan.GetTicksPerSecond();
+			const int64_t dueAt = m_IsHost && m_NextAutosaveSimTime >= 0 ? m_NextAutosaveSimTime : m_CaptureAnchorSimTime + interval;
+			const bool periodicDue = interval > 0 && !paused && m_CaptureAnchorSimTime >= 0 && input.now >= dueAt;
+			const bool asked = m_IsHost && output.manualPending;
+			if (output.periodicOwnLate && m_OpenCaptureTick > tick) m_OwnLateCaptureTick = m_OpenCaptureTick;
+			if (m_OwnLateCaptureTick != 0 && tick > m_OwnLateCaptureTick) m_OwnLateCaptureTick = 0;
+			const bool lateOwnSave = std::any_of(m_AwaitedAutosaves.begin(), m_AwaitedAutosaves.end(), [](const AwaitedAutosave& entry) { return entry.ownLate; });
+			SetSaverOverdue((periodicDue || asked || lateOwnSave) && g_ActivityMan.AutosaveWriterBusy(), tick);
+		}
+		if (output.periodicLateTicks >= 0) {
+			System::PrintDiagnosticLine(std::format("[autosave] periodic due named at={} late_ticks={} waited_ticks={} held={} own_writer={}", tick, output.periodicLateTicks,
+			                                        output.periodicWaitedTicks, input.ownSeatHeld ? 1 : 0, output.periodicOwnLate ? 1 : 0));
+		}
 		if (output.requestPrivateBase) (void)m_Coordinator->RequestPrivateBaseCapture();
 		else if (m_IsHost && (!input.ownSeatHeld || input.hostProvisional)) m_Coordinator->ClearPrivateBaseCaptureRequest();
 		// The prepared capture warms ahead of the next one: a named capture is near at once, an interval one counts from the
@@ -4403,7 +4461,7 @@ static std::string ResyncSaveName() {
 					m_PrivateBaseRefusal.clear();
 				}
 				// The queue is not the verdict: the worker walks the graph off this thread and may still refuse.
-				m_AwaitedAutosaves.push_back(AwaitedAutosave{tick, joinCapture});
+				m_AwaitedAutosaves.push_back(AwaitedAutosave{tick, joinCapture, m_OwnLateCaptureTick != 0 && tick == m_OwnLateCaptureTick});
 				// The segment holds this tick's frames from here; it opens when the archive validates and is
 				// dropped with it when the capture is refused.
 				RollWorldReplaySegment(tick);
@@ -5536,11 +5594,16 @@ static std::string ResyncSaveName() {
 			}
 			if (!refused.empty()) m_PrivateBaseRefusal.clear();
 		}
-		// A returner whose base never comes (the round cannot capture one) is told so, never left waiting on it.
+		// A returner whose base never comes (the round cannot capture one) is told so, never left waiting on it. A base asked of
+		// this machine's busy writer, or taken and still being written, is on its way: only the time with none coming counts.
+		const bool baseComing = m_PrivateImageTask.valid() || m_PrivateBasePending || (m_PrivateBaseRequested && g_ActivityMan.AutosaveWriterBusy());
+		if (baseComing) m_PrivateBaseIdleSinceMs = 0;
+		else if (m_PrivateBaseIdleSinceMs == 0) m_PrivateBaseIdleSinceMs = nowMs;
 		std::vector<NetPeerId> unserved;
 		for (const NetWorldJoinSession& session: m_WorldJoin.Sessions()) {
-			if (session.spectator || session.phase != NetWorldJoinPhase::SnapshotTransfer || session.transferStarted || m_PrivateImageTask.valid() || session.openedAtMs == 0) continue;
-			if (m_WorldJoin.IsPrivateMatch() && nowMs > session.openedAtMs && nowMs - session.openedAtMs > 2 * c_PrivateImageWaitMs) unserved.push_back(session.connection);
+			if (session.spectator || session.phase != NetWorldJoinPhase::SnapshotTransfer || session.transferStarted || baseComing || session.openedAtMs == 0) continue;
+			const uint64_t waitingSince = std::max(session.openedAtMs, m_PrivateBaseIdleSinceMs);
+			if (m_WorldJoin.IsPrivateMatch() && nowMs > waitingSince && nowMs - waitingSince > 2 * c_PrivateImageWaitMs) unserved.push_back(session.connection);
 		}
 		for (const NetPeerId connection: unserved) {
 			System::PrintDiagnosticLine("[net-match] rejoin refused connection=" + std::to_string(connection) + ": no image could be staged for it in " + std::to_string(2 * c_PrivateImageWaitMs) + "ms" +

@@ -21,6 +21,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <thread>
 
 namespace RTE {
@@ -72,6 +73,15 @@ namespace RTE {
 
 		/// The game loop's side: a tick starts, and the saver stops at its next yield.
 		static void CloseSlice() noexcept;
+
+		/// While this machine's own save is due and its writer is still busy, the saver works beside the game at the game's
+		/// priority instead of in its idle time, so the due save is taken as soon as the writer can write it: the machine that
+		/// is late pays for its own save. Otherwise a saver stays below the game, in a match as in single player.
+		static void SetOverdue(bool overdue);
+
+		/// Self-test: a saver thread given a slice keeps its lowest priority, and only an overdue save raises it to the game's.
+		/// Empty when it does, else what was seen.
+		static std::string PrioritySelfTestMismatch();
 
 		/// The game loop's side when it has left the saver no idle time for a while: the tick starting now lends the saver its
 		/// first microseconds, game work in flight or not, so a save in a world slower than its clock still completes.
@@ -133,6 +143,7 @@ namespace RTE {
 		static inline std::atomic<int> s_GameWork{0};
 		static inline std::atomic<bool> s_SliceLent{false};
 		static inline std::atomic<int> s_Parked{0};
+		static inline std::atomic<bool> s_Overdue{false};
 	};
 
 	/// Runs work(index) for every index below a count on a pool, the items taken in index order by whichever thread comes

@@ -1777,6 +1777,8 @@ local function visitUserdata(value, ctx)
 	if kind == "copy" and (native[2] == "PieMenu" or native[2] == "PieSlice") then
 		local slices = _ScriptGraphPieSlices(value)
 		for index = 1, #slices, 2 do ctx.pieSlices[slices[index]] = { owner = value, path = slices[index + 1] } end
+		local menus = _ScriptGraphPieMenus(value)
+		for index = 1, #menus, 2 do ctx.pieMenus[menus[index]] = { owner = value, path = menus[index + 1] } end
 	end
 	if kind == "vector" then
 		return userdataNode(value, ctx, (native[2] and "W" or "v") .. numberText(value.X) .. "," .. numberText(value.Y) .. ";")
@@ -1862,6 +1864,14 @@ local function visitUserdata(value, ctx)
 		ctx.ids[value] = id
 		local instance = visit(_ScriptGraphInstance(value), ctx)
 		ctx.sliceRefs[#ctx.sliceRefs + 1] = { value = value, id = id, address = native[2], constant = native[3], freed = native[4], instance = instance }
+		return reference(ctx, id)
+	elseif kind == "pie-menu-ref" then
+		-- Named after the walk, as a slice reference is.
+		local id = birthId(ctx, value, "PieMenu reference")
+		if not id then return "z;" end
+		ctx.ids[value] = id
+		local instance = visit(_ScriptGraphInstance(value), ctx)
+		ctx.menuRefs[#ctx.menuRefs + 1] = { value = value, id = id, address = native[2], constant = native[3], freed = native[4], instance = instance }
 		return reference(ctx, id)
 	elseif kind == "named" then
 		return userdataNode(value, ctx, pathToken(ctx.paths[value]))
@@ -2129,7 +2139,7 @@ serializeGraph = function(roots, rebuildEverything, captureSerial)
 	phase("paths")
 	local callbacks = rawget(_G, "_ScriptGraphCallbacks")
 	local scratchBase = base >= PEER_BIRTH_BAND and callbacks and callbacks.liveSerial or base
-	local ctx = { ids = {}, cells = {}, rootCells = {}, nodes = {}, order = {}, defined = {}, refs = {}, chunks = {}, base = base, scratchBase = scratchBase, scratch = 0, count = 0, problems = {}, paths = paths, engine = engine, areaBoxes = {}, boxRefs = {}, pieSlices = {}, sliceRefs = {}, ownedPointers = {}, openUpvalues = _ScriptGraphOpenUpvalues and _ScriptGraphOpenUpvalues() or {} }
+	local ctx = { ids = {}, cells = {}, rootCells = {}, nodes = {}, order = {}, defined = {}, refs = {}, chunks = {}, base = base, scratchBase = scratchBase, scratch = 0, count = 0, problems = {}, paths = paths, engine = engine, areaBoxes = {}, boxRefs = {}, pieSlices = {}, sliceRefs = {}, pieMenus = {}, menuRefs = {}, ownedPointers = {}, openUpvalues = _ScriptGraphOpenUpvalues and _ScriptGraphOpenUpvalues() or {} }
 	local chunks, rootIds, uids = {}, {}, {}
 	local reused, rewritten, uncacheable = 0, 0, 0
 	local globalReused, globalUnwatched = true, false
@@ -2172,13 +2182,14 @@ serializeGraph = function(roots, rebuildEverything, captureSerial)
 			for pointer, object in pairs(kept.owned) do ctx.ownedPointers[pointer] = object; _ScriptGraphNoteCarried(object) end
 			for address, link in pairs(kept.areas) do ctx.areaBoxes[address] = link end
 			for address, link in pairs(kept.slices) do ctx.pieSlices[address] = link end
+			for address, link in pairs(kept.menus) do ctx.pieMenus[address] = link end
 			ctx.count = ctx.count + #kept.order
 			ctx.chunks[#ctx.chunks + 1] = kept.text
 			chunks[key] = kept
 			return kept.token, true, false
 		end
 		_ScriptGraphBeginRoot(uid, part)
-		local firstNode, firstBox, firstSlice = #ctx.order + 1, #ctx.boxRefs, #ctx.sliceRefs
+		local firstNode, firstBox, firstSlice, firstMenu = #ctx.order + 1, #ctx.boxRefs, #ctx.sliceRefs, #ctx.menuRefs
 		local outerRefs = ctx.refs
 		local outerCells = ctx.rootCells
 		ctx.refs, ctx.rootUnwatched, ctx.rootCells = {}, false, {}
@@ -2187,8 +2198,9 @@ serializeGraph = function(roots, rebuildEverything, captureSerial)
 		ctx.rootCells = outerCells
 		if #ctx.boxRefs > firstBox then unwatched = unwatched or "deferred Box owner" end
 		if #ctx.sliceRefs > firstSlice then unwatched = unwatched or "deferred PieSlice owner" end
+		if #ctx.menuRefs > firstMenu then unwatched = unwatched or "deferred PieMenu owner" end
 		ctx.refs = outerRefs
-		local text, order, owned, areas, slices = {}, {}, {}, {}, {}
+		local text, order, owned, areas, slices, menus = {}, {}, {}, {}, {}, {}
 		local defines = {}
 		for index = firstNode, #ctx.order do
 			local id = ctx.order[index]
@@ -2202,9 +2214,12 @@ serializeGraph = function(roots, rebuildEverything, captureSerial)
 		for address, link in pairs(ctx.pieSlices) do
 			if defines[ctx.ids[link.owner]] then slices[address] = setmetatable({ owner = link.owner, path = link.path }, { __mode = "v" }) end
 		end
+		for address, link in pairs(ctx.pieMenus) do
+			if defines[ctx.ids[link.owner]] then menus[address] = setmetatable({ owner = link.owner, path = link.path }, { __mode = "v" }) end
+		end
 		local written = { token = token, order = order, refs = refs, text = concatenate(text), cacheable = not unwatched, unwatched = unwatched, cells = cells,
 		                  source = setmetatable({ value }, { __mode = "v" }), values = setmetatable({}, { __mode = "v" }),
-		                  owned = setmetatable(owned, { __mode = "v" }), areas = areas, slices = slices, envs = setmetatable({}, { __mode = "v" }) }
+		                  owned = setmetatable(owned, { __mode = "v" }), areas = areas, slices = slices, menus = menus, envs = setmetatable({}, { __mode = "v" }) }
 		chunks[key] = written
 		ctx.chunks[#ctx.chunks + 1] = written.text
 		return token, false, unwatched
@@ -2314,6 +2329,17 @@ serializeGraph = function(roots, rebuildEverything, captureSerial)
 			noteNode(ctx, ref.id, "U" .. outputNumber(ref.id) .. ";D" .. stringToken("PieSlice") .. "I" .. ref.instance)
 		else
 			problem(ctx, "a PieSlice that no actor's pie menu, script's own pie menu or preset holds")
+			noteNode(ctx, ref.id, "U" .. outputNumber(ref.id) .. ";z;I" .. ref.instance)
+		end
+	end
+	for _, ref in ipairs(ctx.menuRefs) do
+		local link = ctx.pieMenus[ref.address]
+		if link then
+			noteNode(ctx, ref.id, "U" .. outputNumber(ref.id) .. ";x" .. visit(link.owner, ctx) .. stringToken("pie-menu:" .. link.path) .. "n" .. outputNumber(0) .. ";" .. (ref.constant and "t;" or "f;") .. "I" .. ref.instance)
+		elseif ref.freed then
+			noteNode(ctx, ref.id, "U" .. outputNumber(ref.id) .. ";D" .. stringToken("PieMenu") .. "I" .. ref.instance)
+		else
+			problem(ctx, "a PieMenu that no actor's pie menu, script's own pie menu or preset holds")
 			noteNode(ctx, ref.id, "U" .. outputNumber(ref.id) .. ";z;I" .. ref.instance)
 		end
 	end
@@ -4548,12 +4574,25 @@ template<class Visit> static void ForEachPieSlice(const PieMenu* menu, const std
 	}
 }
 
-// Whether a slice's memory is back in its pool - a slot a native pool holds free or a block the class pool holds returned.
-static bool PieSliceFreed(const void* slice) {
-	const Entity::ClassInfo* type = Entity::ClassInfo::GetClass("PieSlice");
-	const size_t bytes = type ? type->CheckpointInstanceBytes() : 0;
-	return bytes && (CheckpointNativeStorage::FreeSlotHolds(slice, bytes) || type->PoolHolds(slice, bytes));
+// Visits a menu and every submenu below it, each by the place of the slice it opens from; the menu itself is at path.
+template<class Visit> static void ForEachPieMenu(const PieMenu* menu, const std::string& path, Visit& visit) {
+	if (!menu) return;
+	visit(CheckpointNativeStorage::Original(menu), path);
+	size_t index = 0;
+	for (const PieSlice* slice: CheckpointValues(CheckpointNativeStorage::Source(menu)->GetPieSlices())) {
+		const std::string place = path + "/" + std::to_string(index++);
+		if (slice) ForEachPieMenu(CheckpointNativeStorage::Source(slice)->GetSubPieMenu(), place, visit);
+	}
 }
+
+// Whether an entity's memory is back in its pool - a slot a native pool holds free or a block the class pool holds returned.
+static bool PieEntityFreed(const char* className, const void* entity) {
+	const Entity::ClassInfo* type = Entity::ClassInfo::GetClass(className);
+	const size_t bytes = type ? type->CheckpointInstanceBytes() : 0;
+	return bytes && (CheckpointNativeStorage::FreeSlotHolds(entity, bytes) || type->PoolHolds(entity, bytes));
+}
+
+static bool PieSliceFreed(const void* slice) { return PieEntityFreed("PieSlice", slice); }
 
 void LuaMan::PlantPieSliceHandles() {
 	static constexpr const char* plant = R"lua(
@@ -4683,6 +4722,12 @@ struct RTE::LuaScriptGraphNativeCaptureData {
 		const auto found = m_PieSlices.find(address);
 		return found == m_PieSlices.end() ? nullptr : &found->second;
 	}
+	/// Where a pie menu lives in a known actor's tree: "menu" for the actor's own, else the place of the slice it opens from.
+	const PieSlicePlace* PieMenuOwner(const void* address) const {
+		PieSliceOwner(nullptr);
+		const auto found = m_PieMenus.find(CheckpointNativeStorage::Original(address));
+		return found == m_PieMenus.end() ? nullptr : &found->second;
+	}
 	/// A stand-in for a slice the world copy does not read: never read itself, it keeps the slice's address for the graph.
 	void* UnreadSlice(const void* slice) const {
 		std::lock_guard lock(m_UnreadMutex);
@@ -4763,6 +4808,8 @@ private:
 	void AddPieMenu(const Actor* owner, const PieMenu* menu, const std::string& path) const {
 		const auto note = [&](const void* slice, const std::string& place) { m_PieSlices.try_emplace(slice, PieSlicePlace{owner, place}); };
 		ForEachPieSlice(menu, path, note);
+		const auto noteMenu = [&](const void* tree, const std::string& place) { m_PieMenus.try_emplace(tree, PieSlicePlace{owner, place}); };
+		ForEachPieMenu(menu, path, noteMenu);
 	}
 	struct VectorGetter { const char* name; const Vector* (*get)(const MovableObject*); };
 	static constexpr std::array<VectorGetter, 9> c_VectorGetters{{
@@ -4923,6 +4970,7 @@ private:
 	mutable std::once_flag m_PieSlicesBuilt;
 	mutable std::atomic<bool> m_PieSlicesReady{false};
 	mutable std::unordered_map<const void*, PieSlicePlace> m_PieSlices;
+	mutable std::unordered_map<const void*, PieSlicePlace> m_PieMenus;
 	struct alignas(PieSlice) UnreadStandIn { std::byte bytes[sizeof(PieSlice)]{}; };
 	mutable std::mutex m_UnreadMutex;
 	mutable std::deque<UnreadStandIn> m_UnreadStandIns;
@@ -5905,26 +5953,33 @@ static int ScriptGraphAreaBoxes(lua_State* L) {
 }
 
 // The slices of a script's own pie menu, or of its own slice's sub-menu, as {address, place, address, place, ...}.
-static int ScriptGraphPieSlices(lua_State* L) {
-	auto* rep = luabind::detail::is_class_object(L, 1);
+// The menu a script's own PieMenu or PieSlice roots its places at: the menu itself, or the slice's submenu.
+static const PieMenu* ScriptOwnedPieRoot(const luabind::detail::object_rep* rep) {
+	if (!rep || !rep->ptr() || !(rep->flags() & luabind::detail::object_rep::owner) || !rep->crep()) return nullptr;
+	if (std::strcmp(rep->crep()->name(), "PieMenu") == 0) return static_cast<const PieMenu*>(CheckpointNativeStorage::Original(rep->ptr()));
+	if (std::strcmp(rep->crep()->name(), "PieSlice") == 0) return CheckpointNativeStorage::Source(static_cast<const PieSlice*>(CheckpointNativeStorage::Original(rep->ptr())))->GetSubPieMenu();
+	return nullptr;
+}
+
+// (address, place) pairs for every slice, or with menus true every menu, under a script's own PieMenu or PieSlice.
+static int ScriptGraphPieTree(lua_State* L, bool menus) {
+	const PieMenu* menu = ScriptOwnedPieRoot(luabind::detail::is_class_object(L, 1));
 	lua_newtable(L);
-	if (!rep || !rep->ptr() || !(rep->flags() & luabind::detail::object_rep::owner) || !rep->crep()) return 1;
-	const PieMenu* menu = nullptr;
-	if (std::strcmp(rep->crep()->name(), "PieMenu") == 0) {
-		menu = static_cast<const PieMenu*>(CheckpointNativeStorage::Original(rep->ptr()));
-	} else if (std::strcmp(rep->crep()->name(), "PieSlice") == 0) {
-		menu = CheckpointNativeStorage::Source(static_cast<const PieSlice*>(CheckpointNativeStorage::Original(rep->ptr())))->GetSubPieMenu();
-	}
 	int index = 0;
-	const auto note = [&](const void* slice, const std::string& place) {
-		lua_pushlightuserdata(L, const_cast<void*>(slice));
+	const auto note = [&](const void* entry, const std::string& place) {
+		lua_pushlightuserdata(L, const_cast<void*>(entry));
 		lua_rawseti(L, -2, ++index);
 		lua_pushlstring(L, place.data(), place.size());
 		lua_rawseti(L, -2, ++index);
 	};
-	ForEachPieSlice(menu, "menu", note);
+	if (menus) ForEachPieMenu(menu, "menu", note);
+	else ForEachPieSlice(menu, "menu", note);
 	return 1;
 }
+
+static int ScriptGraphPieSlices(lua_State* L) { return ScriptGraphPieTree(L, false); }
+
+static int ScriptGraphPieMenus(lua_State* L) { return ScriptGraphPieTree(L, true); }
 
 // (preset, class): a preset as the class the script held it as, const as every preset is.
 static int ScriptGraphPresetAs(lua_State* L) {
@@ -6134,6 +6189,13 @@ static PieSlice* PieSliceAtPlace(PieMenu* menu, std::string_view path) {
 	return path.empty() ? slice : nullptr;
 }
 
+// The menu at a place: the root itself, else the submenu of the slice at that place.
+static PieMenu* PieMenuAtPlace(PieMenu* root, std::string_view path) {
+	if (path.empty()) return root;
+	PieSlice* slice = PieSliceAtPlace(root, path);
+	return slice ? slice->GetSubPieMenu() : nullptr;
+}
+
 static int ScriptGraphOwnerReference(lua_State* L) {
 	auto* owner = luabind::detail::is_class_object(L, 1);
 	const char* property = luaL_checkstring(L, 2);
@@ -6192,11 +6254,10 @@ static int ScriptGraphOwnerReference(lua_State* L) {
 		} else if (std::strcmp(owner->crep()->name(), "PieMenu") == 0 || std::strcmp(owner->crep()->name(), "PieSlice") == 0) {
 			// A slice of a script's own pie menu, or of its own slice's sub-menu, by its place there.
 			std::string_view path(property);
-			constexpr std::string_view slicePrefix = "pie-slice:menu";
-			if (path.starts_with(slicePrefix)) {
-				PieMenu* menu = std::strcmp(owner->crep()->name(), "PieMenu") == 0 ? static_cast<PieMenu*>(owner->ptr()) : static_cast<PieSlice*>(owner->ptr())->GetSubPieMenu();
-				return push(PieSliceAtPlace(menu, path.substr(slicePrefix.size())));
-			}
+			constexpr std::string_view slicePrefix = "pie-slice:menu", menuPrefix = "pie-menu:menu";
+			PieMenu* menu = std::strcmp(owner->crep()->name(), "PieMenu") == 0 ? static_cast<PieMenu*>(owner->ptr()) : static_cast<PieSlice*>(owner->ptr())->GetSubPieMenu();
+			if (path.starts_with(slicePrefix)) return push(PieSliceAtPlace(menu, path.substr(slicePrefix.size())));
+			if (path.starts_with(menuPrefix)) return push(PieMenuAtPlace(menu, path.substr(menuPrefix.size())));
 		} else if (ClassDerivesFrom(owner->crep(), "MovableObject")) {
 			auto* object = static_cast<MovableObject*>(owner->ptr());
 			if (std::strcmp(property, "actor-controller") == 0) {
@@ -6211,10 +6272,14 @@ static int ScriptGraphOwnerReference(lua_State* L) {
 				const auto parsed = std::from_chars(path.data(), path.data() + path.size(), uid);
 				if (parsed.ec == std::errc{} && parsed.ptr == path.data() + path.size()) return push(object->FindPartByUniqueID(uid));
 			}
-			constexpr std::string_view slicePrefix = "pie-slice:menu";
+			constexpr std::string_view slicePrefix = "pie-slice:menu", menuPrefix = "pie-menu:menu";
 			if (path.starts_with(slicePrefix)) {
 				auto* actor = dynamic_cast<Actor*>(object);
 				return push(PieSliceAtPlace(actor ? actor->GetPieMenu() : nullptr, path.substr(slicePrefix.size())));
+			}
+			if (path.starts_with(menuPrefix)) {
+				auto* actor = dynamic_cast<Actor*>(object);
+				return push(PieMenuAtPlace(actor ? actor->GetPieMenu() : nullptr, path.substr(menuPrefix.size())));
 			}
 		} else if (std::strcmp(owner->crep()->name(), "Scene") == 0 && std::strcmp(property, "terrain") == 0) {
 			if (index == 0) return push(static_cast<Scene*>(owner->ptr())->GetTerrain());
@@ -6293,6 +6358,23 @@ static int ScriptGraphOwnerReferenceDescriptor(lua_State* L, const luabind::deta
 		lua_pushboolean(L, (rep->flags() & luabind::detail::object_rep::constant) != 0);
 		lua_pushboolean(L, PieSliceFreed(slice));
 		return 4;
+	}
+	// A pie menu is named by its place in a known actor's tree, else as a preset; one no other owner below names is found by its
+	// address in a script's own menu. It is never read.
+	const bool pieMenu = s_GraphNativeCapture && type && std::strcmp(type->name(), "PieMenu") == 0;
+	if (pieMenu) {
+		const void* menu = CheckpointNativeStorage::Original(rep->ptr());
+		if (const auto* place = s_GraphNativeCapture->PieMenuOwner(menu)) return found(const_cast<Actor*>(place->owner), ("pie-menu:" + place->path).c_str(), 0);
+		if (s_GraphNativeCapture->Preset(menu)) {
+			const auto* preset = static_cast<const Entity*>(static_cast<const PieMenu*>(menu));
+			const Entity* named = preset->GetPresetForCopy();
+			lua_pushliteral(L, "preset");
+			lua_pushstring(L, preset->GetClassName().c_str());
+			lua_pushstring(L, named ? named->GetPresetName().c_str() : "");
+			lua_pushstring(L, named ? named->GetModuleName().c_str() : "");
+			lua_pushstring(L, type->name());
+			return 5;
+		}
 	}
 	if (CheckpointWriter::BatchEnabled() && type && type->get_class_type() == luabind::detail::class_rep::cpp_class &&
 	    type->type() == LUABIND_TYPEID(Vector) && std::strcmp(type->name(), "Vector") == 0) {
@@ -6383,6 +6465,13 @@ static int ScriptGraphOwnerReferenceDescriptor(lua_State* L, const luabind::deta
 			++index;
 		}
 	}
+	if (pieMenu) {
+		lua_pushliteral(L, "pie-menu-ref");
+		lua_pushlightuserdata(L, const_cast<void*>(handle));
+		lua_pushboolean(L, (rep->flags() & luabind::detail::object_rep::constant) != 0);
+		lua_pushboolean(L, PieEntityFreed("PieMenu", handle));
+		return 4;
+	}
 	return 0;
 }
 
@@ -6415,8 +6504,8 @@ static int ScriptGraphNative(lua_State* L) {
 	const bool owned = (rep->flags() & luabind::detail::object_rep::owner) != 0;
 	const std::string className = crep->name();
 	const void* const handle = CheckpointNativeStorage::Original(rep->ptr());
-	// A dead slice reference - restored as one, its pointer null - stays one.
-	if (!owned && !rep->ptr() && className == "PieSlice") {
+	// A dead slice or menu reference - restored as one, its pointer null - stays one.
+	if (!owned && !rep->ptr() && (className == "PieSlice" || className == "PieMenu")) {
 		lua_pushstring(L, "invalid");
 		lua_pushstring(L, className.c_str());
 		return 2;
@@ -7137,6 +7226,14 @@ static Serializable* ScriptGraphSerializable(luabind::detail::object_rep* rep) {
 	return nullptr;
 }
 
+// A script-owned pie menu, or the submenu of a script-owned slice, saves its complete tree beside its text.
+static void SaveScriptOwnedPieTree(Writer& writer, const Serializable* object) {
+	if (const auto* menu = dynamic_cast<const PieMenu*>(object)) menu->SaveCompleteTreeProperty(writer);
+	else if (const auto* slice = dynamic_cast<const PieSlice*>(object); slice && slice->GetSubPieMenu()) {
+		writer.NewPropertyWithValue("SpecialBehaviour_CompleteSubTree", CheckpointWriter::Native([slice] { return slice->GetSubPieMenu()->SaveCompleteCheckpoint(); }).Base64(true));
+	}
+}
+
 static int ScriptGraphNativeSave(lua_State* L) {
 	const auto* native = luabind::detail::is_class_object(L, 1);
 	if (native && native->crep() && ClassDerivesFrom(native->crep(), "GraphicalPrimitive")) {
@@ -7172,7 +7269,7 @@ static int ScriptGraphNativeSave(lua_State* L) {
 						if (const auto* mo = dynamic_cast<const MovableObject*>(owned)) Scene::SaveSceneObject(writer, mo, false, true);
 						else {
 							if (const auto* area = dynamic_cast<const Scene::Area*>(owned)) area->SaveSnapshot(writer);
-							else owned->Save(writer);
+							else { owned->Save(writer); SaveScriptOwnedPieTree(writer, owned); }
 							writer.ObjectEnd();
 						}
 					});
@@ -7184,7 +7281,7 @@ static int ScriptGraphNativeSave(lua_State* L) {
 				if (const MovableObject* mo = dynamic_cast<const MovableObject*>(object)) Scene::SaveSceneObject(writer, mo, false, true);
 				else {
 					if (const Scene::Area* area = dynamic_cast<const Scene::Area*>(object)) area->SaveSnapshot(writer);
-					else object->Save(writer);
+					else { object->Save(writer); SaveScriptOwnedPieTree(writer, object); }
 					writer.ObjectEnd();
 				}
 			}));
@@ -7203,6 +7300,7 @@ static int ScriptGraphNativeSave(lua_State* L) {
 			area->SaveSnapshot(writer);
 		} else {
 			object->Save(writer);
+			SaveScriptOwnedPieTree(writer, object);
 		}
 		writer.ObjectEnd();
 	}
@@ -7487,7 +7585,8 @@ static int ScriptGraphDeadReference(lua_State* L) {
 	lua_getglobal(L, name);
 	if (!luabind::detail::is_class_rep(L, -1)) return luaL_error(L, "unknown dead reference class %s", name);
 	auto* type = static_cast<luabind::detail::class_rep*>(lua_touserdata(L, -1));
-	if (!ClassDerivesFrom(type, "MovableObject") && std::strcmp(type->name(), "Area") != 0 && std::strcmp(type->name(), "PieSlice") != 0) return luaL_error(L, "dead reference class is not a MovableObject, an Area or a PieSlice");
+	if (!ClassDerivesFrom(type, "MovableObject") && std::strcmp(type->name(), "Area") != 0 && std::strcmp(type->name(), "PieSlice") != 0 && std::strcmp(type->name(), "PieMenu") != 0)
+		return luaL_error(L, "dead reference class is not a MovableObject, an Area, a PieSlice or a PieMenu");
 	lua_pop(L, 1);
 	void* storage = lua_newuserdata(L, sizeof(luabind::detail::object_rep));
 	new (storage) luabind::detail::object_rep(nullptr, type, 0, nullptr);
@@ -7520,8 +7619,13 @@ static void RestoreCopiedActorMenus(MovableObject* object) {
 
 static int ScriptGraphNativeMenus(lua_State* L) {
 	try {
-		if (auto* object = dynamic_cast<MovableObject*>(ScriptGraphSerializable(luabind::detail::is_class_object(L, 1)))) {
+		Serializable* native = ScriptGraphSerializable(luabind::detail::is_class_object(L, 1));
+		if (auto* object = dynamic_cast<MovableObject*>(native)) {
 			RestoreCopiedActorMenus(object);
+		} else if (auto* menu = dynamic_cast<PieMenu*>(native)) {
+			menu->RestorePersistedCompleteTree();
+		} else if (auto* slice = dynamic_cast<PieSlice*>(native); slice && slice->GetSubPieMenu()) {
+			slice->GetSubPieMenu()->RestorePersistedCompleteTree();
 		}
 		lua_pushboolean(L, true);
 		return 1;
@@ -7909,6 +8013,7 @@ void LuaStateWrapper::LoadScriptGraphHelper() {
 		lua_setglobal(m_State, "_ScriptGraphPrimitiveResolve");
 		RegisterScriptGraphHelper(m_State, "_ScriptGraphAreaBoxes", ScriptGraphAreaBoxes);
 		RegisterScriptGraphHelper(m_State, "_ScriptGraphPieSlices", ScriptGraphPieSlices);
+		RegisterScriptGraphHelper(m_State, "_ScriptGraphPieMenus", ScriptGraphPieMenus);
 		lua_pushcfunction(m_State, ScriptGraphPresetAs);
 		lua_setglobal(m_State, "_ScriptGraphPresetAs");
 		lua_pushcfunction(m_State, ScriptGraphAreaBox);
@@ -14074,6 +14179,13 @@ debug.setupvalue(next, 4, "150")
 	checkpointValues = PieMenu::RunCheckpointSelfTest() && checkpointValues;
 	checkpointValues = Actor::RunBorrowedReferenceSelfTest() && checkpointValues;
 	checkpointValues = Actor::RunGoneItemInReachSelfTest() && checkpointValues;
+	checkpointValues = Actor::RunConsumedPayloadSelfTest() && checkpointValues;
+	{
+		const std::string mismatch = SaverThreads::PrioritySelfTestMismatch();
+		std::cout << "[script-graph-selftest] " << (mismatch.empty() ? "PASS" : "FAIL") << " saver_priority_follows_its_overdue_save "
+		          << (mismatch.empty() ? "a saver stays lowest in its slices; only its own overdue save gives it the game's priority" : mismatch) << std::endl;
+		checkpointValues = mismatch.empty() && checkpointValues;
+	}
 	checkpointValues = ACraft::RunGoneIncomingObjectSelfTest() && checkpointValues;
 	checkpointValues = Entity::ClassInfo::RunPoolExhaustionSelfTest() && checkpointValues;
 	checkpointValues = GameActivity::RunDeliveryReferenceSelfTest() && checkpointValues;
@@ -17835,6 +17947,7 @@ void LuaMan::PrepareCheckpointValues() {
 	if (CheckpointNativeStorage::Enabled()) { g_UInputMan.PrepareCheckpointValues(); g_FrameMan.PrepareCheckpointValues(); g_PostProcessMan.PrepareCheckpointValues(); }
 	if (CheckpointNativeStorage::Enabled()) g_ActivityMan.PrepareCheckpointValues();
 	if (CheckpointNativeStorage::Enabled()) { g_AudioMan.PrepareCheckpointRegistryValues(); g_AudioMan.PrepareCheckpointValues(); }
+	if (CheckpointNativeStorage::Enabled() && GUISound::IsConstructed()) g_GUISound.PrepareCheckpointValues();
 	if (CheckpointNativeStorage::Enabled()) g_MovableMan.PrepareCheckpointActorValues();
 	if (CheckpointNativeStorage::Enabled()) g_MovableMan.PrepareCheckpointLooseValues();
 	if (CheckpointNativeStorage::Enabled()) g_MovableMan.PrepareCheckpointLookupValues();

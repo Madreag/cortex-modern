@@ -489,11 +489,7 @@ struct MusicCheckpoint {
         CheckpointWriter writer("MusicSet1");
         writer(source.m_SoundSelectionCycleMode, source.m_CurrentSelection, source.m_SoundData.size());
         for (const auto& sample: CheckpointValues(source.m_SoundData)) {
-            std::string path;
-            if (sample.SoundObject) {
-                for (const auto& [candidate, sound]: ContentFile::s_LoadedSamples) if (sound == sample.SoundObject && (path.empty() || candidate < path)) path = candidate;
-                if (path.empty()) throw std::runtime_error("music sample has no cached asset identity");
-            }
+            const std::string path = ContentFile::ReadCheckpointSamplePath(sample.SoundObject);
             writer(CheckpointWriter::Native([&] {
                 CheckpointWriter value("MusicSample1");
                 value(sample.SoundFile, path, sample.Offset, sample.MinimumAudibleDistance, sample.AttenuationStartDistance);
@@ -703,6 +699,13 @@ struct MusicCheckpoint {
         return true;
     }
     static bool SelfTest(MusicMan& manager) {
+        CheckpointNativeStorage::AllocationScope storage(true);
+        struct WorldMode {
+            bool previous = CheckpointNativeStorage::SetWorldEnabled(true);
+            ~WorldMode() { CheckpointNativeStorage::SetWorldEnabled(previous); }
+        } world;
+        ContentFile::InvalidateCheckpointSamples();
+        ContentFile::PrepareCheckpointSamples();
         const std::string originalAudio = g_AudioMan.SaveCheckpoint();
         const auto originalRegistry = g_AudioMan.CaptureCheckpointSoundRegistry();
         const RandomGenerator originalRNG = g_RenderRNG;
@@ -730,6 +733,9 @@ struct MusicCheckpoint {
             manager.m_IsPlayingDynamicMusic = false; manager.m_ReturnToDynamicMusic = true; manager.m_PreviousSoundContainerSetToFade = true;
             manager.m_MusicPausedTime = 137.125; manager.m_MusicTimer.SetStartSimTimeTicks(73); manager.m_MusicFadeTimer.SetRealTimeLimitTicks(271);
             const std::string music = manager.SaveCheckpoint(), audio = g_AudioMan.SaveCheckpoint();
+            const auto voiceMismatch = AudioMan::CheckpointVoiceMapSelfTestMismatch([] { return g_MusicMan.SaveCheckpoint(); }, *manager.m_CurrentSoundContainer);
+            if (!voiceMismatch.empty()) throw std::runtime_error(voiceMismatch);
+            std::cout << "[music-checkpoint-selftest] frozen_voice_predictions_survive_concurrent_music_saves PASS" << std::endl;
             SoundContainer* originalCurrent = manager.m_CurrentSoundContainer.get();
             const std::string playback = g_AudioMan.GetSoundContainerPlaybackCheckpoint(originalCurrent);
             Record missingOwner; if (!missingOwner.LoadCheckpoint(music)) throw std::runtime_error("could not parse music fixture");
