@@ -765,8 +765,9 @@ namespace RTE {
 		};
 		NetHostMigrationMessage agreed; uint32_t voters = 0;
 		if (!DecodePeerBridgeCertificate(certificate, agreed, voters)) { refused("certificate"); return; }
-		// Foreign decisions cannot govern this active continuation.
-		if (agreed.preparedFrame != 0 && agreed.preparedFrame != 3 &&
+		// Foreign decisions cannot govern this active continuation. In direct play that includes another group's migration: only the
+		// heal decides between continuations.
+		if (agreed.preparedFrame != 0 && (agreed.preparedFrame != 3 || !MigrationUsesDirectory()) &&
 		    (agreed.connectedMask & SeatBit(m_Config.localPeerId)) == 0 &&
 		    (PeerFrameMembersAt(agreed.frame) & SeatBit(m_Config.localPeerId)) != 0 && !IsLocalPrivateReaderAt(agreed.frame)) {
 			auto current = agreed;
