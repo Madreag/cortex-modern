@@ -1707,6 +1707,16 @@ static void NoteTickCostDetails(const char* tag, uint64_t round, uint64_t tick, 
 	std::sort(sorted.begin(), sorted.end());
 	const auto rank = [&sorted](size_t permille) { return sorted[std::min(sorted.size() - 1, sorted.size() * permille / 1000)]; };
 	line << " own_p50_us=" << rank(500) << " own_p95_us=" << rank(950) << " own_p99_us=" << rank(990) << " own_max_us=" << sorted.back();
+	// Where the scripted objects live: the threaded passes run one task per state, so one full state is a serial pass.
+	size_t threadedObjects = 0, fullestState = 0, statesUsed = 0;
+	for (const LuaStateWrapper& state: g_LuaMan.GetThreadedScriptStates()) {
+		const size_t objects = state.GetRegisteredMOs().size();
+		threadedObjects += objects;
+		fullestState = std::max(fullestState, objects);
+		statesUsed += objects > 0;
+	}
+	line << " lua_objects_master=" << g_LuaMan.GetMasterScriptState().GetRegisteredMOs().size() << " lua_objects_threaded=" << threadedObjects
+	     << " lua_objects_fullest_state=" << fullestState << " lua_states_used=" << statesUsed;
 	line << " actors=" << g_MovableMan.GetActorCount() << " particles=" << g_MovableMan.GetParticleCount();
 	System::PrintDiagnosticLine(line.str());
 	window = {};
