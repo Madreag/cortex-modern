@@ -5504,6 +5504,9 @@ static std::string ResyncSaveName() {
 					if (peer == session.assignedPeerId || m_Coordinator->IsPeerGoneAtFrame(peer, head) || m_Coordinator->IsSeatUnderAI(peer, head)) continue;
 					noticeTicks = std::max(noticeTicks, static_cast<uint64_t>(std::ceil((stats.pingMs + stats.jitterMs) / m_Coordinator->GetConfig().simTickMs)));
 				}
+				// After the members agree, the returner starts its live round with them over its own link before it plays there: the
+				// notice is both trips and the bound.
+				noticeTicks += static_cast<uint64_t>(std::ceil(session.tailLinkRttMs / m_Coordinator->GetConfig().simTickMs)) + m_Coordinator->GetConfig().slowPlayerBoundTicks;
 				if (session.activationTick > head + noticeTicks + 1) continue;
 				const uint64_t nowFrame = m_Coordinator->GetStats().nextFrame;
 				const uint64_t behind = nowFrame > session.acknowledgedThrough ? nowFrame - session.acknowledgedThrough : 0;

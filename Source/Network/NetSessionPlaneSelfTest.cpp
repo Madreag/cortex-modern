@@ -2572,6 +2572,7 @@ namespace RTE {
 			std::map<uint64_t, NetLockstepReadyFrame> replayedFrames; //!< The replay's own frames, named when its certificate is refused.
 			std::string lastRefusal;
 			const char* lastGate = nullptr;
+			uint64_t proposalAttempts = 0, lastSeenHead = 0;
 			const auto startLive = [&] {
 				// The real service starts live play from the winning replay's configuration, including authority and every member's start terms.
 				config = replayCoordinator.GetConfig();
@@ -2774,6 +2775,8 @@ namespace RTE {
 						if (peer == seat || serving.IsPeerGoneAtFrame(peer, head) || serving.IsSeatUnderAI(peer, head)) continue;
 						noticeTicks = std::max(noticeTicks, static_cast<uint64_t>(std::ceil((stats.pingMs + stats.jitterMs) / serving.GetConfig().simTickMs)));
 					}
+					noticeTicks += static_cast<uint64_t>(std::ceil(session->tailLinkRttMs / serving.GetConfig().simTickMs)) + serving.GetConfig().slowPlayerBoundTicks;
+					const uint64_t previousHead = lastSeenHead; lastSeenHead = head;
 					if (activation > head + noticeTicks + 1) continue;
 					// The trail is judged against the same horizon the progress reports are, the donor's applied world.
 					const uint64_t roundFrame = fixture.worlds[donor - 1].applied;
@@ -2782,7 +2785,7 @@ namespace RTE {
 						uint64_t later = 0;
 						if (join.ReannounceActivation(12, roundFrame, &later, nullptr)) {
 							DiagnosticLine() << "[session-plane-image-activation] returner=" << unsigned(seat) << " announced=" << later << " previous=" << activation
-							                 << " waits_for_tail=1 head=" << head << " notice=" << noticeTicks << " round=" << roundFrame << " acknowledged=" << session->acknowledgedThrough
+							                 << " waits_for_tail=1 attempts=" << proposalAttempts << " last_head=" << previousHead << " head=" << head << " notice=" << noticeTicks << " round=" << roundFrame << " acknowledged=" << session->acknowledgedThrough
 							                 << " trail=" << session->activationTrailFrames << " replay=" << replay.applied << " now_ms=" << fixture.hub.now << std::endl;
 							activation = later;
 						}
@@ -2790,6 +2793,7 @@ namespace RTE {
 					}
 					// FLAGGED fixture departure: a refused proposal remains private and retries, as the service does.
 					std::string refusal;
+					++proposalAttempts;
 					if (!coordinator.SchedulePeerReclaim(seat, fixture.ImageReturnRoute(proposer, seat).second, incarnation, activation, &refusal, session->activationTrailFrames)) {
 						if (lastRefusal != refusal) DiagnosticLine() << "[session-plane-image-proposal] waits=" << refusal << std::endl;
 						lastRefusal = refusal;
