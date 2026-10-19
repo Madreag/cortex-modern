@@ -20,10 +20,13 @@ held to the base instead of to their own idle windows: a kind's frame rate and w
 run's idle windows, and the tip's ratio keeps at least 95 % of the base runs' mean frame-rate ratio and at most 125 % of
 their mean worst-frame ratio; while a base waits the host's tick rate stays within 0.5 ticks/s of the base's and its own
 seat is held no more often. The verdict against the run's own idle windows is reported beside it as in_run_checks.
+--split-cpus puts the host on one half of the logical CPUs and the client on the other, so neither engine's saver or
+startup takes the other's time, as on two machines.
 """
 import argparse
 from datetime import datetime, timezone
 import json
+import os
 import platform
 from pathlib import Path
 import re
@@ -174,6 +177,8 @@ def main():
     p.add_argument('--limit-seconds', type=int, default=1500)
     p.add_argument('--port', type=int, default=49492)
     p.add_argument('--base', type=Path, action='append', default=[], help="a base build's result.json or run folder; repeat per base run")
+    p.add_argument('--split-cpus', action='store_true',
+                   help="the host on one half of the logical CPUs and the client, rejoined too, on the other, as on two machines")
     a = p.parse_args()
     references = []
     for path in a.base:
@@ -201,6 +206,8 @@ def main():
             'client': ['-net-match-service-e2e', '-net-join', '127.0.0.1', '-net-match-report', str(out / 'client-report.json'),
                        '-net-reconnect-ticket', str(out / 'client.ticket')] + common}
     env = {'CCCP_HEADLESS': '1', 'CC_RUNNER_IGNORE_FULLSCREEN': '1', 'CC_TEST_NET_MATCH_E2E_WAIT_PEERS': '1'}
+    half = (os.cpu_count() or 2) // 2
+    masks = {'host': (1 << half) - 1, 'client': ((1 << half) - 1) << half} if a.split_cpus else {}
     settings = {'AutosaveSeconds': '0', 'NetworkHostDelayPolicy': 'Auto', 'NetworkInputDelayFrames': '0', 'NetworkIceEnable': '0',
                 'NetworkPortMapEnable': '0', 'NetworkHostVisibility': 'Unlisted', 'EnableLuaDebugging': '0',
                 'NetworkAutoReconnect': '1', 'NetworkOfferStoredRejoin': '1',
@@ -211,7 +218,8 @@ def main():
         probe_dir.mkdir()
         (probe_dir / 'probe.json').write_text(json.dumps({'schema': 1, 'timeout_ms': (a.limit_seconds + 300) * 1000,
                                                           'steps': [{'op': 'wait_file', 'path': str(quit_path)}, {'op': 'finish', 'quit': True}]}, indent=2))
-        return {**env, 'CC_TEST_NET_UI_SCRIPT': str(probe_dir / 'probe.json')}
+        mask = masks.get('host' if name == 'host' else 'client')
+        return {**env, 'CC_TEST_NET_UI_SCRIPT': str(probe_dir / 'probe.json'), **({'CC_RUNNER_AFFINITY_MASK': f'0x{mask:x}'} if mask else {})}
 
     runs, records, started = {}, {}, []
     for role in ('host', 'client'):
@@ -229,7 +237,7 @@ def main():
             '\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n')
     config = {'topology': 'single-box', 'proof': False, 'box': platform.node(), 'autosave_seconds': a.autosave_seconds,
               'periodic_captures': a.periodic_captures, 'client_rejoin': a.client_rejoin, 'input_delay': 'auto', 'settings': settings,
-              'environment': env, 'source_head': subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip(),
+              'environment': env, 'affinity_masks': {role: f'0x{mask:x}' for role, mask in masks.items()}, 'source_head': subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip(),
               'exe_sha256': file_sha256(engine_executable(repo)), 'started_utc': datetime.now(timezone.utc).isoformat(),
               'bases': [{'path': b['path'], 'exe_sha256': b['exe_sha256'], 'source_head': b['source_head']} for b in references]}
     (out / 'configuration.json').write_text(json.dumps(config, indent=2))
