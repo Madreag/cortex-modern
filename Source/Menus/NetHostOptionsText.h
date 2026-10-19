@@ -60,20 +60,9 @@ namespace RTE {
 		}
 	}
 
-	/// What Responsive controls does for the player who turns it on.
-	inline const char* NetResponsiveControlsHint() {
-		return "Your own units answer at once; the match confirms each move a moment later";
-	}
-
 	/// The autosave interval row's range.
 	inline const char* NetAutosaveRangeHint() {
-		return "1 to 60 minutes, or off";
-	}
-
-	/// An autosave cadence as players read it: "every 5 minutes", or seconds when it is not whole minutes.
-	inline std::string NetAutosaveIntervalText(uint32_t seconds) {
-		if (seconds % 60 != 0) return std::to_string(seconds) + (seconds == 1 ? " second" : " seconds");
-		return std::to_string(seconds / 60) + (seconds == 60 ? " minute" : " minutes");
+		return "Every 60 s to 60 min; 5 min by default";
 	}
 
 	/// What an autosave can cost the other players.
@@ -84,6 +73,17 @@ namespace RTE {
 	/// What a match checkpoint is to the players.
 	inline const char* NetAutosaveNote() {
 		return "Every player takes each checkpoint at the same tick; a player who rejoins starts from one.";
+	}
+
+	/// An autosave cadence as players read it: "every 5 minutes", or seconds when it is not whole minutes.
+	inline std::string NetAutosaveIntervalText(uint32_t seconds) {
+		if (seconds % 60 != 0) return std::to_string(seconds) + (seconds == 1 ? " second" : " seconds");
+		return std::to_string(seconds / 60) + (seconds == 60 ? " minute" : " minutes");
+	}
+
+	/// What Responsive controls does for the player who turns it on.
+	inline const char* NetResponsiveControlsHint() {
+		return "Your own units answer at once; the match confirms each move a moment later";
 	}
 
 	/// The return window row's consequence.

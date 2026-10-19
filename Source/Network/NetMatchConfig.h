@@ -194,6 +194,7 @@ namespace RTE {
 		static constexpr uint16_t c_ReservedKnownMask = c_ReservedDedicatedBit | c_ReservedPathHorizonBit | c_ReservedFrameRedundancyBit | c_MigrationConfigFlag | c_ReservedReturnWindowBit;
 		// The default keeps five minutes of a held seat's history: past it the host frees the journal and a return loads an image.
 		static constexpr uint8_t c_DefaultReturnWindowMinutes = 5;
+		static constexpr uint32_t c_DefaultAutosaveIntervalSeconds = 300; // A host saves every five minutes unless it chooses otherwise.
 		static constexpr uint8_t c_MinReturnWindowMinutes = 1;
 		static constexpr uint8_t c_MaxReturnWindowMinutes = 30;
 		static constexpr uint16_t c_DefaultPathHorizonTicks = 30;

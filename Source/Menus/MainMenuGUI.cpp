@@ -1974,7 +1974,7 @@ void MainMenuGUI::CreateHostOptionsControls() {
 	if (m_HostRecAutosaveIntervalCombo) {
 		m_HostRecAutosaveIntervalCombo->ClearList();
 		for (const uint32_t minutes : {1, 2, 5, 10, 15, 20, 30, 45, 60}) {
-			const bool standard = minutes * 60 == NetMatchService::c_DefaultAutosaveIntervalSeconds;
+			const bool standard = minutes * 60 == NetMatchConfigUtil::c_DefaultAutosaveIntervalSeconds;
 			m_HostRecAutosaveIntervalCombo->AddItem(NetAutosaveIntervalText(minutes * 60) + (standard ? " (default)" : ""));
 		}
 	}
@@ -2750,7 +2750,7 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 	if (m_HostRecRepairCheck) m_HostRecRepairCheck->SetCheck(m_HostOptionsDraft.automaticRepair ? GUICheckbox::Checked : GUICheckbox::Unchecked);
 	if (m_HostRecAutosaveCheck) m_HostRecAutosaveCheck->SetCheck(m_HostOptionsDraft.autosaveEnabled ? GUICheckbox::Checked : GUICheckbox::Unchecked);
 	HostOptSelectAutosaveInterval(m_HostRecAutosaveIntervalCombo, m_HostOptionsDraft.autosaveEnabled ? m_HostOptionsDraft.autosaveIntervalSeconds
-	                                                                                              : NetMatchService::c_DefaultAutosaveIntervalSeconds);
+	                                                                                              : NetMatchConfigUtil::c_DefaultAutosaveIntervalSeconds);
 	HostOptSetEditable(m_HostRecAutosaveIntervalCombo, editable && m_HostOptionsDraft.autosaveEnabled);
 	HostOptSelectReturnWindow(m_HostRecReturnWindowCombo, m_HostOptionsDraft.returnWindowMinutes);
 	HostOptSetEditable(m_HostRecReturnWindowCombo, editable);
@@ -3102,7 +3102,7 @@ void MainMenuGUI::DraftHostOptionsFromControls() {
 		const uint32_t picked = autosaveWasEnabled ? HostOptAutosaveIntervalOf(m_HostRecAutosaveIntervalCombo) : 0;
 		m_HostOptionsDraft.autosaveIntervalSeconds = picked != 0 ? picked
 		                                           : m_HostOptionsDraft.autosaveIntervalSeconds != 0 ? m_HostOptionsDraft.autosaveIntervalSeconds
-		                                           : NetMatchService::c_DefaultAutosaveIntervalSeconds;
+		                                           : NetMatchConfigUtil::c_DefaultAutosaveIntervalSeconds;
 	} else {
 		m_HostOptionsDraft.autosaveIntervalSeconds = 0;
 	}
@@ -3350,7 +3350,7 @@ void MainMenuGUI::RestoreHostOptionsPageDefaults() {
 		case c_HostOptionsRecoveryPage:
 			m_HostOptionsDraft.automaticRepair = factory.automaticRepair;
 			m_HostOptionsDraft.autosaveEnabled = true;
-			m_HostOptionsDraft.autosaveIntervalSeconds = NetMatchService::c_DefaultAutosaveIntervalSeconds;
+			m_HostOptionsDraft.autosaveIntervalSeconds = NetMatchConfigUtil::c_DefaultAutosaveIntervalSeconds;
 			m_HostOptionsDraft.returnWindowMinutes = NetMatchConfigUtil::c_DefaultReturnWindowMinutes;
 			m_HostComputerDraft.joinHistorySeconds = HostComputerDraft{}.joinHistorySeconds;
 			m_HostComputerDraft.joinLagSeconds = HostComputerDraft{}.joinLagSeconds;

@@ -2114,7 +2114,7 @@ def scripts(case, port, root, size="960x540"):
                  "setcheck CheckHostRecAutosave 0\nwait_ms 500\nassert_checked CheckHostRecAutosave 0\n"
                  "assert_enabled ComboHostRecAutosaveInterval 0\n"
                  "assert_label LabelHostRecLastSave No autosaves while this is off\n"
-                 "assert_label LabelHostRecAutosaveHint 1 to 60 minutes, or off\n"
+                 "assert_label LabelHostRecAutosaveHint Every 60 s to 60 min; 5 min by default\n"
                  # Off is off at Apply too: the service accepts off instead of refusing an enabled zero.
                  # Apply publishes an open-seat lobby too; read the committed revision's
                  # confirmation rather than accepting a pending draft or stale edit hint.

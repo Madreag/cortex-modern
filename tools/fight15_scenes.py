@@ -669,7 +669,7 @@ def recovery_defaults_scene():
             "video_mark recovery-host", "assert_label LabelHostRecReclaim Seats stay held until you give them away",
             "assert_text_fits LabelHostRecReclaim", "assert_no_overlap LabelHostRecRejoin LabelHostRecReclaim",
             "assert_checked CheckHostRecAutosave 1", "assert_label ComboHostRecAutosaveInterval 5 minutes",
-            "assert_text_fits ComboHostRecAutosaveInterval", "assert_label LabelHostRecAutosaveHint 1 to 60 minutes, or off",
+            "assert_text_fits ComboHostRecAutosaveInterval", "assert_label LabelHostRecAutosaveHint Every 60 s to 60 min; 5 min by default",
             "assert_text_fits LabelHostRecAutosaveHint",
             "combo_select ComboHostRecAutosaveInterval 10 minutes", "assert_label ComboHostRecAutosaveInterval 10 minutes", "activate ButtonHostOptApply",
             "wait_ms 900", "video_mark recovery-applied-host", "activate TabHostPageSeats", "wait_ms 600", "activate ButtonHostSeatDetails1", "wait_ms 900",
