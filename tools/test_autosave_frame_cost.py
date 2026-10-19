@@ -325,6 +325,7 @@ def main():
     p.add_argument('--split-cpus', action='store_true',
                    help="the host on one half of the logical CPUs and the client, rejoined too, on the other, as on two machines")
     p.add_argument('--judge', type=Path, help='a finished run folder of this driver to place and judge again, without engines')
+    p.add_argument('--engine-env', action='append', default=[], help='NAME=VALUE given to every engine, a test lever')
     a = p.parse_args()
     if a.saves_after_return and not a.client_rejoin:
         raise SystemExit('--saves-after-return needs --client-rejoin')
@@ -362,7 +363,7 @@ def main():
                      '-net-reconnect-ticket', str(out / 'host.ticket')] + common,
             'client': ['-net-match-service-e2e', '-net-join', '127.0.0.1', '-net-match-report', str(out / 'client-report.json'),
                        '-net-reconnect-ticket', str(out / 'client.ticket')] + common}
-    env = {'CCCP_HEADLESS': '1', 'CC_RUNNER_IGNORE_FULLSCREEN': '1', 'CC_TEST_NET_MATCH_E2E_WAIT_PEERS': '1'}
+    env = {'CCCP_HEADLESS': '1', 'CC_RUNNER_IGNORE_FULLSCREEN': '1', 'CC_TEST_NET_MATCH_E2E_WAIT_PEERS': '1', **dict(item.split('=', 1) for item in a.engine_env)}
     half = (os.cpu_count() or 2) // 2
     masks = {'host': (1 << half) - 1, 'client': ((1 << half) - 1) << half} if a.split_cpus else {}
     settings = {'AutosaveSeconds': '0', 'NetworkHostDelayPolicy': 'Auto', 'NetworkInputDelayFrames': '0', 'NetworkIceEnable': '0',
