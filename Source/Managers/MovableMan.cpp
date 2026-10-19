@@ -8374,9 +8374,14 @@ void MovableMan::UpdateStage(MovableObject* mo, bool actor) {
 	SoundSimulationScope sounds(mo->GetUniqueID(), soundPhase);
 	mo->Update();
 
-	g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::ScriptsUpdate);
-	mo->UpdateScripts();
-	g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::ScriptsUpdate);
+	// Only an object with scripts spends script time; timing every particle's call read the clock twice for nothing.
+	if (mo->HasAnyScripts()) {
+		g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::ScriptsUpdate);
+		mo->UpdateScripts();
+		g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::ScriptsUpdate);
+	} else {
+		mo->UpdateScripts();
+	}
 
 	mo->ApplyImpulses();
 }
