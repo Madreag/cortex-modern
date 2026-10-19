@@ -4,7 +4,7 @@
                                           [--module <a session_directory.py>] [--ttl 600] [--scan <root> ...]
 
 The directory runs in this process on a loopback port with the key file's backend, read by path. One session
-registers, asks for its relay (the host's POST) and fetches the offer back (a Relay only client's GET). The receipt
+registers, asks for its relay (the host's POST) and fetches a joiner's own login (a Relay only client's GET). The receipt
 keeps public evidence only: the directory's statuses, Cloudflare's own status for each request it answered, the
 lifetime and the server URLs. The key, the token and every minted login stay in memory; the scan proves that no
 file under the output or a --scan root holds one. --module runs another copy of the directory (a RED on a build
@@ -138,7 +138,9 @@ def main(argv=None) -> int:
                                  {'token': token, 'match_id': f'{session}:1', 'ttl': options.ttl})
             receipt['mint'] = {'status': status, **({'error': offer.get('error')} if status != 200 else public_offer(offer, wall))}
             status, fetched = http(server.port, 'GET', f'/v1/sessions/{session}/ice-servers')
-            receipt['fetch'] = {'status': status, **({'error': fetched.get('error')} if status != 200 else {'same_offer': fetched == offer})}
+            logins = lambda body: {server.get('username') for server in body.get('iceServers', []) if server.get('username')}
+            receipt['fetch'] = {'status': status, **({'error': fetched.get('error')} if status != 200 else
+                                                     dict(public_offer(fetched, wall), distinct_login=logins(fetched).isdisjoint(logins(offer))))}
     finally:
         server.stop()
     receipt['provider_calls'] = calls
@@ -148,7 +150,8 @@ def main(argv=None) -> int:
     receipt['finished'] = stamp()
     mint = receipt.get('mint', {})
     receipt['passed'] = bool(calls and calls[-1]['status'] == 201 and mint.get('status') == 200 and mint.get('servers_with_login', 0) >= 1
-                             and receipt.get('fetch', {}).get('same_offer') and receipt['relay_offer_issued'])
+                             and receipt.get('fetch', {}).get('distinct_login') and receipt['fetch'].get('servers_with_login', 0) >= 1
+                             and receipt['relay_offer_issued'])
     (out / 'mint-receipt.json').write_text(json.dumps(receipt, indent=2) + '\n', encoding='utf-8')
     scan = book.scan([out, *options.scan])
     (out / 'secret-scan.json').write_text(json.dumps(scan, indent=2) + '\n', encoding='utf-8')

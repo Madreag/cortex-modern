@@ -195,7 +195,9 @@ class DirectoryTests(unittest.TestCase):
             expected = base64.b64encode(hmac.new(b"server-only-secret", server["username"].encode(), hashlib.sha1).digest()).decode()
             self.assertEqual(server["credential"], expected)
             self.assertNotIn("server-only-secret", json.dumps(offer))
-            self.assertEqual(store.get_ice_servers(row["session_id"], 11), offer)
+            lent = store.get_ice_servers(row["session_id"], "joiner0123456789", 11)
+            self.assertNotEqual(lent["iceServers"][0]["username"], server["username"], "a fetch returned the match's own relay login")
+            self.assertEqual(lent["expires_at"], 1000 + session_directory.BOOTSTRAP_RELAY_TTL)
             for _ in range(session_directory.TURN_REQUESTS_PER_MIN - 1):
                 store.mint_ice_servers(row["session_id"], data, INSTALL_KEY, 11)
             with self.assertRaises(session_directory.TurnError) as limited:
@@ -203,8 +205,8 @@ class DirectoryTests(unittest.TestCase):
             self.assertEqual(limited.exception.status, 429)
             self.assertEqual(limited.exception.body["error"], "rate_limited_key")
         with mock.patch.object(session_directory.time, "time", return_value=1600):
-            with self.assertRaises(session_directory.TurnError):
-                store.get_ice_servers(row["session_id"], 12)
+            # The host's lapsed login renews through its check-ins; a joiner still gets its own.
+            self.assertEqual(store.get_ice_servers(row["session_id"], "joiner0123456789", 12)["expires_at"], 1600 + session_directory.BOOTSTRAP_RELAY_TTL)
         for bad in ({**data, "token": "wrong"}, {**data, "ttl": 0}, {**data, "ttl": 86401}, {**data, "static_auth_secret": "never"}):
             with self.assertRaises((PermissionError, session_directory.FieldError)):
                 store.mint_ice_servers(row["session_id"], bad, INSTALL_KEY, 12)
@@ -222,14 +224,14 @@ class DirectoryTests(unittest.TestCase):
         store = session_directory.SessionDirectory(300, 5, turn_config={"backend": "cloudflare", "turn_key_id": "key-id", "api_token": "backend-token"})
         row = store.register(sample_register(), "127.0.0.1", 10, INSTALL_KEY)
         with self.assertRaises(session_directory.TurnError) as none:
-            store.get_ice_servers(row["session_id"], 11)
+            store.get_ice_servers(row["session_id"], "joiner0123456789", 11)
         self.assertEqual((none.exception.status, none.exception.body["error"]), (404, "relay_offer_unavailable"))
         data = {"token": row["token"], "match_id": "match:1", "ttl": 600}
         with mock.patch.object(session_directory, "urlopen", side_effect=OSError("backend-token")):
             with self.assertRaises(session_directory.TurnError):
                 store.mint_ice_servers(row["session_id"], data, INSTALL_KEY, 11)
         with self.assertRaises(session_directory.TurnError) as refused:
-            store.get_ice_servers(row["session_id"], 12)
+            store.get_ice_servers(row["session_id"], "joiner0123456789", 12)
         self.assertEqual((refused.exception.status, refused.exception.body["error"]), (502, "relay_provider_refused"))
         self.assertNotIn("backend-token", json.dumps(refused.exception.body))
         response = mock.MagicMock()
@@ -239,27 +241,33 @@ class DirectoryTests(unittest.TestCase):
                                                                  "username": "u", "credential": "c"}]}).encode()
         with mock.patch.object(session_directory, "urlopen", return_value=response):
             store.mint_ice_servers(row["session_id"], data, INSTALL_KEY, 13)
-        self.assertEqual(store.get_ice_servers(row["session_id"], 14)["iceServers"][0]["username"], "u")
+        response.read.return_value = json.dumps({"iceServers": [{"urls": ["turn:turn.cloudflare.com:3478?transport=udp"],
+                                                                 "username": "joiner-u", "credential": "joiner-c"}]}).encode()
+        with mock.patch.object(session_directory, "urlopen", return_value=response) as fetch:
+            self.assertEqual(store.get_ice_servers(row["session_id"], "joiner0123456789", 14)["iceServers"][0]["username"], "joiner-u")
+        self.assertEqual(json.loads(fetch.call_args.args[0].data), {"ttl": session_directory.BOOTSTRAP_RELAY_TTL})
 
     def test_unexpired_relay_offer_survives_listing_gap_and_host_resume(self) -> None:
-        store = session_directory.SessionDirectory(15, 5)
+        store = session_directory.SessionDirectory(15, 5, turn_config={
+            "backend": "coturn", "static_auth_secret": "server-only-secret", "relay_urls": ["turn:relay.example:3478?transport=udp"]})
+        lent = lambda at: store.get_ice_servers(sid, "joiner0123456789", at)
+        retained = lambda at: store._signalling(sid, at).ice_offer
         row = store.register(sample_register(), "192.0.2.1", 0, INSTALL_KEY)
         sid, token = row["session_id"], row["token"]
         store.heartbeat(sid, {"token": token, "peer_count": 2, "seats_free": 0, "state": "running"}, 1, INSTALL_KEY)
         with mock.patch.object(session_directory.time, "time", return_value=1000):
             offer = store.mint_ice_servers(sid, {"token": token, "match_id": "match:1", "ttl": 300,
                 "iceServers": [{"urls": ["turn:relay.example:3478?transport=udp"], "username": "<synthetic-username>", "credential": "<synthetic-credential>"}]}, INSTALL_KEY, 2)
-            self.assertEqual(store.get_ice_servers(sid, 17), offer, "live rendezvous lost its unexpired relay offer")
+            self.assertEqual(retained(17), offer, "live rendezvous lost its unexpired relay offer")
+            self.assertNotIn("<synthetic-credential>", json.dumps(lent(17)), "a fetch returned the host's fixed relay account")
             resumed = store.register(sample_register(resume_session_id=sid, resume_token=token), "192.0.2.2", 18, INSTALL_KEY)
             self.assertEqual(resumed["session_id"], sid)
-            self.assertEqual(store.get_ice_servers(sid, 19), offer, "resumed host discarded the offer before renewing it")
-        with mock.patch.object(session_directory.time, "time", return_value=1300):
-            with self.assertRaises(session_directory.TurnError):
-                store.get_ice_servers(sid, 20)
+            self.assertEqual(retained(19), offer, "resumed host discarded the offer before renewing it")
+            self.assertNotIn("<synthetic-credential>", json.dumps(lent(19)))
         with mock.patch.object(session_directory.time, "time", return_value=1001):
             store.delete(sid, {"token": resumed["token"]}, 21)
             with self.assertRaises(KeyError):
-                store.get_ice_servers(sid, 22)
+                lent(22)
 
     def test_live_host_resume_keeps_offer_until_its_original_expiry(self) -> None:
         store = session_directory.SessionDirectory(15, 5)
@@ -270,7 +278,7 @@ class DirectoryTests(unittest.TestCase):
             offer = store.mint_ice_servers(sid, {"token": token, "match_id": "match:1", "ttl": 300,
                 "iceServers": [{"urls": ["turn:relay.example:3478?transport=udp"], "username": "<synthetic-username>", "credential": "<synthetic-credential>"}]}, INSTALL_KEY, 2)
             store.register(sample_register(resume_session_id=sid, resume_token=token), "192.0.2.2", 3, INSTALL_KEY)
-            self.assertEqual(store.get_ice_servers(sid, 4), offer)
+            self.assertEqual(store._signalling(sid, 4).ice_offer, offer)
 
     def test_turn_max_ttl_caps_the_minted_lifetime(self) -> None:
         store = session_directory.SessionDirectory(300, 5, turn_config={
@@ -332,6 +340,43 @@ class DirectoryTests(unittest.TestCase):
             with self.assertRaises(session_directory.TurnError) as refused:
                 provider.mint("match:2", 900, 1000)
         self.assertNotIn("backend-token", str(refused.exception))
+
+    def test_ice_fetch_mints_each_requester_its_own_short_login(self) -> None:
+        """GET /ice-servers lends a joiner its own short login; the match's login and a fixed account stay inside."""
+        self.server = spawn_server(bind="127.0.0.1", port=0, expiry_s=15, heartbeat_s=5, insecure_http=True, caller_mode="direct",
+            turn_config={"backend": "coturn", "static_auth_secret": "server-only-secret", "relay_urls": ["turn:relay.example:3478?transport=udp"]})
+        self._wait_port()
+        joiner, other = "joiner0123456789", "fedcba9876543210"
+        status, row = self.call("POST", "/v1/sessions", sample_register())
+        self.assertEqual(status, 200)
+        path = "/v1/sessions/" + row["session_id"] + "/ice-servers"
+        self.assertEqual(self.call("GET", path, install_key=joiner), (404, {"error": "relay_offer_unavailable"}))
+        status, room = self.call("POST", path, {"token": row["token"], "match_id": "match:room", "ttl": 3600})
+        self.assertEqual(status, 200)
+        room_logins = {server["username"] for server in room["iceServers"]}
+        status, lent = self.call("GET", path, install_key=joiner)
+        self.assertEqual(status, 200)
+        lent_logins = {server["username"] for server in lent["iceServers"]}
+        self.assertFalse(lent_logins & room_logins, "a fetch returned the match's own relay login")
+        self.assertLessEqual(lent["expires_at"] - int(time.time()), session_directory.BOOTSTRAP_RELAY_TTL + 1, "a fetched login outlived a first dial")
+        status, second = self.call("GET", path, install_key=other)
+        self.assertEqual(status, 200)
+        self.assertFalse({server["username"] for server in second["iceServers"]} & lent_logins, "two requesters shared one login")
+        for _ in range(session_directory.TURN_REQUESTS_PER_MIN - 1):
+            self.assertEqual(self.call("GET", path, install_key=other)[0], 200)
+        status, limited = self.call("GET", path, install_key=other)
+        self.assertEqual((status, limited["error"], limited.get("budget")), (429, "rate_limited_key", "relay"))
+        # A fixed account reaches players only in the admitted lobby config.
+        private = {"urls": ["turn:private.example:3478?transport=udp"], "username": "private-user", "credential": "private-password"}
+        status, fixed = self.call("POST", "/v1/sessions", sample_register(), headers={"X-Install-Key": "hostfixed0123456"}, install_key=None)
+        self.assertEqual(status, 200)
+        fixed_path = "/v1/sessions/" + fixed["session_id"] + "/ice-servers"
+        self.assertEqual(self.call("POST", fixed_path, {"token": fixed["token"], "match_id": "fixed:1", "ttl": 3600, "iceServers": [private]},
+                                   headers={"X-Install-Key": "hostfixed0123456"}, install_key=None)[0], 200)
+        status, lent_fixed = self.call("GET", fixed_path, install_key=joiner)
+        self.assertEqual(status, 200)
+        self.assertNotIn("private-password", json.dumps(lent_fixed), "a fetch returned the host's fixed relay account")
+        self.assertNotIn("private.example", json.dumps(lent_fixed))
 
     def test_ice_endpoint_refuses_missing_identity_and_host_token(self) -> None:
         self.start()
@@ -3426,10 +3471,10 @@ class ConnectionAuthorityTests(unittest.TestCase):
         self.route = dict(ice_identity="str:player-route", ice_virtual_port=41012, listen_port=41012,
             listen_addrs=["192.0.2.2", "2001:db8::2"], generation=1, state="connected")
 
-    def envelope(self, *, key=None, token=None, instance="30" * 16, route=None, host=None, nonce=None):
+    def envelope(self, *, key=None, token=None, instance="30" * 16, route=None, host=None, nonce=None, sent_at=None):
         key = key or self.player
         data = dict(session_id=self.sid, seat_token=token or self.lease["seat_token"], instance=instance,
-            nonce=nonce or uuid.uuid4().hex, sent_at=int(self.wall), route=route or self.route)
+            nonce=nonce or uuid.uuid4().hex, sent_at=int(self.wall) if sent_at is None else sent_at, route=route or self.route)
         if host is not None:
             data["host"] = host
         raw = json.dumps(data, separators=(",", ":")).encode()
@@ -3732,6 +3777,28 @@ class ConnectionAuthorityTests(unittest.TestCase):
         self.assertIn("Original player", banned.exception.body["message"])
         with self.assertRaises(ConnectionErrorReply):
             self.store.connection_request(self.sid, self.issue, self.now, INSTALL_KEY)
+
+    def test_a_clock_refusal_names_the_directory_time(self) -> None:
+        self.assertEqual(self.check()["directory_time"], int(self.wall))
+        self.assertEqual(self.store.connection_bootstrap(self.sid, self.now)["directory_time"], int(self.wall))
+        with self.assertRaises(ConnectionErrorReply) as refused:
+            self.store.connection_request(self.sid, self.envelope(sent_at=int(self.wall) - 120), self.now, INSTALL_KEY)
+        self.assertEqual((refused.exception.status, refused.exception.body["error"], refused.exception.body.get("directory_time")),
+                         (409, "connection_clock", int(self.wall)))
+        # A request signed on the time the refusal named is accepted.
+        signed = self.envelope(sent_at=refused.exception.body["directory_time"])
+        self.assertEqual(self.store.connection_request(self.sid, signed, self.now, INSTALL_KEY)["seat"], 1)
+
+    def test_a_fetch_lends_its_own_login_never_a_seat_one(self) -> None:
+        seat = self.check(host={"token": self.row["token"], "generation": 0})
+        seat_login = seat["relay"]["iceServers"][0]["username"]
+        # The hosting seat's login is also the match's offer.
+        self.assertEqual(self.store._signalling(self.sid, self.now).ice_offer["iceServers"][0]["username"], seat_login)
+        lent = self.store.get_ice_servers(self.sid, "joiner0123456789", self.now)
+        self.assertNotIn(seat_login, json.dumps(lent), "a fetch returned a seat's relay login")
+        self.assertEqual(lent["expires_at"], int(self.wall) + session_directory.BOOTSTRAP_RELAY_TTL)
+        with self.assertRaises(PermissionError):
+            self.store.get_ice_servers(self.sid, "", self.now)
 
     def test_current_host_updates_its_route_and_old_host_cannot_move_it_back(self) -> None:
         current = self.check(host={"token": self.row["token"], "generation": 0})

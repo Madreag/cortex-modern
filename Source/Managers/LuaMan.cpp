@@ -16961,9 +16961,11 @@ int LuaStateWrapper::RunScriptFunctionObject(const LuabindObjectWrapper* functio
 	int status = 0;
 
 	std::lock_guard<std::recursive_mutex> lock(GetMutex());
-	// Peer AI births do not advance the shared script identity sequence.
+	// Peer AI births do not advance the shared script identity sequence. A shared hook on a state already counting shared births
+	// would change nothing, so only the others ask the round, whose lock the network plane holds while it works.
 	std::optional<ScriptBirthDomainScope> birthDomain;
-	if (ScenarioRunner::IsLockstepControllerSyncActive()) birthDomain.emplace(m_State, SoundSimulationScope::Domain() == SoundExecutionDomain::LocalSimulation);
+	const bool localBirths = SoundSimulationScope::Domain() == SoundExecutionDomain::LocalSimulation;
+	if ((localBirths || luaJIT_state_serial(m_State) >= c_PeerScriptBirthBand) && ScenarioRunner::IsLockstepControllerSyncActive()) birthDomain.emplace(m_State, localBirths);
 	s_currentLuaState = this;
 	m_CurrentlyRunningScriptPath = functionObject->GetFilePath();
 
@@ -18007,15 +18009,18 @@ void LuaMan::StartAsyncGarbageCollection(uint64_t tick, bool everyState) {
 	}
 
 	m_GarbageCollectionTask = BS::multi_future<void>();
+	// Test lever CC_TEST_TICK_COST_DETAILS: a full collection over 2 ms names its state, heap and time.
+	static const bool reportSlowCollections = std::getenv("CC_TEST_TICK_COST_DETAILS") != nullptr;
 	for (LuaStateWrapper* luaState: dueStates) {
 		m_GarbageCollectionTask.push_back(
-		    g_ThreadMan.GetPriorityThreadPool().submit([luaState, fullCollection]() {
+		    g_ThreadMan.GetPriorityThreadPool().submit([this, luaState, fullCollection, tick]() {
 			    ZoneScopedN("Lua Garbage Collection");
 			    std::lock_guard<std::recursive_mutex> lock(luaState->GetMutex());
 			    lua_State* state = luaState->GetLuaState();
 			    if (fullCollection) {
 				    const CheckpointLua::HeapOwner::CollectionScope collecting;
 				    const size_t inUse = static_cast<size_t>(G(state)->gc.total);
+				    const auto collectionBegan = reportSlowCollections ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 				    // A whole cycle, so the tick a dropped object dies on does not follow its state's heap size.
 				    if (G(state)->gc.state == GCSpause) {
 					    // From the pause one unlimited step is that cycle; LUA_GCCOLLECT would first sweep every object once for nothing.
@@ -18027,6 +18032,10 @@ void LuaMan::StartAsyncGarbageCollection(uint64_t tick, bool everyState) {
 					    lua_gc(state, LUA_GCCOLLECT, 0);
 				    }
 				    if (CheckpointNativeStorage::Enabled()) luaState->NoteFullCollection(inUse, static_cast<size_t>(G(state)->gc.total));
+				    if (reportSlowCollections) {
+					    const auto us = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - collectionBegan).count();
+					    if (us > 2000) System::PrintDiagnosticLine(std::format("[gc-slow] tick={} slot={} us={} before_kb={} after_kb={}", tick, GetStateIndex(luaState), us, inUse >> 10, static_cast<size_t>(G(state)->gc.total) >> 10));
+				    }
 				    lua_gc(state, LUA_GCSTOP, 0);
 			    } else {
 				    // Keep allocation-triggered collection on in single player. A fixed tick-end step alone cannot keep up

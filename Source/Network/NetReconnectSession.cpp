@@ -1758,7 +1758,8 @@ namespace RTE {
 	bool NetReconnectHost::PrepareSeatLease(NetPeerId connection, const std::string& name, NetSeatLease& lease, std::string& error) {
 		if (!m_ConnectionAuthority) return true;
 		if (m_Registry) m_ConnectionAuthority->SetHostSigningKey(m_Registry->HostLeaseSigningKey());
-		const uint64_t now = UnixNowMs() / 1000;
+		const uint64_t local = UnixNowMs() / 1000;
+		const uint64_t now = lease.directorySessionId.empty() ? local : m_ConnectionAuthority->DirectoryNow(local);
 		if (!lease.Empty() && lease.expiresAt > now + NetSeatLease::c_LifetimeSeconds / 2) return true;
 		if (connection != c_InvalidNetPeerId && !LookupParticipantId(connection, lease.participant)) {
 			error = "This device could not prove its player key. Restart the game and join again."; return false;
@@ -1783,7 +1784,7 @@ namespace RTE {
 		}
 		// A direct host can renew its own expired token once the holder proves its
 		// key and H4 credential. An Internet return renews at the directory first.
-		if (!lease.directorySessionId.empty() && !lease.Usable(UnixNowMs() / 1000)) {
+		if (!lease.directorySessionId.empty() && !lease.Usable(m_ConnectionAuthority ? m_ConnectionAuthority->DirectoryNow(UnixNowMs() / 1000) : UnixNowMs() / 1000)) {
 			expired = true;
 			error = "Your seat lease expired. Reconnecting will renew it; Cancel returns to Multiplayer."; return false;
 		}
@@ -3304,7 +3305,9 @@ namespace RTE {
 	bool NetReconnectClient::ReadSeatLease(const std::string& token, const NetAuthBytes32& key, NetH4TicketRecord& record) {
 		if (!m_ConnectionAuthority) return true;
 		NetSeatLease lease;
-		if (!NetSeatLease::Decode(token, key, lease) || !lease.Usable(UnixNowMs() / 1000) || lease.participant != m_ConnectionAuthority->LocalParticipant() ||
+		// A seat is judged on its issuer's clock: the directory's as measured, a host's by that host when its holder returns.
+		if (!NetSeatLease::Decode(token, key, lease) || (!lease.directorySessionId.empty() && !lease.Usable(m_ConnectionAuthority->DirectoryNow(UnixNowMs() / 1000))) ||
+		    lease.participant != m_ConnectionAuthority->LocalParticipant() ||
 		    lease.epoch != record.epoch || lease.seat != record.stableSeat || lease.generation != record.holderGeneration ||
 		    lease.hostSessionId != record.hostSessionId || lease.credential != record.credential || lease.directorySessionId != m_DirectorySessionId) return false;
 		record.seatToken = token; record.authorityKey = key; record.directorySessionId = lease.directorySessionId;

@@ -1304,6 +1304,9 @@ namespace RTE {
 		bool SetUpIceTransport(const NetMatchServiceRequest& request, const NetIdentityManifest& manifest, NetMuxTransport& mux, NetSessionConfig& sessionConfig, std::string& joinAddress, NetIceJoinTarget& target, std::string* error);
 		/// Builds the candidate policy from the saved settings and run overrides.
 		static GnsP2PConfig BuildIceConfig(const SettingsMan& settings, const std::string& localIdentity, int localVirtualPort, const NetRelayConfig& relay = {});
+		/// What a rejoin's check-ins have given its dial so far: its route checked in under a usable seat, and the relay login it must wait for.
+		static void ReadRejoinCheckIn(const NetConnectionAuthority& authority, bool allowRelay, bool relayOnly, const std::optional<NetConnectionHost>& host,
+		                              uint64_t localUnixSeconds, bool& checkedIn, bool& relayReady);
 		void UpdateRelayOffer(uint64_t nowMs);
 		void UpdateConnectionAuthority(uint64_t nowMs);
 		void PublishRelayOfferLocked(NetSession& session, INetTransport& wire);
@@ -1365,6 +1368,7 @@ namespace RTE {
 		friend bool TestARejoinWalksItsPhasesAndTheGoodbyeEndsItsTailReplay(std::string* error);
 		friend struct HostOptionsLobbyRow;
 		friend struct SeatAdmissionServiceTest;
+		friend struct NetConnectionSelfTestAccess;
 		void NoteAdmissionReleasesLocked();
 		bool HostOptionsNeedCorrectionLocked() const;
 		friend bool TestMatchOverRejoinFromWaitKeepsCoordinator(std::string* error);

@@ -8,6 +8,7 @@
 #include "NetDirectoryRetry.h"
 #include <deque>
 
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -152,9 +153,14 @@ namespace RTE {
 		void Update(uint64_t steadyMs, uint64_t unixSeconds);
 		uint64_t AdmissionWaitedMs() const;
 		uint64_t AdmissionRetryMs() const;
+		/// This machine's clock moved onto the directory's, as its last reply measured it; the seat and relay times it issues are on that clock.
+		uint64_t DirectoryNow(uint64_t localUnixSeconds) const;
+		/// Test lever: replaces the machine's adapter enumeration with this source.
+		void SetAddressSourceForTest(std::function<std::vector<std::string>()> source) { m_AddressSource = std::move(source); }
 
 	private:
 		friend bool TestRecoveryUsesListedMatch(std::string* error);
+		friend struct NetConnectionSelfTestAccess;
 		NetHash32 DirectoryMatchHash(const NetHash32& peerHash) const;
 		struct Operation {
 			std::string body;
@@ -174,7 +180,6 @@ namespace RTE {
 		void PollHostChange(uint64_t steadyMs, uint64_t unixSeconds);
 		void PollFrameTie(uint64_t steadyMs, uint64_t unixSeconds);
 		std::string SignedSeatRequest(const std::string& operation, uint64_t unixSeconds, const NetHostChangeRequest* change = nullptr, const NetFrameTieRequest* tie = nullptr);
-		void ObserveNetwork(uint64_t steadyMs, uint64_t unixSeconds);
 
 		mutable std::mutex m_Mutex;
 		NetParticipantIdentityStore* m_Player = nullptr;
@@ -184,7 +189,7 @@ namespace RTE {
 		NetAuthBytes32 m_HostSigningKey{};
 		NetAuthBytes16 m_Instance{};
 		std::map<std::string, Operation> m_Operations;
-		std::set<std::string> m_Removals;
+		std::map<std::string, bool> m_Removals; //!< Each removal sent or queued, and whether it bans.
 		std::optional<NetSeatLease> m_LocalLease;
 		std::optional<NetConnectionHost> m_Host;
 		NetConnectionRoute m_Route;
@@ -192,6 +197,7 @@ namespace RTE {
 		std::unique_ptr<NetLanDiscovery> m_LanBrowser;
 		std::map<uint64_t, NetConnectionRoute> m_DirectHosts;
 		std::vector<std::string> m_NetworkAddresses;
+		std::function<std::vector<std::string>()> m_AddressSource; //!< The adapter enumeration; empty reads the machine's own.
 		NetRelayConfig m_Relay;
 		std::unique_ptr<NetHttpClient> m_CheckIn, m_Bootstrap, m_HostChange;
 		std::optional<NetHostChangeRequest> m_HostChangeRequest;
@@ -220,11 +226,29 @@ namespace RTE {
 		bool CanSeatRequest(uint64_t nowMs, bool decisionRequest = false);
 		bool CanTieRequest(uint64_t nowMs);
 		bool CanRequest(uint64_t nowMs) const;
+		void NoteDirectoryClock(const std::string& body);
+		uint64_t DirectoryNowLocked(uint64_t localUnixSeconds) const;
+		void ProbeLanHosts(uint64_t steadyMs, std::map<uint64_t, NetConnectionRoute>& hosts);
+		struct NetworkProbe {
+			std::vector<std::string> addresses;
+			uint32_t nativeRevision = 0;
+			bool resumed = false;
+			uint64_t sequence = 0;
+		};
+		std::optional<NetworkProbe> ProbeNetwork(uint64_t steadyMs, uint64_t unixSeconds);
+		void ApplyNetwork(NetworkProbe probe);
+		int64_t m_DirectoryClockOffset = 0; //!< The directory's clock minus this machine's, in seconds.
+		uint64_t m_UnixSeconds = 0; //!< This machine's clock at the last Update.
+		std::mutex m_NetworkMutex; //!< The LAN browser and the adapter scan, kept apart from m_Mutex so no query waits on them.
+		uint64_t m_ProbeSequence = 0, m_LanSequence = 0, m_AppliedProbe = 0, m_AppliedLan = 0;
 		uint32_t m_NetworkRevision = 0;
 		uint32_t m_NativeRouteRevision = 0;
 		uint32_t m_CheckInGeneration = 0, m_CheckedGeneration = 0, m_RelayGeneration = 0;
 		bool m_BootstrapWanted = false, m_Refused = false, m_Ended = false, m_Suspended = false;
 		std::string m_Error;
 	};
+
+	/// The connection plane's rows, run by the net-directory self-test; CCCP_TEST_CONNECTION_CASE picks one.
+	namespace NetConnectionSelfTest { bool Run(std::string* error); }
 
 } // namespace RTE

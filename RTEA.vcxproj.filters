@@ -943,6 +943,9 @@
     <ClCompile Include="Source\Network\NetConnectionAuthority.cpp">
       <Filter>Network</Filter>
     </ClCompile>
+    <ClCompile Include="Source\Network\NetConnectionSelfTest.cpp">
+      <Filter>Network</Filter>
+    </ClCompile>
     <ClCompile Include="Source\Network\NetDirectoryCodec.cpp">
       <Filter>Network</Filter>
     </ClCompile>
