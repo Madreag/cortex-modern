@@ -145,7 +145,8 @@ def run_pair(repo: Path, root: Path, case: dict, port: int, timeout: float, full
     runs, records = {}, {}
     try:
         for who in PEERS:
-            env = {"CCCP_HEADLESS": "1", "CC_SIM_DUMP": f"1:{case['ticks']}"}
+            # The host asks for the start as its lobby opens; the round must wait for the client it compares against.
+            env = {"CCCP_HEADLESS": "1", "CC_SIM_DUMP": f"1:{case['ticks']}", "CC_TEST_NET_MATCH_E2E_WAIT_PEERS": "1"}
             runs[who] = make_run(repo, peer_args(case, who, port, root, fullstate_every, client_stall), root / who, timeout, env=env)
             stage_module(runs[who].cwd, case)
 
