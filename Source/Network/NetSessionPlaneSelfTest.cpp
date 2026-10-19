@@ -364,7 +364,7 @@ namespace RTE {
 				}
 				const size_t index = QuestionIndex(asked);
 				auto& question = questions[index];
-				if (question.reply.state != NetFrameTieReply::State::Decided && asked.queryOnly && !question.request.queryOnly) {
+				if (question.reply.state != NetFrameTieReply::State::Decided && asked.queryOnly != question.request.queryOnly) {
 					if (activeTie == index && tie) {
 						if (retiredTies.size() >= 16) return {};
 						retiredTies.push_back(std::move(*tie)); tie.reset(); activeTie.reset();
