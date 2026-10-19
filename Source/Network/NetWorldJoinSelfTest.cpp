@@ -8124,7 +8124,8 @@ namespace RTE {
 			std::map<uint64_t, std::vector<NetMatchService::CheckpointNote>> stream;
 			std::vector<std::pair<uint64_t, uint64_t>> writer;
 			uint64_t baseTick = 0, baseDone = 0, dueDuringBase = 0, raisedDuringBase = 0, namedAfter = 0;
-			int64_t lateAfter = -1;
+			// The periodic save before the base is named on time; the save after it may be no later than that.
+			int64_t onTime = -1, lateAfter = -1;
 			bool ownLateAfter = false;
 			for (uint64_t tick = 1; tick <= 300; ++tick) {
 				NetMatchService::AutosaveTickInput input;
@@ -8145,6 +8146,7 @@ namespace RTE {
 				const bool onlyBase = baseTick != 0 && tick > baseTick && tick < baseDone;
 				if (onlyBase && dueDuringBase == 0 && input.now >= service.m_NextAutosaveSimTime) dueDuringBase = tick;
 				if (onlyBase && raisedDuringBase == 0 && service.SaverOverdue(input, output)) raisedDuringBase = tick;
+				if (baseTick == 0 && onTime < 0 && output.periodicLateTicks >= 0) onTime = output.periodicLateTicks;
 				if (baseTick != 0 && tick > baseTick && namedAfter == 0 && output.periodicLateTicks >= 0) {
 					namedAfter = tick;
 					lateAfter = output.periodicLateTicks;
@@ -8169,11 +8171,12 @@ namespace RTE {
 				}
 			}
 			const bool withinInterval = baseTicks < 60;
-			if (baseTick == 0 || raisedDuringBase != 0 || namedAfter == 0 || ownLateAfter || (withinInterval && (dueDuringBase != 0 || lateAfter != 0))) {
+			if (baseTick == 0 || raisedDuringBase != 0 || namedAfter == 0 || ownLateAfter || (withinInterval && (dueDuringBase != 0 || lateAfter > onTime))) {
 				*error = "a-returners-base-is-the-matchs-save: the base taken at " + std::to_string(baseTick) + " was written by " + std::to_string(baseDone) +
 				         (dueDuringBase != 0 ? "; a periodic save fell due at " + std::to_string(dueDuringBase) + " while only the base was written" : std::string()) +
 				         (raisedDuringBase != 0 ? "; the saver was raised at " + std::to_string(raisedDuringBase) + " for the base alone" : std::string()) +
-				         "; the next periodic save was named at " + std::to_string(namedAfter) + " late by " + std::to_string(lateAfter) + " ticks" +
+				         "; the next periodic save was named at " + std::to_string(namedAfter) + " late by " + std::to_string(lateAfter) + " ticks (on time: " +
+				         std::to_string(onTime) + ")" +
 				         (ownLateAfter ? " as the host's own late save" : "");
 				return false;
 			}
