@@ -182,8 +182,9 @@ namespace RTE {
 	std::string NetReconnectUx::GetOfferText() const {
 		switch (m_Offer) {
 			case NetReconnectOffer::Available:
-				if (!m_OfferName.empty()) return "Rejoin " + m_OfferName + "?";
-				return "Rejoin your match?";
+				// The seat waits for its player with no deadline: only the host gives it away.
+				if (!m_OfferName.empty()) return "Rejoin " + m_OfferName + "? Your seat is held until the host gives it away.";
+				return "Rejoin your match? Your seat is held until the host gives it away.";
 			case NetReconnectOffer::Corrupt: return "The saved rejoin information is damaged and cannot be used.";
 			case NetReconnectOffer::Stale: return "The saved rejoin information is too old to use.";
 			case NetReconnectOffer::Missing: return "No reconnect record for that match.";

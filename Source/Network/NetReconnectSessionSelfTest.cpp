@@ -3241,11 +3241,11 @@ namespace RTE {
 				NetReconnectUx offer;
 				offer.OfferStoredTicket(NetH4TicketLoadResult::Loaded, "10.0.0.7");
 				if (offer.GetOffer() != NetReconnectOffer::Available || offer.GetOfferAddress() != "10.0.0.7" ||
-				    offer.GetOfferText() != "Rejoin your match?") {
+				    offer.GetOfferText() != "Rejoin your match? Your seat is held until the host gives it away.") {
 					return Fail("a usable record lost its route or exposed it in the rejoin offer");
 				}
 				offer.OfferStoredTicket(NetH4TicketLoadResult::Loaded, "10.0.0.7", "Evening match");
-				if (offer.GetOfferText() != "Rejoin Evening match?" || offer.GetOfferAddress() != "10.0.0.7") {
+				if (offer.GetOfferText() != "Rejoin Evening match? Your seat is held until the host gives it away." || offer.GetOfferAddress() != "10.0.0.7") {
 					return Fail("a named rejoin offer did not preserve its private route");
 				}
 				offer.OfferStoredTicket(NetH4TicketLoadResult::Corrupt, "10.0.0.7");

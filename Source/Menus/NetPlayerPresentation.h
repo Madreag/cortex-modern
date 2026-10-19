@@ -4,6 +4,7 @@
 #include "NetMatchService.h"
 #include "ScenarioRunner.h"
 
+#include <cctype>
 #include <map>
 #include <set>
 #include <string>
@@ -58,6 +59,13 @@ namespace RTE::NetPlayerPresentation {
 			return text.find("banned from this session") != std::string::npos ? "The host banned you from this session" : text;
 		}
 		if (text.find("transport stopped") != std::string::npos || text == "Connection dropped") return "The host's connection was lost.";
+		// The session's own error text starts in lower case; the player reads what happened and what to do, the log keeps the rest.
+		if (!text.empty() && std::islower(static_cast<unsigned char>(text.front()))) {
+			if (text.starts_with("match over")) return "The host ended the match";
+			if (text.starts_with("rematch roster")) return "The match could not return to the lobby";
+			if (text.find("timed out") != std::string::npos) return "The other players did not answer in time - try again";
+			return "The connection to the match failed - try again, or save a support report";
+		}
 		return text;
 	}
 
