@@ -1909,7 +1909,11 @@ namespace RTE {
 					}
 					size_t inputs = ready.localPeerId == seat ? ready.localFrames.size() : 0;
 					if (ready.localPeerId != seat) for (const auto& [sender, count]: ready.remoteFrameCounts) if (sender == seat) inputs += count;
-					if (inputs) { error = "authority ruling: a held incarnation supplied human input at frame " + std::to_string(ready.frame) + "; HoldAtFrame requires empty input"; return false; }
+					if (inputs) {
+						error = "authority ruling: a held incarnation supplied human input at frame " + std::to_string(ready.frame) + "; HoldAtFrame requires empty input: observer=" +
+						    std::to_string(observer) + " seat=" + std::to_string(seat) + " hold_frame=" + std::to_string(std::prev(after)->first);
+						return false;
+					}
 					++aiFrames; ++substitutes;
 					firstLostPressMs = std::min(firstLostPressMs, hub.now >= hub.faultAt ? hub.now - hub.faultAt : 0);
 				}
