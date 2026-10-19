@@ -160,6 +160,7 @@ namespace RTE {
 
 	private:
 		friend bool TestRecoveryUsesListedMatch(std::string* error);
+		friend struct NetConnectionSelfTestAccess;
 		NetHash32 DirectoryMatchHash(const NetHash32& peerHash) const;
 		struct Operation {
 			std::string body;
@@ -246,5 +247,8 @@ namespace RTE {
 		bool m_BootstrapWanted = false, m_Refused = false, m_Ended = false, m_Suspended = false;
 		std::string m_Error;
 	};
+
+	/// The connection plane's rows, run by the net-directory self-test; CCCP_TEST_CONNECTION_CASE picks one.
+	namespace NetConnectionSelfTest { bool Run(std::string* error); }
 
 } // namespace RTE

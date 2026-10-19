@@ -1357,6 +1357,7 @@ namespace RTE {
 		friend bool TestARejoinWalksItsPhasesAndTheGoodbyeEndsItsTailReplay(std::string* error);
 		friend struct HostOptionsLobbyRow;
 		friend struct SeatAdmissionServiceTest;
+		friend struct NetConnectionSelfTestAccess;
 		void NoteAdmissionReleasesLocked();
 		bool HostOptionsNeedCorrectionLocked() const;
 		friend bool TestMatchOverRejoinFromWaitKeepsCoordinator(std::string* error);
