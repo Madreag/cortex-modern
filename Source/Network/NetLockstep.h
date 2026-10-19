@@ -492,6 +492,9 @@ namespace RTE {
 	/// A combat bridge stays invisible until this interval; host loss requires total traffic silence.
 	constexpr uint64_t c_NetSeatDisconnectSilenceMs = 5000;
 	constexpr uint64_t c_NetHostLossSilenceMs = 15000;
+	/// How long a group smaller than half of its split's seats lets the larger half's question reach the referee first, as the
+	/// referee's own tie deadline.
+	constexpr uint64_t c_NetMinorityTieGraceMs = 1000;
 	constexpr uint64_t c_NetInputContinuityMs = 2000;
 	constexpr uint64_t c_NetHeldActionReleaseMs = 250;
 	constexpr uint32_t c_NetSeatCatchUpRate = 3;
@@ -1884,6 +1887,7 @@ namespace RTE {
 			uint32_t asked = 0; //!< The seats this seat itself first asked the referee to rule for.
 		};
 		std::map<uint64_t, PeerSplitArbitration> m_PeerSplitArbitrations;
+		std::map<uint64_t, std::pair<uint64_t, uint32_t>> m_PeerMinorityTieAsks; //!< A smaller group's own question: when it may ask, and its seats.
 		uint64_t m_TestBlackoutFrame = UINT64_MAX, m_TestBlackoutDurationMs = 0;
 		std::optional<uint64_t> m_TestBlackoutAtMs;
 		bool m_TestBlackoutEnded = false;

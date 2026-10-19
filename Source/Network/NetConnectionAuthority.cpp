@@ -577,7 +577,8 @@ namespace RTE {
 		if (index == m_FrameTieQuestions.size()) m_FrameTieQuestions.push_back(FrameTieOperation{request});
 		auto& question = m_FrameTieQuestions[index];
 		if (question.reply.state == NetFrameTieReply::State::Decided) return question.reply;
-		if (request.queryOnly && !question.request.queryOnly) {
+		// A check-in that becomes a query, or a smaller group's query that becomes its own question past its grace, is asked afresh.
+		if (request.queryOnly != question.request.queryOnly) {
 			if (m_ActiveFrameTie == index && m_FrameTie) {
 				if (m_RetiredFrameTies.size() >= 16) return {};
 				m_RetiredFrameTies.push_back(std::move(m_FrameTie));

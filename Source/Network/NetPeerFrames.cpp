@@ -296,9 +296,14 @@ namespace RTE {
 		const uint32_t voters = PeerVotingOwners(voting, frame);
 		if (voters == 0 || voting == voters) return;
 		request.queryOnly = (voting & SeatBit(m_Config.localPeerId)) == 0;
-		// A group smaller than half of the seats that played together before the split never asks the referee to rule for itself: the
-		// seat with the problem does not decide for the others. It queries and plays on, and the larger half's question rules.
-		if (2 * std::popcount(voting) < std::popcount(PeerFrameMembersAt(split))) request.queryOnly = true;
+		// A group smaller than half of the seats that played together before the split asks the referee to rule for it only after the
+		// referee's tie deadline: the larger half's question rules first, so the seat with the problem never decides for the others.
+		// Meanwhile it queries and plays on; it asks for itself only if no larger half did.
+		bool minorityAsks = false;
+		if (const uint32_t whole = PeerFrameMembersAt(split); !request.queryOnly && 2 * std::popcount(members & whole) < std::popcount(whole)) {
+			const auto& ask = m_PeerMinorityTieAsks.try_emplace(split, nowMs + c_NetMinorityTieGraceMs, voting).first->second;
+			if (nowMs < ask.first) request.queryOnly = true; else minorityAsks = true;
+		}
 		// The halves compare and decide in History scope: a returner still in its neutral interval on one half is an owner on both.
 		uint32_t named = members;
 		uint32_t owners = PeerVotingOwners(named, frame, PeerVotingScope::History);
@@ -314,7 +319,7 @@ namespace RTE {
 		if (request.members.empty() || request.members.size() >= request.owners.size()) return;
 		// A seat that heard the other half play on keeps asking what was decided: the referee holds one request per seat, and
 		// checking in again would replace the question and lose its answer.
-		if (m_Config.frameTieReferee && m_PeerFrameTie && m_PeerFrameTie->queryOnly) {
+		if (m_Config.frameTieReferee && m_PeerFrameTie && m_PeerFrameTie->queryOnly && !minorityAsks) {
 			auto asked = *m_PeerFrameTie;
 			asked.members = request.members; asked.queryOnly = request.queryOnly;
 			if (asked == request) request = *m_PeerFrameTie;
@@ -337,6 +342,18 @@ namespace RTE {
 	}
 
 	void NetLockstepCoordinator::PollPeerFrameTies(uint64_t nowMs) {
+		// A smaller group whose grace has passed with its split still open asks for itself.
+		for (auto ask = m_PeerMinorityTieAsks.begin(); ask != m_PeerMinorityTieAsks.end();) {
+			const auto arbitration = m_PeerSplitArbitrations.find(ask->first);
+			if (arbitration == m_PeerSplitArbitrations.end() || m_PeerFrameTieWinners.contains(ask->first)) { ask = m_PeerMinorityTieAsks.erase(ask); continue; }
+			if (nowMs >= ask->second.first && arbitration->second.request.queryOnly) {
+				arbitration->second.request.queryOnly = false;
+				if (arbitration->second.asked == 0) arbitration->second.asked = ask->second.second;
+				if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) DiagnosticLine() << "[net-peer-tie-question] local=" << unsigned(m_Config.localPeerId)
+				    << " split=" << ask->first << " minority_asks=1 members=" << ask->second.second << " now_ms=" << nowMs << std::endl;
+			}
+			++ask;
+		}
 		for (const auto& [split, arbitration]: m_PeerSplitArbitrations) {
 			const auto& request = arbitration.request;
 			const uint32_t owners = arbitration.owners;
