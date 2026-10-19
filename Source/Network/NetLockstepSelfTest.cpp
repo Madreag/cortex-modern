@@ -1599,27 +1599,45 @@ namespace RTE {
 
 		static bool HeldHostHashesStayPrivateInFrameGroups(std::string* error) {
 			// A frame group's held seat, host included, plays off the round until it returns; the host-routed round's held host
-			// still simulates it, so only there does its hash count.
-			for (bool groups: {false, true}) for (bool held: {false, true}) {
+			// still simulates it, so only there does its hash count. In a frame group a playing member's differing hash is a desync only
+			// when its record of every frame since the last match was this peer's: one that differed plays another continuation, which the
+			// split rule settles, and records not yet known decide the hash when they arrive.
+			enum class Records { None, Same, Differing, Unknown };
+			struct Arm { bool groups, held; Records records; };
+			for (const Arm arm: {Arm{false, false, Records::None}, Arm{false, true, Records::None}, Arm{true, true, Records::None},
+			                     Arm{true, false, Records::Same}, Arm{true, false, Records::Differing}, Arm{true, false, Records::Unknown}}) {
 				DelayWire wire; NetLockstepCoordinator peer; Configure(peer, wire);
-				peer.m_Config.peerFrameGroups = groups; peer.m_Config.substituteSlowPeers = true;
+				peer.m_Config.peerFrameGroups = arm.groups; peer.m_Config.substituteSlowPeers = true;
 				peer.m_MigrationPhase = NetHostMigrationPhase::None;
 				peer.m_RemotePeerIds = {1, 3}; peer.m_RemoteTransports = {{1, 41}, {3, 43}}; peer.m_RemoteStartsReceived = {1, 3};
-				if (held && groups) peer.m_PeerBridges[1] = {4400, 4400, true, std::nullopt, {}, 6};
-				else if (held) peer.m_AiHeldSeats[1] = 4400;
+				if (arm.groups) { peer.m_FrameGroupMembers = 7; peer.m_FrameGroupChanges = {{1, 7}}; }
+				if (arm.held && arm.groups) peer.m_PeerBridges[1] = {4400, 4400, true, std::nullopt, {}, 6};
+				else if (arm.held) peer.m_AiHeldSeats[1] = 4400;
+				peer.m_VerifiedAppliedFrames[1] = 4400;
+				const auto record = [&](bool differing) { for (uint64_t frame = 4401; frame <= 4410; ++frame) peer.m_PeerRecordMatches[1][frame] = !(differing && frame == 4405); };
+				if (arm.records == Records::Same || arm.records == Records::Differing) record(arm.records == Records::Differing);
 				std::array<uint8_t, 32> ours{}, theirs{};
 				ours.fill(0x11); theirs.fill(0x22);
 				if (!peer.SubmitLocalChecksum(4410, ours, error)) return false;
 				NetLockstepChecksum host; host.senderPeerId = 1; host.frame = 4410; host.hash = theirs; host.roundId = 77;
 				peer.HandleChecksum(host, 41);
-				const bool stopped = peer.m_PendingRecoveryStop && peer.m_PendingRecoveryStop->reason == NetLockstepStopReason::Desync;
-				const std::string arm = std::string(groups ? "frame groups" : "host-routed") + (held ? ", host held" : ", host playing");
-				std::cout << "[held-host-hash] " << arm << " mismatches=" << peer.m_Stats.checksumMismatches << " desync_stop=" << stopped << std::endl;
-				if (groups && held && (stopped || peer.m_Stats.checksumMismatches != 0)) {
-					*error = "a frame group stopped for a desync on a held host's private hash (" + arm + ")"; return false;
+				const auto stopped = [&] { return peer.m_PendingRecoveryStop && peer.m_PendingRecoveryStop->reason == NetLockstepStopReason::Desync; };
+				const std::string name = std::string(arm.groups ? "frame groups" : "host-routed") + (arm.held ? ", host held" : ", host playing") +
+				    (arm.records == Records::Same ? ", same records" : arm.records == Records::Differing ? ", a differing record" : arm.records == Records::Unknown ? ", records unknown" : "");
+				std::cout << "[held-host-hash] " << name << " mismatches=" << peer.m_Stats.checksumMismatches << " desync_stop=" << stopped() << std::endl;
+				if (arm.groups && arm.held && (stopped() || peer.m_Stats.checksumMismatches != 0)) {
+					*error = "a frame group stopped for a desync on a held host's private hash (" + name + ")"; return false;
 				}
-				if (!(groups && held) && (!stopped || peer.m_Stats.checksumMismatches != 1)) {
-					*error = "a differing hash from a host that plays the round was not a desync (" + arm + ")"; return false;
+				if (arm.records == Records::Differing && (stopped() || peer.m_Stats.checksumMismatches != 0 || !peer.m_PeerOtherContinuations.contains(1))) {
+					*error = "a member whose record differed was not taken as another continuation, or was called a desync (" + name + ")"; return false;
+				}
+				if (arm.records == Records::Unknown) {
+					if (stopped() || !peer.m_DeferredChecksumFrames.contains(4410)) { *error = "a hash was judged before the records that decide it (" + name + ")"; return false; }
+					record(false);
+					peer.RecheckDeferredChecksums();
+				}
+				if (!(arm.groups && arm.held) && arm.records != Records::Differing && (!stopped() || peer.m_Stats.checksumMismatches != 1)) {
+					*error = "a differing hash from a host that plays the round on the same records was not a desync (" + name + ")"; return false;
 				}
 			}
 			return true;
