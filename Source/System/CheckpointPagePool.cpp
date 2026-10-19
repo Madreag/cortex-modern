@@ -1128,7 +1128,7 @@ namespace {
 	constexpr size_t c_NativeStorageBlockBytes = size_t{1} << 20;
 	struct NativeStoragePool {
 		CheckpointPagePool pages;
-		std::vector<void*> free;
+		std::vector<void*> free; //!< A heap on the lowest address, so the live slots stay packed into the fewest pages.
 		uint64_t bytes = 0;
 		NativeStoragePool() { pages.IncludeInInventory(); }
 	};
@@ -1292,9 +1292,12 @@ void* CheckpointNativeStorage::Allocate(size_t bytes, size_t alignment) {
 		pools.ranges.insert(std::move(node));
 		pool.bytes += pool.free.size() * slot;
 		(s_NativeStorageAllocation ? pools.explicitGrownBytes : pools.worldGrownBytes) += bytes;
+		std::make_heap(pool.free.begin(), pool.free.end(), std::greater<>{});
 	}
-	void* address = pool.free.back();
+	// Every page that holds a live slot is written each tick and kept warm in a capture's copy, so the lowest free slot goes first.
+	void* address = pool.free.front();
 	if (CheckpointHeldMemory::Recording()) CheckpointHeldMemory::Note(&pool, address, slot, true);
+	std::pop_heap(pool.free.begin(), pool.free.end(), std::greater<>{});
 	pool.free.pop_back();
 	return address;
 }
@@ -1339,6 +1342,7 @@ bool CheckpointNativeStorage::ReleaseOwned(void* address) noexcept {
 		// Free lists reserve every slot at growth, so returning storage cannot allocate or discard frozen pages.
 		if (CheckpointHeldMemory::Recording()) CheckpointHeldMemory::Note(range.second.pool, address, range.second.slot, false);
 		range.second.pool->free.push_back(address);
+		std::push_heap(range.second.pool->free.begin(), range.second.pool->free.end(), std::greater<>{});
 		return true;
 	}
 	return false;
