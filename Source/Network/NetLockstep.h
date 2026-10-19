@@ -1840,6 +1840,8 @@ namespace RTE {
 		uint8_t m_PeerTailDonor = 0;
 		std::map<uint8_t, uint32_t> m_PeerReportedMembers; //!< The seats each seat last reported playing at its applied frame.
 		std::map<uint8_t, uint64_t> m_PeerOtherContinuations; //!< Members seen playing another continuation, from the frame whose records differed.
+		struct PeerContinuationEvidence { uint64_t first = 0, last = 0; uint32_t frames = 0; };
+		std::map<uint8_t, PeerContinuationEvidence> m_PeerContinuationEvidence; //!< Differing records since a member's last matching one.
 		std::optional<uint64_t> m_PeerNoDonorSinceMs; //!< Since when no seat could give this held seat its next frame.
 		bool m_LoneSeatInstalling = false; //!< This seat's own return as the round's lone player is being installed.
 		uint64_t m_PeerTailDuplicateFrames = 0;

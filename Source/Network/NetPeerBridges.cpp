@@ -955,7 +955,7 @@ namespace RTE {
 		m_FrameGroupChanges[agreed.frame] = agreed.connectedMask;
 		for (uint8_t peer: agreed.members) m_PeerFrameHolds[peer][agreed.frame] = agreed.preparedFrame == 0;
 		// A returning seat takes this group's history again.
-		if (agreed.preparedFrame == 1) for (uint8_t peer: agreed.members) m_PeerOtherContinuations.erase(peer);
+		if (agreed.preparedFrame == 1) for (uint8_t peer: agreed.members) { m_PeerOtherContinuations.erase(peer); m_PeerContinuationEvidence.erase(peer); }
 		if (agreed.preparedFrame == 0) {
 			m_FrameGroupMembers = PeerFrameMembersAt(agreed.frame);
 			// Retain the surviving display clock even when a certificate arrives after preparation.

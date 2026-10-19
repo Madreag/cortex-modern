@@ -21,6 +21,7 @@ namespace RTE {
 	// The low seat bits acknowledge committed continuations; the next seat bits acknowledge pre-hold reader reports.
 	// Heartbeats publish those distinct masks in voterMask and offset, respectively. A reader receipt cannot decide a split.
 	static constexpr unsigned c_DirectReaderReceiptShift = NetMatchConfigUtil::c_MaxPeerCount;
+	static constexpr uint32_t c_OtherContinuationFrames = 3;
 
 	std::pair<INetTransport*, NetPeerId> NetLockstepCoordinator::PeerFrameRoute(uint8_t peer) const {
 		if (m_Config.peerSessionLinks) return m_Config.peerSessionLinks->RouteTo(peer);
@@ -229,9 +230,19 @@ namespace RTE {
 		const uint32_t members = PeerFrameMembersAt(frame);
 		if ((members & SeatBit(peer)) == 0 || (members & SeatBit(m_Config.localPeerId)) == 0 || (PeerFrameMembersAt(m_Stats.nextFrame) & SeatBit(peer)) == 0) return;
 		const auto own = PeerAppliedFramePrefix(frame);
-		if (own == NetHash32{} || own == applied) return;
-		m_PeerOtherContinuations[peer] = frame;
-		DiagnosticLine() << "[net-peer-continuation] local=" << static_cast<int>(m_Config.localPeerId) << " peer=" << static_cast<int>(peer) << " frame=" << frame
+		if (own == NetHash32{}) return;
+		auto& evidence = m_PeerContinuationEvidence[peer];
+		if (own == applied) {
+			if (frame >= evidence.last) evidence = {};
+			return;
+		}
+		// One frame can carry a seat's own transition facts; another continuation differs on every frame it plays.
+		if (evidence.frames == 0 || frame < evidence.first) evidence.first = frame;
+		if (frame > evidence.last || evidence.frames == 0) { evidence.last = frame; ++evidence.frames; }
+		if (evidence.frames < c_OtherContinuationFrames) return;
+		m_PeerOtherContinuations[peer] = evidence.first;
+		m_PeerContinuationEvidence.erase(peer);
+		DiagnosticLine() << "[net-peer-continuation] local=" << static_cast<int>(m_Config.localPeerId) << " peer=" << static_cast<int>(peer) << " frame=" << m_PeerOtherContinuations.at(peer)
 		    << " next=" << m_Stats.nextFrame << " displayed=" << *m_LastCompletedSimulationTick << " now_ms=" << m_TimingNowMs << std::endl;
 	}
 
