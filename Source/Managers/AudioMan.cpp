@@ -2479,12 +2479,39 @@ std::string AudioMan::Census() const {
 	return "voices=" + std::to_string(m_PlayingVoices.size()) + " backend_voices=" + std::to_string(m_BackendVoiceIdentities.size()) +
 	       " logical_sounds=" + std::to_string(m_ActiveLogicalSounds.size()) + " live_containers=" + std::to_string(LiveSoundContainerCount()) +
 	       " pending_ops=" + std::to_string(m_PendingSoundOpContainers.size()) + " committed_audibility=" + std::to_string(m_CommittedAudibility.size()) + "/" + std::to_string(audibility) +
-	       " sent_audibility=" + std::to_string(m_LastSentAudibility.size()) + " restored_identities=" + std::to_string(WithCheckpointRegistry([](const auto& values) { return values.m_RestoredManagerIdentities.size(); }));
+	       " sent_audibility=" + std::to_string(m_LastSentAudibility.size()) + " restored_identities=" + std::to_string(WithCheckpointRegistry([](const auto& values) { return values.m_RestoredManagerIdentities.size(); })) + LiveSoundNames();
 }
 
 size_t AudioMan::LiveSoundContainerCount() const {
 	auto lock = RegistryLock();
 	return WithCheckpointRegistry([](const auto& values) { return values.m_LiveCheckpointSoundContainers.size(); });
+}
+
+std::string AudioMan::LiveSoundNames() const {
+	static const bool enabled = std::getenv("CC_TEST_SOUND_NAMES") != nullptr;
+	if (!enabled) return {};
+	auto lock = RegistryLock();
+	return WithCheckpointRegistry([](const auto& values) {
+		std::map<std::string, int> all, newest;
+		std::vector<std::pair<uint64_t, const SoundContainer*>> byIdentity;
+		for (const auto& [container, identity]: values.m_LiveCheckpointSoundContainers) {
+			const std::string name = container->GetPresetName() + "|" + container->GetModuleName();
+			++all[name];
+			byIdentity.emplace_back(identity, container);
+		}
+		std::sort(byIdentity.begin(), byIdentity.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+		for (size_t i = 0; i < std::min<size_t>(byIdentity.size(), 200); ++i) ++newest[byIdentity[i].second->GetPresetName() + "|" + byIdentity[i].second->GetModuleName()];
+		const auto top = [](const std::map<std::string, int>& counts) {
+			std::vector<std::pair<int, std::string>> sorted;
+			for (const auto& [name, count]: counts) sorted.emplace_back(count, name);
+			std::sort(sorted.rbegin(), sorted.rend());
+			std::string text;
+			for (size_t i = 0; i < std::min<size_t>(sorted.size(), 8); ++i) text += (i ? ";" : "") + sorted[i].second + ":" + std::to_string(sorted[i].first);
+			std::replace(text.begin(), text.end(), ' ', '_');
+			return text;
+		};
+		return " live_names=" + top(all) + " newest_names=" + top(newest);
+	});
 }
 
 void AudioMan::PauseIngameSounds(bool pause) {

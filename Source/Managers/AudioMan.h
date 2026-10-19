@@ -99,6 +99,8 @@ namespace RTE {
 
 		/// The voices and audibility records the manager keeps and their counts, for the memory census.
 		std::string Census() const;
+		/// Test lever CC_TEST_SOUND_NAMES: the live sound containers' most common preset names, of all and of the newest, for the memory census.
+		std::string LiveSoundNames() const;
 		/// The sound containers alive and registered for checkpoints.
 		size_t LiveSoundContainerCount() const;
 		/// This peer's actual audibility of every live shared sound it answers for, sampled at the input boundary; only changed readings ride.
