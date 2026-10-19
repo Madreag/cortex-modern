@@ -175,6 +175,26 @@ class ConnectionAuthority:
     def _json(value: Any) -> bytes:
         return json.dumps(value, separators=(",", ":"), ensure_ascii=True, sort_keys=True).encode()
 
+    @staticmethod
+    def _tie_winner(groups: list[list[int]], owners: list[int], host: int) -> list[int] | None:
+        """The group that keeps its history once no group of the seats not yet heard could beat it, as direct play rules at the heal:
+        the larger group, an even pair to the group with the host, or with the host in neither to the one with the lowest seat."""
+        def beats(group: list[int], other: list[int]) -> bool:
+            if len(group) != len(other):
+                return len(group) > len(other)
+            if (host in group) != (host in other):
+                return host in group
+            return min(group) < min(other)
+        best = None
+        for group in groups:
+            if best is None or beats(group, best):
+                best = group
+        heard = {seat for group in groups for seat in group}
+        unheard = [seat for seat in owners if seat not in heard]
+        if best is None or (unheard and not beats(best, unheard)):
+            return None
+        return best
+
     @classmethod
     def _tie_digest(cls, ties: dict[str, Any]) -> str:
         return hashlib.sha256(cls._json(ties)).hexdigest()
@@ -469,18 +489,23 @@ class ConnectionAuthority:
                 return dict(connection_protocol=CONNECTION_PROTOCOL, generation=generation, round_id=round_id,
                             frame=frame, config_hash=config_hash, status="waiting")
             if key not in ties:
-                ties[key] = {"owners": owners, "host": host, "until": now, "groups": []}
+                ties[key] = {"owners": owners, "host": host, "groups": []}
             tie = ties[key]
             if tie["owners"] != owners or tie["host"] != host:
                 raise ConnectionErrorReply(409, "frame_tie_mismatch", "The groups disagree about the retained seats. Reconnecting will retry.")
             # A record kept from the collecting rule ends its window as that rule did.
-            if "winner" not in tie and now >= tie["until"] and tie["groups"]:
+            if "winner" not in tie and "until" in tie and now >= tie["until"] and tie["groups"]:
                 tie["winner"] = tie["groups"][0]
             # Survivors already play through local holds. These immutable decisions arbitrate only competing split
-            # histories: the first group to check in keeps its history, and the other group returns through an image.
+            # histories: the group that would win at a direct heal keeps its history, decided as soon as no group of the
+            # seats not yet heard could beat it, and the other group returns through an image. A smaller group heard
+            # first waits for the rest; it plays on meanwhile, so the seat with the problem never decides for the others.
             if "winner" not in tie and not query_only:
-                tie["groups"].append(members)
-                tie["winner"] = members
+                if members not in tie["groups"]:
+                    tie["groups"].append(members)
+                winner = self._tie_winner(tie["groups"], owners, host)
+                if winner is not None:
+                    tie["winner"] = winner
             # Return waiting immediately; no HTTP worker sleeps on a tie.
             # Keep every decision for the match's lifetime, including after
             # later ties, so an old observer can never reopen a decided tie.
