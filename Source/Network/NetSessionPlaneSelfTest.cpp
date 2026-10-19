@@ -191,7 +191,23 @@ namespace RTE {
 		// The first group to check in keeps that split; later replies cannot change it. Holds never consult this fixture's record directly.
 		// The existing frame-tie message carries the request, including unequal splits of three retained seats.
 		struct Directory {
-			struct Tie { std::vector<uint16_t> owners; uint16_t host = 0; std::vector<uint16_t> winner; };
+			struct Tie { std::vector<uint16_t> owners; uint16_t host = 0; std::vector<uint16_t> winner; std::vector<std::vector<uint16_t>> groups; };
+			// As the directory decides (connection_authority._tie_winner): the group no group of the seats not yet heard could beat, as
+			// direct play rules at the heal - the larger, an even pair to the host's group, with the host in neither to the lowest seat.
+			static std::vector<uint16_t> TieWinner(const std::vector<std::vector<uint16_t>>& groups, const std::vector<uint16_t>& owners, uint16_t host) {
+				const auto has = [](const std::vector<uint16_t>& seats, uint16_t seat) { return std::find(seats.begin(), seats.end(), seat) != seats.end(); };
+				const auto beats = [&](const std::vector<uint16_t>& group, const std::vector<uint16_t>& other) {
+					if (group.size() != other.size()) return group.size() > other.size();
+					if (has(group, host) != has(other, host)) return has(group, host);
+					return *std::min_element(group.begin(), group.end()) < *std::min_element(other.begin(), other.end());
+				};
+				const std::vector<uint16_t>* best = nullptr;
+				for (const auto& group: groups) if (!best || beats(group, *best)) best = &group;
+				std::vector<uint16_t> unheard;
+				for (uint16_t seat: owners) if (std::none_of(groups.begin(), groups.end(), [&](const auto& group) { return has(group, seat); })) unheard.push_back(seat);
+				if (!best || (!unheard.empty() && !beats(*best, unheard))) return {};
+				return *best;
+			}
 			std::map<std::tuple<uint64_t, uint64_t, NetHash32, uint64_t>, Tie> ties;
 			std::vector<uint16_t> retained;
 			std::set<uint16_t> leases, removed;
@@ -282,7 +298,10 @@ namespace RTE {
 				if (request.queryOnly && !ties.contains(key)) return {200, false, {}};
 				auto& tie = ties.try_emplace(key, Tie{request.owners, request.host, {}}).first->second;
 				if (tie.owners != request.owners || tie.host != request.host) return refuse(409, "frame_tie_mismatch");
-				if (tie.winner.empty() && !request.queryOnly) tie.winner = request.members;
+				if (tie.winner.empty() && !request.queryOnly) {
+					if (std::find(tie.groups.begin(), tie.groups.end(), request.members) == tie.groups.end()) tie.groups.push_back(request.members);
+					tie.winner = TieWinner(tie.groups, request.owners, request.host);
+				}
 				return {200, !tie.winner.empty(), tie.winner};
 			}
 		};
