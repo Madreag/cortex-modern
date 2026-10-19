@@ -4479,6 +4479,53 @@ namespace RTE {
 		return 0;
 	}
 
+	/// A returner far behind the round is served from the journal: a datagram it lost goes again once the journal has read it back,
+	/// never dropped from the resend queue while that read is on its way.
+	int TestALostJournalDatagramIsSentAgain() {
+		ResumeScratchDirectory scratch;
+		NetWorldJoinHost host;
+		auto config = NetMatchConfigUtil::MakeDefault(0x9A23);
+		std::string error;
+		if (!host.ConfigureMatchRejoins(config, 1, 1000.0 / 60.0, &error)) return Fail("journal resend fixture: " + error);
+		NetWorldFrameLog& tail = host.Tail();
+		tail.Configure(4, 1 << 20);
+		for (uint64_t tick = 1; tick <= 400; ++tick) {
+			if (!tail.Append(MakeCommittedFrame(tick), &error)) return Fail(error);
+			if (tick == 1) tail.EnableJournal((scratch.path / "match.inputs").string());
+		}
+		(void)SettledJournalStats(tail);
+		if (!host.BeginInPlaceRejoin(42, 2, 2, 3, "returning", 1, 282, &error)) return Fail("journal resend fixture: " + error);
+		host.NoteRejoinLinkFit(42, true);
+		std::vector<uint8_t> packed;
+		const auto carries = [&](uint64_t wanted) {
+			for (size_t offset = 0; offset + 4 <= packed.size();) {
+				const uint32_t bytes = static_cast<uint32_t>(packed[offset]) | (static_cast<uint32_t>(packed[offset + 1]) << 8) |
+					(static_cast<uint32_t>(packed[offset + 2]) << 16) | (static_cast<uint32_t>(packed[offset + 3]) << 24);
+				offset += 4;
+				NetLockstepFrame frame;
+				if (bytes > packed.size() - offset || !DecodeCommittedJoinFrame(std::vector<uint8_t>(packed.begin() + offset, packed.begin() + offset + bytes), frame, &error)) return false;
+				if (frame.targetFrame == wanted) return true;
+				offset += bytes;
+			}
+			return false;
+		};
+		// Each call is one pump of the link at the given time; the journal reads on its own thread meanwhile.
+		const auto pumpUntilSent = [&](uint64_t nowMs, uint64_t wanted) {
+			const auto deadline = RTE::SteadyClock::now() + std::chrono::seconds(2);
+			while (RTE::SteadyClock::now() < deadline) {
+				if (host.NextTailDatagram(42, nowMs, packed) && carries(wanted)) return true;
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			}
+			return false;
+		};
+		if (!pumpUntilSent(1000, 283)) return Fail("a returner served from the journal got no first datagram");
+		// The returner never receives it; the copy due a moment later is read back from the journal too.
+		if (!pumpUntilSent(1000 + c_NetWorldTailRepeatMs, 283))
+			return Fail("lost-journal-datagram-dropped: the datagram from frame 283 left the resend queue while the journal read it back, so the returner waits on frame 283 forever");
+		std::cout << "[net-world-join-selftest] PASS a_lost_journal_datagram_is_sent_again from=283" << std::endl;
+		return 0;
+	}
+
 	/// A returning seat is activated where it will have caught up: at its measured replay rate it closes on the round
 	/// only by the difference of the two rates, and an activation the round reaches first leaves every peer waiting.
 	int TestPrivateActivationWaitsForTheCatchUp() {
@@ -10495,6 +10542,7 @@ namespace RTE {
 		if (const int result = TestPrivateRejoinHeadroom(); result != 0) return result;
 		if (const int result = TestPrivateActivationWaitsForTheCatchUp(); result != 0) return result;
 		if (const int result = TestAHeldSeatCatchesUpInPlaceWithoutAnImage(); result != 0) return result;
+		if (const int result = TestALostJournalDatagramIsSentAgain(); result != 0) return result;
 		if (const int result = TestAReturnedSeatTakesNoBaseThatStallsTheRound(); result != 0) return result;
 		if (const int result = TestTheColdFirstCaptureNeverDecidesAHeldSeatsRefresh(); result != 0) return result;
 		if (const int result = TestAHeldWorldSeatWaitsForItsReturner(); result != 0) return result;
