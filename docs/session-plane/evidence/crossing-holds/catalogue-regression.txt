@@ -1,0 +1,16 @@
+# four_seats_hold_during_another_seats_private_catch_up (fixed catalogue), alone: CC_TEST_SESSION_PLANE_CASE
+## 56b4fb9b
+[net-session-plane-selftest] PASS four_seats_hold_during_another_seats_private_catch_up
+## 548610a7
+[net-session-plane-selftest] FAIL four_seats_hold_during_another_seats_private_catch_up: seed=0 property=return kind=returned_seat_held_again: seat 3 was held at 20513 ms with no trouble of its own since 17513 ms after it had returned
+## be574ef8
+[net-session-plane-selftest] FAIL four_seats_hold_during_another_seats_private_catch_up: seed=0 property=return kind=returned_seat_held_again: seat 3 was held at 20513 ms with no trouble of its own since 17513 ms after it had returned
+## 1b068d9a
+[net-session-plane-selftest] PASS four_seats_hold_during_another_seats_private_catch_up
+
+# The same schedule with every engine line (CC_TEST_HOLD_SCHEDULE, CC_TEST_RETURN_INPUT_DETAILS): the held seat 2 refused the ruling half's hold
+[net-peer-foreign-hold] local=2 frame=708 next=719 displayed=698 waiting=18446744073709551615 waiting_since=0 input_voters=2 local_source=0 now_ms=13103
+[net-peer-decision-refused] local=2 frame=708 kind=25 reason=no playing seat next=719 displayed=698 now_ms=13103
+# on 56b4fb9b it took it
+[net-peer-hold-installed] local=2 peer=1 frame=708 ai_frame=708 voters=4 proposer=3 certificate_sender=3 next=708 displayed=698 now_ms=13103 cause=certified_peer_decision
+[net-peer-hold-installed] local=2 peer=4 frame=708 ai_frame=708 voters=4 proposer=3 certificate_sender=3 next=708 displayed=698 now_ms=13103 cause=certified_peer_decision

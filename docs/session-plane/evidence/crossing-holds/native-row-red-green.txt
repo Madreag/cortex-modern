@@ -1,0 +1,19 @@
+# RED, binary dd6923e8 (the guard disabled by a temporary lever, removed before commit), CC_TEST_LOCKSTEP_SELFTEST_CASE=round-keeps-a-player
+[round-keeps-a-player] FAIL a seat that signed its own hold signed a hold of the other seat too
+[round-keeps-a-player] FAIL a seat that signed its own hold would hold another
+[round-keeps-a-player] FAIL the hold that left the round without a playing seat was installed: held=1 members=0
+
+# GREEN, binary 548610a7
+[net-lockstep-selftest] PASS a_round_keeps_a_playing_seat
+[net-lockstep-selftest] PASS
+
+# a_returners_pace_compares_what_it_applied: RED on 52bb9d77 with the lag ignored by a temporary lever (removed), GREEN on the same binary and on the clean build
+[net-lockstep-selftest] FAIL: a seat applying the display of a round trip earlier was paced against the burst: 60.000000 against 65.000000
+[net-lockstep-selftest] PASS a_returners_pace_compares_what_it_applied
+[net-lockstep-selftest] PASS
+
+# a_held_seat_with_no_donor_plays_on: RED on 48f33826 with the lone path disabled by a temporary lever (removed), GREEN on the same binary without it
+[lone-seat] FAIL a held seat with no seat left to give its history still waited: took=0 reader=1 members=1
+[lone-seat] FAIL of two held seats waiting on each other the host did not play on: took=0 members=2
+[net-lockstep-selftest] PASS a_held_seat_with_no_donor_plays_on
+[net-lockstep-selftest] PASS

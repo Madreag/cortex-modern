@@ -1,0 +1,32 @@
+# Old build 56b4fb9b (before), tools/test_crossing_holds.py --host-load 25000:1500:1560 --client-load 40000:1540:1660 (final driver)
+r1: : false, "failure": "RuntimeError('the round stood still for 90 s at ticks (12000, 2100)')", "checks": {"all_normal_exits": true, "played_past_the_end_tick": false, "a_seat_was_held": true, "every_held_seat_returned": true, "never_a_round_without_a_player": true, "hashes_equal": false}, "ticks": {"host": 12000, "client": 2100}}
+r2: : false, "failure": "RuntimeError('the round stood still for 90 s at ticks (12000, 2100)')", "checks": {"all_normal_exits": true, "played_past_the_end_tick": false, "a_seat_was_held": true, "every_held_seat_returned": true, "never_a_round_without_a_player": true, "hashes_equal": false}, "ticks": {"host": 12000, "client": 2100}}
+
+trace on the same shape: [tmp-open-inplace] member=2 why=transport-bound
+trace on the same shape: [tmp-open-inplace] member=2 why=transport-bound
+
+# New build (a3a4742c engine = 548610a7 engine), the same shape
+h1: {"pass": true, "failure": null, "checks": {"all_normal_exits": true, "played_past_the_end_tick": true, "a_seat_was_held": true, "every_held_seat_returned": true, "never_a_round_without_a_player": true, "hashes_equal": true}, "ticks": {"host": 4200, "client": 4200}}
+   splits {'host': [], 'client': [['1979', '2162', '1']]} rejoin_frame 3946 desyncs {'host': [], 'client': [2130, 2160]}
+h2: {"pass": true, "failure": null, "checks": {"all_normal_exits": true, "played_past_the_end_tick": true, "a_seat_was_held": true, "every_held_seat_returned": true, "never_a_round_without_a_player": true, "hashes_equal": true}, "ticks": {"host": 2700, "client": 2700}}
+   splits {'host': [], 'client': []} rejoin_frame None desyncs {'host': [], 'client': []}
+
+# Driver corrections between runs (disclosed): first version on a3a4742c, run xh-fy-2
+{"pass": false, "failure": null, "checks": {"all_normal_exits": false, "played_past_the_end_tick": true, "a_seat_was_held": true, "every_held_seat_returned": true, "never_a_round_without_a_player": true, "hashes_equal": false}, "ticks": {"host": 3240, "client": 2700}}
+
+[net-match] resync failed: No reconnect record for that match.
+
+# Build 1b068d9a (the install guard narrowed to playing seats, see catalogue-regression.txt), the same shape, two runs
+g1: {"pass": true, "failure": null, "checks": {"all_normal_exits": true, "played_past_the_end_tick": true, "a_seat_was_held": true, "every_held_seat_returned": true, "never_a_round_without_a_player": true, "hashes_equal": true}, "ticks": {"host": 3540, "client": 3540}}
+   exe 1b068d9a splits {'host': [], 'client': [['1918', '2064', '1']]} rejoin_frame 3238 desyncs {'host': [], 'client': []}
+g2: {"pass": true, "failure": null, "checks": {"all_normal_exits": true, "played_past_the_end_tick": true, "a_seat_was_held": true, "every_held_seat_returned": true, "never_a_round_without_a_player": true, "hashes_equal": true}, "ticks": {"host": 3480, "client": 3480}}
+   exe 1b068d9a splits {'host': [], 'client': [['1927', '2096', '1']]} rejoin_frame 3230 desyncs {'host': [], 'client': [2070]}
+
+# A held client whose host engine is dropped: --host-dies-when-client-held --host-load none --client-load 60000:1500:1800
+# RED on 1b068d9a (no lone-seat path), GREEN on 8466d30b
+red: {"pass": false, "failure": "RuntimeError('the round stood still for 90 s at ticks (1500,)')", "checks": {"host_dropped_while_client_held": true, "client_exited_normally": true, "client_played_past_the_end_tick": false, "client_took_its_seat_back_alone": false, "never_a_round_without_a_player": true, "client_hashes_agreed_before_the_drop": true}, "ticks": {"host": 1500, "client": 1500}, "host_dropped_at_client_tick": 1500}
+   exe 1b068d9a
+green: {"pass": true, "failure": null, "checks": {"host_dropped_while_client_held": true, "client_exited_normally": true, "client_played_past_the_end_tick": true, "client_took_its_seat_back_alone": true, "never_a_round_without_a_player": true, "client_hashes_agreed_before_the_drop": true}, "ticks": {"host": 1500, "client": 2700}, "host_dropped_at_client_tick": 1500}
+   exe 8466d30b
+green client: [net-peer-recovery] peer=2 now_ms=42563 frame=1515 lone=1 waiting=2 held=1: no seat can give this frame; this seat plays on alone
+green client: [net-admin] validated boundary=1515 activation=1520 host=2 voters=2
