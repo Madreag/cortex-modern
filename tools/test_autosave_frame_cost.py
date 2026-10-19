@@ -11,8 +11,13 @@ still busy with that save.
 For each peer and kind the result gives the median frame rate, the 95th percentile of the per-window worst frame interval,
 the median tick rate and the seat holds whose frame falls there. The verdict: each peer's ordinary saves (not in a rejoin
 run, whose client is replaced) and the host's frames while a base waits keep at least 95 % of the idle frame rate and at
-most 125 % of the idle worst frame interval, and the host keeps its idle tick rate within 0.5 ticks/s while a base waits.
-The same numbers on a base build are the reference a tip is compared with.
+most 125 % of the idle worst frame interval, and the host keeps its idle tick rate within 0.5 ticks/s while a base waits;
+in a rejoin run the returner also catches up with no refusal of its base (tools/rejoin_stage_check.py).
+--base names a base build's result.json (or its run folder), as often as there are base runs. The judged kinds are then
+held to the base instead of to their own idle windows: a kind's frame rate and worst frame are taken as ratios to its own
+run's idle windows, and the tip's ratio keeps at least 95 % of the base runs' mean frame-rate ratio and at most 125 % of
+their mean worst-frame ratio; while a base waits the host's tick rate stays within 0.5 ticks/s of the base's and its own
+seat is held no more often. The verdict against the run's own idle windows is reported beside it as in_run_checks.
 """
 import argparse
 from datetime import datetime, timezone
@@ -113,6 +118,28 @@ def keeps(kind, idle, minimum):
             'keeps_worst_frame': kind['worst_ms_p95'] <= 1.25 * idle['worst_ms_p95']}
 
 
+def ratios(kind, idle):
+    """The kind's frame rate and worst frame interval as ratios to its own run's idle windows."""
+    return kind['fps_median'] / idle['fps_median'], kind['worst_ms_p95'] / idle['worst_ms_p95']
+
+
+def equals_base(role, name, kind, idle, bases, minimum):
+    """The kind against the base runs' same kind: its ratios to idle keep 95 % of their frame-rate ratio and 125 % of their
+    worst-frame ratio; while a base waits the tick rate stays within 0.5 ticks/s of theirs and the own seat is held no more."""
+    reference = [b['peers'][role]['kinds'] for b in bases if role in b['peers']]
+    reference = [k for k in reference if k[name]['windows'] >= minimum and k['idle']['windows'] >= 10]
+    if kind['windows'] < minimum or idle['windows'] < 10 or not reference:
+        return {'enough_windows': False}
+    fps, worst = ratios(kind, idle)
+    base_fps = statistics.mean(ratios(k[name], k['idle'])[0] for k in reference)
+    base_worst = statistics.mean(ratios(k[name], k['idle'])[1] for k in reference)
+    out = {'enough_windows': True, 'frame_rate_equal_to_base': fps >= 0.95 * base_fps, 'worst_frame_equal_to_base': worst <= 1.25 * base_worst}
+    if name == 'base':
+        out['tick_rate_equal_to_base'] = kind['tps_median'] >= statistics.mean(k[name]['tps_median'] for k in reference) - 0.5
+        out['own_seat_holds_equal_to_base'] = kind['own_seat_holds'] <= max(k[name]['own_seat_holds'] for k in reference)
+    return out
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--repo', type=Path, required=True)
@@ -123,7 +150,14 @@ def main():
     p.add_argument('--warmup-ticks', type=int, default=1200)
     p.add_argument('--limit-seconds', type=int, default=1500)
     p.add_argument('--port', type=int, default=49492)
+    p.add_argument('--base', type=Path, action='append', default=[], help="a base build's result.json or run folder; repeat per base run")
     a = p.parse_args()
+    references = []
+    for path in a.base:
+        found = sorted(path.resolve().rglob('result.json')) if path.is_dir() else [path.resolve()]
+        if not found or not found[0].exists():
+            raise SystemExit(f'no base result at {path}')
+        references.append({'path': str(found[0]), **json.loads(found[0].read_text())})
     repo = a.repo.resolve()
     sys.path.insert(0, str(repo / 'tools'))
     from run_sim_test import make_run, seed_settings, engine_executable, file_sha256
@@ -172,7 +206,8 @@ def main():
     config = {'topology': 'single-box', 'proof': False, 'box': platform.node(), 'autosave_seconds': a.autosave_seconds,
               'periodic_captures': a.periodic_captures, 'client_rejoin': a.client_rejoin, 'input_delay': 'auto', 'settings': settings,
               'environment': env, 'source_head': subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip(),
-              'exe_sha256': file_sha256(engine_executable(repo)), 'started_utc': datetime.now(timezone.utc).isoformat()}
+              'exe_sha256': file_sha256(engine_executable(repo)), 'started_utc': datetime.now(timezone.utc).isoformat(),
+              'bases': [{'path': b['path'], 'exe_sha256': b['exe_sha256'], 'source_head': b['source_head']} for b in references]}
     (out / 'configuration.json').write_text(json.dumps(config, indent=2))
 
     def log(role):
@@ -206,7 +241,9 @@ def main():
                 runs['client'] = make_run(repo, argv['client'], out / 'client-rejoined', a.limit_seconds + 600,
                                           env=probe_env('client-rejoined'), runtime=Path(runs['client-dropped'].cwd))
                 runs['client'].start()
-            rejoin_pending = bool(a.client_rejoin) and (rejoined_at is None or not re.search('private base taken', log('host')))
+            # A rejoin run lasts until its base is taken and the returner is back or refused.
+            rejoin_pending = bool(a.client_rejoin) and (rejoined_at is None or not re.search('private base taken', log('host')) or
+                                                        not re.search(r'CaughtUp REJOIN_CATCHUP->RUNNING|rejoin refused connection=', log('host')))
             if len(named()) >= a.periodic_captures and written('host') >= len(named()) and not rejoin_pending:
                 break
             if time.monotonic() > until:
@@ -223,7 +260,7 @@ def main():
                 records[role] = runs[role].finish()
         for run in runs.values():
             run.close()
-    peers, judged = {}, {}
+    peers, judged, in_run = {}, {}, {}
     host_dues = timeline(log('host'), True)[2]
     for local, role in ((1, 'host'), (2, 'client')):
         windows, saves, dues, bases, holds = timeline(log(role), role == 'host')
@@ -231,20 +268,35 @@ def main():
         kinds, overdue = classify(windows, saves, host_dues, bases, a.warmup_ticks)
         peers[role] = {'kinds': summary(windows, kinds, holds, local), 'saves': saves, 'overdue_spans': overdue, 'bases': bases}
         idle, save, base = (peers[role]['kinds'][k] for k in ('idle', 'save', 'base'))
+        if idle['windows']:
+            peers[role]['ratios_to_idle'] = {k: [round(r, 3) for r in ratios(v, idle)] for k, v in peers[role]['kinds'].items() if v['windows']}
         if not a.client_rejoin:
-            judged[role] = {f'save_{name}': value for name, value in keeps(save, idle, 5).items()}
+            in_run[role] = {f'save_{name}': value for name, value in keeps(save, idle, 5).items()}
+            if references:
+                judged[role] = {f'save_{name}': value for name, value in equals_base(role, 'save', save, idle, references, 5).items()}
         elif role == 'host':
             busy = any(any(start <= asked <= end for start, end in saves) for asked, _ in bases)
-            judged[role] = {'base_asked_while_writer_busy': busy, **{f'base_{name}': value for name, value in keeps(base, idle, 3).items()}}
+            in_run[role] = {'base_asked_while_writer_busy': busy, **{f'base_{name}': value for name, value in keeps(base, idle, 3).items()}}
             if base['windows'] >= 3:
-                judged[role]['base_keeps_tick_rate'] = base['tps_median'] >= idle['tps_median'] - 0.5
+                in_run[role]['base_keeps_tick_rate'] = base['tps_median'] >= idle['tps_median'] - 0.5
+            if references:
+                judged[role] = {'base_asked_while_writer_busy': busy, **{f'base_{name}': value for name, value in equals_base(role, 'base', base, idle, references, 3).items()}}
+        if not references and role in in_run:
+            judged[role] = in_run[role]
     refused = {role: re.findall(r'^\[autosave\] (?:named tick=\d+ not taken: .*|failed .*)$', log(role), re.M) for role in ('host', 'client')}
     checks = {'no_driver_failure': failure is None,
               'all_exit_zero': all(r.get('exit_code') == 0 and not r.get('timed_out') for role, r in records.items() if role != 'client-dropped'),
               'periodic_captures_taken': len(named()) >= a.periodic_captures,
               'no_capture_refused': not refused['host'] and (bool(a.client_rejoin) or not refused['client']),
               **{f'{role}_{name}': value for role, items in judged.items() for name, value in items.items()}}
-    result = {**config, 'pass': all(checks.values()), 'checks': checks, 'failure': failure, 'wall_seconds': round(time.monotonic() - began, 1),
+    if a.client_rejoin:
+        # The returner waits for its base and comes back; a base on its way is never refused.
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from rejoin_stage_check import check as stage_check
+        stage = stage_check(log('host'))
+        checks['returner_caught_up_unrefused'] = stage['status'] == 'PASS' and stage['returns_caught_up'] > 0
+    in_run_checks = {f'{role}_{name}': value for role, items in in_run.items() for name, value in items.items()} if references else None
+    result = {**config, 'pass': all(checks.values()), 'checks': checks, 'in_run_checks': in_run_checks, 'failure': failure, 'wall_seconds': round(time.monotonic() - began, 1),
               'captures': named(), 'rejoined_at_host_tick': rejoined_at, 'peers': peers, 'refused': refused,
               'exits': {role: r.get('exit_code') for role, r in records.items()}}
     (out / 'result.json').write_text(json.dumps(result, indent=2))
