@@ -39,8 +39,9 @@ How the multiplayer screens behave, for players and for anyone changing them. Ev
   pending request. Nobody loses a seat without the host's click.
 - Removing a player asks for a second press everywhere: the Players panel's `Remove` and `Ban`, the lobby seat dialog's
   `Kick player` and `Ban this session` ("Confirm kick" - "Press Confirm kick to remove <player> from this session"), and the
-  session's `End session` ("Confirm end"). Any other press takes the first one back. `Banned players` lists the session's
-  bans; `Remove ban` lets a player back.
+  session's `End session` ("Confirm end"). Any other press takes the first one back. A removed player stays refused for the
+  rest of the match ("The host removed you from this session"). `Banned players` lists the session's bans; `Remove ban` lets
+  a player back.
 
 ## In a match
 
