@@ -2086,6 +2086,8 @@ namespace RTE {
 					if (const auto unresolved = UnresolvedLateSplits(); !unresolved.empty()) { error = unresolved + " before the round ended"; return false; }
 					compared = {}; splitFrom = {}; inputSplits = {}; inputSplitCauses.clear(); partitionOwners = {}; lateSplits.clear(); unexplained = {}; sawSplit = splitHistories = false;
 					imageTasks.clear(); imageTasks.resize(hub.row.seats);
+					// As the service's tail log, the committed record starts again with the round: frame numbers restart.
+					committed.assign(hub.row.seats, {}); for (auto& donors: abandonedDonors) donors.clear();
 					directRuling = 0;
 					std::fill(lostAt.begin(), lostAt.end(), 0); std::fill(lostFrame.begin(), lostFrame.end(), 0);
 					std::fill(imageAt.begin(), imageAt.end(), 0); std::fill(imageReturns.begin(), imageReturns.end(), 0);
