@@ -30,3 +30,7 @@ green: {"pass": true, "failure": null, "checks": {"host_dropped_while_client_hel
    exe 8466d30b
 green client: [net-peer-recovery] peer=2 now_ms=42563 frame=1515 lone=1 waiting=2 held=1: no seat can give this frame; this seat plays on alone
 green client: [net-admin] validated boundary=1515 activation=1520 host=2 voters=2
+
+# Build 8c903518, the same shape, run beside the network rows
+g3: {"pass": true, "failure": null, "checks": {"all_normal_exits": true, "played_past_the_end_tick": true, "a_seat_was_held": true, "every_held_seat_returned": true, "never_a_round_without_a_player": true, "hashes_equal": true}, "ticks": {"host": 4800, "client": 4800}}
+   exe 8c903518 splits {'host': [], 'client': [['1949', '2093', '1']]} rejoin_frame 4506 desyncs {'host': [], 'client': []}

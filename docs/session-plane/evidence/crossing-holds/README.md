@@ -37,6 +37,8 @@ compare had already flagged frames 2100 and 2130): its stop named the frame it s
 - (c) A held seat that no seat can give its next frame - every other seat silent past the host-loss window, or held itself
   - takes its seat back and holds the others at that frame; of several such seats only the original host, else the lowest,
   does, and the others read its history. A lone survivor then migrates as before.
+  A seat whose applied frame still rises is reading toward its own return and is waited for: the first form took the round
+  from such a seat (random seed 92, `catalogue-regression.txt`: RED on 8466d30b, GREEN on 8c903518).
 - The host's in-place opener accepts a held seat's own bound link in a frame-group round.
 - A split loser records the frame after the split's last common frame as where its history parted, so it rejoins through
   the image, as the ruling says, never by replaying the ruling half's frames over its own.
