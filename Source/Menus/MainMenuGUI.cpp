@@ -3316,8 +3316,8 @@ void MainMenuGUI::RestoreHostOptionsPageDefaults() {
 			break;
 		case c_HostOptionsRecoveryPage:
 			m_HostOptionsDraft.automaticRepair = factory.automaticRepair;
-			m_HostOptionsDraft.autosaveEnabled = false;
-			m_HostOptionsDraft.autosaveIntervalSeconds = 0;
+			m_HostOptionsDraft.autosaveEnabled = true;
+			m_HostOptionsDraft.autosaveIntervalSeconds = NetMatchService::c_DefaultAutosaveIntervalSeconds;
 			m_HostOptionsDraft.returnWindowMinutes = NetMatchConfigUtil::c_DefaultReturnWindowMinutes;
 			m_HostComputerDraft.joinHistorySeconds = HostComputerDraft{}.joinHistorySeconds;
 			m_HostComputerDraft.joinLagSeconds = HostComputerDraft{}.joinLagSeconds;

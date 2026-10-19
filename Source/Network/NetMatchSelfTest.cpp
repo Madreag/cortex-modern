@@ -10460,7 +10460,7 @@ namespace RTE {
 		}
 	} // namespace
 
-	// The host saves when it chooses, with autosaves off (the default): both peers capture the tick the ask names, the stream
+	// The host saves when it chooses, with autosaves off: both peers capture the tick the ask names, the stream
 	// carries it marked as the host's save, and the host hears back from both writers. A second ask before that tick is the
 	// same save; an ask after it is a new one.
 	bool TestTheHostSavesTheMatchWhenAsked(std::string* error) {

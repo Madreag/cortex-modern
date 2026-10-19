@@ -33,7 +33,7 @@ namespace RTE {
 
 	/// The autosave interval row's range.
 	inline const char* NetAutosaveRangeHint() {
-		return "Every 60 s to 60 min, or off (default)";
+		return "Every 60 s to 60 min; 5 min by default";
 	}
 
 	/// What an autosave can cost the other players.
