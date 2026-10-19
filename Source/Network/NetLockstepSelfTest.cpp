@@ -979,6 +979,44 @@ namespace RTE {
 		// Seat 1 held seat 3 at its bound at frame 150 while seat 2 had already played seat 3's input there. A witness of a frame both
 		// applied shows the other continuation: the member is held at the next frame, the groups are disjoint, and the healed
 		// histories or the directory choose between them. A directory decision naming seats of both continuations is the asker's.
+		static bool AStraddlingRulingIsTheOtherHalfsQuestion(std::string* error) {
+			// The directory rules for a split's first question. A seat held while it still counted a seat of this group asks with
+			// that seat named, so the ruling names seats of both continuations; a seat whose own question it is not lost it, wherever
+			// its members are. Arms: seats 4 and 1 of the group that held seat 3, seat 3 itself, and a plain two-two partition.
+			struct Arm { uint8_t local; uint32_t asked, playing, winner; bool stops; };
+			for (const Arm arm: {Arm{4, 11, 11, 5, true}, Arm{1, 11, 11, 5, true}, Arm{3, 5, 4, 5, false}, Arm{1, 3, 3, 3, false}}) {
+				Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
+				peer.m_Config.peerCount = peer.m_Config.matchConfig.peerCount = 4;
+				peer.m_Config.matchConfig.players.push_back({4, 3, false, "Fourth"});
+				peer.m_Config.matchConfig.successorOrder = {2, 3, 4};
+				peer.m_Config.localPeerId = arm.local; peer.m_Config.authorityPeerId = 1;
+				peer.m_Config.peerFrameGroups = peer.m_Config.substituteSlowPeers = true;
+				std::vector<uint16_t> winners;
+				for (uint8_t seat = 1; seat <= 4; ++seat) if (arm.winner & (1U << (seat - 1))) winners.push_back(seat);
+				peer.m_Config.frameTieReferee = [winners](const NetFrameTieRequest&) { NetFrameTieReply reply{NetFrameTieReply::State::Decided}; reply.members = winners; return reply; };
+				peer.m_RoundConfigHash = NetMatchConfigUtil::HashConfig(peer.m_Config.matchConfig);
+				peer.m_MigrationPhase = NetHostMigrationPhase::None;
+				peer.m_FrameGroupMembers = arm.playing; peer.m_FrameGroupChanges = {{1, 15}, {339, arm.playing}};
+				NetFrameTieRequest request;
+				request.frame = 39; request.roundId = peer.m_Config.matchConfig.roundId; request.configHash = peer.m_RoundConfigHash; request.host = 1;
+				request.owners = {1, 2, 3, 4};
+				for (uint8_t seat = 1; seat <= 4; ++seat) if (arm.asked & (1U << (seat - 1))) request.members.push_back(seat);
+				NetLockstepCoordinator::PeerSplitArbitration question{request, 15, 339};
+				question.asked = arm.asked;
+				peer.m_PeerSplitArbitrations[39] = question;
+				peer.m_LastCompletedSimulationTick = peer.m_LastDeliveredFrame = 350; peer.m_Stats.nextFrame = 351;
+				peer.PollPeerFrameTies(6209);
+				const bool stopped = peer.IsStopped() && peer.m_LocalSeatHeld;
+				std::cout << "[straddling-ruling] local=" << int(arm.local) << " asked=" << arm.asked << " playing=" << arm.playing << " winner=" << arm.winner << " stopped=" << stopped << std::endl;
+				if (stopped != arm.stops) {
+					*error = arm.stops ? "a seat whose group lost the directory's ruling to the other continuation's question played on: local=" + std::to_string(arm.local) :
+					                     "a seat stopped for a ruling on its own question: local=" + std::to_string(arm.local);
+					return false;
+				}
+			}
+			return true;
+		}
+
 		static bool OnlyASeatCountingThisOneIsAnotherContinuation(std::string* error) {
 			// Arms: the host's records differ on three frames after it held this seat - a split, which the heal decides, so the seats
 			// still playing its input keep it; a member that counts this seat in its group differs on three frames that arrive out of
@@ -33111,6 +33149,12 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS an_open_vote_asks_for_its_frames_record_at_once\n[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "straddling-ruling") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::AStraddlingRulingIsTheOtherHalfsQuestion(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS a_straddling_ruling_is_the_other_halfs_question\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "mutual-continuation") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::OnlyASeatCountingThisOneIsAnotherContinuation(&error)) return fail(error);
@@ -33452,6 +33496,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::AnOpenVoteAsksForItsFramesRecordAtOnce, "an_open_vote_asks_for_its_frames_record_at_once");
 		row(&SessionPlaneRecoveryTest::ADirectMigrationNeedsThisSeatsGroup, "a_direct_migration_needs_this_seats_group");
 		row(&SessionPlaneRecoveryTest::OnlyASeatCountingThisOneIsAnotherContinuation, "only_a_seat_counting_this_one_is_another_continuation");
+		row(&SessionPlaneRecoveryTest::AStraddlingRulingIsTheOtherHalfsQuestion, "a_straddling_ruling_is_the_other_halfs_question");
 		row(&SessionPlaneRecoveryTest::ReaderLinksContributeToInputRunway, "reader_links_contribute_to_input_runway");
 		row(&SessionPlaneRecoveryTest::LinkRiseHasNoResizeCooldown, "link_rise_has_no_resize_cooldown");
 		row(&SessionPlaneRecoveryTest::LinkFallNeedsFiveMeasuredSeconds, "link_fall_requires_five_continuous_measured_seconds");
