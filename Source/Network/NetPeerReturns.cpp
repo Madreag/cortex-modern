@@ -350,7 +350,7 @@ namespace RTE {
 		}
 		NetLockstepReadyFrame ready;
 		if (const auto decisions = m_PeerTailDecisions.find(frame); decisions != m_PeerTailDecisions.end()) {
-			for (const auto& decision: decisions->second) InstallPeerBridge(decision, nowMs, true);
+			for (const auto& decision: decisions->second) InstallPeerBridge(decision, nowMs);
 			m_PeerTailDecisions.erase(decisions);
 		}
 		PreparePeerBridgeInputs(frame, nowMs);
