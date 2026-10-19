@@ -3,17 +3,22 @@
 A hosted two-peer match at the host's default automatic input delay saves every --autosave-seconds. Every per-second
 [frame-pace] window of each peer is placed by its ticks: no save running (idle), inside one of this peer's saves whose own
 deadline had not yet passed (save), inside a span this peer's saver logged as overdue (overdue: the late machine may pay
-for its own save there; on a build that logs none, the part of a save that ran past the next deadline), or, on the host, from a returning seat's base being asked to its being taken or no
-longer waited for - the returner loaded an image, dropped or was refused (base).
+for its own save there; on a build that logs none, the part of a save that ran past the next deadline), or, on the host,
+from a returning seat's base being asked to its being published or no longer waited for - the returner loaded an image,
+dropped or was refused (base). A base window is a base window whatever the saver logged: the base's own write is part of
+what the return costs the host.
 --client-rejoin TICK drops the client once its game reaches TICK and starts it again with its reconnect ticket, so it
 returns through the host's image and the host asks for its base; a tick shortly after a capture meets the host's writer
 still busy with that save.
 
 For each peer and kind the result gives the median frame rate, the 95th percentile of the per-window worst frame interval,
-the median tick rate and the seat holds whose frame falls there. The verdict: each peer's ordinary saves (not in a rejoin
-run, whose client is replaced) and the host's frames while a base waits keep at least 95 % of the idle frame rate and at
-most 125 % of the idle worst frame interval, and the host keeps its idle tick rate within 0.5 ticks/s while a base waits;
-in a rejoin run the returner also catches up with no refusal of its base (tools/rejoin_stage_check.py).
+the median tick rate and the seat holds whose frame falls there. The verdict: each peer's ordinary saves (in a rejoin run
+the host's alone, the client being replaced) and the host's frames while a base waits or is written keep at least 95 % of
+the idle frame rate and at most 125 % of the idle worst frame interval, and the host keeps its idle tick rate within
+0.5 ticks/s while a base waits; in a rejoin run the returner also catches up with no refusal of its base
+(tools/rejoin_stage_check.py). Every span a peer's saver logs as overdue needs a cause this driver finds in the log on its
+own: a deadline that passed while that peer's own capture was unwritten, a periodic save named late for that peer's own
+writer (the save written last before its naming is the peer's own and ends at it), or a manual save; a base is no cause.
 --base names a base build's result.json (or its run folder), as often as there are base runs; each base run's logs are
 placed again by this driver's rules. The judged kinds are then
 held to the base instead of to their own idle windows: a kind's frame rate and worst frame are taken as ratios to its own
@@ -25,6 +30,8 @@ startup takes the other's time, as on two machines.
 --saves-after-return N (with --client-rejoin) plays on until the host has named N periodic captures after the returner
 caught up: the returned seat writes every one of them with no failed save, and its game keeps ticking at least 600 ticks
 past the last; a returner whose game stops for 60 s while the host plays on ends the run at once.
+--judge RUN places and judges a finished run of this driver again by these rules, without starting an engine; the verdict
+goes to --out/judged.json.
 """
 import argparse
 from datetime import datetime, timezone
@@ -49,9 +56,10 @@ def percentile(values, fraction):
 
 
 def timeline(text, host):
-    """The peer's frame windows, saves, deadlines, bases, holds and, where its build logs them, the spans its own saver was
-    overdue (None when the log has no such line), in its log's order."""
+    """The peer's frame windows, saves, deadlines, bases, holds, the spans its own saver logged as overdue (None when the log
+    has no such line) and the events that can cause one, in its log's order."""
     windows, saves, dues, bases, holds = [], [], [], [], []
+    events = {'base_ticks': [], 'namings': [], 'manual': []}
     latest = 0
     asked = None
     saver, raised = None, None
@@ -74,15 +82,19 @@ def timeline(text, host):
         elif match := re.match(r'^\[autosave\] tick=(\d+) capture_ms=', line):
             # Printed when the save is written: its window runs from its boundary to the tick the game had reached.
             saves.append((int(match.group(1)), max(latest, int(match.group(1)))))
-        elif host and (match := re.match(r'^\[autosave\] periodic due named at=(\d+) late_ticks=(-?\d+)', line)):
+        elif host and (match := re.match(r'^\[autosave\] periodic due named at=(\d+) late_ticks=(-?\d+)(?:.*? own_writer=([01]))?', line)):
             dues.append(int(match.group(1)) - int(match.group(2)))
+            events['namings'].append((int(match.group(1)), match.group(3) == '1'))
+        elif match := re.match(r'^\[autosave\] manual save (?:named|taken|saved|failed) tick=(\d+)', line):
+            events['manual'].append(int(match.group(1)))
         elif host and (match := re.search(r'private base asked of the checkpoint schedule at tick (\d+)', line)):
             asked = int(match.group(1))
         elif host and asked is not None and (match := re.search(r'private base taken at the announced tick (\d+)', line)):
-            bases.append((asked, int(match.group(1))))
-            asked = None
-        elif host and asked is not None and re.search(r'^\[roster\] rev=\d+ seat=\d+ (?:ImageLoaded|LinkDropped) REJOIN_IMAGE->|^\[net-match\] rejoin refused ', line):
-            # Nobody waits on that base any more: the returner loaded an image, dropped, or was refused.
+            # The base's own write is part of what its returner costs: the span runs on until the base is published.
+            events['base_ticks'].append(int(match.group(1)))
+        elif host and asked is not None and re.search(r'private base published from the announced capture at tick \d+|'
+                                                      r'^\[roster\] rev=\d+ seat=\d+ (?:ImageLoaded|LinkDropped) REJOIN_IMAGE->|^\[net-match\] rejoin refused ', line):
+            # Nobody waits on that base any more: it was published, the returner loaded an image, dropped, or was refused.
             bases.append((asked, max(latest, asked)))
             asked = None
         elif match := re.match(r'^\[net-peer-hold-installed\] local=(\d+) peer=(\d+) frame=(\d+)', line):
@@ -91,7 +103,7 @@ def timeline(text, host):
         bases.append((asked, latest))
     if saver is not None and raised is not None:
         saver.append((raised, latest))
-    return windows, saves, dues, bases, holds, saver
+    return windows, saves, dues, bases, holds, saver, events
 
 
 def classify(windows, saves, dues, bases, warmup, saver=None):
@@ -123,6 +135,34 @@ def classify(windows, saves, dues, bases, warmup, saver=None):
     return kinds, overdue
 
 
+def uncaused(saver, saves, dues, events, near=30, slack=120):
+    """The spans the peer's saver logged as overdue that no cause found in the log explains: a deadline that passed while the
+    peer's own capture was unwritten (a written save's tick is known to within a frame-pace window), a periodic save named
+    late for the peer's own writer - the save written last before the naming is the peer's own and ends at it - or a
+    manual save. A base is another player's save and causes none."""
+    if saver is None:
+        return []
+    bases = set(events['base_ticks'])
+    own = [(start, end) for start, end in saves if start not in bases]
+    found = []
+    for start, end in saver:
+        at_deadline = any(due - 1 <= start <= due + near and any(s0 <= due + near and e0 + 60 >= due and end <= e0 + slack for s0, e0 in own)
+                          for due in dues)
+        own_late = False
+        for named, own_writer in events['namings']:
+            if not own_writer or not named - 2 <= start <= named + near:
+                continue
+            before = [save for save in saves if save[1] <= named + 60 and save[0] < named]
+            last = max(before, key=lambda save: save[1]) if before else None
+            written = [e1 for s1, e1 in own if named <= s1 <= named + near]
+            if last and last[0] not in bases and named - last[1] <= slack and written and end <= written[0] + slack:
+                own_late = True
+        manual = any(start - 600 <= tick <= end + 600 for tick in events['manual'])
+        if not (at_deadline or own_late or manual):
+            found.append((start, end))
+    return found
+
+
 def summary(windows, kinds, holds, local):
     out = {}
     for kind in ('idle', 'save', 'overdue', 'base', 'edge', 'warmup'):
@@ -149,17 +189,20 @@ def ratios(kind, idle):
     return kind['fps_median'] / idle['fps_median'], kind['worst_ms_p95'] / idle['worst_ms_p95']
 
 
+def log_text(run_dir, role):
+    path = Path(run_dir) / role / 'stdout.log'
+    return path.read_text(errors='replace') if path.exists() else ''
+
+
 def analyze(run_dir, warmup):
     """Each peer's windows placed and summarized from a run's logs; the client follows the host's agreed deadlines."""
-    def text(role):
-        path = Path(run_dir) / role / 'stdout.log'
-        return path.read_text(errors='replace') if path.exists() else ''
-    host_dues = timeline(text('host'), True)[2]
+    host_dues = timeline(log_text(run_dir, 'host'), True)[2]
     peers = {}
     for local, role in ((1, 'host'), (2, 'client')):
-        windows, saves, _, bases, holds, saver = timeline(text(role), role == 'host')
+        windows, saves, _, bases, holds, saver, events = timeline(log_text(run_dir, role), role == 'host')
         kinds, overdue = classify(windows, saves, host_dues, bases, warmup, saver)
-        peers[role] = {'kinds': summary(windows, kinds, holds, local), 'saves': saves, 'overdue_spans': overdue, 'bases': bases}
+        peers[role] = {'kinds': summary(windows, kinds, holds, local), 'saves': saves, 'overdue_spans': overdue, 'bases': bases,
+                       'logs_overdue': saver is not None, 'uncaused_overdue_spans': uncaused(saver, saves, host_dues, events)}
         idle = peers[role]['kinds']['idle']
         if idle['windows']:
             peers[role]['ratios_to_idle'] = {k: [round(r, 3) for r in ratios(v, idle)] for k, v in peers[role]['kinds'].items() if v['windows']}
@@ -183,9 +226,93 @@ def equals_base(role, name, kind, idle, bases, minimum):
     return out
 
 
+def named_ticks(host_text):
+    return [int(t) for t in re.findall(r'^\[autosave\] named tick=(\d+) at=\d+ writers=\d+', host_text, re.M)]
+
+
+def written_ticks(text):
+    return [int(t) for t in re.findall(r'^\[autosave\] tick=(\d+) capture_ms=', text, re.M)]
+
+
+def last_tick(text):
+    ticks_seen = re.findall(r'^\[frame-pace\] .*? tick=(\d+) ', text, re.M)
+    return int(ticks_seen[-1]) if ticks_seen else 0
+
+
+def named_after_return(host_text):
+    # The captures the host named after its log says the returning seat is back.
+    back = re.search(r'^\[roster\] rev=\d+ seat=\d+ CaughtUp REJOIN_CATCHUP->RUNNING', host_text, re.M)
+    return named_ticks(host_text[back.end():]) if back else []
+
+
+def judge(out, cfg, references, warmup, failure, exits_ok):
+    """The run's checks from its logs: the placed windows against idle or the base runs, the logged overdue spans' causes,
+    the captures, refusals, the return and the returned seat's saves."""
+    rejoin, after_count = cfg.get('client_rejoin', 0), cfg.get('saves_after_return', 0)
+    judged, in_run = {}, {}
+    peers = analyze(out, warmup)
+    for role in ('host', 'client'):
+        idle, save, base = (peers[role]['kinds'][k] for k in ('idle', 'save', 'base'))
+        saves, bases = peers[role]['saves'], peers[role]['bases']
+        if not rejoin or role == 'host':
+            in_run[role] = {f'save_{name}': value for name, value in keeps(save, idle, 5).items()}
+            if references:
+                judged[role] = {f'save_{name}': value for name, value in equals_base(role, 'save', save, idle, references, 5).items()}
+        if rejoin and role == 'host':
+            busy = any(any(start <= asked <= end for start, end in saves) for asked, _ in bases)
+            in_run[role].update({'base_asked_while_writer_busy': busy, **{f'base_{name}': value for name, value in keeps(base, idle, 3).items()}})
+            if base['windows'] >= 3:
+                in_run[role]['base_keeps_tick_rate'] = base['tps_median'] >= idle['tps_median'] - 0.5
+            if references:
+                judged[role].update({'base_asked_while_writer_busy': busy, **{f'base_{name}': value for name, value in equals_base(role, 'base', base, idle, references, 3).items()}})
+        if not references and role in in_run:
+            judged[role] = in_run[role]
+        if peers[role]['logs_overdue']:
+            judged.setdefault(role, {})['overdue_spans_have_causes'] = not peers[role]['uncaused_overdue_spans']
+    host_text = log_text(out, 'host')
+    refused = {role: re.findall(r'^\[autosave\] (?:named tick=\d+ not taken: .*|failed .*)$', log_text(out, role), re.M) for role in ('host', 'client')}
+    captures = named_ticks(host_text)
+    checks = {'no_driver_failure': failure is None,
+              'all_exit_zero': exits_ok,
+              'periodic_captures_taken': len(captures) >= cfg.get('periodic_captures', 0),
+              'no_capture_refused': not refused['host'] and (bool(rejoin) or not refused['client']),
+              **{f'{role}_{name}': value for role, items in judged.items() for name, value in items.items()}}
+    if rejoin:
+        # The returner waits for its base and comes back; a base on its way is never refused.
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from rejoin_stage_check import check as stage_check
+        stage = stage_check(host_text)
+        checks['returner_caught_up_unrefused'] = stage['status'] == 'PASS' and stage['returns_caught_up'] > 0
+    returned = None
+    if after_count:
+        # The returned seat saves every capture named after it is back, refuses none, and its game goes on past the last.
+        returner_text = log_text(out, 'client-rejoined')
+        after = named_after_return(host_text)[:after_count]
+        written = set(written_ticks(returner_text))
+        failed = re.findall(r'^\[autosave\] failed .*$', returner_text, re.M)
+        returned = {'named_after_return': after, 'written': sorted(written & set(after)), 'failed': failed,
+                    'returner_last_tick': last_tick(returner_text), 'host_last_tick': last_tick(host_text)}
+        checks['returner_writes_saves_after_return'] = len(after) == after_count and set(after) <= written and not failed
+        checks['returner_keeps_ticking'] = bool(after) and returned['returner_last_tick'] >= after[-1] + 600
+    in_run_checks = {f'{role}_{name}': value for role, items in in_run.items() for name, value in items.items()} if references else None
+    return {'pass': all(checks.values()), 'checks': checks, 'in_run_checks': in_run_checks, 'captures': captures,
+            'returned_seat': returned, 'peers': peers, 'refused': refused}
+
+
+def load_references(paths, warmup):
+    references = []
+    for path in paths:
+        found = sorted(path.resolve().rglob('result.json')) if path.is_dir() else [path.resolve()]
+        if not found or not (found[0].parent / 'host' / 'stdout.log').exists():
+            raise SystemExit(f'no base run at {path}')
+        # The base run's logs are placed again with this driver's own rules, never read from its stored summary.
+        references.append({'path': str(found[0]), **json.loads(found[0].read_text()), 'peers': analyze(found[0].parent, warmup)})
+    return references
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument('--repo', type=Path, required=True)
+    p.add_argument('--repo', type=Path)
     p.add_argument('--out', type=Path, required=True)
     p.add_argument('--autosave-seconds', type=int, default=90)
     p.add_argument('--periodic-captures', type=int, default=5)
@@ -197,16 +324,26 @@ def main():
     p.add_argument('--base', type=Path, action='append', default=[], help="a base build's result.json or run folder; repeat per base run")
     p.add_argument('--split-cpus', action='store_true',
                    help="the host on one half of the logical CPUs and the client, rejoined too, on the other, as on two machines")
+    p.add_argument('--judge', type=Path, help='a finished run folder of this driver to place and judge again, without engines')
     a = p.parse_args()
     if a.saves_after_return and not a.client_rejoin:
         raise SystemExit('--saves-after-return needs --client-rejoin')
-    references = []
-    for path in a.base:
-        found = sorted(path.resolve().rglob('result.json')) if path.is_dir() else [path.resolve()]
-        if not found or not (found[0].parent / 'host' / 'stdout.log').exists():
-            raise SystemExit(f'no base run at {path}')
-        # The base run's logs are placed again with this driver's own rules, never read from its stored summary.
-        references.append({'path': str(found[0]), **json.loads(found[0].read_text()), 'peers': analyze(found[0].parent, a.warmup_ticks)})
+    references = load_references(a.base, a.warmup_ticks)
+    if a.judge:
+        run_dir = a.judge.resolve()
+        recorded = json.loads((run_dir / 'result.json').read_text())
+        cfg = json.loads((run_dir / 'configuration.json').read_text())
+        exits_ok = all(code == 0 for role, code in recorded.get('exits', {}).items() if role != 'client-dropped')
+        verdict = judge(run_dir, cfg, references, a.warmup_ticks, recorded.get('failure'), exits_ok)
+        verdict = {'judged_run': str(run_dir), 'recorded_pass': recorded.get('pass'), **verdict,
+                   'bases': [{'path': b['path'], 'exe_sha256': b['exe_sha256'], 'source_head': b['source_head']} for b in references]}
+        a.out.mkdir(parents=True, exist_ok=True)
+        (a.out / 'judged.json').write_text(json.dumps(verdict, indent=2))
+        print(json.dumps({'pass': verdict['pass'], 'checks': verdict['checks'],
+                          'uncaused_overdue_spans': {role: verdict['peers'][role]['uncaused_overdue_spans'] for role in verdict['peers']}}))
+        return 0 if verdict['pass'] else 1
+    if a.repo is None:
+        raise SystemExit('--repo is needed to run a match')
     repo = a.repo.resolve()
     sys.path.insert(0, str(repo / 'tools'))
     from run_sim_test import make_run, seed_settings, engine_executable, file_sha256
@@ -264,32 +401,15 @@ def main():
     (out / 'configuration.json').write_text(json.dumps(config, indent=2))
 
     def log(role):
-        path = out / role / 'stdout.log'
-        return path.read_text(errors='replace') if path.exists() else ''
-
-    def named():
-        return [int(t) for t in re.findall(r'^\[autosave\] named tick=(\d+) at=\d+ writers=\d+', log('host'), re.M)]
+        return log_text(out, role)
 
     def written(role):
-        return len(re.findall(r'^\[autosave\] tick=\d+ capture_ms=', log(role), re.M))
-
-    def reached(role):
-        ticks_seen = re.findall(r'^\[frame-pace\] .*? tick=(\d+) ', log(role), re.M)
-        return int(ticks_seen[-1]) if ticks_seen else 0
-
-    def named_after_return():
-        # The captures the host named after its log says the returning seat is back.
-        text = log('host')
-        back = re.search(r'^\[roster\] rev=\d+ seat=\d+ CaughtUp REJOIN_CATCHUP->RUNNING', text, re.M)
-        return [int(t) for t in re.findall(r'^\[autosave\] named tick=(\d+) at=\d+ writers=\d+', text[back.end():], re.M)] if back else []
-
-    def returner_written():
-        return {int(t) for t in re.findall(r'^\[autosave\] tick=(\d+) capture_ms=', log('client-rejoined'), re.M)}
+        return len(written_ticks(log(role)))
 
     def returner_done():
-        after = named_after_return()[:a.saves_after_return]
-        return (len(after) == a.saves_after_return and set(after) <= returner_written() and
-                reached('client-rejoined') >= after[-1] + 600)
+        after = named_after_return(log('host'))[:a.saves_after_return]
+        return (len(after) == a.saves_after_return and set(after) <= set(written_ticks(log('client-rejoined'))) and
+                last_tick(log('client-rejoined')) >= after[-1] + 600)
 
     failure = None
     rejoined_at = None
@@ -301,29 +421,30 @@ def main():
             started.append(role)
         until = time.monotonic() + a.limit_seconds
         while True:
-            if a.client_rejoin and rejoined_at is None and reached('client') >= a.client_rejoin:
+            if a.client_rejoin and rejoined_at is None and last_tick(log('client')) >= a.client_rejoin:
                 runs['client'].terminate(reason=f'the client drops at tick {a.client_rejoin}')
                 records['client-dropped'] = runs['client'].finish()
                 runs['client-dropped'] = runs.pop('client')
-                rejoined_at = reached('host')
+                rejoined_at = last_tick(log('host'))
                 runs['client'] = make_run(repo, argv['client'], out / 'client-rejoined', a.limit_seconds + 600,
                                           env=probe_env('client-rejoined'), runtime=Path(runs['client-dropped'].cwd))
                 runs['client'].start()
-            # A rejoin run lasts until its base is taken and the returner is back or refused.
+            # A rejoin run lasts until its base is published and the returner is back or refused.
             rejoin_pending = bool(a.client_rejoin) and (rejoined_at is None or not re.search('private base taken', log('host')) or
                                                         not re.search(r'CaughtUp REJOIN_CATCHUP->RUNNING|rejoin refused connection=', log('host')))
             if a.saves_after_return and re.search(r'CaughtUp REJOIN_CATCHUP->RUNNING', log('host')):
                 # A returned seat whose game stops while the host plays on is the defect this mode looks for.
-                tick = reached('client-rejoined')
+                tick = last_tick(log('client-rejoined'))
                 if tick > returner_progress[0]:
                     returner_progress = (tick, time.monotonic())
-                elif tick and time.monotonic() - returner_progress[1] > 60 and reached('host') > tick + 600:
-                    raise RuntimeError(f'the returned seat stopped ticking at tick {tick} while the host reached {reached("host")}')
+                elif tick and time.monotonic() - returner_progress[1] > 60 and last_tick(log('host')) > tick + 600:
+                    raise RuntimeError(f'the returned seat stopped ticking at tick {tick} while the host reached {last_tick(log("host"))}')
             after_pending = bool(a.saves_after_return) and not returner_done()
-            if len(named()) >= a.periodic_captures and written('host') >= len(named()) and not rejoin_pending and not after_pending:
+            captures = named_ticks(log('host'))
+            if len(captures) >= a.periodic_captures and written('host') >= len(captures) and not rejoin_pending and not after_pending:
                 break
             if time.monotonic() > until:
-                raise RuntimeError(f'{len(named())} captures named, {written("host")} written by the host in {a.limit_seconds} s')
+                raise RuntimeError(f'{len(captures)} captures named, {written("host")} written by the host in {a.limit_seconds} s')
             if any(runs[role].poll() is not None for role in ('host', 'client')):
                 raise RuntimeError('an engine ended before the captures')
             time.sleep(1)
@@ -336,52 +457,13 @@ def main():
                 records[role] = runs[role].finish()
         for run in runs.values():
             run.close()
-    judged, in_run = {}, {}
-    peers = analyze(out, a.warmup_ticks)
-    for role in ('host', 'client'):
-        idle, save, base = (peers[role]['kinds'][k] for k in ('idle', 'save', 'base'))
-        saves, bases = peers[role]['saves'], peers[role]['bases']
-        if not a.client_rejoin:
-            in_run[role] = {f'save_{name}': value for name, value in keeps(save, idle, 5).items()}
-            if references:
-                judged[role] = {f'save_{name}': value for name, value in equals_base(role, 'save', save, idle, references, 5).items()}
-        elif role == 'host':
-            busy = any(any(start <= asked <= end for start, end in saves) for asked, _ in bases)
-            in_run[role] = {'base_asked_while_writer_busy': busy, **{f'base_{name}': value for name, value in keeps(base, idle, 3).items()}}
-            if base['windows'] >= 3:
-                in_run[role]['base_keeps_tick_rate'] = base['tps_median'] >= idle['tps_median'] - 0.5
-            if references:
-                judged[role] = {'base_asked_while_writer_busy': busy, **{f'base_{name}': value for name, value in equals_base(role, 'base', base, idle, references, 3).items()}}
-        if not references and role in in_run:
-            judged[role] = in_run[role]
-    refused = {role: re.findall(r'^\[autosave\] (?:named tick=\d+ not taken: .*|failed .*)$', log(role), re.M) for role in ('host', 'client')}
-    checks = {'no_driver_failure': failure is None,
-              'all_exit_zero': all(r.get('exit_code') == 0 and not r.get('timed_out') for role, r in records.items() if role != 'client-dropped'),
-              'periodic_captures_taken': len(named()) >= a.periodic_captures,
-              'no_capture_refused': not refused['host'] and (bool(a.client_rejoin) or not refused['client']),
-              **{f'{role}_{name}': value for role, items in judged.items() for name, value in items.items()}}
-    if a.client_rejoin:
-        # The returner waits for its base and comes back; a base on its way is never refused.
-        sys.path.insert(0, str(Path(__file__).resolve().parent))
-        from rejoin_stage_check import check as stage_check
-        stage = stage_check(log('host'))
-        checks['returner_caught_up_unrefused'] = stage['status'] == 'PASS' and stage['returns_caught_up'] > 0
-    returned = None
-    if a.saves_after_return:
-        # The returned seat saves every capture named after it is back, refuses none, and its game goes on past the last.
-        after = named_after_return()[:a.saves_after_return]
-        failed = re.findall(r'^\[autosave\] failed .*$', log('client-rejoined'), re.M)
-        returned = {'named_after_return': after, 'written': sorted(returner_written() & set(after)), 'failed': failed,
-                    'returner_last_tick': reached('client-rejoined'), 'host_last_tick': reached('host')}
-        checks['returner_writes_saves_after_return'] = len(after) == a.saves_after_return and set(after) <= returner_written() and not failed
-        checks['returner_keeps_ticking'] = bool(after) and returned['returner_last_tick'] >= after[-1] + 600
-    in_run_checks = {f'{role}_{name}': value for role, items in in_run.items() for name, value in items.items()} if references else None
-    result = {**config, 'pass': all(checks.values()), 'checks': checks, 'in_run_checks': in_run_checks, 'failure': failure, 'wall_seconds': round(time.monotonic() - began, 1),
-              'captures': named(), 'rejoined_at_host_tick': rejoined_at, 'returned_seat': returned, 'peers': peers, 'refused': refused,
+    exits_ok = all(r.get('exit_code') == 0 and not r.get('timed_out') for role, r in records.items() if role != 'client-dropped')
+    verdict = judge(out, config, references, a.warmup_ticks, failure, exits_ok)
+    result = {**config, **verdict, 'failure': failure, 'wall_seconds': round(time.monotonic() - began, 1), 'rejoined_at_host_tick': rejoined_at,
               'exits': {role: r.get('exit_code') for role, r in records.items()}}
     (out / 'result.json').write_text(json.dumps(result, indent=2))
-    print(json.dumps({'pass': result['pass'], 'checks': checks, 'failure': failure,
-                      'kinds': {role: peers[role]['kinds'] for role in peers}}))
+    print(json.dumps({'pass': result['pass'], 'checks': result['checks'], 'failure': failure,
+                      'kinds': {role: verdict['peers'][role]['kinds'] for role in verdict['peers']}}))
     return 0 if result['pass'] else 1
 
 
