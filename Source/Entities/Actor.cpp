@@ -63,6 +63,9 @@
 using namespace RTE;
 
 namespace {
+	// A consumed payload returns its storage at once; clear() would keep both buffers until the actor dies.
+	void ReleaseCheckpointText(CheckpointString& text) { CheckpointString().swap(text); }
+
 	struct ActorIconReference {
 		int kind = 0;
 		int team = -1;
@@ -2516,7 +2519,7 @@ void Actor::AdoptPersistedUniqueID() {
 	if (m_PieMenu && !m_PersistedPieMenuState.empty()) {
 		m_PieMenu->UnpackInteractionState(m_PersistedPieMenuState);
 	}
-	m_PersistedPieMenuState.clear();
+	ReleaseCheckpointText(m_PersistedPieMenuState);
 	if (m_HasPersistedViewPoint) {
 		m_ViewPoint = m_PersistedViewPoint;
 		m_HasPersistedViewPoint = false;
@@ -2527,7 +2530,7 @@ void Actor::AdoptPersistedUniqueID() {
 	}
 	if (!m_PersistedActorRuntime.empty()) {
 		if (!LoadActorRuntime(m_PersistedActorRuntime)) throw std::runtime_error("could not restore Actor runtime checkpoint");
-		m_PersistedActorRuntime.clear();
+		ReleaseCheckpointText(m_PersistedActorRuntime);
 	}
 }
 
@@ -2574,8 +2577,8 @@ void Actor::RestoreCompletePieMenuCheckpoint() {
 	if (!m_PieMenu || !m_PieMenu->LoadCompleteCheckpoint(m_PersistedCompletePieMenu)) {
 		throw std::runtime_error("could not restore complete pie menu for actor " + std::to_string(GetUniqueID()));
 	}
-	m_PersistedCompletePieMenu.clear();
-	m_LegacyCompletePieMenu.clear();
+	ReleaseCheckpointText(m_PersistedCompletePieMenu);
+	ReleaseCheckpointText(m_LegacyCompletePieMenu);
 	m_NeedsLegacyPieMenuBaseline = false;
 }
 
@@ -2635,21 +2638,21 @@ void Actor::RemapExternalLinks(const std::function<MovableObject*(MovableObject*
 }
 
 void Actor::DiscardPersistedSnapshotState() {
-	m_PersistedCompletePieMenu.clear();
+	ReleaseCheckpointText(m_PersistedCompletePieMenu);
 	m_PersistedActorIconReferences = {};
-	m_PersistedControllerCheckpoint.clear();
+	ReleaseCheckpointText(m_PersistedControllerCheckpoint);
 	MOSRotating::DiscardPersistedSnapshotState();
 	m_PersistedSharpAimTimerAnchor.pending = false;
 	m_PersistedAimTimerAnchor.pending = false;
 	m_PersistedControllerInputMode = -1;
 	m_PersistedControllerQuickDisabled = -1;
-	m_PersistedPieMenuState.clear();
+	ReleaseCheckpointText(m_PersistedPieMenuState);
 	m_HasPersistedViewPoint = false;
 	m_HasPersistedMovePath = false;
 	for (MovableObject* inventoryItem: m_Inventory) {
 		inventoryItem->DiscardPersistedSnapshotState();
 	}
-	m_PersistedActorRuntime.clear();
+	ReleaseCheckpointText(m_PersistedActorRuntime);
 }
 
 void Actor::ApplyPersistedControllerMode() {
@@ -2674,13 +2677,17 @@ void Actor::ApplyPersistedControllerMode() {
 	if (!m_PersistedControllerCheckpoint.empty()) {
 		m_Controller.LoadCheckpoint(m_PersistedControllerCheckpoint);
 		m_Controller.SetControlledActor(this);
-		m_PersistedControllerCheckpoint.clear();
+		ReleaseCheckpointText(m_PersistedControllerCheckpoint);
 	}
+}
+
+void Actor::ExpireLegacyPieMenuBaseline() {
+	if (!m_LegacyCompletePieMenu.empty()) ReleaseCheckpointText(m_LegacyCompletePieMenu);
 }
 
 void Actor::Update() {
 	// Only a same-boundary recapture may reuse an older menu encoding; ordinary ticks always carry the complete tree.
-	if (!m_LegacyCompletePieMenu.empty()) m_LegacyCompletePieMenu.clear();
+	ExpireLegacyPieMenuBaseline();
 	ZoneScoped;
 
 	// The wound, travel and death paths write health and status straight, so the stamp is taken around them.
@@ -3483,6 +3490,37 @@ bool Actor::RunCheckpointPathRequestSelfTest() {
 		std::cout << "[actor-path-checkpoint-selftest] " << error.what() << " while " << stage << std::endl;
 		return false;
 	}
+}
+
+bool Actor::RunConsumedPayloadSelfTest() {
+	CheckpointNativeStorage::AllocationScope storage(true);
+	const auto* preset = dynamic_cast<const Actor*>(g_PresetMan.GetEntityPreset("AHuman", "Green Dummy", "Base.rte"));
+	std::unique_ptr<Actor> actor(preset ? dynamic_cast<Actor*>(preset->Clone()) : nullptr);
+	// An emptied string keeps its capacity; a released one is back to its inline buffer.
+	const auto released = [](const CheckpointString& text) { return text.empty() && text.capacity() < 64; };
+	bool restored = false, expired = false, discarded = false;
+	std::string detail;
+	try {
+		if (!actor || !actor->m_PieMenu) throw std::runtime_error("no actor with a pie menu");
+		const std::string menu = actor->m_PieMenu->SaveCompleteCheckpoint();
+		actor->m_PersistedCompletePieMenu = menu;
+		actor->m_LegacyCompletePieMenu = menu;
+		actor->RestoreCompletePieMenuCheckpoint();
+		restored = released(actor->m_PersistedCompletePieMenu) && released(actor->m_LegacyCompletePieMenu);
+		const std::string payload(4096, 'x');
+		actor->m_LegacyCompletePieMenu = payload;
+		actor->ExpireLegacyPieMenuBaseline();
+		expired = released(actor->m_LegacyCompletePieMenu);
+		actor->m_PersistedCompletePieMenu = payload; actor->m_PersistedControllerCheckpoint = payload;
+		actor->m_PersistedPieMenuState = payload; actor->m_PersistedActorRuntime = payload;
+		actor->DiscardPersistedSnapshotState();
+		discarded = released(actor->m_PersistedCompletePieMenu) && released(actor->m_PersistedControllerCheckpoint) &&
+		            released(actor->m_PersistedPieMenuState) && released(actor->m_PersistedActorRuntime);
+	} catch (const std::exception& error) { detail = error.what(); }
+	const bool pass = restored && expired && discarded;
+	std::cout << "[actor-consumed-payload-selftest] " << (pass ? "PASS" : "FAIL") << " restored=" << restored << " expired=" << expired << " discarded=" << discarded
+	          << (detail.empty() ? "" : " detail=" + detail) << std::endl;
+	return pass;
 }
 
 bool Actor::RunGoneItemInReachSelfTest() {

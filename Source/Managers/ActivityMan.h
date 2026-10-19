@@ -211,6 +211,10 @@ namespace RTE {
 		void DropPreparedAutosave();
 		/// Automatic captures the writer has not finished; each holds its whole frozen image until it has.
 		size_t UnwrittenAutosaves();
+		/// Whether this machine's writer can take a capture now: nothing still writing, and the saver's next plan prepared.
+		bool AutosaveWriterReady();
+		/// Whether the saver is still writing, retiring or preparing; a saver whose preparation failed is not busy, only unready.
+		bool AutosaveWriterBusy();
 		/// The full-state oracle's captures still holding their images; a lever-only count, 0 without the lever.
 		size_t UnfinishedFullStateCaptures();
 		/// The last automatic capture this process published; empty when none has.

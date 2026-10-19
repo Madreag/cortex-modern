@@ -12709,6 +12709,11 @@ int main(int argc, char** argv) {
 		return ShutDown(report.ok ? 0 : (report.truncated ? 2 : (report.corrupt ? 3 : 1)));
 	}
 	if (ScenarioRunner::GetArgs().scriptGraphSelfTest) {
+		if (const char* musicOnly = std::getenv("CC_TEST_MUSIC_CHECKPOINT_ONLY"); musicOnly && std::string_view(musicOnly) == "1") {
+			const bool pass = g_MusicMan.RunCheckpointSelfTest();
+			System::PrintDiagnosticLine(std::string("[music-voice-map-selftest] ") + (pass ? "PASS" : "FAIL"));
+			return ShutDown(pass ? 0 : 1);
+		}
 		bool pass = g_LuaMan.RunScriptGraphSelfTest();
 		pass = RunHarnessCaptureSelfTest() && pass;
 		return ShutDown(pass ? 0 : 1);

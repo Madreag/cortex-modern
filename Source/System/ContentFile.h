@@ -241,6 +241,8 @@ namespace RTE {
 		static bool CheckpointSamplesReady() noexcept;
 		static void RefreshCheckpointSample(const std::string& path, FMOD::Sound* sound) noexcept;
 		static std::vector<AudioCheckpoint::Sample> ReadCheckpointSamples();
+		/// The least asset path naming this sample at the frozen boundary.
+		static std::string ReadCheckpointSamplePath(const FMOD::Sound* sound);
 		static std::string SavedSampleValuesMismatch();
 		static BITMAP* ReadLoadedBitmap(const std::string& path, int depth);
 

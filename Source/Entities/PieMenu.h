@@ -54,6 +54,10 @@ namespace RTE {
 		/// The whole runtime menu, including device-added clones, restored before Lua resolves borrowed handles.
 		std::string SaveCompleteCheckpoint() const;
 		bool LoadCompleteCheckpoint(std::string_view text);
+		/// A script-owned menu's text save keeps only its owner's slices, so a snapshot carries its complete tree beside it.
+		void SaveCompleteTreeProperty(Writer& writer) const;
+		/// Installs a script-owned menu's saved complete tree, once every native object of the restore exists.
+		void RestorePersistedCompleteTree();
 		static bool RunHoverOpenDelayPinSelfTest(std::string* error = nullptr);
 #pragma endregion
 
@@ -432,6 +436,7 @@ namespace RTE {
 		std::string m_FrozenTreeInteraction;
 		std::array<std::array<int, 10>, 4> CheckpointSliceLayout() const;
 		CheckpointString m_PersistedRuntime;
+		CheckpointString m_PersistedCompleteTree; //!< A script-owned menu's saved complete tree until the restore installs it.
 		std::string SaveRuntimeCheckpoint() const;
 		bool LoadRuntimeCheckpoint(std::string_view text, bool validateOnly = false);
 		/// What LoadRuntimeCheckpoint(reference.SaveRuntimeCheckpoint()) leaves, copied field by field for a preview's clone.
