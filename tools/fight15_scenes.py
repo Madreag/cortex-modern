@@ -1079,9 +1079,9 @@ def end_session_scene():
     """D9: End session asks for a second press that names its consequence, and the second press ends the game for both players."""
     host = host_setup() + [
         "activate ButtonLobbyOptions", "wait_ms 600", "assert_substate HostOptions", "activate TabHostPageSession", "wait_ms 600",
-        "activate ButtonHostSessEnd", "wait_ms 600", "assert_substate HostOptions", "assert_label ButtonHostSessEnd Confirm end",
+        "activate ButtonHostSessEnd", "wait_ms 600", "assert_label ButtonHostSessEnd Confirm end",
         "assert_label LabelHostSessEndHint Press Confirm end to close the game for every player", "assert_text_fits LabelHostSessEndHint",
-        "video_mark end-armed-host", "touch_file {PROBE_DIR}/armed.json",
+        "assert_substate HostOptions", "video_mark end-armed-host", "touch_file {PROBE_DIR}/armed.json",
         # Both probes read the relay route while the session still stands; then the second press ends it.
         "wait_file {PROBE_DIR}/done.json 120", "wait_file {PROBE_DIR_joiner}/done.json 120",
         "activate ButtonHostSessEnd", "wait_substate Landing 60", "video_mark session-ended-host", "wait_ms 1400", "exit"]
