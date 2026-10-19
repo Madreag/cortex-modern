@@ -727,6 +727,34 @@ namespace RTE {
 			return true;
 		}
 
+		// A reader's subscription went to a donor whose link then lost most packets, and a repair asked the other donor for an earlier
+		// range. The retry of the lost frames goes to the donor that was not asked for them.
+		static bool TailRetryAsksAnotherDonor(std::string* error) {
+			bool passed = true;
+			const auto check = [&](bool ok, const std::string& why) {
+				if (!ok) { passed = false; *error += why + "; "; std::cout << "[tail-retry-donor] FAIL " << why << std::endl; }
+			};
+			for (uint8_t asked: {uint8_t(1), uint8_t(2)}) {
+				Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
+				peer.m_Config.peerFrameGroups = true; peer.m_Config.localPeerId = 3; peer.m_Config.authorityPeerId = 1;
+				peer.m_Config.peerCount = peer.m_Config.matchConfig.peerCount = 3;
+				peer.m_Config.matchConfig.players.resize(2); peer.m_Config.matchConfig.players.push_back({3, 2, false, "Third"});
+				peer.m_RemotePeerIds = {1, 2}; peer.m_RemoteTransports = {{1, 41}, {2, 42}};
+				peer.m_MigrationPhase = NetHostMigrationPhase::None;
+				peer.m_PeerBridges[3] = {50, 50, true, std::nullopt, {}, 3};
+				peer.m_FrameGroupMembers = 3; peer.m_FrameGroupChanges = {{1, 7}, {50, 3}};
+				peer.m_Stats.nextFrame = 630; peer.m_LastCompletedSimulationTick = 629;
+				peer.m_PeerAppliedThrough = {{1, 700}, {2, 700}};
+				peer.m_PeerTailDonor = 1;
+				peer.m_PeerTailRequestedUntil[630] = 500; peer.m_PeerTailRequestedOf[630] = asked;
+				peer.RequestPeerCommittedTail(1000);
+				const uint8_t expected = asked == 1 ? 2 : 1;
+				check(peer.m_PeerTailDonor == expected, "frame 630 was asked of donor " + std::to_string(asked) + " and is retried with donor " +
+				    std::to_string(peer.m_PeerTailDonor) + ", not " + std::to_string(expected));
+			}
+			return passed;
+		}
+
 		static bool ForeignHistoryKeepsAnActiveContinuation(std::string* error) {
 			bool passed = true;
 			const auto check = [&](bool ok, const std::string& why) {
@@ -32274,6 +32302,12 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS waiting_mesh_publishes_its_own_start\n[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "tail-retry-donor") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::TailRetryAsksAnotherDonor(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS a_tail_retry_asks_another_donor_than_the_one_that_failed\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "foreign-history-scope") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::ForeignHistoryKeepsAnActiveContinuation(&error)) return fail(error);
@@ -32715,6 +32749,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::DirectHoldScope, "a_foreign_local_hold_requires_the_readers_healed_history");
 		row(&SessionPlaneRecoveryTest::LoneMigrationFollowsItsAuthority, "lone_migration_follows_its_authority");
 		row(&SessionPlaneRecoveryTest::ForeignHistoryKeepsAnActiveContinuation, "foreign_history_keeps_an_active_continuation");
+		row(&SessionPlaneRecoveryTest::TailRetryAsksAnotherDonor, "a_tail_retry_asks_another_donor_than_the_one_that_failed");
 		row(&SessionPlaneRecoveryTest::TailHoldSignersAreNotAnotherPlayingHalf, "tail_hold_signers_are_not_another_playing_half");
 		row(&SessionPlaneRecoveryTest::CertifiedTailKeepsItsWitnesses, "certified_tail_keeps_its_witnesses");
 

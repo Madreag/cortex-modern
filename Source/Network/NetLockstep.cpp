@@ -5493,7 +5493,7 @@ namespace RTE {
 		m_PeerCommittedTail.clear(); m_PeerFrameIncoming.clear(); m_PeerTailThrough.reset(); m_PeerAppliedThrough.clear(); m_PeerAppliedAtMs.clear();
 		m_PeerAppliedPrefixes.clear();
 		m_PeerAppliedProgress.clear(); m_OwnDisplayProgress.clear();
-		m_PeerTailRequestedUntil.clear(); m_PeerTailLastSentMs.clear(); m_PeerTailResendFrames.clear(); m_PeerTailSendRanges.clear();
+		m_PeerTailRequestedUntil.clear(); m_PeerTailRequestedOf.clear(); m_PeerTailLastSentMs.clear(); m_PeerTailResendFrames.clear(); m_PeerTailSendRanges.clear();
 		m_PeerTailDonor = 0; m_PeerTailDuplicateFrames = 0;
 		m_PeerTailOutgoing.clear(); m_PeerTailRawBytesSent = m_PeerTailDeferredSends = 0;
 		m_PeerTailRequests = m_PeerTailFramesSent = m_PeerTailBytesSent = m_PeerTailLogAtMs = m_PeerPathLogAtMs = 0;

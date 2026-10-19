@@ -1828,6 +1828,7 @@ namespace RTE {
 		uint8_t m_PeerTailDonor = 0;
 		uint64_t m_PeerTailDuplicateFrames = 0;
 		std::map<uint64_t, uint64_t> m_PeerTailRequestedUntil;
+		std::map<uint64_t, uint8_t> m_PeerTailRequestedOf; //!< The donor each pending frame was last asked of.
 		std::map<uint8_t, std::map<uint64_t, uint64_t>> m_PeerTailLastSentMs;
 		std::map<uint8_t, std::set<uint64_t>> m_PeerTailResendFrames;
 		std::map<uint8_t, std::pair<uint64_t, uint64_t>> m_PeerTailSendRanges;

@@ -236,6 +236,7 @@ namespace RTE {
 		// Two batches of at most eight needed ranges fit in one measured round trip.
 		m_PeerTailRequestAtMs = nowMs + std::max<uint64_t>(100, roundTripMs / 2);
 		m_PeerTailRequestedUntil.erase(m_PeerTailRequestedUntil.begin(), m_PeerTailRequestedUntil.lower_bound(m_Stats.nextFrame));
+		m_PeerTailRequestedOf.erase(m_PeerTailRequestedOf.begin(), m_PeerTailRequestedOf.lower_bound(m_Stats.nextFrame));
 		// Repair missing buffered ranges before they reach the consumer.
 		if (!m_PeerCommittedTail.empty()) {
 			const uint64_t lastBuffered = m_PeerCommittedTail.rbegin()->first;
@@ -261,12 +262,11 @@ namespace RTE {
 			}
 			if (donor == 0) break;
 			if (m_PeerTailDonor != 0 && m_PeerAppliedThrough.contains(m_PeerTailDonor) &&
-			    m_PeerAppliedThrough.at(m_PeerTailDonor) >= frame && HasPeerFrameRoute(m_PeerTailDonor)) {
-				donor = m_PeerTailDonor;
-				if (pending != m_PeerTailRequestedUntil.end())
-					for (const auto& [peer, applied]: m_PeerAppliedThrough)
-						if (peer != donor && peer != m_Config.localPeerId && applied >= frame && HasPeerFrameRoute(peer)) { donor = peer; break; }
-			}
+			    m_PeerAppliedThrough.at(m_PeerTailDonor) >= frame && HasPeerFrameRoute(m_PeerTailDonor)) donor = m_PeerTailDonor;
+			// A retry asks another donor than the one that did not deliver this frame, not merely another than the last one asked.
+			if (const auto asked = m_PeerTailRequestedOf.find(frame); pending != m_PeerTailRequestedUntil.end() && asked != m_PeerTailRequestedOf.end() && asked->second == donor)
+				for (const auto& [peer, applied]: m_PeerAppliedThrough)
+					if (peer != donor && peer != m_Config.localPeerId && applied >= frame && HasPeerFrameRoute(peer)) { donor = peer; break; }
 			m_PeerTailDonor = donor;
 			auto request = PeerFrameMessage(NetHostMigrationMessageType::PeerTailRequest);
 			request.frame = frame;
@@ -280,7 +280,7 @@ namespace RTE {
 				    << " retry_ms=" << retryMs << " now_ms=" << nowMs << std::endl;
 			++requestsInBatch;
 			++m_PeerTailRequests;
-			for (; frame < end; ++frame) m_PeerTailRequestedUntil[frame] = nowMs + retryMs;
+			for (; frame < end; ++frame) { m_PeerTailRequestedUntil[frame] = nowMs + retryMs; m_PeerTailRequestedOf[frame] = donor; }
 		}
 		if ((m_FrameGroupMembers & SeatBit(m_Config.localPeerId)) == 0 && nowMs >= m_PeerTailLogAtMs) {
 			m_PeerTailLogAtMs = nowMs + 1000;
