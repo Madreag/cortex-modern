@@ -870,9 +870,9 @@ def setup_doors_scene():
             "activate ButtonHostOptBack", "wait_substate Lobby 30",
             "activate ButtonLobbyOptions", "wait_ms 600", "assert_substate HostOptions", "video_mark advanced-host",
             "assert_label LabelHostOptionsTitle A D V A N C E D", "assert_visible TabHostPageConnection 1", "assert_visible TabHostPageSession 1",
-            "activate TabHostPageSession", "wait_ms 600", "activate ButtonHostSessEnd", "wait_ms 600", "assert_substate HostOptions",
+            "activate TabHostPageSession", "wait_ms 600", "activate ButtonHostSessEnd", "wait_ms 600", "video_mark end-confirm-host", "assert_substate HostOptions",
             "assert_label ButtonHostSessEnd Confirm end", "assert_label LabelHostSessEndHint Press Confirm end to close the game for every player",
-            "assert_text_fits LabelHostSessEndHint", "video_mark end-confirm-host", "activate TabHostPageRules", "wait_ms 400", "activate TabHostPageSession",
+            "assert_text_fits LabelHostSessEndHint", "activate TabHostPageRules", "wait_ms 400", "activate TabHostPageSession",
             "wait_ms 600", "assert_label ButtonHostSessEnd End session", "activate ButtonHostOptBack", "wait_substate Lobby 30"]
     joiner = ["activate ButtonLobbyEditSetup", "wait_ms 600", "assert_substate HostOptions", "video_mark match-details-joiner",
               "assert_label LabelHostOptionsTitle M A T C H   D E T A I L S", "assert_visible TabHostPageTiming 1",
@@ -1085,9 +1085,9 @@ def end_session_scene():
     """D9: End session asks for a second press that names its consequence, and the second press ends the game for both players."""
     host = host_setup() + [
         "activate ButtonLobbyOptions", "wait_ms 600", "assert_substate HostOptions", "activate TabHostPageSession", "wait_ms 600",
-        "activate ButtonHostSessEnd", "wait_ms 600", "assert_label ButtonHostSessEnd Confirm end",
+        "activate ButtonHostSessEnd", "wait_ms 600", "video_mark end-armed-host", "assert_label ButtonHostSessEnd Confirm end",
         "assert_label LabelHostSessEndHint Press Confirm end to close the game for every player", "assert_text_fits LabelHostSessEndHint",
-        "assert_substate HostOptions", "video_mark end-armed-host", "touch_file {PROBE_DIR}/armed.json",
+        "assert_substate HostOptions", "touch_file {PROBE_DIR}/armed.json",
         # Both probes read the relay route while the session still stands; then the second press ends it.
         "wait_file {PROBE_DIR}/done.json 120", "wait_file {PROBE_DIR_joiner}/done.json 120",
         "activate ButtonHostSessEnd", "wait_substate Landing 60", "video_mark session-ended-host", "wait_ms 1400", "exit"]
