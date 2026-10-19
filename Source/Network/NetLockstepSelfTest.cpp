@@ -797,6 +797,36 @@ namespace RTE {
 				    "a record in which a held seat plays was applied: applied=" + std::to_string(applied) + " next=" + std::to_string(peer.m_Stats.nextFrame));
 				check(peer.m_PeerTailDonor == 2, "the frame was asked again of the donor whose record was set aside: donor=" + std::to_string(peer.m_PeerTailDonor));
 			}
+			// The reader displayed 149 on its own continuation. A record of 150 that continues another history is never played over it:
+			// offered alone, the reader returns through a private image from the frame it began reading; offered beside a record that
+			// continues this history, that one is taken.
+			for (const bool both: {false, true}) {
+				Wire wire; NetLockstepCoordinator peer; reader(peer, wire);
+				peer.m_LastCompletedSimulationTick = 149;
+				NetLockstepReadyFrame ready; ready.frame = 150; ready.localPeerId = 3; ready.authorityPeerId = ready.updateAuthorityPeerId = 1;
+				ControllerFrame first, second; first.actorUniqueID = 1001; second.actorUniqueID = 1002;
+				ready.remoteFrameCounts = {{1, 1}, {2, 1}}; ready.remoteFrames = {first, second};
+				std::vector<uint8_t> record;
+				if (!peer.EncodeMigrationFrame(ready, record)) { *error = "the continuation records did not encode"; return false; }
+				NetLockstepCoordinator::PeerTailVote other; other.members = 1; other.bytes = record; other.through = 160; other.prefix.fill(0x5a);
+				peer.m_PeerTailVotes[150][1] = other;
+				if (both) {
+					NetLockstepCoordinator::PeerTailVote own = other; own.members = 2; own.prefix = peer.PeerFramePrefix(149);
+					peer.m_PeerTailVotes[150][2] = own;
+				}
+				peer.m_PeerAppliedThrough = {{1, 160}, {2, 160}};
+				const bool confirmed = peer.ConfirmPeerTail(150, 1000);
+				const bool continues = confirmed && peer.m_PeerTailPrefixes.contains(150) && peer.m_PeerTailPrefixes.at(150) == peer.PeerFramePrefix(149);
+				const bool applied = confirmed && peer.ApplyPeerCommittedTail(150, 1000);
+				if (both) {
+					check(continues && applied && peer.IsRunning() && peer.m_Stats.nextFrame == 151, "the record continuing this seat's history was passed over: confirmed=" +
+					    std::to_string(confirmed) + " continues=" + std::to_string(continues) + " applied=" + std::to_string(applied) + " reason=" + peer.m_Stats.timeoutReason);
+				} else {
+					check(!applied && peer.IsStopped() && peer.IsLocalSeatHeld() && peer.GetLocalHoldFrame() == 50 && peer.m_Stats.timeoutReason.rfind("PeerHeld:", 0) == 0 &&
+					    peer.m_ReadyFrames.empty() && !peer.m_PeerCommittedTail.contains(150), "another continuation's record did not send this seat back through a private image: applied=" +
+					    std::to_string(applied) + " stopped=" + std::to_string(peer.IsStopped()) + " hold_frame=" + std::to_string(peer.GetLocalHoldFrame()) + " reason=" + peer.m_Stats.timeoutReason);
+				}
+			}
 			return passed;
 		}
 
