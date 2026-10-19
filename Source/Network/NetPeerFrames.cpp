@@ -222,25 +222,27 @@ namespace RTE {
 		return name;
 	}
 
-	void NetLockstepCoordinator::NotePeerContinuation(uint8_t peer, uint64_t frame, const NetHash32& applied) {
+	void NetLockstepCoordinator::NotePeerContinuation(uint8_t peer, uint64_t frame, const NetHash32& applied, uint32_t peerMembers) {
 		if (!UsesPeerFrameGroups() || m_Playback || !IsRunning() || peer == 0 || peer > m_Config.peerCount || peer == m_Config.localPeerId ||
 		    m_PeerOtherContinuations.contains(peer) || applied == NetHash32{} || !m_LastCompletedSimulationTick || frame > *m_LastCompletedSimulationTick ||
 		    !m_MigrationHistory.contains(frame) || IsLocalPrivateReaderAt(frame)) return;
-		// Both seats showed the frame in this seat's group and the member still plays here: a record that differs is another history.
+		// Both seats showed the frame in one group, each counting the other in it, and the member still plays here: a record that
+		// differs is another history inside this group. A seat that had held this one plays a split, which the heal decides.
 		const uint32_t members = PeerFrameMembersAt(frame);
-		if ((members & SeatBit(peer)) == 0 || (members & SeatBit(m_Config.localPeerId)) == 0 || (PeerFrameMembersAt(m_Stats.nextFrame) & SeatBit(peer)) == 0) return;
+		if ((members & SeatBit(peer)) == 0 || (members & SeatBit(m_Config.localPeerId)) == 0 || (peerMembers & SeatBit(m_Config.localPeerId)) == 0 ||
+		    (PeerFrameMembersAt(m_Stats.nextFrame) & SeatBit(peer)) == 0) return;
 		const auto own = PeerAppliedFramePrefix(frame);
 		if (own == NetHash32{}) return;
 		auto& evidence = m_PeerContinuationEvidence[peer];
 		if (own == applied) {
-			if (frame >= evidence.last) evidence = {};
+			if (evidence.frames.empty() || frame >= *evidence.frames.rbegin()) evidence.frames.clear();
 			return;
 		}
-		// One frame can carry a seat's own transition facts; another continuation differs on every frame it plays.
-		if (evidence.frames == 0 || frame < evidence.first) evidence.first = frame;
-		if (frame > evidence.last || evidence.frames == 0) { evidence.last = frame; ++evidence.frames; }
-		if (evidence.frames < c_OtherContinuationFrames) return;
-		m_PeerOtherContinuations[peer] = evidence.first;
+		// One frame can carry a seat's own transition facts; another continuation differs on every frame it plays, whatever order
+		// its records arrive in.
+		evidence.frames.insert(frame);
+		if (evidence.frames.size() < c_OtherContinuationFrames) return;
+		m_PeerOtherContinuations[peer] = *evidence.frames.begin();
 		m_PeerContinuationEvidence.erase(peer);
 		DiagnosticLine() << "[net-peer-continuation] local=" << static_cast<int>(m_Config.localPeerId) << " peer=" << static_cast<int>(peer) << " frame=" << m_PeerOtherContinuations.at(peer)
 		    << " next=" << m_Stats.nextFrame << " displayed=" << *m_LastCompletedSimulationTick << " now_ms=" << m_TimingNowMs << std::endl;

@@ -1709,7 +1709,7 @@ namespace RTE {
 		/// The frame from which the whole group last played together at or before frame: the name every half gives the split after it.
 		uint64_t PeerSplitEpoch(uint64_t frame) const;
 		/// A member whose committed record of a frame this seat also applied differs plays another continuation.
-		void NotePeerContinuation(uint8_t peer, uint64_t frame, const NetHash32& applied);
+		void NotePeerContinuation(uint8_t peer, uint64_t frame, const NetHash32& applied, uint32_t peerMembers);
 		bool HoldsOtherContinuation(uint64_t frame) const;
 		/// Whether these seats confirm a frame the given group of members played: a majority of them, or on a tie the half the round's tie
 		/// rule names, as for every other decision of that group.
@@ -1839,7 +1839,7 @@ namespace RTE {
 		uint8_t m_PeerTailDonor = 0;
 		std::map<uint8_t, uint32_t> m_PeerReportedMembers; //!< The seats each seat last reported playing at its applied frame.
 		std::map<uint8_t, uint64_t> m_PeerOtherContinuations; //!< Members seen playing another continuation, from the frame whose records differed.
-		struct PeerContinuationEvidence { uint64_t first = 0, last = 0; uint32_t frames = 0; };
+		struct PeerContinuationEvidence { std::set<uint64_t> frames; };
 		std::map<uint8_t, PeerContinuationEvidence> m_PeerContinuationEvidence; //!< Differing records since a member's last matching one.
 		struct PeerQuestionHeard { uint64_t boundary = 0; uint32_t times = 0; };
 		std::map<uint8_t, std::map<uint64_t, PeerQuestionHeard>> m_PeerQuestionsHeard; //!< Each seat's split questions heard on its heartbeats.

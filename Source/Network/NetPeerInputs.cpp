@@ -362,7 +362,7 @@ namespace RTE {
 				std::copy_n(message.bytes.begin(), prefix.size(), prefix.begin());
 				if (!m_PeerAppliedPrefixes.contains(message.senderPeerId) || m_PeerAppliedPrefixes.at(message.senderPeerId).first < message.frame)
 					m_PeerAppliedPrefixes[message.senderPeerId] = {message.frame, prefix};
-				NotePeerContinuation(message.senderPeerId, message.frame, prefix);
+				NotePeerContinuation(message.senderPeerId, message.frame, prefix, message.voterMask);
 				if (m_PeerTailVotes.contains(message.frame)) ConfirmPeerTail(message.frame, nowMs);
 				return true;
 			}
@@ -515,7 +515,7 @@ namespace RTE {
 				NetHash32 prefix{};
 				std::copy_n(message.bytes.begin() + 8, prefix.size(), prefix.begin());
 				m_PeerAppliedPrefixes[message.senderPeerId] = {message.appliedFrame, prefix};
-				NotePeerContinuation(message.senderPeerId, message.appliedFrame, prefix);
+				NotePeerContinuation(message.senderPeerId, message.appliedFrame, prefix, message.connectedMask);
 			}
 			m_Stats.peers[message.senderPeerId].pingMs = rtt; m_Stats.peers[message.senderPeerId].jitterMs = jitter;
 			m_PeerAdminReady[message.senderPeerId] = {message.completeFrom, nowMs};

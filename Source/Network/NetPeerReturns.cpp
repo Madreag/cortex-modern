@@ -81,7 +81,7 @@ namespace RTE {
 		for (const auto& [peer, other]: m_PeerFrameWitnesses[frame]) if (peer != m_Config.localPeerId && other.bytes.size() >= NetHash32{}.size()) {
 			NetHash32 prefix{};
 			std::copy_n(other.bytes.begin(), prefix.size(), prefix.begin());
-			NotePeerContinuation(peer, frame, prefix);
+			NotePeerContinuation(peer, frame, prefix, other.voterMask);
 		}
 	}
 
