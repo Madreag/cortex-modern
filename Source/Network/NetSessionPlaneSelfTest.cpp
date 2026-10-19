@@ -1333,9 +1333,11 @@ namespace RTE {
 		bool ReadImageTail(const Wire::ImageTailDelivery& delivery, uint8_t donor, uint64_t round, uint64_t applied,
 		                   std::vector<uint8_t>& partial, std::map<uint64_t, NetLockstepFrame>& received, std::string& error) {
 			uint64_t packetRound = 0;
-			if (delivery.donor != donor || !ParseWorldTailChunkRound(delivery.chunk, packetRound) || packetRound != round) {
-				error = "image tail arrived from another donor or round"; return false;
+			if (delivery.donor != donor || !ParseWorldTailChunkRound(delivery.chunk, packetRound)) {
+				error = "image tail arrived from another donor or with no round"; return false;
 			}
+			// As the service's lobby does, a chunk of another round (one still in flight across a rematch) is dropped.
+			if (packetRound != round) return true;
 			const bool stream = delivery.lane == NetTransportLane::ControlReliable;
 			std::vector<uint8_t> packed(delivery.chunk.bytes.begin() + c_NetWorldTailRoundBytes, delivery.chunk.bytes.end());
 			if (stream) {
