@@ -1438,6 +1438,7 @@ namespace RTE {
 		friend bool TestAHeldHostKeepsTheAutosaveCadence(std::string* error);
 		friend bool TestAHostsLostOwnReportDoesNotStopTheSchedule(std::string* error);
 		friend bool TestALateCaptureNamesTheWriterThatMadeItLate(std::string* error);
+		friend bool TestAReturnersBaseIsTheMatchsSave(std::string* error);
 		friend bool TestAProvisionalHostWritesNothing(std::string* error);
 		friend bool TestNoCaptureIsNamedOverAPendingActivation(std::string* error);
 		friend bool TestNoCaptureIsNamedBeforeTheAgreedFirstFrame(std::string* error);
