@@ -184,7 +184,10 @@ namespace RTE {
 	NetConnectionAuthority::~NetConnectionAuthority() = default;
 	void NetConnectionAuthority::Suspend() {
 		std::lock_guard lock(m_Mutex);
-		m_CheckIn.reset(); m_Bootstrap.reset(); m_Operations.clear(); m_LocalLease.reset(); m_HostToken.clear();
+		m_CheckIn.reset(); m_Bootstrap.reset(); m_LocalLease.reset(); m_HostToken.clear();
+		// Queued removals outlive the suspension and go out under the next host token.
+		std::erase_if(m_Operations, [](const auto& item) { return !item.second.removal; });
+		for (auto& [key, operation]: m_Operations) { (void)key; operation.request.reset(); }
 		m_HostChange.reset(); m_HostChangeRequest.reset(); m_HostChangeReply = {}; m_HostChangeToken.clear();
 		m_FrameTie.reset(); m_FrameTieRequest.reset(); m_FrameTieReply = {}; m_NextFrameTie = 0;
 		m_HostSigningKey.fill(0);
@@ -222,7 +225,8 @@ namespace RTE {
 			m_CheckIns = m_NextCheckIn = m_NextBootstrap = 0; m_BootstrapWanted = m_Refused = m_Ended = false; m_Error.clear();
 			m_CheckedGeneration = m_RelayGeneration = UINT32_MAX;
 		}
-		if (!m_HostToken.empty() && hostToken.empty()) { m_Operations.clear(); m_Removals.clear(); }
+		// A host handing its token on stops issuing seats; its removals wait for the next token.
+		if (!m_HostToken.empty() && hostToken.empty()) std::erase_if(m_Operations, [](const auto& item) { return !item.second.removal; });
 		if (m_HostToken != hostToken || m_HostGeneration != hostGeneration)
 			for (auto& [key, operation]: m_Operations) { (void)key; operation.error.clear(); }
 		m_SessionId = std::move(sessionId); m_HostToken = std::move(hostToken); m_HostGeneration = hostGeneration;
@@ -320,9 +324,13 @@ namespace RTE {
 
 	void NetConnectionAuthority::Remove(const NetParticipantId& player, const std::string& name, bool ban) {
 		std::lock_guard lock(m_Mutex);
-		if (m_SessionId.empty() || m_HostToken.empty()) return;
+		// A removal made before the host holds its directory token waits for one.
+		if (m_SessionId.empty()) return;
 		const std::string key = "remove:" + Hex(player);
-		if (!m_Removals.insert(key).second) return;
+		const auto [known, added] = m_Removals.try_emplace(key, ban);
+		// A ban after a kick of the same player is a new answer for the directory.
+		if (!added && (!ban || known->second)) return;
+		known->second = ban;
 		Operation operation; operation.removal = true;
 		operation.body = json{{"connection_protocol", NetSeatLease::c_Version}, {"operation", "remove"}, {"token", m_HostToken}, {"host_generation", m_HostGeneration},
 			{"participant", Hex(player)}, {"name", name}, {"action", ban ? "banned" : "removed"}}.dump();
@@ -432,7 +440,7 @@ namespace RTE {
 					if (ended) { m_Ended = m_Refused = true; NetDirectoryBudget::EndSession(m_BaseUrl, m_InstallKey, m_SessionId, steadyMs); }
 				}
 			}
-			if (!op.request && !op.issued && op.error.empty() && steadyMs >= op.retryAt && steadyMs >= (op.removal ? m_RemoveRetry : m_IssueRetry).nextMs && active < 1 && CanRequest(steadyMs)) {
+			if (!op.request && !op.issued && op.error.empty() && !m_HostToken.empty() && steadyMs >= op.retryAt && steadyMs >= (op.removal ? m_RemoveRetry : m_IssueRetry).nextMs && active < 1 && CanRequest(steadyMs)) {
 				// Host migration may rotate the directory token while this request waits.
 				auto body = json::parse(op.body); body["token"] = m_HostToken; body["host_generation"] = m_HostGeneration;
 				op.request = StartRequest("POST", body.dump()); if (op.request) ++active;

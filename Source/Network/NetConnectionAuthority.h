@@ -184,7 +184,7 @@ namespace RTE {
 		NetAuthBytes32 m_HostSigningKey{};
 		NetAuthBytes16 m_Instance{};
 		std::map<std::string, Operation> m_Operations;
-		std::set<std::string> m_Removals;
+		std::map<std::string, bool> m_Removals; //!< Each removal sent or queued, and whether it bans.
 		std::optional<NetSeatLease> m_LocalLease;
 		std::optional<NetConnectionHost> m_Host;
 		NetConnectionRoute m_Route;
