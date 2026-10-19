@@ -9216,6 +9216,9 @@ bool LuaStateWrapper::CapturePreparedScriptGraphs(const CheckpointLua::Boundary&
 					// An activity the world no longer has (a rejoin's image load replaced it) can stay in the capture helper's own maps,
 					// which the copy carries and the serializer skips; it is never read.
 					if (!owned && bindings.DerivesFrom(type, "Activity") && !LuaScriptGraphNativeCaptureScope::Current()->LiveActivity(entity)) return nullptr;
+					// Test lever CC_TEST_CAPTURE_NATIVE_TRACE=1: each native a script holds, named before the saver freezes it.
+					static const bool trace = [] { const char* value = std::getenv("CC_TEST_CAPTURE_NATIVE_TRACE"); return value && std::string_view(value) == "1"; }();
+					if (trace) std::cout << std::format("[capture-native] class={} owned={} at={} retained={}", bindings.Class(type)->name(), owned, static_cast<const void*>(entity), Entity::RetainedMemoryHolds(entity, 1)) << std::endl;
 					try {
 						void* result = reinterpret_cast<char*>(snapshot->Object(entity)) - *offset;
 						if (bindings.DerivesFrom(type, "PieSlice") || bindings.DerivesFrom(type, "PieMenu")) return LuaScriptGraphNativeCaptureScope::Current()->NoteSliceCopy(result, pointer);
