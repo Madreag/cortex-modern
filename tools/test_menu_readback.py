@@ -1622,9 +1622,11 @@ def scripts(case, port, root, size="960x540"):
                  "activate ButtonMultiplayerHostGame\nwait 5\n"
                  "assert_visible LabelHostInputDelayPolicy 0\nassert_visible TextHostInputDelay 0\nassert_visible TextHostPort 0\n"
                  "dump_host_options\n"
-                 # The seeded policy is automatic and Advanced's Timing page says so; autosave is on every five minutes by default.
+                 # The seeded policy is automatic and Advanced's Timing page says so; autosave is on every five minutes by default,
+                 # and turned off its interval box is the disabled frame the dump below is read for.
                  "activate ButtonHostOptions\nwait 5\nactivate TabHostPageTiming\nwait 3\nassert_label ComboHostNetPolicy Automatic\ndump_host_options\n"
-                 "activate TabHostPageRecovery\nwait 3\nassert_enabled TextHostRecAutosaveInterval 1\nassert_label TextHostRecAutosaveInterval 300\ndump_host_options\n"
+                 "activate TabHostPageRecovery\nwait 3\nassert_enabled TextHostRecAutosaveInterval 1\nassert_label TextHostRecAutosaveInterval 300\n"
+                 "setcheck CheckHostRecAutosave 0\nwait_ms 500\nassert_checked CheckHostRecAutosave 0\nassert_enabled TextHostRecAutosaveInterval 0\ndump_host_options\n"
                  "activate ButtonHostOptBack\nwait 4\nassert_substate HostSetup\n"
                  f"setup_host_port {port}\ncombo_select ComboHostPlayers 2\n"
                  "activate ButtonMultiplayerCreate\nwait 15\nassert_substate Lobby\n"

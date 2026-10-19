@@ -22,8 +22,7 @@
   },
   {
    "name": "TextHostRecAutosaveInterval",
-   "enabled": false,
-   "reason": "Autosave is off: the interval applies once it is on."
+   "enabled": true
   },
   {
    "name": "ButtonHostRecRepairNow",
