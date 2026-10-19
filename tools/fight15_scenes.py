@@ -831,11 +831,11 @@ def newcomer_scene(number, size):
     host_steps, joiner_steps = place("host"), place("joiner")
     for peer, steps in (("host", host_steps), ("joiner", joiner_steps)):
         steps += complete_live_scene(peer, number)
-    checks = [dict(id=f"network-defaults-{peer}", peer=peer, mark=f"network-defaults-{peer}", screen="MainScreen",
+    checks = [dict(id=f"network-defaults-{peer}", peer=peer, mark=f"network-defaults-{peer}", screen="SettingsScreen",
                    what="A newcomer's Settings > Network reads Automatic and When needed, and the hand picks Relay only.",
                    events=["^assert_label LabelNetworkConnectionValue \"Automatic\".*PASS", "^assert_label ComboNetworkConnection \"Relay only\".*PASS"])
               for peer in ("host", "joiner")]
-    checks += [dict(id=f"files-default-{peer}", peer=peer, mark=f"files-default-{peer}", screen="MainScreen",
+    checks += [dict(id=f"files-default-{peer}", peer=peer, mark=f"files-default-{peer}", screen="SettingsScreen",
                     what="Outside a match the Files page shows this computer's hosting default, on every five minutes, under its own name.",
                     events=["^assert_label LabelNetAutosaveHost \"Your hosting default\".*PASS", "^assert_label LabelNetAutosave \"On\".*PASS",
                             "^assert_label LabelNetAutosaveInterval \"Every 5 minutes\".*PASS"]) for peer in ("host", "joiner")]
@@ -933,10 +933,12 @@ def hosting_page_scene():
     host += ["touch_file {PROBE_DIR}/scene-end.json", "wait_file {PROBE_DIR_joiner}/scene-end.json 120"] + lobby_exit()
     joiner = ["wait_ms 1800"] + hosting_pages("joiner") + join_setup()[1:] + ["touch_file {PROBE_DIR}/scene-end.json", "wait_file {PROBE_DIR_host}/scene-end.json 300"] + lobby_exit()
     done = probe([dict(op="wait_file", path="{PROBE_DIR}/scene-end.json", scope="menu", within_ms=300000), dict(op="finish")], 320000)
-    checks = [marked(f"hosting-page-{peer}", peer, "The Hosting page holds only hosting defaults, each with what it costs.",
-                     ["^assert_visible CheckboxNetworkPrediction 0.*PASS", "^assert_label LabelNetworkHostingHint .*PASS"]) for peer in ("host", "joiner")]
-    checks += [marked(f"in-match-page-{peer}", peer, "This computer's in-match options have their own page.", ["^assert_label TabNetPageChat \"In match\".*PASS"])
-               for peer in ("host", "joiner")]
+    # Settings pages are recorded as the settings screen.
+    checks = [dict(marked(f"hosting-page-{peer}", peer, "The Hosting page holds only hosting defaults, each with what it costs.",
+                          ["^assert_visible CheckboxNetworkPrediction 0.*PASS", "^assert_label LabelNetworkHostingHint .*PASS"]), screen="SettingsScreen")
+              for peer in ("host", "joiner")]
+    checks += [dict(marked(f"in-match-page-{peer}", peer, "This computer's in-match options have their own page.",
+                           ["^assert_label TabNetPageChat \"In match\".*PASS"]), screen="SettingsScreen") for peer in ("host", "joiner")]
     emit(28, "Hosting defaults and this computer's in-match options on their own pages; the router row says what it opens",
          host, joiner, done, done, checks, timeout=300)
 

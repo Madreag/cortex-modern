@@ -47,7 +47,7 @@
       "id": "network-defaults-host",
       "peer": "host",
       "mark": "network-defaults-host",
-      "screen": "MainScreen",
+      "screen": "SettingsScreen",
       "what": "A newcomer's Settings > Network reads Automatic and When needed, and the hand picks Relay only.",
       "events": [
         "^assert_label LabelNetworkConnectionValue \"Automatic\".*PASS",
@@ -58,7 +58,7 @@
       "id": "network-defaults-joiner",
       "peer": "joiner",
       "mark": "network-defaults-joiner",
-      "screen": "MainScreen",
+      "screen": "SettingsScreen",
       "what": "A newcomer's Settings > Network reads Automatic and When needed, and the hand picks Relay only.",
       "events": [
         "^assert_label LabelNetworkConnectionValue \"Automatic\".*PASS",
@@ -69,7 +69,7 @@
       "id": "files-default-host",
       "peer": "host",
       "mark": "files-default-host",
-      "screen": "MainScreen",
+      "screen": "SettingsScreen",
       "what": "Outside a match the Files page shows this computer's hosting default, on every five minutes, under its own name.",
       "events": [
         "^assert_label LabelNetAutosaveHost \"Your hosting default\".*PASS",
@@ -81,7 +81,7 @@
       "id": "files-default-joiner",
       "peer": "joiner",
       "mark": "files-default-joiner",
-      "screen": "MainScreen",
+      "screen": "SettingsScreen",
       "what": "Outside a match the Files page shows this computer's hosting default, on every five minutes, under its own name.",
       "events": [
         "^assert_label LabelNetAutosaveHost \"Your hosting default\".*PASS",
