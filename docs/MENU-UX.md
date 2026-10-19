@@ -36,7 +36,7 @@ How the multiplayer screens behave, for players and for anyone changing them. Ev
   dialog or the lobby's Seats panel, all in the same words: `Keep for <player>`, `Let <newcomer> join`, `Cancel this
   approval`, and for a request `Decline` or `Ban`.
 - The Players panel names why each seat is held ("Left 2 min ago", "Connection lost 10 s ago", "Machine too slow") and any
-  pending request. Nobody loses a seat without the host's click.
+  pending request; a request waits 20 seconds for the host's answer. Nobody loses a seat without the host's click.
 - Removing a player asks for a second press everywhere: the Players panel's `Remove` and `Ban`, the lobby seat dialog's
   `Kick player` and `Ban this session` ("Confirm kick" - "Press Confirm kick to remove <player> from this session"), and the
   session's `End session` ("Confirm end"). Any other press takes the first one back. A removed player stays refused for the
@@ -49,7 +49,8 @@ How the multiplayer screens behave, for players and for anyone changing them. Ev
   away and why, how each player is connected. Its numbers (input delay, round trip, pace, waits) appear only with
   Settings > Network > Show network diagnostics.
 - A player whose own seat is held reads "The AI is playing for you until you are back" once, in the status box; the
-  notifications below never repeat a line the status box already shows.
+  notifications below never repeat a line the status box already shows, and the Players panel's line says how everyone
+  else is ("Everyone else is playing").
 - Under the default brain-loss rule ("Keep playing, humans spectate") a player whose brain is destroyed watches while the
   match plays on for everyone else; when only one side is left standing the round ends there.
 - After a match the lobby's last-match line names the result and its reason in a player's words, such as "Joiner's brain was
