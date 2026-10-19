@@ -2411,8 +2411,12 @@ namespace RTE {
 			std::erase_if(replayConfig.initialPeerLeaves, [base](const auto& entry) { return entry.second > base; });
 			for (auto& [peer, changes]: replayConfig.initialDelayChanges) changes.erase(changes.upper_bound(base), changes.end());
 			LoopbackTransport replayWire; NetLockstepCoordinator replayCoordinator;
-			// A losing branch must not import its former seat transitions into the ruling image. An in-place nonsplit reader can.
-			const bool discardedBranch = fixture.lostAt[seat - 1] || (!fixture.hub.row.internet && fixture.sawSplit);
+			// The replay is chosen as the service chooses it (NetMatchService::BeginInPlaceCatchUp): only a sim short of its own hold frame
+			// still holds the round's state and imports its seat transitions in place; any other returns through a fresh replay.
+			const auto& returner = *fixture.peers[seat - 1];
+			const uint64_t holdFrame = returner.GetLocalHoldFrame(), simulated = fixture.worlds[seat - 1].applied;
+			const bool discardedBranch = !(returner.IsLocalSeatHeld() && returner.UsesBoundedWait() && !returner.IsPersistentWorldRound() &&
+			    holdFrame != 0 && simulated != 0 && simulated < holdFrame);
 			if (discardedBranch ? !replayCoordinator.StartReplay(replayWire, replayConfig, &error) :
 			    !replayCoordinator.StartCatchUpReplay(replayWire, replayConfig, *fixture.peers[seat - 1], &error)) co_return false;
 			NetWorldJoinHost join;
