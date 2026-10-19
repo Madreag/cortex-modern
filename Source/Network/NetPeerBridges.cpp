@@ -716,7 +716,7 @@ namespace RTE {
 		    agreed.boundary == certificate.boundary && agreed.completeFrom == certificate.completeFrom && agreed.successorPeerId == certificate.successorPeerId;
 	}
 
-	void NetLockstepCoordinator::InstallPeerBridge(const NetHostMigrationMessage& certificate, uint64_t nowMs) {
+	void NetLockstepCoordinator::InstallPeerBridge(const NetHostMigrationMessage& certificate, uint64_t nowMs, bool fromCommittedTail) {
 		if (m_PeerBridgeCertificates.contains({certificate.frame, DecisionKind(certificate)})) return;
 		// CC_TEST_RETURN_INPUT_DETAILS names each decision this peer sets aside and why.
 		const auto refused = [&](const char* reason) {
@@ -753,6 +753,24 @@ namespace RTE {
 			    << " waiting=" << m_ConsumerWaitingFrame.value_or(UINT64_MAX) << " waiting_since=" << m_ConsumerWaitStartMs
 			    << " input_voters=" << PeerInputVoters(agreed.frame, m_Config.localPeerId) << " local_source=" << m_LocalFrames.contains(agreed.frame)
 			    << " now_ms=" << nowMs << std::endl;
+		// A private reader plays the certified history it reads, whose record carries every hold of that history. A hold certified to it
+		// directly may be another continuation's, in which the seat it holds still plays. The reader adopts it before it has shown that
+		// frame unless the split's ruling names another group or, unruled, the record it has of that frame shows a held seat playing.
+		// One ahead is judged again at its frame.
+		if (agreed.preparedFrame == 0 && !fromCommittedTail && certificate.frame <= m_Stats.nextFrame && IsLocalPrivateReaderAt(agreed.frame)) {
+			CheckPeerFrameTie(certificate.frame, agreed.connectedMask, nowMs);
+			const auto ruling = m_PeerFrameTieWinners.find(PeerSplitEpoch(certificate.frame));
+			const bool shown = (m_LastCompletedSimulationTick && *m_LastCompletedSimulationTick >= certificate.frame) ||
+			    (m_LastDeliveredFrame && *m_LastDeliveredFrame >= certificate.frame) || (m_GrantedSimulationTick && *m_GrantedSimulationTick >= certificate.frame);
+			bool contested = false;
+			const auto& records = certificate.frame < m_Stats.nextFrame ? m_MigrationHistory : m_PeerCommittedTail;
+			if (const auto record = records.find(certificate.frame); record != records.end()) {
+				NetLockstepReadyFrame read;
+				if (DecodeMigrationFrame(record->second, certificate.frame, read))
+					for (uint8_t peer: agreed.members) contested = contested || read.remoteFrameCounts.contains(peer);
+			}
+			if (shown || (ruling != m_PeerFrameTieWinners.end() ? (ruling->second & agreed.connectedMask) == 0 : contested)) { refused("private reader"); return; }
+		}
 		if (agreed.preparedFrame == 1) {
 			if (ReturnCrossesDeparture(agreed, m_PeerOwnershipChanges)) { refused("owner changed"); return; }
 			for (uint8_t peer: agreed.members) if ((PeerRetainedSeatsAt(agreed.frame) & SeatBit(peer)) == 0) { refused("removed"); return; }

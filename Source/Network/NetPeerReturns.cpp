@@ -349,14 +349,25 @@ namespace RTE {
 			Fail(NetLockstepStopReason::ProtocolError, frame, "the committed tail differs from displayed history at frame " + std::to_string(frame)); return false;
 		}
 		NetLockstepReadyFrame ready;
-		if (const auto decisions = m_PeerTailDecisions.find(frame); decisions != m_PeerTailDecisions.end()) {
-			for (const auto& decision: decisions->second) InstallPeerBridge(decision, nowMs);
-			m_PeerTailDecisions.erase(decisions);
-		}
-		PreparePeerBridgeInputs(frame, nowMs);
 		if (!DecodeMigrationFrame(kept->second, frame, ready)) {
 			Fail(NetLockstepStopReason::ProtocolError, frame, "invalid committed peer tail"); return false;
 		}
+		// The record is the history this seat plays. One in which a seat it holds at this frame plays is another continuation's:
+		// it is set aside unapplied and the frame asked of another donor.
+		for (const auto& [peer, count]: ready.remoteFrameCounts) {
+			if (peer == m_Config.localPeerId || !IsSeatUnderAI(peer, frame)) continue;
+			if (const auto votes = m_PeerTailVotes.find(frame); votes != m_PeerTailVotes.end())
+				for (const auto& [donor, vote]: votes->second) if (vote.bytes == kept->second) { m_PeerTailRequestedOf[frame] = donor; m_PeerTailRequestedUntil[frame] = 0; break; }
+			m_PeerCommittedTail.erase(kept); m_PeerTailPrefixes.erase(frame); m_PeerPreparedPrefixes.erase(frame);
+			m_PeerTailVotes.erase(frame); m_PeerTailDecisions.erase(frame);
+			m_PeerTailRequestAtMs = 0; RequestPeerCommittedTail(nowMs);
+			return false;
+		}
+		if (const auto decisions = m_PeerTailDecisions.find(frame); decisions != m_PeerTailDecisions.end()) {
+			for (const auto& decision: decisions->second) InstallPeerBridge(decision, nowMs, true);
+			m_PeerTailDecisions.erase(decisions);
+		}
+		PreparePeerBridgeInputs(frame, nowMs);
 		StoreMigrationFrame(frame, kept->second);
 		const auto own = m_PeerBridges.find(m_Config.localPeerId);
 		const bool privateReader = own != m_PeerBridges.end() && own->second.committedHold &&

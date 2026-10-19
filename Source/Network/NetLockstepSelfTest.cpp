@@ -727,6 +727,79 @@ namespace RTE {
 			return true;
 		}
 
+		// Seat 3 catches up privately while seats 1 and 2 split. It is offered seat 2's lone hold of seat 1 directly, and it may be sent a
+		// record of the half in which seat 1 plays. It adopts a direct hold before showing its frame unless the ruling names the other half
+		// or, unruled, its record of that frame shows seat 1 playing; and it never applies a record in which a seat it holds plays.
+		static bool PrivateReaderPlaysOnlyTheHistoryItReads(std::string* error) {
+			bool passed = true;
+			const auto check = [&](bool ok, const std::string& why) {
+				if (!ok) { passed = false; *error += why + "; "; std::cout << "[private-reader-history] FAIL " << why << std::endl; }
+			};
+			const auto reader = [](NetLockstepCoordinator& peer, Wire& wire) {
+				Configure(peer, wire);
+				peer.m_Config.peerFrameGroups = true; peer.m_Config.localPeerId = 3; peer.m_Config.authorityPeerId = 1;
+				peer.m_Config.peerCount = peer.m_Config.matchConfig.peerCount = 3;
+				peer.m_Config.matchConfig.players.resize(2); peer.m_Config.matchConfig.players.push_back({3, 2, false, "Third"});
+				peer.m_Config.matchConfig.successorOrder = {2, 3};
+				peer.m_RoundConfigHash = NetMatchConfigUtil::HashConfig(peer.m_Config.matchConfig);
+				peer.m_RemotePeerIds = {1, 2}; peer.m_RemoteTransports = {{1, 41}, {2, 42}};
+				peer.m_MigrationPhase = NetHostMigrationPhase::None;
+				peer.m_PeerBridges[3] = {50, 50, true, std::nullopt, {}, 3};
+				peer.m_PeerFrameHolds[3][50] = true;
+				peer.m_FrameGroupMembers = 3; peer.m_FrameGroupChanges = {{1, 7}, {50, 3}};
+				peer.m_Stats.nextFrame = 150; peer.m_LastCompletedSimulationTick = 140;
+				peer.m_MigrationHistory[149] = {1, 2, 3};
+			};
+			// Arms: no ruling against a record of the frame with seat 1 playing; a ruling for seat 1's half; a ruling for the hold's half;
+			// that ruling after the frame was shown; the tail's record; no ruling and no record of the frame yet.
+			for (unsigned arm = 0; arm < 6; ++arm) {
+				Wire wire; NetLockstepCoordinator peer; reader(peer, wire);
+				if (arm == 3) peer.m_LastCompletedSimulationTick = 150;
+				if (arm >= 1 && arm <= 3) peer.m_PeerFrameTieWinners[peer.PeerSplitEpoch(150)] = arm == 1 ? 1 : 2;
+				if (arm == 0) {
+					NetLockstepReadyFrame read; read.frame = 150; read.localPeerId = 3; read.authorityPeerId = read.updateAuthorityPeerId = 1;
+					ControllerFrame first, second; first.actorUniqueID = 1001; second.actorUniqueID = 1002;
+					read.remoteFrameCounts = {{1, 1}, {2, 1}}; read.remoteFrames = {first, second};
+					if (!peer.EncodeMigrationFrame(read, peer.m_PeerCommittedTail[150])) { *error = "the host half's record did not encode"; return false; }
+				}
+				auto vote = peer.PeerFrameMessage(NetHostMigrationMessageType::PeerBridge);
+				vote.senderPeerId = vote.successorPeerId = 2; vote.frame = vote.boundary = 150;
+				vote.preparedFrame = 0; vote.connectedMask = vote.voterMask = 2; vote.members = {1};
+				const auto prefix = peer.PeerFramePrefix(149); vote.bytes.assign(prefix.begin(), prefix.end()); vote.totalBytes = vote.bytes.size();
+				std::vector<uint8_t> signedVote;
+				if (!NetHostMigrationCodec::Encode(vote, peer.m_Config.migrationKey, signedVote)) { *error = "the lone hold vote did not encode"; return false; }
+				auto certificate = vote; certificate.type = NetHostMigrationMessageType::PeerBridgeCommit; certificate.bytes = {1};
+				for (unsigned shift = 0; shift < 32; shift += 8) certificate.bytes.push_back(static_cast<uint8_t>(signedVote.size() >> shift));
+				certificate.bytes.insert(certificate.bytes.end(), signedVote.begin(), signedVote.end()); certificate.totalBytes = certificate.bytes.size();
+				peer.InstallPeerBridge(certificate, 1000, arm == 4);
+				const bool held = peer.m_PeerBridges.contains(1) && peer.IsSeatUnderAI(1, 150);
+				const bool expected = arm == 2 || arm == 4 || arm == 5;
+				check(held == expected && peer.m_PendingPeerDecisions.empty(), "arm " + std::to_string(arm) + (expected ? " did not adopt the hold of the history it reads" :
+				    " adopted another continuation's direct hold") + ": held=" + std::to_string(held) + " pending=" + std::to_string(peer.m_PendingPeerDecisions.size()));
+			}
+			{
+				// Seat 1 is held at 145 in the history this reader plays; a record of frame 150 carrying seat 1's input is another continuation's.
+				Wire wire; NetLockstepCoordinator peer; reader(peer, wire);
+				peer.m_LastCompletedSimulationTick = 149;
+				peer.m_PeerBridges[1] = {145, 145, true, std::nullopt, {}, 2};
+				peer.m_PeerFrameHolds[1][145] = true; peer.m_FrameGroupChanges[145] = 2; peer.m_FrameGroupMembers = 2;
+				NetLockstepReadyFrame ready; ready.frame = 150; ready.localPeerId = 3; ready.authorityPeerId = ready.updateAuthorityPeerId = 2;
+				ControllerFrame first, second; first.actorUniqueID = 1001; second.actorUniqueID = 1002;
+				ready.remoteFrameCounts = {{1, 1}, {2, 1}}; ready.remoteFrames = {first, second};
+				std::vector<uint8_t> record;
+				if (!peer.EncodeMigrationFrame(ready, record)) { *error = "the other continuation's record did not encode"; return false; }
+				peer.m_PeerCommittedTail[150] = record; peer.m_PeerTailPrefixes[150] = peer.PeerFramePrefix(149);
+				NetLockstepCoordinator::PeerTailVote tail; tail.members = 3; tail.bytes = record; tail.through = 160;
+				peer.m_PeerTailVotes[150][1] = tail;
+				peer.m_PeerAppliedThrough = {{1, 160}, {2, 160}}; peer.m_PeerTailDonor = 1;
+				const bool applied = peer.ApplyPeerCommittedTail(150, 1000);
+				check(!applied && peer.m_Stats.nextFrame == 150 && !peer.m_PeerCommittedTail.contains(150) && peer.m_ReadyFrames.empty(),
+				    "a record in which a held seat plays was applied: applied=" + std::to_string(applied) + " next=" + std::to_string(peer.m_Stats.nextFrame));
+				check(peer.m_PeerTailDonor == 2, "the frame was asked again of the donor whose record was set aside: donor=" + std::to_string(peer.m_PeerTailDonor));
+			}
+			return passed;
+		}
+
 		// A reader's subscription went to a donor whose link then lost most packets, and a repair asked the other donor for an earlier
 		// range. The retry of the lost frames goes to the donor that was not asked for them.
 		static bool TailRetryAsksAnotherDonor(std::string* error) {
@@ -32302,6 +32375,12 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS waiting_mesh_publishes_its_own_start\n[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "private-reader-history") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::PrivateReaderPlaysOnlyTheHistoryItReads(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS a_private_reader_plays_only_the_history_it_reads\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "tail-retry-donor") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::TailRetryAsksAnotherDonor(&error)) return fail(error);
@@ -32750,6 +32829,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::LoneMigrationFollowsItsAuthority, "lone_migration_follows_its_authority");
 		row(&SessionPlaneRecoveryTest::ForeignHistoryKeepsAnActiveContinuation, "foreign_history_keeps_an_active_continuation");
 		row(&SessionPlaneRecoveryTest::TailRetryAsksAnotherDonor, "a_tail_retry_asks_another_donor_than_the_one_that_failed");
+		row(&SessionPlaneRecoveryTest::PrivateReaderPlaysOnlyTheHistoryItReads, "a_private_reader_plays_only_the_history_it_reads");
 		row(&SessionPlaneRecoveryTest::TailHoldSignersAreNotAnotherPlayingHalf, "tail_hold_signers_are_not_another_playing_half");
 		row(&SessionPlaneRecoveryTest::CertifiedTailKeepsItsWitnesses, "certified_tail_keeps_its_witnesses");
 
