@@ -7270,7 +7270,8 @@ namespace RTE {
 		    static_cast<double>(nowMs - firstMissingMs) >= m_Config.slowPlayerBoundTicks * m_Config.simTickMs;
 		for (uint8_t peer: missing) {
 			const uint64_t heard = LastAuthenticatedTraffic(peer);
-			const bool bridge = combatBound && m_PeersPlayedThisRound.contains(peer);
+			// A seat owes its input from its effective start: one that has not played yet this round is held at the bound too.
+			const bool bridge = combatBound && (m_PeersPlayedThisRound.contains(peer) || frame >= EffectiveStartOf(peer));
 			if (peer == GetHostPeerId() || (!bridge && (nowMs < heard || nowMs - heard < c_NetSeatDisconnectSilenceMs))) continue;
 			if (ProposePeerHold(peer, nowMs, nullptr, bridge ? frame : 0, bridge ? "combat_bridge" : "disconnect")) {
 				m_Stats.lastHoldDeclarationMs = bridge ? nowMs - firstMissingMs : nowMs - heard;
