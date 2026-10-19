@@ -30921,8 +30921,10 @@ namespace {
 		for (int i = 0; i < 5; ++i) StepQuorumRig(round);
 		KillQuorumPeer(round, 1);
 		for (int i = 0; i < 23000; ++i) StepQuorumRig(round);
-		if (round.Peer(2).GetHostPeerId() != 1 || round.Peer(2).IsStopped() || round.Peer(2).GetMigrationResult().hostPeerId != 0) {
-			*error = "a lone direct survivor changed the host or inferred a match end"; return false;
+		// A leave is a drop: the lone survivor takes the round its host announced leaving, and plays on.
+		if (round.Peer(2).GetHostPeerId() != 2 || !round.Peer(2).IsRunning() || round.Peer(2).GetMigrationResult().hostPeerId != 2) {
+			*error = "a lone direct survivor did not take the round its host announced leaving: host=" + std::to_string(round.Peer(2).GetHostPeerId()) +
+			    " state=" + std::string(NetLockstepCoordinator::StateName(round.Peer(2).GetState())); return false;
 		}
 		return true;
 	}
