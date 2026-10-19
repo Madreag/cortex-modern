@@ -220,7 +220,15 @@ LuaEntityCastFunctionsDefinitionsForType(PieMenu);
 		luaSelfObject->SETTERFUNCTION(objectToSet ? dynamic_cast<PROPERTYTYPE*>(objectToSet->Clone()) : nullptr); \
 	}
 
-LuaPropertyOwnershipSafetyFakerFunctionDefinition(MOSRotating, SoundContainer, SetGibSound);
+// The object owns the sound it held, so it lets that one go; one a script still holds a handle to lives on until the handle does.
+#define LuaSoundPropertyOwnershipSafetyFakerFunctionDefinition(OBJECTTYPE, SETTERFUNCTION, GETTERFUNCTION) \
+	void LuaAdaptersPropertyOwnershipSafetyFaker::OBJECTTYPE##SETTERFUNCTION(OBJECTTYPE* luaSelfObject, SoundContainer* objectToSet) { \
+		SoundContainer* replaced = luaSelfObject->GETTERFUNCTION(); \
+		luaSelfObject->SETTERFUNCTION(objectToSet ? dynamic_cast<SoundContainer*>(objectToSet->Clone()) : nullptr); \
+		if (replaced != luaSelfObject->GETTERFUNCTION()) SoundContainer::ReleaseUnowned(replaced); \
+	}
+
+LuaSoundPropertyOwnershipSafetyFakerFunctionDefinition(MOSRotating, SetGibSound, GetGibSound);
 void LuaAdaptersPropertyOwnershipSafetyFaker::AttachableSetBreakWound(Attachable* object, AEmitter* wound) {
 	object->SetOwnedBreakWound(wound ? static_cast<AEmitter*>(wound->Clone()) : nullptr);
 }
@@ -228,18 +236,18 @@ void LuaAdaptersPropertyOwnershipSafetyFaker::AttachableSetParentBreakWound(Atta
 	object->SetOwnedParentBreakWound(wound ? static_cast<AEmitter*>(wound->Clone()) : nullptr);
 }
 LuaPropertyOwnershipSafetyFakerFunctionDefinition(AEmitter, Attachable, SetFlash);
-LuaPropertyOwnershipSafetyFakerFunctionDefinition(AEmitter, SoundContainer, SetEmissionSound);
-LuaPropertyOwnershipSafetyFakerFunctionDefinition(AEmitter, SoundContainer, SetBurstSound);
-LuaPropertyOwnershipSafetyFakerFunctionDefinition(AEmitter, SoundContainer, SetEndSound);
+LuaSoundPropertyOwnershipSafetyFakerFunctionDefinition(AEmitter, SetEmissionSound, GetEmissionSound);
+LuaSoundPropertyOwnershipSafetyFakerFunctionDefinition(AEmitter, SetBurstSound, GetBurstSound);
+LuaSoundPropertyOwnershipSafetyFakerFunctionDefinition(AEmitter, SetEndSound, GetEndSound);
 LuaPropertyOwnershipSafetyFakerFunctionDefinition(ADoor, Attachable, SetDoor);
 LuaPropertyOwnershipSafetyFakerFunctionDefinition(Arm, HeldDevice, SetHeldDevice);
 LuaPropertyOwnershipSafetyFakerFunctionDefinition(Leg, Attachable, SetFoot);
 LuaPropertyOwnershipSafetyFakerFunctionDefinition(Actor, PieMenu, SetPieMenu);
-LuaPropertyOwnershipSafetyFakerFunctionDefinition(Actor, SoundContainer, SetBodyHitSound);
-LuaPropertyOwnershipSafetyFakerFunctionDefinition(Actor, SoundContainer, SetAlarmSound);
-LuaPropertyOwnershipSafetyFakerFunctionDefinition(Actor, SoundContainer, SetPainSound);
-LuaPropertyOwnershipSafetyFakerFunctionDefinition(Actor, SoundContainer, SetDeathSound);
-LuaPropertyOwnershipSafetyFakerFunctionDefinition(Actor, SoundContainer, SetDeviceSwitchSound);
+LuaSoundPropertyOwnershipSafetyFakerFunctionDefinition(Actor, SetBodyHitSound, GetBodyHitSound);
+LuaSoundPropertyOwnershipSafetyFakerFunctionDefinition(Actor, SetAlarmSound, GetAlarmSound);
+LuaSoundPropertyOwnershipSafetyFakerFunctionDefinition(Actor, SetPainSound, GetPainSound);
+LuaSoundPropertyOwnershipSafetyFakerFunctionDefinition(Actor, SetDeathSound, GetDeathSound);
+LuaSoundPropertyOwnershipSafetyFakerFunctionDefinition(Actor, SetDeviceSwitchSound, GetDeviceSwitchSound);
 LuaPropertyOwnershipSafetyFakerFunctionDefinition(ADoor, SoundContainer, SetDoorMoveStartSound);
 LuaPropertyOwnershipSafetyFakerFunctionDefinition(ADoor, SoundContainer, SetDoorMoveSound);
 LuaPropertyOwnershipSafetyFakerFunctionDefinition(ADoor, SoundContainer, SetDoorDirectionChangeSound);
@@ -252,18 +260,18 @@ LuaPropertyOwnershipSafetyFakerFunctionDefinition(AHuman, Leg, SetFGLeg);
 LuaPropertyOwnershipSafetyFakerFunctionDefinition(AHuman, Leg, SetBGLeg);
 LuaPropertyOwnershipSafetyFakerFunctionDefinition(AHuman, Attachable, SetFGFoot);
 LuaPropertyOwnershipSafetyFakerFunctionDefinition(AHuman, Attachable, SetBGFoot);
-LuaPropertyOwnershipSafetyFakerFunctionDefinition(AHuman, SoundContainer, SetStrideSound);
+LuaSoundPropertyOwnershipSafetyFakerFunctionDefinition(AHuman, SetStrideSound, GetStrideSound);
 LuaPropertyOwnershipSafetyFakerFunctionDefinition(ACrab, Turret, SetTurret);
 LuaPropertyOwnershipSafetyFakerFunctionDefinition(ACrab, AEJetpack, SetJetpack);
 LuaPropertyOwnershipSafetyFakerFunctionDefinition(ACrab, Leg, SetLeftFGLeg);
 LuaPropertyOwnershipSafetyFakerFunctionDefinition(ACrab, Leg, SetLeftBGLeg);
 LuaPropertyOwnershipSafetyFakerFunctionDefinition(ACrab, Leg, SetRightFGLeg);
 LuaPropertyOwnershipSafetyFakerFunctionDefinition(ACrab, Leg, SetRightBGLeg);
-LuaPropertyOwnershipSafetyFakerFunctionDefinition(ACrab, SoundContainer, SetStrideSound);
+LuaSoundPropertyOwnershipSafetyFakerFunctionDefinition(ACrab, SetStrideSound, GetStrideSound);
 LuaPropertyOwnershipSafetyFakerFunctionDefinition(Turret, HeldDevice, SetFirstMountedDevice);
-LuaPropertyOwnershipSafetyFakerFunctionDefinition(ACraft, SoundContainer, SetHatchOpenSound);
-LuaPropertyOwnershipSafetyFakerFunctionDefinition(ACraft, SoundContainer, SetHatchCloseSound);
-LuaPropertyOwnershipSafetyFakerFunctionDefinition(ACraft, SoundContainer, SetCrashSound);
+LuaSoundPropertyOwnershipSafetyFakerFunctionDefinition(ACraft, SetHatchOpenSound, GetHatchOpenSound);
+LuaSoundPropertyOwnershipSafetyFakerFunctionDefinition(ACraft, SetHatchCloseSound, GetHatchCloseSound);
+LuaSoundPropertyOwnershipSafetyFakerFunctionDefinition(ACraft, SetCrashSound, GetCrashSound);
 LuaPropertyOwnershipSafetyFakerFunctionDefinition(ACDropShip, AEmitter, SetRightThruster);
 LuaPropertyOwnershipSafetyFakerFunctionDefinition(ACDropShip, AEmitter, SetLeftThruster);
 LuaPropertyOwnershipSafetyFakerFunctionDefinition(ACDropShip, AEmitter, SetURightThruster);
@@ -279,14 +287,14 @@ LuaPropertyOwnershipSafetyFakerFunctionDefinition(ACRocket, AEmitter, SetULeftTh
 LuaPropertyOwnershipSafetyFakerFunctionDefinition(ACRocket, AEmitter, SetURightThruster);
 LuaPropertyOwnershipSafetyFakerFunctionDefinition(HDFirearm, Magazine, SetMagazine);
 LuaPropertyOwnershipSafetyFakerFunctionDefinition(HDFirearm, Attachable, SetFlash);
-LuaPropertyOwnershipSafetyFakerFunctionDefinition(HDFirearm, SoundContainer, SetPreFireSound);
-LuaPropertyOwnershipSafetyFakerFunctionDefinition(HDFirearm, SoundContainer, SetFireSound);
-LuaPropertyOwnershipSafetyFakerFunctionDefinition(HDFirearm, SoundContainer, SetFireEchoSound);
-LuaPropertyOwnershipSafetyFakerFunctionDefinition(HDFirearm, SoundContainer, SetActiveSound);
-LuaPropertyOwnershipSafetyFakerFunctionDefinition(HDFirearm, SoundContainer, SetDeactivationSound);
-LuaPropertyOwnershipSafetyFakerFunctionDefinition(HDFirearm, SoundContainer, SetEmptySound);
-LuaPropertyOwnershipSafetyFakerFunctionDefinition(HDFirearm, SoundContainer, SetReloadStartSound);
-LuaPropertyOwnershipSafetyFakerFunctionDefinition(HDFirearm, SoundContainer, SetReloadEndSound);
+LuaSoundPropertyOwnershipSafetyFakerFunctionDefinition(HDFirearm, SetPreFireSound, GetPreFireSound);
+LuaSoundPropertyOwnershipSafetyFakerFunctionDefinition(HDFirearm, SetFireSound, GetFireSound);
+LuaSoundPropertyOwnershipSafetyFakerFunctionDefinition(HDFirearm, SetFireEchoSound, GetFireEchoSound);
+LuaSoundPropertyOwnershipSafetyFakerFunctionDefinition(HDFirearm, SetActiveSound, GetActiveSound);
+LuaSoundPropertyOwnershipSafetyFakerFunctionDefinition(HDFirearm, SetDeactivationSound, GetDeactivationSound);
+LuaSoundPropertyOwnershipSafetyFakerFunctionDefinition(HDFirearm, SetEmptySound, GetEmptySound);
+LuaSoundPropertyOwnershipSafetyFakerFunctionDefinition(HDFirearm, SetReloadStartSound, GetReloadStartSound);
+LuaSoundPropertyOwnershipSafetyFakerFunctionDefinition(HDFirearm, SetReloadEndSound, GetReloadEndSound);
 
 void LuaAdaptersEntity::SetPresetName(Entity* luaSelfObject, const std::string& presetName) {
 	luaSelfObject->SetPresetName(presetName, true);
@@ -924,6 +932,39 @@ bool LuaAdaptersAudioMan::RunModApiShimsSelfTest() {
 	QueueMusicStream(nullptr, "no-such-file.ogg");
 	check("bad_path_queue_does_not_enqueue", s_CompatMusicQueue.empty(), "queue=" + std::to_string(s_CompatMusicQueue.size()));
 	g_MusicMan.ResetMusicState();
+
+	{
+		// A script that sets an object's sound property every tick, as a dropped Kar98's reload cycle does, leaves the object one sound;
+		// a sound a script still holds a handle to lives until the handle goes.
+		LuaStateWrapper& state = g_LuaMan.GetMasterScriptState();
+		const auto run = [&state](const std::string& code) { return state.RunScriptString(code, true) == 0; };
+		const auto settle = [] {
+			LuabindObjectWrapper::ApplyQueuedEntityDeletions();
+			LuabindObjectWrapper::ApplyQueuedDeletions();
+			g_AudioMan.DeleteReleasedSoundContainers();
+		};
+		bool ran = run("_SoundPropertyGun = CreateHDFirearm(\"Light Digger\", \"Base.rte\"); _SoundPropertySound = CreateSoundContainer(\"Funds Changed\", \"Base.rte\"); _SoundPropertyGun.ReloadEndSound = _SoundPropertySound");
+		settle();
+		const size_t first = g_AudioMan.LiveSoundContainerCount();
+		ran = run("for i = 1, 100 do _SoundPropertyGun.ReloadEndSound = _SoundPropertySound end") && ran;
+		settle();
+		const size_t repeated = g_AudioMan.LiveSoundContainerCount();
+		check("sound_property_set_again_keeps_one_sound", ran && repeated == first, "live_before=" + std::to_string(first) + " live_after_100_sets=" + std::to_string(repeated));
+		ran = run("_SoundPropertyHeld = _SoundPropertyGun.ReloadEndSound; _SoundPropertyGun.ReloadEndSound = _SoundPropertySound") && ran;
+		settle();
+		ran = run("_SoundPropertyHeld.Volume = 0.25; _SoundPropertyHeldReads = _SoundPropertyHeld.Volume == 0.25 and _SoundPropertyHeld:HasAnySounds()") && ran;
+		lua_getglobal(state.GetLuaState(), "_SoundPropertyHeldReads");
+		const bool heldReads = lua_toboolean(state.GetLuaState(), -1) != 0;
+		lua_pop(state.GetLuaState(), 1);
+		const size_t held = g_AudioMan.LiveSoundContainerCount();
+		check("sound_property_held_handle_outlives_its_replacement", ran && heldReads && held == repeated + 1, "reads=" + std::string(heldReads ? "true" : "false") + " live=" + std::to_string(held) + " expected=" + std::to_string(repeated + 1));
+		ran = run("_SoundPropertyHeld = nil; _SoundPropertyHeldReads = nil; collectgarbage(\"collect\")") && ran;
+		settle();
+		const size_t dropped = g_AudioMan.LiveSoundContainerCount();
+		check("sound_property_replaced_sound_goes_with_its_last_handle", ran && dropped == repeated, "live=" + std::to_string(dropped) + " expected=" + std::to_string(repeated));
+		run("_SoundPropertyGun = nil; _SoundPropertySound = nil; collectgarbage(\"collect\")");
+		settle();
+	}
 
 	const std::filesystem::path exe(System::GetThisExePathAndName());
 	std::filesystem::path fixture = exe.parent_path() / "tools" / "fixtures" / "mod-api-shims.lua";

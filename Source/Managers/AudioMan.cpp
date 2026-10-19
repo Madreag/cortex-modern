@@ -386,6 +386,22 @@ void AudioMan::Destroy() {
 	Clear();
 }
 
+void AudioMan::DeleteReleasedSoundContainer(SoundContainer* container) {
+	std::lock_guard<std::mutex> lock(m_ReleasedSoundContainersMutex);
+	m_ReleasedSoundContainers.push_back(container);
+}
+
+void AudioMan::DeleteReleasedSoundContainers() {
+	std::vector<SoundContainer*> released;
+	{
+		std::lock_guard<std::mutex> lock(m_ReleasedSoundContainersMutex);
+		released.swap(m_ReleasedSoundContainers);
+	}
+	// Scripts on parallel workers let containers go in any order; the deletions run in one.
+	std::sort(released.begin(), released.end(), [](const SoundContainer* a, const SoundContainer* b) { return a->GetCheckpointIdentity() < b->GetCheckpointIdentity(); });
+	for (SoundContainer* container: released) delete container;
+}
+
 void AudioMan::Update() {
 	std::vector<std::shared_ptr<PlayingVoice::ChannelUserData>> releasing;
 	releasing.swap(m_RetiredHandles);
@@ -2461,9 +2477,14 @@ std::string AudioMan::Census() const {
 	size_t audibility = 0;
 	for (const auto& [key, peers]: m_CommittedAudibility) audibility += peers.size();
 	return "voices=" + std::to_string(m_PlayingVoices.size()) + " backend_voices=" + std::to_string(m_BackendVoiceIdentities.size()) +
-	       " logical_sounds=" + std::to_string(m_ActiveLogicalSounds.size()) + " live_containers=" + std::to_string(WithCheckpointRegistry([](const auto& values) { return values.m_LiveCheckpointSoundContainers.size(); })) +
+	       " logical_sounds=" + std::to_string(m_ActiveLogicalSounds.size()) + " live_containers=" + std::to_string(LiveSoundContainerCount()) +
 	       " pending_ops=" + std::to_string(m_PendingSoundOpContainers.size()) + " committed_audibility=" + std::to_string(m_CommittedAudibility.size()) + "/" + std::to_string(audibility) +
 	       " sent_audibility=" + std::to_string(m_LastSentAudibility.size()) + " restored_identities=" + std::to_string(WithCheckpointRegistry([](const auto& values) { return values.m_RestoredManagerIdentities.size(); }));
+}
+
+size_t AudioMan::LiveSoundContainerCount() const {
+	auto lock = RegistryLock();
+	return WithCheckpointRegistry([](const auto& values) { return values.m_LiveCheckpointSoundContainers.size(); });
 }
 
 void AudioMan::PauseIngameSounds(bool pause) {

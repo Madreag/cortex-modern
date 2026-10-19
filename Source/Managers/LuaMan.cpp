@@ -4448,26 +4448,34 @@ static bool ClassDerivesFrom(const luabind::detail::class_rep* rep, const char* 
 	return false;
 }
 
-// Whether a luabind class is a MovableObject, noted on the class the first time it is asked.
-static bool IsMovableObjectClass(const luabind::detail::class_rep* rep) {
+// What engine class a luabind class is, noted on the class the first time it is asked: 1 a MovableObject, 2 a SoundContainer, else 0.
+static int EngineKind(const luabind::detail::class_rep* rep) {
 	if (!rep) {
-		return false;
+		return 0;
 	}
 	int kind = rep->engine_kind();
 	if (kind < 0) {
-		kind = ClassDerivesFrom(rep, "MovableObject") ? 1 : 0;
+		kind = ClassDerivesFrom(rep, "MovableObject") ? 1 : ClassDerivesFrom(rep, "SoundContainer") ? 2 : 0;
 		rep->set_engine_kind(kind);
 	}
-	return kind == 1;
+	return kind;
 }
 
-// A handle naming a MovableObject keeps that object's memory while the handle lives.
+static bool IsMovableObjectClass(const luabind::detail::class_rep* rep) { return EngineKind(rep) == 1; }
+
+// A handle naming a MovableObject keeps that object's memory while the handle lives; one naming a sound an object let go keeps
+// that sound alive.
 static void NoteBorrowedHandle(luabind::detail::object_rep* handle) {
 	// A saver's handles name its own frozen copies, which never return to a pool.
 	if (luabind::detail::saved_objects.copy) return;
-	if (!handle->has_life_owner() && handle->ptr() && IsMovableObjectClass(handle->crep())) {
+	if (handle->has_life_owner() || !handle->ptr()) return;
+	const int kind = EngineKind(handle->crep());
+	if (kind == 1) {
 		auto* object = static_cast<MovableObject*>(static_cast<Entity*>(handle->ptr()));
 		handle->set_life_owner(object->NoteLuaHandle(), &MovableObject::ReleaseLuaHandle);
+	} else if (kind == 2) {
+		auto* sound = static_cast<SoundContainer*>(static_cast<Entity*>(handle->ptr()));
+		handle->set_life_owner(sound->NoteLuaHandle(), &SoundContainer::ReleaseLuaHandle);
 	}
 }
 
@@ -17813,6 +17821,8 @@ void LuaMan::WaitForAsyncGarbageCollection() {
 	m_GarbageCollectionTask.wait();
 	// The collecting threads only unlink; the destructors are ours to run, in state order.
 	LuabindObjectWrapper::ApplyQueuedEntityDeletions();
+	// The sounds objects let go and the last handles to them have released, all in one place on every peer.
+	g_AudioMan.DeleteReleasedSoundContainers();
 }
 
 long long LuaMan::GetTotalHeapBytes() {

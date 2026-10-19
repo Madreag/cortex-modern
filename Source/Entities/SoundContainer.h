@@ -6,6 +6,8 @@
 #include "AudioMan.h"
 #include "LogicalSound.h"
 
+#include <atomic>
+#include <cstdint>
 #include <mutex>
 #include <unordered_set>
 
@@ -150,6 +152,26 @@ namespace RTE {
 			Clear();
 			Entity::Reset();
 		}
+
+		/// The Lua handles naming a container, and whether its owner let it go while one of them lived.
+		struct LuaNames {
+			uint32_t count = 0; //!< The live handles naming the container.
+			bool released = false; //!< Whether its owner let it go, so the last handle deletes it.
+			SoundContainer* container = nullptr; //!< The container, or nullptr once something else deleted it.
+			const void* address = nullptr; //!< The container's address, which keys the record's lock after it is gone.
+		};
+
+		/// Notes one more Lua handle naming this container.
+		/// @return The record the handle lets go of when it is collected.
+		LuaNames* NoteLuaHandle();
+
+		/// Lets one Lua handle go; the last handle of a released container deletes it.
+		/// @param record What NoteLuaHandle returned.
+		static void ReleaseLuaHandle(void* record);
+
+		/// Deletes a container its owner no longer holds, once no Lua handle names it.
+		/// @param container The container its owner let go.
+		static void ReleaseUnowned(SoundContainer* container);
 #pragma endregion
 
 #pragma region Sound Management Getters and Setters
@@ -621,6 +643,7 @@ namespace RTE {
 		SoundContainer* m_PreviewOrigin = nullptr;
 		bool m_CheckpointRegistered = false;
 		bool m_IsDestroying = false;
+		std::atomic<LuaNames*> m_LuaNames{nullptr}; //!< Created when a Lua handle first names this container; never cleared by Clear().
 		void ReidentifyCheckpoint(uint64_t identity);
 		void SwapCheckpoint(SoundContainer& other) noexcept;
 
