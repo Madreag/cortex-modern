@@ -51,7 +51,7 @@ How the multiplayer screens behave, for players and for anyone changing them. Ev
 - A player whose own seat is held reads "The AI is playing for you until you are back" once, in the status box; the
   notifications below never repeat a line the status box already shows.
 - Under the default brain-loss rule ("Keep playing, humans spectate") a player whose brain is destroyed watches while the
-  match plays on for everyone else.
+  match plays on for everyone else; when only one side is left standing the round ends there.
 - After a match the lobby's last-match line names the result and its reason in a player's words, such as "Joiner's brain was
   destroyed". `Details` shows the full record.
 
