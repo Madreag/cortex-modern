@@ -362,8 +362,13 @@ namespace RTE {
 			// A decision naming members of two continuations is the question one of them asked: a seat held while it still counted a
 			// seat of this group asks with that seat named. A seat whose group plays some it names and holds others, and did not ask
 			// that question itself, lost it.
-			uint32_t other = owners & ~playing;
-			for (const auto& [peer, since]: m_PeerOtherContinuations) other |= SeatBit(peer);
+			uint32_t other = owners & ~playing, elsewhere = 0;
+			for (const auto& [peer, since]: m_PeerOtherContinuations) elsewhere |= SeatBit(peer);
+			other |= elsewhere;
+			// A ruling that names only seats of this group as it stood at its own hold is this group's, whatever seat it held since: a seat
+			// held later for a fault of its own never played the other continuation.
+			const uint32_t atHold = PeerFrameMembersAt(*arbitration.holdFrame) & owners;
+			if ((winner & local) != 0 && (atHold & local) != 0 && (winner & ~atHold) == 0 && (winner & elsewhere) == 0) continue;
 			const bool askerElsewhere = (winner & other) != 0 && (winner & playing) != 0 && arbitration.asked != winner;
 			if (((winner & local) == 0 || askerElsewhere) && (playing & local) != 0 && ((playing & winner) == 0 || askerElsewhere)) {
 				// Preparation may lead the displayed world by several ticks. Finish any granted tick, then discard that
