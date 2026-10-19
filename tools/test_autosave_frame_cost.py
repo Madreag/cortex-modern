@@ -2,8 +2,8 @@
 
 A hosted two-peer match at the host's default automatic input delay saves every --autosave-seconds. Every per-second
 [frame-pace] window of each peer is placed by its ticks: no save running (idle), inside one of this peer's saves whose own
-deadline had not yet passed (save), inside the part of a save that ran past the next deadline (overdue: the late machine
-may pay for its own save there), or, on the host, from a returning seat's base being asked to its being taken or no
+deadline had not yet passed (save), inside a span this peer's saver logged as overdue (overdue: the late machine may pay
+for its own save there; on a build that logs none, the part of a save that ran past the next deadline), or, on the host, from a returning seat's base being asked to its being taken or no
 longer waited for - the returner loaded an image, dropped or was refused (base).
 --client-rejoin TICK drops the client once its game reaches TICK and starts it again with its reconnect ticket, so it
 returns through the host's image and the host asks for its base; a tick shortly after a capture meets the host's writer
@@ -46,11 +46,21 @@ def percentile(values, fraction):
 
 
 def timeline(text, host):
-    """The peer's frame windows, saves, deadlines, bases and holds, in its log's order."""
+    """The peer's frame windows, saves, deadlines, bases, holds and, where its build logs them, the spans its own saver was
+    overdue (None when the log has no such line), in its log's order."""
     windows, saves, dues, bases, holds = [], [], [], [], []
     latest = 0
     asked = None
+    saver, raised = None, None
     for line in text.splitlines():
+        if match := re.match(r'^\[autosave\] saver overdue=([01]) tick=(\d+)', line):
+            saver = saver if saver is not None else []
+            if match.group(1) == '1':
+                raised = int(match.group(2))
+            elif raised is not None:
+                saver.append((raised, int(match.group(2))))
+                raised = None
+            continue
         if line.startswith('[frame-pace] '):
             f = fields(line)
             if 'first_tick' in f and 'tick' in f and float(f.get('wall_ms', 0)) > 0:
@@ -76,13 +86,17 @@ def timeline(text, host):
             holds.append({'local': int(match.group(1)), 'peer': int(match.group(2)), 'frame': int(match.group(3))})
     if asked is not None:
         bases.append((asked, latest))
-    return windows, saves, dues, bases, holds
+    if saver is not None and raised is not None:
+        saver.append((raised, latest))
+    return windows, saves, dues, bases, holds, saver
 
 
-def classify(windows, saves, dues, bases, warmup):
-    """Places each window: base, overdue, save, idle, or edge (half in a save) and warmup, which are not judged."""
-    overdue = []
-    for start, end in saves:
+def classify(windows, saves, dues, bases, warmup, saver=None):
+    """Places each window: base, overdue, save, idle, or edge (half in a save) and warmup, which are not judged. The overdue
+    spans are the ones the peer's saver logged; a build that logs none has them inferred: the part of a save that ran past
+    the next deadline."""
+    overdue = list(saver) if saver is not None else []
+    for start, end in saves if saver is None else []:
         later = [due for due in dues if due > start]
         if later and end > later[0]:
             overdue.append((later[0], end))
@@ -140,8 +154,8 @@ def analyze(run_dir, warmup):
     host_dues = timeline(text('host'), True)[2]
     peers = {}
     for local, role in ((1, 'host'), (2, 'client')):
-        windows, saves, _, bases, holds = timeline(text(role), role == 'host')
-        kinds, overdue = classify(windows, saves, host_dues, bases, warmup)
+        windows, saves, _, bases, holds, saver = timeline(text(role), role == 'host')
+        kinds, overdue = classify(windows, saves, host_dues, bases, warmup, saver)
         peers[role] = {'kinds': summary(windows, kinds, holds, local), 'saves': saves, 'overdue_spans': overdue, 'bases': bases}
         idle = peers[role]['kinds']['idle']
         if idle['windows']:

@@ -41,8 +41,8 @@ def frame_pacing(run_dir, warmup):
     dues = fc.timeline(text('host'), True)[2]
     out = {}
     for local, role in ((1, 'host'), (2, 'client')):
-        windows, saves, _, bases, holds = fc.timeline(text(role), role == 'host')
-        kinds, _ = fc.classify(windows, saves, dues, bases, warmup)
+        windows, saves, _, bases, holds, saver = fc.timeline(text(role), role == 'host')
+        kinds, _ = fc.classify(windows, saves, dues, bases, warmup, saver)
         chosen = [w for w, k in zip(windows, kinds) if k in ('idle', 'save', 'edge')]
         if not chosen:
             out[role] = {'windows': 0}
