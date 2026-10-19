@@ -3640,8 +3640,7 @@ void MainMenuGUI::RefreshHostSeatDialog() {
 	const uint8_t localPeerId = g_NetMatchService.GetLobbySnapshot().localPeerId;
 	// A connected player has no moderation row, only its admission seat: that seat is what removal acts on.
 	const bool owned = m_HostSeatDlgRemovalSeat && !m_HostSeatDlgRemovalSeat->closed;
-	const bool paused = owned && !m_HostSeatDlgRemovalSeat->actionsAvailable;
-	const bool humanSeat = host && owned && !paused && !slot.cpu && slot.peerId != 0 && slot.peerId != localPeerId;
+	const bool humanSeat = host && owned && !slot.cpu && slot.peerId != 0 && slot.peerId != localPeerId;
 	m_HostSeatDlgKick->SetEnabled(humanSeat);
 	m_HostSeatDlgBan->SetEnabled(humanSeat);
 	if (!humanSeat) m_HostSeatDlgArmed = SeatDialogArm::None;
@@ -3651,7 +3650,6 @@ void MainMenuGUI::RefreshHostSeatDialog() {
 		m_HostSeatDlgActionHint->SetText(humanSeat ? "Seat actions apply to this player."
 		                                         : (slot.cpu ? "CPU seats are the host's to retype, not to moderate."
 		                                            : host && slot.peerId != 0 && slot.peerId == localPeerId ? "The host's own seat is never kicked or banned."
-		                                            : host && paused ? "Changes are paused for a moment while the match updates."
 		                                            : host && !owned ? "No player holds this seat."
 		                                            : "Only the host can change who plays here."));
 	}
