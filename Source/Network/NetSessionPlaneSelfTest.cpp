@@ -2242,6 +2242,12 @@ namespace RTE {
 					for (uint8_t seat = 1; seat <= hub.row.seats; ++seat) if (seat != observer && peer.HasHeldAISeat(seat)) held[seat] = true;
 				}
 				for (uint8_t seat = 1; seat <= hub.row.seats; ++seat) {
+					if (held[seat] && heldSince[seat] == UINT64_MAX && std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) {
+						std::string by;
+						for (uint8_t observer = 1; observer <= hub.row.seats; ++observer) if (peers[observer - 1]->IsRunning())
+							by += " observer" + std::to_string(observer) + "=" + (views[observer].contains(seat) ? "bridge" : "") + (peers[observer - 1]->HasHeldAISeat(seat) ? "+ai" : "");
+						DiagnosticLine() << "[session-plane-held-view] seat=" << unsigned(seat) << " now_ms=" << hub.now << by << std::endl;
+					}
 					if (held[seat] && heldSince[seat] == UINT64_MAX) heldSince[seat] = hub.now;
 					if (!held[seat] && heldSince[seat] != UINT64_MAX) { heldSpans[seat].push_back({heldSince[seat], hub.now}); heldSince[seat] = UINT64_MAX; }
 				}
