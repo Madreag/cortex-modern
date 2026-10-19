@@ -2200,7 +2200,11 @@ namespace RTE {
 					hub.refaultEnd = hub.refaultAt + hub.row.refaultMs;
 				}
 				if (hub.now >= hub.faultEnd) {
-					const uint64_t highest = std::max_element(worlds.begin(), worlds.end(), [](const World& a, const World& b) { return a.applied < b.applied; })->applied;
+					// A dedicated host has no seat and relays every input: its clients trail it by that relay, so a returned seat catches up with
+					// the seats that play through it, not with the host.
+					const bool relayed = peers.front()->GetConfig().matchConfig.dedicated;
+					uint64_t highest = 0;
+					for (uint8_t id = relayed ? 2 : 1; id <= hub.row.seats; ++id) highest = std::max(highest, worlds[id - 1].applied);
 					for (uint8_t id = 1; id <= hub.row.seats; ++id) if (!caughtAt[id - 1] && worlds[id - 1].applied + 1 >= highest && common > 0 &&
 					    !peers[id - 1]->HasHeldAISeat(hub.ReturningSeat()) && !Bridges(*peers[id - 1]).contains(hub.ReturningSeat()) &&
 					    (!hub.row.secondSubject || (!peers[id - 1]->HasHeldAISeat(hub.row.secondSubject) && !Bridges(*peers[id - 1]).contains(hub.row.secondSubject))) &&
