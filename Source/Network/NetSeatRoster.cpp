@@ -122,12 +122,14 @@ namespace RTE {
 							seat->holdCause = NetSeatHoldCause::Leave;
 						return commit("The player left - the AI plays the seat until its owner returns");
 					}
+					// A seat held because its player said it left stays held as left when its link then closes.
+					const bool left = event.byChoice || (seat->phase == NetSeatPhase::Held && seat->holdCause == NetSeatHoldCause::Leave);
 					seat->link = NetSeatLink::Dropped;
-					seat->leftByChoice = event.byChoice;
+					seat->leftByChoice = left;
 					if (seat->phase != NetSeatPhase::Held) seat->heldSinceMs = event.nowMs;
 					// A seat already held by a committed bridge stays held at the
 					// same boundary; its closed link changes the reason for waiting.
-					if (seat->phase == NetSeatPhase::Held) seat->holdCause = event.byChoice ? NetSeatHoldCause::Leave : NetSeatHoldCause::LinkDrop;
+					if (seat->phase == NetSeatPhase::Held) seat->holdCause = left ? NetSeatHoldCause::Leave : NetSeatHoldCause::LinkDrop;
 					if (seat->phase == NetSeatPhase::RejoinImage || seat->phase == NetSeatPhase::RejoinCatchUp)
 						FailReturn(*seat, event.nowMs, next.stage, next.hostSeat, !event.byChoice);
 					return commit("Connection lost - waiting for the host's ordered recovery");
@@ -1095,6 +1097,25 @@ namespace RTE {
 			check("seq LEFT AFTER DROP a leave declared after the link closed holds the seat as left", ok,
 			      "declared=" + std::to_string(declared.changed) + " held_after='" + RosterSeatLabel(*heldAfter.roster.Find(2)) + "' held_first='" +
 			      RosterSeatLabel(*closedThen.roster.Find(2)) + "' repeat=" + std::to_string(again.changed));
+		}
+		{
+			// A player who said it left on a link that stays open is held as left; the link closing after keeps that reason, and the
+			// player's return on the open link plays the seat again.
+			NetSeatRoster running = RosterForRow(3);
+			NetRosterEvent leave; leave.kind = NetRosterEventKind::HeldInPlace; leave.seat = 2; leave.nowMs = 13000; leave.cause = NetSeatHoldCause::Leave;
+			const NetRosterResult held = ApplyRosterEvent(running, leave);
+			NetRosterEvent lost; lost.kind = NetRosterEventKind::LinkDropped; lost.seat = 2; lost.nowMs = 13500;
+			const NetRosterResult closed = ApplyRosterEvent(held.roster, lost);
+			NetRosterEvent back; back.kind = NetRosterEventKind::Returned; back.seat = 2; back.nowMs = 14000; back.keptWorld = true; back.ticket = held.roster.Find(2)->ticket;
+			const NetRosterResult returning = ApplyRosterEvent(held.roster, back);
+			NetRosterEvent played; played.kind = NetRosterEventKind::CaughtUp; played.seat = 2;
+			const NetRosterResult playing = ApplyRosterEvent(returning.roster, played);
+			const NetRosterSeat& left = *held.roster.Find(2);
+			const bool ok = held.changed && left.phase == NetSeatPhase::Held && left.holdCause == NetSeatHoldCause::Leave && left.link == NetSeatLink::Connected &&
+			                closed.changed && closed.roster.Find(2)->holdCause == NetSeatHoldCause::Leave && closed.roster.Find(2)->leftByChoice &&
+			                closed.roster.Find(2)->link == NetSeatLink::Dropped && playing.roster.Find(2)->phase == NetSeatPhase::Running;
+			check("seq LEAVE IN PLACE a declared leave on an open link holds the seat as left until its player plays it again", ok,
+			      "held='" + RosterSeatLabel(left) + "' closed='" + RosterSeatLabel(*closed.roster.Find(2)) + "' back=" + NetSeatPhaseName(playing.roster.Find(2)->phase));
 		}
 		{
 			// The start gate: the round is agreed on one revision; a peer that heard it hashed alike starts, any other is refused by name.

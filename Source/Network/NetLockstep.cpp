@@ -7282,7 +7282,7 @@ namespace RTE {
 		// A machine held for being too slow keeps talking: its hold shows at once, not after a silence it never keeps.
 		if (IsHeldAsSlowMachine(peerId)) return true;
 		// So does a player who said it left: its menu may keep the link talking.
-		if (const auto ended = m_PeerRoundEnds.find(peerId); ended != m_PeerRoundEnds.end() && !ended->second.closedLink) return true;
+		if (HasDeclaredLeave(peerId)) return true;
 		const auto bridge = m_SeatBridgeSinceMs.find(peerId);
 		if (bridge == m_SeatBridgeSinceMs.end()) return true;
 		if (nowMs == UINT64_MAX) nowMs = std::max(m_TimingNowMs, NetLockstepNowMs());

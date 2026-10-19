@@ -5585,7 +5585,8 @@ static std::string ResyncSaveName() {
 		for (const uint8_t peer: m_ReconnectHost.PlayingPeers())
 			if (m_Coordinator->HasHeldAISeat(peer) && m_Coordinator->IsSeatUnderAI(peer, next - 1) && m_Coordinator->IsSeatHoldVisible(peer))
 				m_ReconnectHost.NoteSeatHeldInPlace(peer, peer == m_Coordinator->GetHostPeerId() ? NetSeatHoldCause::OwnSeat :
-					    m_Coordinator->IsHeldAsSlowMachine(peer) ? NetSeatHoldCause::Capacity : NetSeatHoldCause::LateStream);
+					    m_Coordinator->IsHeldAsSlowMachine(peer) ? NetSeatHoldCause::Capacity :
+					    m_Coordinator->HasDeclaredLeave(peer) ? NetSeatHoldCause::Leave : NetSeatHoldCause::LateStream);
 		for (const uint8_t peer: m_ReconnectHost.HeldInPlacePeers())
 			if (m_Coordinator->SeatPlaysAtFrame(peer, next - 1)) m_ReconnectHost.NoteSeatPlaysAgain(peer);
 	}
