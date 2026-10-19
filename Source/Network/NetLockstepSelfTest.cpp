@@ -957,6 +957,25 @@ namespace RTE {
 			return passed;
 		}
 
+		// The survivors moved the round's authority to seat 2 fifteen seconds after they last heard the old host. The new host is timed
+		// from its own traffic: the third seat does not find it silent at once and move the authority again.
+		static bool NewHostTimedFromItsOwnTraffic(std::string* error) {
+			Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
+			peer.m_Config.peerFrameGroups = true; peer.m_Config.localPeerId = 3; peer.m_Config.authorityPeerId = 1; peer.m_Config.migrationGeneration = 0;
+			peer.m_RemotePeerIds = {1, 2}; peer.m_RemoteTransports = {{1, 41}, {2, 42}};
+			peer.m_MigrationPhase = NetHostMigrationPhase::Recovering;
+			peer.m_AuthorityLastHeardMs = 5000; peer.m_PeerLastHeardMs[1] = 5000; peer.m_PeerLastHeardMs[2] = 19990; peer.m_TimingNowMs = 20000;
+			NetLockstepReadyFrame ready; ready.frame = 1214;
+			ready.remoteCommands.push_back({2, NetGameHostAuthority{1, 2, 1, 1214, 6, 6, 6}});
+			peer.DeliverPeerAdmin(ready);
+			if (peer.GetHostPeerId() != 2) { *error = "the delivered host change did not take effect"; return false; }
+			if (peer.m_AuthorityLastHeardMs < 19990) {
+				*error = "the new host's silence was timed from the old host's last traffic: heard=" + std::to_string(peer.m_AuthorityLastHeardMs);
+				return false;
+			}
+			return true;
+		}
+
 		// A reader's subscription went to a donor whose link then lost most packets, and a repair asked the other donor for an earlier
 		// range. The retry of the lost frames goes to the donor that was not asked for them.
 		static bool TailRetryAsksAnotherDonor(std::string* error) {
@@ -32556,6 +32575,12 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS a_held_seat_with_no_donor_plays_on\n[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "new-host-silence") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::NewHostTimedFromItsOwnTraffic(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS a_new_host_is_timed_from_its_own_traffic\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "tail-retry-donor") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::TailRetryAsksAnotherDonor(&error)) return fail(error);
@@ -33006,6 +33031,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::TailRetryAsksAnotherDonor, "a_tail_retry_asks_another_donor_than_the_one_that_failed");
 		row(&SessionPlaneRecoveryTest::RoundKeepsAPlayingSeat, "a_round_keeps_a_playing_seat");
 		row(&SessionPlaneRecoveryTest::HeldSeatWithNoDonorPlaysOn, "a_held_seat_with_no_donor_plays_on");
+		row(&SessionPlaneRecoveryTest::NewHostTimedFromItsOwnTraffic, "a_new_host_is_timed_from_its_own_traffic");
 		row(&SessionPlaneRecoveryTest::ReturnerPaceComparesWhatItApplied, "a_returners_pace_compares_what_it_applied");
 		row(&SessionPlaneRecoveryTest::PrivateReaderPlaysOnlyTheHistoryItReads, "a_private_reader_plays_only_the_history_it_reads");
 		row(&SessionPlaneRecoveryTest::TailHoldSignersAreNotAnotherPlayingHalf, "tail_hold_signers_are_not_another_playing_half");

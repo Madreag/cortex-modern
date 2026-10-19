@@ -167,6 +167,8 @@ namespace RTE {
 			const auto* authority = std::get_if<NetGameHostAuthority>(&command.payload);
 			if (!authority || !authority->IsValid() || authority->applyFrame != ready.frame || authority->generation <= m_Config.migrationGeneration) continue;
 			m_Config.authorityPeerId = authority->peerId; m_Config.migrationGeneration = authority->generation;
+			// The new host's silence is timed from its own traffic, never from the host it replaces.
+			m_AuthorityLastHeardMs = std::max(m_AuthorityLastHeardMs, LastAuthenticatedTraffic(authority->peerId));
 			m_AuthorityEvents.emplace(ready.frame, *authority);
 			m_MigrationResult = {}; m_MigrationResult.generation = authority->generation; m_MigrationResult.boundary = m_MigrationBoundary;
 			m_MigrationResult.activationFrame = ready.frame; m_MigrationResult.hostPeerId = authority->peerId;
