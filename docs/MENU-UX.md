@@ -75,8 +75,9 @@ How the multiplayer screens behave, for players and for anyone changing them. Ev
   a hint naming what the row under the hand costs.
 - **In match:** chat, match notifications, Responsive controls ("Your own units answer at once; the match confirms each move a
   moment later") and Show network diagnostics.
-- **Files:** outside a match it shows this computer's hosting default for autosave, labelled "Your hosting default"; the
-  autosaves kept, diagnostics and replays.
+- **Files:** autosave On or Off and its interval: in a match the match's own, labelled "Set by the host" ("Set by you as the
+  host" for the host); outside one this computer's hosting default, labelled "Your hosting default". Then the autosaves kept,
+  diagnostics and replays.
 - **Connection:** Automatic (direct first, relay when needed), Direct only or Relay only, each with its cost; the STUN list
   and an optional fixed relay of the player's own.
 
