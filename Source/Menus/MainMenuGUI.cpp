@@ -1094,7 +1094,7 @@ namespace {
 		const int message = event.GetMsg();
 		return (dynamic_cast<GUITab*>(control) && message == GUITab::UnPushed) || (dynamic_cast<GUIComboBox*>(control) && message == GUIComboBox::Closed) ||
 		       (dynamic_cast<GUICheckbox*>(control) && message == GUICheckbox::Changed) || (dynamic_cast<GUISlider*>(control) && message == GUISlider::Changed) ||
-		       (dynamic_cast<GUITextBox*>(control) && message == GUITextBox::Enter);
+		       (dynamic_cast<GUITextBox*>(control) && (message == GUITextBox::Changed || message == GUITextBox::Enter));
 	}
 } // namespace
 
@@ -1181,8 +1181,8 @@ bool MainMenuGUI::HandleInputEvents() {
 			DraftHostOptionsFromControls();
 		} else if (guiEvent.GetType() == GUIEvent::Notification && m_ActiveMenuScreen == MenuScreen::MultiplayerScreen &&
 		           m_MultiplayerSubScreen == MultiplayerSubScreen::HostOptions && CommitsOnNotification(guiEvent)) {
-			// Tabs, combos, checks and sliders on the options pages notify rather than Command; only
-			// the commit-flavoured ones reach the handler (a hover must never switch the page).
+			// Tabs, combos, checks, sliders and boxes on the options pages notify rather than Command; only the
+			// commit-flavoured ones reach the handler (a hover must never switch the page; a box commits as it is typed).
 			HandleMultiplayerScreenInputEvents(guiEvent.GetControl());
 		}
 	}
