@@ -5520,20 +5520,19 @@ static std::string ResyncSaveName() {
 		// The round's own hold of a playing seat whose link stays open is the roster's too, and so is that seat's return in place.
 		for (const uint8_t peer: m_ReconnectHost.PlayingPeers()) {
 			const bool held = m_Coordinator->HasHeldAISeat(peer), underAI = m_Coordinator->IsSeatUnderAI(peer, next - 1), visible = m_Coordinator->IsSeatHoldVisible(peer);
-			if (held && underAI && visible) {
+			const bool fed = held && underAI && visible;
+			if (fed)
 				m_ReconnectHost.NoteSeatHeldInPlace(peer, peer == m_Coordinator->GetHostPeerId() ? NetSeatHoldCause::OwnSeat :
 					    m_Coordinator->IsHeldAsSlowMachine(peer) ? NetSeatHoldCause::Capacity :
 					    m_Coordinator->HasDeclaredLeave(peer) ? NetSeatHoldCause::Leave : NetSeatHoldCause::LateStream);
-				continue;
-			}
-			// A seat the round bridges that the roster does not hold yet says why, once per change.
+			// A seat the round bridges while the roster still says it plays says why, once per change.
 			static std::map<uint8_t, int> s_Waiting;
 			const bool bridged = m_Coordinator->SeatBridgeTimes().contains(peer), declared = m_Coordinator->HasDeclaredLeave(peer);
-			const int state = (bridged || held || declared) ? 1 | (bridged << 1) | (held << 2) | (underAI << 3) | (visible << 4) | (declared << 5) : 0;
+			const int state = (bridged || held || declared) ? 1 | (bridged << 1) | (held << 2) | (underAI << 3) | (visible << 4) | (declared << 5) | (fed << 6) : 0;
 			if (std::exchange(s_Waiting[peer], state) != state && state != 0)
-				System::PrintDiagnosticLine("[roster] round holds peer=" + std::to_string(peer) + " frame=" + std::to_string(next - 1) + " not yet held: bridged=" +
+				System::PrintDiagnosticLine("[roster] round holds peer=" + std::to_string(peer) + " frame=" + std::to_string(next - 1) + " roster playing: bridged=" +
 				                            std::to_string(bridged) + " ai_held=" + std::to_string(held) + " under_ai=" + std::to_string(underAI) + " visible=" +
-				                            std::to_string(visible) + " declared_leave=" + std::to_string(declared));
+				                            std::to_string(visible) + " declared_leave=" + std::to_string(declared) + " fed=" + std::to_string(fed));
 		}
 		for (const uint8_t peer: m_ReconnectHost.HeldInPlacePeers())
 			if (m_Coordinator->SeatPlaysAtFrame(peer, next - 1)) m_ReconnectHost.NoteSeatPlaysAgain(peer);
