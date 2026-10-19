@@ -1,0 +1,77 @@
+{
+  "schema": 1,
+  "name": "fight15-s16",
+  "title": "Autosave on every five minutes by default; the host's Recovery page promises held seats wait",
+  "port_base": 49442,
+  "size": "960x540",
+  "timeout_s": 360,
+  "public_directory": true,
+  "peers": [
+    {
+      "name": "host",
+      "menu_script": "host.menu",
+      "probe": "host.probe",
+      "env": {
+        "CCCP_TEST_READBACK_TIMING": "1"
+      },
+      "settings": {
+        "SessionDirectoryUrl": "directory.broserver.com",
+        "NetworkHostRelayMode": "Directory",
+        "NetworkConnectionMode": "RelayOnly",
+        "NetworkIceEnable": 1,
+        "NetworkPortMapEnable": 0,
+        "NetworkMatchStatusMode": "Always",
+        "NetworkDisplayName": "Captain"
+      }
+    },
+    {
+      "name": "joiner",
+      "menu_script": "joiner.menu",
+      "probe": "joiner.probe",
+      "env": {
+        "CCCP_TEST_READBACK_TIMING": "1"
+      },
+      "settings": {
+        "SessionDirectoryUrl": "directory.broserver.com",
+        "NetworkHostRelayMode": "Directory",
+        "NetworkConnectionMode": "RelayOnly",
+        "NetworkIceEnable": 1,
+        "NetworkPortMapEnable": 0,
+        "NetworkMatchStatusMode": "Always",
+        "NetworkDisplayName": "Joiner"
+      }
+    }
+  ],
+  "scripts": {
+    "host.menu": "wait_ms 1800\nactivate ButtonMainToMultiplayer\nwait_ms 600\nassert_substate Landing\nsettext TextMultiplayerName Captain\nactivate ButtonMultiplayerHostGame\nwait_ms 500\nassert_substate HostSetup\ncombo_select ComboHostActivity Skirmish Defense\ncombo_select ComboHostScene Grasslands\nsetup_host_port {PORT}\ncombo_select ComboHostPlayers 2\nactivate ButtonHostOptions\nwait_ms 500\nassert_substate HostOptions\nactivate TabHostPageConnection\ncombo_select ComboHostNetVisibility Public (default)\ncombo_select ComboHostNetRelay Game service (default)\nassert_label ComboHostNetVisibility Public (default)\nassert_label ComboHostNetRelay Game service (default)\nactivate ButtonHostOptBack\nwait_ms 500\nactivate ButtonMultiplayerCreate\nwait_substate Lobby 90\nwrite_lobby {PROBE_DIR}/lobby.json 90\nvideo_mark fight15-host-listening\nwait_connected 2 90\nwait_ms 1200\nactivate ButtonLobbyOptions\nwait_ms 600\nassert_substate HostOptions\nactivate TabHostPageRecovery\nwait_ms 600\nvideo_mark recovery-host\nassert_label LabelHostRecReclaim Seats stay held until you give them away\nassert_text_fits LabelHostRecReclaim\nassert_no_overlap LabelHostRecRejoin LabelHostRecReclaim\nassert_checked CheckHostRecAutosave 1\nassert_label ComboHostRecAutosaveInterval 5 minutes\nassert_text_fits ComboHostRecAutosaveInterval\nassert_label LabelHostRecAutosaveHint 1 to 60 minutes, or off\nassert_text_fits LabelHostRecAutosaveHint\ncombo_select ComboHostRecAutosaveInterval 10 minutes\nassert_label ComboHostRecAutosaveInterval 10 minutes\nactivate ButtonHostOptApply\nwait_ms 900\nvideo_mark recovery-applied-host\nactivate ButtonHostOptBack\nwait_substate Lobby 30\ntouch_file {PROBE_DIR}/applied.json\nwait_file {PROBE_DIR_joiner}/scene-end.json 120\ntouch_file {PROBE_DIR}/scene-end.json\nwait_file {PROBE_DIR}/done.json 360\nwait_ms 1400\nexit\n",
+    "joiner.menu": "wait_ms 1800\nactivate ButtonMainToMultiplayer\nwait_ms 600\nassert_substate Landing\nsettext TextMultiplayerName Joiner\nactivate ButtonMultiplayerJoinGame\nwait_ms 600\nassert_substate JoinSetup\nwait_file {PROBE_DIR_host}/lobby.json 90\nwait_row PublicGameRowLobby:{PROBE_DIR_host}/lobby.json 90\nclick_row PublicGameRowLobby:{PROBE_DIR_host}/lobby.json\nassert_label LabelJoinSelected internet\nassert_enabled ButtonMultiplayerConnect 1\nactivate ButtonMultiplayerConnect\nwait_connected 2 90\nwait_substate Lobby 90\nwait_ms 1200\nwait_file {PROBE_DIR_host}/applied.json 120\nwait_ms 1200\nactivate ButtonLobbyEditSetup\nwait_ms 600\nassert_substate HostOptions\nactivate TabHostPageRecovery\nwait_ms 600\nvideo_mark recovery-joiner\nassert_checked CheckHostRecAutosave 1\nassert_label ComboHostRecAutosaveInterval 10 minutes\nassert_enabled ComboHostRecAutosaveInterval 0\nactivate ButtonHostOptBack\nwait_substate Lobby 30\ntouch_file {PROBE_DIR}/scene-end.json\nwait_file {PROBE_DIR}/done.json 360\nwait_ms 1400\nexit\n",
+    "host.probe": "{\n  \"schema\": 1,\n  \"timeout_ms\": 320000,\n  \"step_timeout_ms\": 60000,\n  \"label_dump\": {\n    \"every_ms\": 5000\n  },\n  \"steps\": [\n    {\n      \"op\": \"wait_file\",\n      \"path\": \"{PROBE_DIR}/scene-end.json\",\n      \"scope\": \"menu\",\n      \"within_ms\": 300000\n    },\n    {\n      \"op\": \"assert_relay\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"signal\",\n      \"name\": \"done\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"finish\"\n    }\n  ]\n}\n",
+    "joiner.probe": "{\n  \"schema\": 1,\n  \"timeout_ms\": 320000,\n  \"step_timeout_ms\": 60000,\n  \"label_dump\": {\n    \"every_ms\": 5000\n  },\n  \"steps\": [\n    {\n      \"op\": \"wait_file\",\n      \"path\": \"{PROBE_DIR}/scene-end.json\",\n      \"scope\": \"menu\",\n      \"within_ms\": 300000\n    },\n    {\n      \"op\": \"assert_relay\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"signal\",\n      \"name\": \"done\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"finish\"\n    }\n  ]\n}\n"
+  },
+  "checklist": [
+    {
+      "id": "recovery-host",
+      "peer": "host",
+      "mark": "recovery-host",
+      "screen": "MultiplayerScreen",
+      "what": "The host's Recovery page promises held seats wait for the host's word and starts on autosave every five minutes.",
+      "events": [
+        "^assert_label LabelHostRecReclaim .*PASS",
+        "^assert_text_fits LabelHostRecReclaim.*PASS",
+        "^assert_checked CheckHostRecAutosave .*PASS",
+        "^assert_label ComboHostRecAutosaveInterval \"5 minutes\".*PASS"
+      ]
+    },
+    {
+      "id": "recovery-joiner",
+      "peer": "joiner",
+      "mark": "recovery-joiner",
+      "screen": "MultiplayerScreen",
+      "what": "The joiner's Match details read the cadence the host applied, and cannot change it.",
+      "events": [
+        "^assert_label ComboHostRecAutosaveInterval \"10 minutes\".*PASS",
+        "^assert_enabled ComboHostRecAutosaveInterval .*PASS"
+      ]
+    }
+  ]
+}

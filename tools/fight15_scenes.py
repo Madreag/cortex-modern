@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent / "e2e"
+# The scenes main() writes; None writes every scene a function emits.
+SELECTED = None
 SETTINGS = {
     "SessionDirectoryUrl": "directory.broserver.com",
     "NetworkHostRelayMode": "Directory",
@@ -93,6 +95,10 @@ def watch_pass(name):
     return rf'text_watch .*"watch"\s*:\s*"{name}".*PASS'
 
 
+# The status box's numbers, shown only under Settings > Network > Show network diagnostics.
+STATUS_NUMBERS = ["RTT ", "PACE ", " waits "]
+
+
 def lobby_wait(peer):
     text = "Waiting for Joiner to press Ready" if peer == "host" else "Press Ready when you're ready to play"
     return wait(scope="menu", screen="MultiplayerScreen", control="LabelMultiplayerStatus", text_contains=text, within_ms=90000)
@@ -104,22 +110,28 @@ def probe(steps, timeout=180000):
     return json.dumps(dict(schema=1, timeout_ms=timeout, step_timeout_ms=60000, label_dump=dict(every_ms=5000), steps=steps), indent=2) + "\n"
 
 
-def emit(number, title, host, joiner, host_probe, join_probe, checklist, timeout=220, matching_log_lines=(), engine_args=()):
+def emit(number, title, host, joiner, host_probe, join_probe, checklist, timeout=220, matching_log_lines=(), engine_args=(),
+         size="960x540", settings=None, peer_settings=None, peer_args=None, peer_env=None, extra=None):
     name = f"fight15-s{number:02d}"
+    if SELECTED is not None and name not in SELECTED:
+        return
     scripts = {"host.menu": "\n".join(host) + "\n", "joiner.menu": "\n".join(joiner) + "\n",
                "host.probe": host_probe, "joiner.probe": join_probe}
     peers = [dict(name=peer, menu_script=f"{peer}.menu", probe=f"{peer}.probe",
-                  env=dict(CCCP_TEST_READBACK_TIMING="1"),
-                  settings=dict(SETTINGS, NetworkDisplayName="Captain" if peer == "host" else "Joiner"))
+                  env=dict(CCCP_TEST_READBACK_TIMING="1", **(peer_env or {}).get(peer, {})),
+                  settings=dict(SETTINGS if settings is None else settings, NetworkDisplayName="Captain" if peer == "host" else "Joiner",
+                                **(peer_settings or {}).get(peer, {})))
              for peer in ("host", "joiner")]
-    if engine_args:
-        for peer in peers:
-            peer["args"] = list(engine_args)
+    for peer in peers:
+        args = list(engine_args) + list((peer_args or {}).get(peer["name"], ()))
+        if args:
+            peer["args"] = args
     document = dict(schema=1, name=name, title=title, port_base=49410 + number * 2,
-                    size="960x540", timeout_s=timeout, public_directory=True, peers=peers, scripts=scripts, checklist=checklist)
+                    size=size, timeout_s=timeout, public_directory=True, peers=peers, scripts=scripts, checklist=checklist)
     if matching_log_lines:
         document["matching_log_lines"] = list(matching_log_lines)
-    (ROOT / f"{name}.json").write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+    document.update(extra or {})
+    (ROOT / f"{name}.json").write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8", newline="\n")
 
 
 def lobby_probe(mark):
@@ -253,7 +265,7 @@ def game_probe(steps, timeout=360000):
     return json.dumps(document, indent=2) + "\n"
 
 
-def place(peer, occupied=False, x=None, relative_to=None):
+def place(peer, occupied=False, x=None, relative_to=None, tag=""):
     fraction = x if x is not None else (0.35 if peer == "host" else 0.65)
     steps = [wait(editing=True), dict(op="assert_relay"), dict(op="editor_pick", input_player=0),
              dict(op="editor_move", input_player=0, x_fraction=fraction), wait(renders=5, elapsed_ms=1000)]
@@ -264,25 +276,25 @@ def place(peer, occupied=False, x=None, relative_to=None):
     if peer == "joiner": steps += [wait(setup_ready=1), wait(elapsed_ms=2500)]
     if peer == "joiner" and occupied:
         steps += [wait(setup_ready=1), dict(op="editor_move", input_player=0, x_fraction=0.35)]
-        steps += capture("occupied-preview")
+        steps += capture(f"occupied-preview{tag}")
         steps += [dict(op="assert_editor", input_player=0, equals=dict(screen_text="Occupied by Captain's brain - choose another spot"))]
         steps += click()
         steps += [dict(op="assert_editor", input_player=0, equals=dict(ready=False, submitted=False)),
                   dict(op="editor_move", input_player=0, x_fraction=fraction), wait(renders=5, elapsed_ms=1000)]
-    steps += capture(f"valid-preview-{peer}")
+    steps += capture(f"valid-preview-{peer}{tag}")
     steps += [dict(op="assert_editor", input_player=0, equals=dict(screen_text="Valid spot - click to INSTALL your brain")),
               dict(op="assert_net_ui_clear", player=0 if peer == "host" else 1),
               dict(op="assert_control", control="LabelNetMatchStatus", text_contains="0 of 2" if peer == "host" else "1 of 2", fits=True, inside="BoxNetMatchStatus")]
     steps += click()
     if peer == "host":
-        steps += [wait(setup_ready=1)] + capture("placed-host")
+        steps += [wait(setup_ready=1)] + capture(f"placed-host{tag}")
         steps += [dict(op="assert_editor", input_player=0, equals=dict(ready=True, submitted=True, screen_text="READY to start - wait for others to finish...")),
                   dict(op="assert_net_ui_clear", player=0),
                   dict(op="assert_control", control="LabelNetMatchStatus", text_contains="1 of 2", fits=True, inside="BoxNetMatchStatus")]
     steps += key("Return")
     steps += [wait(editing=False, paused=False), dict(op="assert", equals=dict(setup_ready=2, setup_humans=2, local_actor_alive=True)),
               dict(op="assert_scene", input_player=0, equals=dict(alive=True, brain_count=2))]
-    steps += capture(f"playing-{peer}")
+    steps += capture(f"playing-{peer}{tag}")
     return steps
 
 
@@ -397,7 +409,9 @@ def game_scenes():
     for peer, steps in (("host", host), ("joiner", joiner)):
         steps += [lobby_wait(peer)]
         steps += capture(f"brain-loss-{peer}", "MultiplayerScreen")
-        steps += [menu("assert_label LabelLastMatchSummary Brain"), menu("assert_label LabelLastMatchSummary SkirmishDefense.lua:397"),
+        # The lobby names the loss in a player's words; the rule's script line stays in the log and the Details dialog.
+        steps += [menu("assert_label LabelLastMatchSummary Brain"), menu("assert_label LabelLastMatchSummary Joiner's brain was destroyed"),
+                  menu("assert_label_absent LabelLastMatchSummary .lua"), menu("assert_label_absent LabelLastMatchSummary tick"),
                   menu("assert_text_fits LabelLastMatchSummary"), dict(op="finish")]
     checks = scene_checks("host", host) + scene_checks("joiner", joiner)
     checks += [dict(id=f"brain-loss-console-{peer}", peer=peer, mark=f"brain-loss-{peer}", screen="MultiplayerScreen",
@@ -414,6 +428,8 @@ def game_scenes():
     host += key("F6") + [wait(panel_open=True), wait(held_peer="Joiner")]
     host += capture("left-seat-held") + [dict(op="assert", equals=dict(service="Running", local_actor_alive=True), held_peer="Joiner"),
             dict(op="assert_control", control="NetworkSeatDetail@Joiner", text_contains="AI", fits=True, inside="NetworkSeats"),
+            # The status box tells the host why the seat is held; its numbers stay behind Show network diagnostics.
+            dict(op="assert_control", control="LabelNetMatchStatus", text_contains="Joiner: Left", text_lacks=STATUS_NUMBERS, fits=True, inside="BoxNetMatchStatus"),
             wait(returned_peer="Joiner", within_ms=90000)] + key("F6") + [wait(panel_open=False)]
     host += capture("rejoined-host") + [dict(op="assert_scene", input_player=0, equals=dict(alive=True, brain_count=2)), dict(op="assert_relay")] + complete_live_scene("host", 7)
     joiner += key("Escape") + [wait(screen="Pause"), menu("activate ButtonLeaveMatch"), wait(screen="PauseLeaveConfirm")]
@@ -515,6 +531,8 @@ def ai_fight():
 
 
 def moderation_scene():
+    if SELECTED is not None and "fight15-s08" not in SELECTED:
+        return
     document, runs, scripts, checks = None, [], {}, []
     for action, part, reason in (("kick", "Remove", "removed"), ("ban", "Ban", "banned")):
         host, joiner = place("host"), place("joiner")
@@ -562,7 +580,290 @@ def moderation_scene():
     (ROOT / "fight15-s08.json").write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
 
 
-if __name__ == "__main__":
+def menu_probe(steps, timeout=360000):
+    """A probe that starts with the menus and follows the same player into the match."""
+    document = json.loads(probe(steps, timeout))
+    document.update(sim_clock="lockstep")
+    return json.dumps(document, indent=2) + "\n"
+
+
+def lobby_exit():
+    return ["wait_file {PROBE_DIR}/done.json 360", "wait_ms 1400", "exit"]
+
+
+def own_seat_held_scene():
+    """D1 and D2: the host's own seat held on cue reads its line once, and the status box says why in words, its numbers left to diagnostics."""
+    stall_tick, stall_ms = 3000, 2500
+    host, joiner = place("host"), place("joiner")
+    host += [wait(control="LabelNetMatchStatus", text_contains="until you are back", within_ms=90000)] + capture("own-seat-held-host")
+    host += [wait(control="LabelNetMatchStatus", text_contains="Everyone is connected", within_ms=90000)] + capture("own-seat-back-host")
+    host += [dict(op="assert_control", control="LabelNetMatchStatus", text_contains="F6: Players", text_lacks=STATUS_NUMBERS, fits=True, inside="BoxNetMatchStatus")]
+    host += complete_live_scene("host", 14)
+    joiner += [wait(control="LabelNetMatchStatus", text_contains="The AI is playing for Captain", within_ms=90000)] + capture("host-held-joiner")
+    joiner += complete_live_scene("joiner", 14)
+    checks = scene_checks("host", host) + scene_checks("joiner", joiner)
+    checks.append(dict(id="host-seat-held-host", peer="host", mark="own-seat-held-host", screen="game",
+                       what=f"The host's own simulation stalled {stall_ms} ms at tick {stall_tick}: its seat was held to the AI and came back.",
+                       log_regex=[rf"\[net-test\] live stall frame=\d+ ms={stall_ms}", r"\[net-seat-ai\] peer=1 held=1 frame=", r"\[net-match\] seat-reclaimed peer=1 frame="]))
+    stall = {"peer": "host", "first_tick": stall_tick - 60, "last_tick": stall_tick + 240,
+             "reason": f"the scene's own stall of the host's simulation, {stall_ms} ms at tick {stall_tick}"}
+    emit(14, "The host's own seat held on cue says so once, and the status box gives reasons in words",
+         game_menu("host"), game_menu("joiner"), game_probe(host), game_probe(joiner), checks,
+         peer_args={"host": ["-net-test-live-stall", f"{stall_tick}:{stall_ms}"]}, peer_env={"host": {"CC_TEST_RETURN_INPUT_DETAILS": "1"}},
+         extra=dict(drawn_frames_exclude=[dict(stall)], allowed_stills=[dict(stall)]))
+
+
+def seat_dialog_scene():
+    """D3 and G6: the lobby seat dialog removes and bans a connected player; the Banned players list lifts the ban."""
+    seat = ["activate ButtonLobbyOptions", "wait_ms 600", "assert_substate HostOptions", "activate TabHostPageSeats", "wait_ms 600",
+            "activate ButtonHostSeatDetails1", "wait_ms 900", "assert_visible HostSeatDialog 1", "assert_label LabelHostSeatDlgName Joiner"]
+    host = host_setup() + seat + ["video_mark kick-dialog-host", "assert_enabled ButtonHostSeatDlgKick 1", "assert_enabled ButtonHostSeatDlgBan 1",
+            "assert_text_fits LabelHostSeatDlgActionHint", "assert_no_overlap LabelHostSeatDlgActionHint ButtonHostSeatDlgBan"]
+    host += ["activate ButtonHostSeatDlgKick", "wait_ms 1200", "assert_visible HostSeatDialog 0", "activate ButtonHostOptBack", "wait_substate Lobby 30",
+             "wait_label LabelLobbyPlayer1 Open seat", "video_mark kicked-host", "wait_file {PROBE_DIR_joiner}/kicked.json 90",
+             "wait_connected 2 90", "wait_label LabelLobbyPlayer1 Joiner", "video_mark readmitted-after-kick-host"]
+    host += seat + ["assert_enabled ButtonHostSeatDlgBan 1", "activate ButtonHostSeatDlgBan", "wait_ms 1200", "assert_visible HostSeatDialog 0",
+             "activate TabHostPageSession", "wait_ms 600", "activate ButtonHostSessBanned", "wait_ms 900", "assert_visible HostBannedDialog 1",
+             "assert_label LabelHostBannedList Joiner", "assert_label LabelHostBannedList session", "video_mark banned-list-host",
+             "wait_file {PROBE_DIR_joiner}/refused.json 120", "activate ButtonHostBannedRemove", "wait_ms 900",
+             "assert_label LabelHostBannedStatus Remove ban", "assert_label_absent LabelHostBannedList Joiner", "video_mark ban-lifted-host",
+             "touch_file {PROBE_DIR}/unbanned.json", "activate ButtonHostBannedClose", "wait_ms 600", "activate ButtonHostOptBack",
+             "wait_substate Lobby 30", "wait_connected 2 120", "wait_label LabelLobbyPlayer1 Joiner", "video_mark readmitted-after-ban-host"]
+    host += lobby_exit()
+    rejoin = ["activate ButtonMultiplayerJoinGame", "wait_ms 600", "assert_substate JoinSetup", *join_own_lobby(), "activate ButtonMultiplayerConnect"]
+    joiner = join_setup() + ["video_mark seated-joiner", "wait_label LabelMultiplayerLandingStatus The host removed you from this session",
+              "video_mark kicked-joiner", "assert_text_fits LabelMultiplayerLandingStatus", "touch_file {PROBE_DIR}/kicked.json"]
+    joiner += rejoin + ["wait_connected 2 90", "wait_substate Lobby 90", "video_mark readmitted-after-kick-joiner",
+               "wait_label LabelMultiplayerLandingStatus The host banned you from this session", "video_mark banned-joiner"]
+    joiner += rejoin + ["wait_label LabelJoinSelected The host banned you from this session", "video_mark ban-refused-joiner", "touch_file {PROBE_DIR}/refused.json",
+               "wait_file {PROBE_DIR_host}/unbanned.json 120", "activate ButtonMultiplayerConnect", "wait_connected 2 90", "wait_substate Lobby 90",
+               "video_mark readmitted-after-ban-joiner"]
+    joiner += lobby_exit()
+    host[-3:-3] = ["touch_file {PROBE_DIR}/scene-end.json"]
+    joiner[-3:-3] = ["touch_file {PROBE_DIR}/scene-end.json"]
+    done = probe([dict(op="wait_file", path="{PROBE_DIR}/scene-end.json", scope="menu", within_ms=400000), dict(op="assert_relay", scope="menu"), dict(op="finish")], 400000)
+    marks = {"host": ["kick-dialog-host", "kicked-host", "readmitted-after-kick-host", "banned-list-host", "ban-lifted-host", "readmitted-after-ban-host"],
+             "joiner": ["kicked-joiner", "readmitted-after-kick-joiner", "banned-joiner", "ban-refused-joiner", "readmitted-after-ban-joiner"]}
+    checks = [dict(id=mark, peer=peer, mark=mark, screen="MultiplayerScreen", what="The lobby seat dialog's removal reached the player and the Banned players list lifted the ban.",
+                   events=[f"^video_mark {mark}"]) for peer, names in marks.items() for mark in names]
+    checks[0]["events"] += ["^assert_enabled ButtonHostSeatDlgKick .*PASS", "^assert_enabled ButtonHostSeatDlgBan .*PASS"]
+    emit(15, "The lobby seat dialog kicks and bans a connected player; Remove ban lets them back", host, joiner, done, done, checks, timeout=420)
+
+
+def files_page(where="main"):
+    """Settings > Network > Files, opened by hand from the main menu."""
+    return ["activate ButtonMainToOptions", "wait_ms 600", "select_settings_page Network", "wait_ms 450", "select_settings_page Network:Basics",
+            "wait 3", "activate ButtonNetworkAdvanced", "wait 4", "select_settings_page Network:Files", "wait 4"]
+
+
+def recovery_defaults_scene():
+    """D4 and D6: the host's Recovery page promises held seats wait for its word and starts on autosave every five minutes."""
+    host = host_setup() + ["activate ButtonLobbyOptions", "wait_ms 600", "assert_substate HostOptions", "activate TabHostPageRecovery", "wait_ms 600",
+            "video_mark recovery-host", "assert_label LabelHostRecReclaim Seats stay held until you give them away",
+            "assert_text_fits LabelHostRecReclaim", "assert_no_overlap LabelHostRecRejoin LabelHostRecReclaim",
+            "assert_checked CheckHostRecAutosave 1", "assert_label ComboHostRecAutosaveInterval 5 minutes",
+            "assert_text_fits ComboHostRecAutosaveInterval", "assert_label LabelHostRecAutosaveHint 1 to 60 minutes, or off",
+            "assert_text_fits LabelHostRecAutosaveHint",
+            "combo_select ComboHostRecAutosaveInterval 10 minutes", "assert_label ComboHostRecAutosaveInterval 10 minutes", "activate ButtonHostOptApply",
+            "wait_ms 900", "video_mark recovery-applied-host", "activate ButtonHostOptBack", "wait_substate Lobby 30", "touch_file {PROBE_DIR}/applied.json"]
+    host += ["wait_file {PROBE_DIR_joiner}/scene-end.json 120", "touch_file {PROBE_DIR}/scene-end.json"] + lobby_exit()
+    # The joiner's Match details read the cadence the host applied.
+    joiner = join_setup() + ["wait_file {PROBE_DIR_host}/applied.json 120", "wait_ms 1200", "activate ButtonLobbyEditSetup", "wait_ms 600",
+              "assert_substate HostOptions", "activate TabHostPageRecovery", "wait_ms 600", "video_mark recovery-joiner",
+              "assert_checked CheckHostRecAutosave 1", "assert_label ComboHostRecAutosaveInterval 10 minutes", "assert_enabled ComboHostRecAutosaveInterval 0",
+              "activate ButtonHostOptBack", "wait_substate Lobby 30", "touch_file {PROBE_DIR}/scene-end.json"] + lobby_exit()
+    done = probe([dict(op="wait_file", path="{PROBE_DIR}/scene-end.json", scope="menu", within_ms=300000), dict(op="assert_relay", scope="menu"),
+                  dict(op="finish")], 320000)
+    checks = [dict(id="recovery-host", peer="host", mark="recovery-host", screen="MultiplayerScreen",
+                   what="The host's Recovery page promises held seats wait for the host's word and starts on autosave every five minutes.",
+                   events=["^assert_label LabelHostRecReclaim .*PASS", "^assert_text_fits LabelHostRecReclaim.*PASS",
+                           "^assert_checked CheckHostRecAutosave .*PASS", "^assert_label ComboHostRecAutosaveInterval \"5 minutes\".*PASS"]),
+              dict(id="recovery-joiner", peer="joiner", mark="recovery-joiner", screen="MultiplayerScreen",
+                   what="The joiner's Match details read the cadence the host applied, and cannot change it.",
+                   events=["^assert_label ComboHostRecAutosaveInterval \"10 minutes\".*PASS", "^assert_enabled ComboHostRecAutosaveInterval .*PASS"])]
+    emit(16, "Autosave on every five minutes by default; the host's Recovery page promises held seats wait", host, joiner, done, done, checks,
+         timeout=360)
+
+
+def ready_scene():
+    """G1 and G2: Ready and Cancel Ready, a setup change clearing Ready, the setup cancelling a countdown, the last Ready starting at once."""
+    host = host_setup() + ["assert_label LabelMultiplayerStatus Waiting for Joiner to press Ready",
+            "wait_label LabelMultiplayerStatus Everyone is ready - press Start Match", "video_mark ready-host",
+            "wait_label LabelMultiplayerStatus Waiting for Joiner to press Ready", "video_mark ready-taken-back-host", "touch_file {PROBE_DIR}/saw-cancel.json",
+            "wait_label LabelMultiplayerStatus Everyone is ready - press Start Match",
+            "activate ButtonLobbyEditSetup", "wait_ms 600", "assert_substate HostOptions", "activate TabHostPageRules", "wait_ms 400",
+            "slider_set SliderHostRulesGold 3000", "activate ButtonHostOptApply", "wait_ms 900", "activate ButtonHostOptBack", "wait_substate Lobby 30",
+            "wait_label LabelMultiplayerStatus Waiting for Joiner to press Ready", "video_mark setup-changed-host", "touch_file {PROBE_DIR}/changed.json",
+            "wait_file {PROBE_DIR_joiner}/saw-changed.json 60",
+            "activate ButtonMultiplayerStart", "wait_label LabelMultiplayerStatus Starting in", "assert_label ButtonMultiplayerStart Cancel Start",
+            "activate ButtonLobbyEditSetup", "wait_ms 600", "assert_substate HostOptions",
+            "assert_label LabelHostOptStatus The start countdown stopped while you change the setup.", "video_mark countdown-stopped-host",
+            "wait_file {PROBE_DIR_joiner}/saw-setup-open.json 60", "activate ButtonHostOptBack", "wait_substate Lobby 30", "wait_ms 1200",
+            "assert_label LabelMultiplayerStatus Waiting for Joiner to press Ready", "assert_label ButtonMultiplayerStart Start Match",
+            "video_mark countdown-cancelled-host", "touch_file {PROBE_DIR}/countdown-stopped.json",
+            "wait_file {PROBE_DIR_joiner}/saw-stopped.json 60", "activate ButtonMultiplayerStart", "wait_label LabelMultiplayerStatus Starting in",
+            "touch_file {PROBE_DIR}/countdown-running.json"] + lobby_exit()
+    joiner = join_setup() + ["assert_label ButtonMultiplayerReady Ready", "activate ButtonMultiplayerReady", "wait_label ButtonMultiplayerReady Cancel Ready",
+              "assert_label LabelMultiplayerStatus You're ready", "video_mark ready-joiner", "wait_ms 1500",
+              "activate ButtonMultiplayerReady", "wait_label ButtonMultiplayerReady Ready", "wait_label LabelMultiplayerStatus Press Ready when you're ready to play",
+              "video_mark ready-taken-back-joiner", "wait_file {PROBE_DIR_host}/saw-cancel.json 60",
+              "activate ButtonMultiplayerReady", "wait_label ButtonMultiplayerReady Cancel Ready",
+              "wait_label LabelMultiplayerStatus The host changed the setup - check it and press Ready again",
+              "assert_label ButtonMultiplayerReady Ready", "video_mark setup-changed-joiner", "wait_file {PROBE_DIR_host}/changed.json 60",
+              "touch_file {PROBE_DIR}/saw-changed.json",
+              "wait_label LabelMultiplayerStatus The host is changing the setup - the start waits for it", "video_mark setup-open-joiner",
+              "touch_file {PROBE_DIR}/saw-setup-open.json", "wait_file {PROBE_DIR_host}/countdown-stopped.json 60",
+              "wait_label LabelMultiplayerStatus press Ready", "assert_label_absent LabelMultiplayerStatus starting the match in",
+              "video_mark countdown-cancelled-joiner", "touch_file {PROBE_DIR}/saw-stopped.json",
+              "wait_file {PROBE_DIR_host}/countdown-running.json 60", "wait_label LabelMultiplayerStatus The host is starting the match in",
+              "video_mark last-ready-joiner", "activate ButtonMultiplayerReady", "touch_file {PROBE_DIR}/last-ready.json"] + lobby_exit()
+    # The last Ready starts the match at once: the countdown's remaining seconds never run out first.
+    host_steps, joiner_steps = place("host"), [dict(op="wait_file", path="{PROBE_DIR}/last-ready.json", scope="menu", within_ms=300000),
+                                               wait(editing=True, within_ms=15000)] + place("joiner")
+    host_steps += pause_end() + [lobby_wait("host"), dict(op="finish")]
+    joiner_steps += [lobby_wait("joiner"), dict(op="finish")]
+    marks = {"host": ["ready-host", "ready-taken-back-host", "setup-changed-host", "countdown-stopped-host", "countdown-cancelled-host"],
+             "joiner": ["ready-joiner", "ready-taken-back-joiner", "setup-changed-joiner", "setup-open-joiner", "countdown-cancelled-joiner", "last-ready-joiner"]}
+    checks = [dict(id=mark, peer=peer, mark=mark, screen="MultiplayerScreen", what="Each lobby state named its next action as the player's hand changed it.",
+                   events=[f"^video_mark {mark}"]) for peer, names in marks.items() for mark in names]
+    checks += scene_checks("host", host_steps) + scene_checks("joiner", joiner_steps)
+    emit(17, "Ready and Cancel Ready, a setup change, the setup stopping a countdown and the last Ready starting at once",
+         host, joiner, game_probe(host_steps), menu_probe(joiner_steps), checks, timeout=480)
+
+
+def countdown_zero_scene():
+    """G2: an unready player does not hold the match: the countdown reaches zero and starts it with everyone in the lobby."""
+    host = host_setup() + ["activate ButtonMultiplayerStart", "wait_label LabelMultiplayerStatus Starting in 30 s",
+            "video_mark countdown-30-host", "wait_label LabelMultiplayerStatus Starting in 2 s", "video_mark countdown-2-host"] + lobby_exit()
+    joiner = join_setup() + ["wait_label LabelMultiplayerStatus The host is starting the match in 30 s - press Ready", "video_mark countdown-30-joiner",
+              "wait_label LabelMultiplayerStatus The host is starting the match in 2 s", "video_mark countdown-2-joiner",
+              "assert_label ButtonMultiplayerReady Ready"] + lobby_exit()
+    host_steps, joiner_steps = place("host"), place("joiner")
+    host_steps += pause_end() + [lobby_wait("host"), dict(op="finish")]
+    joiner_steps += [lobby_wait("joiner"), dict(op="finish")]
+    checks = [dict(id=mark, peer=peer, mark=mark, screen="MultiplayerScreen", what="The countdown ran to its end on both screens with the joiner unready.",
+                   events=[f"^video_mark {mark}"]) for peer, mark in (("host", "countdown-30-host"), ("host", "countdown-2-host"),
+                                                                      ("joiner", "countdown-30-joiner"), ("joiner", "countdown-2-joiner"))]
+    checks += scene_checks("host", host_steps) + scene_checks("joiner", joiner_steps)
+    emit(18, "The countdown reaches zero with a player unready and starts the match with everyone",
+         host, joiner, game_probe(host_steps), game_probe(joiner_steps), checks, timeout=420)
+
+
+def default_brain_loss_scene():
+    """G4: under the default rule a lost brain leaves its player watching while the match plays on for everyone."""
+    host = place("host", x=0.4) + buy("host", fire=False, landing_offset=-180, craft="Base.rte/Dropship MK1")
+    joiner = place("joiner", x=0.48)
+    host += [dict(op="aim_brain", input_player=0, target_player=1)]
+    host += capture("aimed-at-brain-host") + [dict(op="game_mouse", down=True),
+             dict(op="aim_brain", input_player=0, target_player=1, until_brain_lost=True, within_ms=30000), dict(op="game_mouse", down=False)]
+    host += [wait(sim_advanced=300, elapsed_ms=5000)] + capture("brain-lost-host")
+    host += [dict(op="assert", equals=dict(service="Running", local_actor_alive=True)), dict(op="assert_scene", input_player=0, equals=dict(alive=True, brain_count=1))]
+    joiner += [dict(op="wait_scene", input_player=0, equals=dict(brain_count=1), within_ms=120000), wait(sim_advanced=300, elapsed_ms=5000)]
+    joiner += capture("watching-joiner") + [dict(op="assert", equals=dict(service="Running")), dict(op="assert_scene", input_player=0, equals=dict(brain_count=1)),
+               dict(op="assert_relay")]
+    for peer, steps in (("host", host), ("joiner", joiner)):
+        steps += complete_live_scene(peer, 20)
+    checks = scene_checks("host", host) + scene_checks("joiner", joiner)
+    checks += [dict(id=f"brain-lost-plays-on-{peer}", peer=peer, mark="brain-lost-host" if peer == "host" else "watching-joiner", screen="game",
+                    what="The default rule kept the round running after Joiner's brain was destroyed; the host ended it by hand.",
+                    log_regex=[r"\[net-match\] brain lost: Joiner's Brain Case .* at tick "]) for peer in ("host", "joiner")]
+    emit(20, "A brain lost under the default rule: its player watches and the match plays on",
+         game_menu("host"), game_menu("joiner"), game_probe(host), game_probe(joiner), checks,
+         matching_log_lines=[r"^\[net-match\] brain lost: .+$"])
+
+
+def second_rematch_scene():
+    """G7: a rematch plays a second round from the rematch lobby, and the lobby returns again after it."""
+    host, joiner = place("host"), place("joiner")
+    host += pause_end() + [lobby_wait("host")] + capture("rematch-lobby-host", "MultiplayerScreen")
+    joiner += [lobby_wait("joiner")] + capture("rematch-lobby-joiner", "MultiplayerScreen")
+    joiner += [menu("activate ButtonMultiplayerReady"), wait(scope="menu", control="ButtonMultiplayerReady", text_contains="Cancel Ready")]
+    host += [wait(scope="menu", control="LabelMultiplayerStatus", text_contains="Everyone is ready - press Start Match", within_ms=90000),
+             menu("activate ButtonMultiplayerStart")]
+    host += place("host", tag="-round2") + pause_end() + [lobby_wait("host")] + capture("second-lobby-host", "MultiplayerScreen")
+    joiner += place("joiner", tag="-round2") + [lobby_wait("joiner")] + capture("second-lobby-joiner", "MultiplayerScreen")
+    for peer, steps in (("host", host), ("joiner", joiner)):
+        steps += [menu("assert_label LabelLastMatchSummary Match ended by host"), menu("assert_text_fits LabelLastMatchSummary"), dict(op="finish")]
+    emit(22, "A second rematch round plays and returns to the lobby again",
+         game_menu("host"), game_menu("joiner"), game_probe(host, 480000), game_probe(joiner, 480000),
+         scene_checks("host", host) + scene_checks("joiner", joiner), timeout=560)
+
+
+# A newcomer's settings: the harness pins (the public directory and no router mapping) and nothing else.
+NEWCOMER_SETTINGS = {"SessionDirectoryUrl": "directory.broserver.com", "NetworkHostRelayMode": "Directory", "NetworkPortMapEnable": 0}
+
+
+def relay_by_hand(peer):
+    """A newcomer's first visit to Settings > Network: the defaults read as shipped, then Relay only picked by hand for the gate's relay."""
+    return ["activate ButtonMainToOptions", "wait_ms 600", "select_settings_page Network", "wait_ms 450", "select_settings_page Network:Basics", "wait 3",
+            f"video_mark network-defaults-{peer}", "assert_label LabelNetworkConnectionValue Automatic", "assert_label ComboMatchStatusWidget When needed",
+            "assert_text_fits LabelNetworkConnectionValue",
+            # Outside a match the Files page reads this computer's own hosting default, under that name.
+            "activate ButtonNetworkAdvanced", "wait 4", "select_settings_page Network:Files", "wait 4", f"video_mark files-default-{peer}",
+            "assert_label LabelNetAutosaveHost Your hosting default", "assert_label LabelNetAutosave On", "assert_label LabelNetAutosaveInterval Every 5 minutes",
+            "assert_text_fits LabelNetAutosaveHost", "select_settings_page Network:Basics", "wait 3", "activate ButtonNetworkConnectionChange", "wait 4",
+            "assert_label ComboNetworkConnection Automatic", "combo_select ComboNetworkConnection Relay only", "wait_ms 600",
+            "assert_label ComboNetworkConnection Relay only", "assert_text_fits LabelNetworkConnectionHint", "post_command ButtonBackToMainMenu", "wait_ms 900",
+            "assert_screen MainScreen"]
+
+
+def newcomer_scene(number, size):
+    """G8: a newcomer's defaults at one window size: Host a Game, Create Lobby, Join, Ready, Start, place, play."""
+    host = ["wait_ms 1800"] + relay_by_hand("host") + [
+        "activate ButtonMainToMultiplayer", "wait_ms 600", "assert_substate Landing", "settext TextMultiplayerName Captain", "activate ButtonMultiplayerHostGame",
+        "wait_ms 500", "assert_substate HostSetup", "video_mark host-setup-defaults", "assert_text_fits ButtonMultiplayerCreate", "setup_host_port {PORT}",
+        "activate ButtonMultiplayerCreate", "wait_substate Lobby 90", "write_lobby {PROBE_DIR}/lobby.json 90", "video_mark fight15-host-listening",
+        "wait_connected 2 90", "wait_ms 1200", "wait_remote_ready 90", "activate ButtonMultiplayerStart"] + lobby_exit()
+    joiner = ["wait_ms 1800"] + relay_by_hand("joiner") + join_setup()[1:] + ["activate ButtonMultiplayerReady"] + lobby_exit()
+    host_steps, joiner_steps = place("host"), place("joiner")
+    for peer, steps in (("host", host_steps), ("joiner", joiner_steps)):
+        steps += complete_live_scene(peer, number)
+    checks = [dict(id=f"network-defaults-{peer}", peer=peer, mark=f"network-defaults-{peer}", screen="MainScreen",
+                   what="A newcomer's Settings > Network reads Automatic and When needed, and the hand picks Relay only.",
+                   events=["^assert_label LabelNetworkConnectionValue \"Automatic\".*PASS", "^assert_label ComboNetworkConnection \"Relay only\".*PASS"])
+              for peer in ("host", "joiner")]
+    checks += [dict(id=f"files-default-{peer}", peer=peer, mark=f"files-default-{peer}", screen="MainScreen",
+                    what="Outside a match the Files page shows this computer's hosting default, on every five minutes, under its own name.",
+                    events=["^assert_label LabelNetAutosaveHost \"Your hosting default\".*PASS", "^assert_label LabelNetAutosave \"On\".*PASS",
+                            "^assert_label LabelNetAutosaveInterval \"Every 5 minutes\".*PASS"]) for peer in ("host", "joiner")]
+    checks += scene_checks("host", host_steps) + scene_checks("joiner", joiner_steps)
+    emit(number, f"A newcomer's defaults at {size}: Host a Game, Create Lobby, Join, Ready, Start and play",
+         host, joiner, game_probe(host_steps), game_probe(joiner_steps), checks, size=size, settings=NEWCOMER_SETTINGS, timeout=420)
+
+
+def menu_scenes():
+    own_seat_held_scene()
+    seat_dialog_scene()
+    recovery_defaults_scene()
+    ready_scene()
+    countdown_zero_scene()
+    default_brain_loss_scene()
+    second_rematch_scene()
+    for number, size in ((23, "640x360"), (24, "960x540"), (25, "1280x720")):
+        newcomer_scene(number, size)
+
+
+def main(argv):
+    """Writes the named scenes, s01 to s32, or every scene this file owns with 'all'.
+
+    fight15-s10's committed file carries edits made after ai_fight, so 'all' leaves it alone; name s10 to rewrite it.
+    """
+    global SELECTED
+    owned = [f"s{number:02d}" for number in range(1, 33)]
+    names = [name for name in owned if name != "s10"] if argv == ["all"] else argv
+    unknown = [name for name in names if name not in owned]
+    if not names or unknown:
+        print(main.__doc__.strip() + ("\nunknown: " + " ".join(unknown) if unknown else ""))
+        return 2
+    SELECTED = {f"fight15-{name}" for name in names}
     lobby_scenes()
     game_scenes()
-    ai_fight()
+    if "fight15-s10" in SELECTED:
+        ai_fight()
+    menu_scenes()
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(main(sys.argv[1:]))
