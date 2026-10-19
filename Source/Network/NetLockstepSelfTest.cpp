@@ -1012,9 +1012,11 @@ namespace RTE {
 		static bool AStraddlingRulingIsTheOtherHalfsQuestion(std::string* error) {
 			// The directory rules for a split's first question. A seat held while it still counted a seat of this group asks with
 			// that seat named, so the ruling names seats of both continuations; a seat whose own question it is not lost it, wherever
-			// its members are. Arms: seats 4 and 1 of the group that held seat 3, seat 3 itself, and a plain two-two partition.
-			struct Arm { uint8_t local; uint32_t asked, playing, winner; bool stops; };
-			for (const Arm arm: {Arm{4, 11, 11, 5, true}, Arm{1, 11, 11, 5, true}, Arm{3, 5, 4, 5, false}, Arm{1, 3, 3, 3, false}}) {
+			// its members are. A ruling for exactly the group a seat played in at its hold is that group's, though the seat only queried
+			// and held another of its seats later. Arms: seats 4 and 1 of the group that held seat 3, seat 3 itself, a plain two-two
+			// partition, and seat 1 of the group of three that held seat 2 and later held seat 3 for a hang of its own.
+			struct Arm { uint8_t local; uint32_t asked, playing, winner; bool stops; uint32_t later = 0; };
+			for (const Arm arm: {Arm{4, 11, 11, 5, true}, Arm{1, 11, 11, 5, true}, Arm{3, 5, 4, 5, false}, Arm{1, 3, 3, 3, false}, Arm{1, 0, 13, 13, false, 9}}) {
 				Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
 				peer.m_Config.peerCount = peer.m_Config.matchConfig.peerCount = 4;
 				peer.m_Config.matchConfig.players.push_back({4, 3, false, "Fourth"});
@@ -1027,6 +1029,7 @@ namespace RTE {
 				peer.m_RoundConfigHash = NetMatchConfigUtil::HashConfig(peer.m_Config.matchConfig);
 				peer.m_MigrationPhase = NetHostMigrationPhase::None;
 				peer.m_FrameGroupMembers = arm.playing; peer.m_FrameGroupChanges = {{1, 15}, {339, arm.playing}};
+				if (arm.later) { peer.m_FrameGroupMembers = arm.later; peer.m_FrameGroupChanges[345] = arm.later; }
 				NetFrameTieRequest request;
 				request.frame = 39; request.roundId = peer.m_Config.matchConfig.roundId; request.configHash = peer.m_RoundConfigHash; request.host = 1;
 				request.owners = {1, 2, 3, 4};
