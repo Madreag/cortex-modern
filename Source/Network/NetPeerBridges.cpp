@@ -1095,7 +1095,8 @@ namespace RTE {
 			if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) DiagnosticLine() << "[net-peer-decision-wait] local=" << static_cast<int>(m_Config.localPeerId)
 			    << " frame=" << votes->first.first << " kind=" << static_cast<int>(votes->first.second) << " cause=open_vote required=" << required
 			    << " voted=" << std::accumulate(votes->second.begin(), votes->second.end(), 0U, [](uint32_t mask, const auto& vote) { return mask | (1U << (vote.first - 1)); })
-			    << " next=" << m_Stats.nextFrame << " now_ms=" << nowMs << std::endl;
+			    << " connected=" << basis.connectedMask << " held=" << PeerHeldSeatsAt(votes->first.first) << " own_gap=" << IsSeatReclaimGap(m_Config.localPeerId, votes->first.first)
+			    << " authority=" << PeerGroupHasAuthority(SeatBit(m_Config.localPeerId), votes->first.first) << " next=" << m_Stats.nextFrame << " now_ms=" << nowMs << std::endl;
 			// It is asked at once of the seats that have played the frame, so the wait is one trip to them.
 			RequestPeerCommittedTail(nowMs);
 			// Only its certificate, a committed frame or a proof that it cannot complete releases this promise.
