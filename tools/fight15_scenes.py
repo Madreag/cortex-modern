@@ -1000,10 +1000,10 @@ def apply_for_held_seat_scene():
     newcomer_menu = ["wait_ms 1800", "wait_file {PROBE_DIR_leaver}/left.json 300", "activate ButtonMainToMultiplayer", "wait_ms 600", "assert_substate Landing",
                      "settext TextMultiplayerName Newcomer", "activate ButtonMultiplayerJoinGame", "wait_ms 600", "assert_substate JoinSetup", *join_own_lobby(),
                      # A full match takes an application once the list shows the held seat; a hand reads that first.
-                     "wait_label_absent LabelJoinSelected Cannot join", "activate ButtonMultiplayerConnect", "video_mark newcomer-refused", *apply, "video_mark newcomer-applied",
+                     "wait_label_absent LabelJoinSelected cannot be joined", "activate ButtonMultiplayerConnect", "video_mark newcomer-refused", *apply, "video_mark newcomer-applied",
                      "wait_label LabelMultiplayerLandingStatus The host removed you from this session", "video_mark newcomer-declined",
                      "touch_file {PROBE_DIR}/declined.json", "activate ButtonMultiplayerJoinGame", "wait_ms 600", *join_own_lobby(),
-                     "wait_label_absent LabelJoinSelected Cannot join", "activate ButtonMultiplayerConnect",
+                     "wait_label_absent LabelJoinSelected cannot be joined", "activate ButtonMultiplayerConnect",
                      *apply, "video_mark newcomer-applied-again", "wait_file {PROBE_DIR}/done.json 600", "wait_ms 1400", "exit"]
     seat_row = lambda part: f"NetworkSeat{part}@Leaver"
     press = lambda control: [dict(op="mouse_down", control=control), wait(control=control, equals=dict(pushed=True)), dict(op="mouse_up", control=control),
