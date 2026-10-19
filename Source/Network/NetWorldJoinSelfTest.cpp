@@ -8051,6 +8051,50 @@ namespace RTE {
 		return true;
 	}
 
+	// A periodic capture named past its deadline is the host's own late save only when the host's own writer kept it waiting:
+	// one that waited only for another peer's report costs the host nothing.
+	bool TestALateCaptureNamesTheWriterThatMadeItLate(std::string* error) {
+		for (const bool ownSlow: {true, false}) {
+			NetMatchService service;
+			service.m_IsHost = true;
+			service.m_AutosaveMatchId = "00000000deadbeef-000000000000000a";
+			service.m_MatchAutosaveSeconds = 1;
+			const int64_t tickLength = g_TimerMan.GetTicksPerSecond() / 60;
+			std::map<uint64_t, std::vector<NetMatchService::CheckpointNote>> stream;
+			std::vector<std::pair<uint64_t, uint64_t>> writer;
+			size_t late = 0, ownLate = 0;
+			for (uint64_t tick = 1; tick <= 600; ++tick) {
+				NetMatchService::AutosaveTickInput input;
+				input.tick = tick; input.now = static_cast<int64_t>(tick) * tickLength;
+				if (const auto due = stream.find(tick); due != stream.end()) input.applied = due->second;
+				input.writers = {1, 2}; input.lead = 5; input.localPeer = 1;
+				while (!writer.empty() && writer.front().second <= tick) { input.finished.push_back(writer.front().first); writer.erase(writer.begin()); }
+				input.unwritten = writer.size();
+				const NetMatchService::AutosaveTickOutput output = service.StepAutosaveSchedule(input);
+				if (output.periodicLateTicks > 0) {
+					++late;
+					if (output.periodicOwnLate) ++ownLate;
+				}
+				if (output.capture) {
+					// One writer takes 90 ticks against the 60-tick schedule; the other reports 10 ticks after the capture.
+					writer.emplace_back(tick, tick + (ownSlow ? 90 : 10));
+					stream[tick + (ownSlow ? 10 : 90)].push_back({2, NetGameCheckpoint::Written, tick});
+				}
+				for (NetMatchService::CheckpointNote note: output.send) {
+					note.sender = 1;
+					stream[tick + 4].push_back(note);
+				}
+			}
+			if (late < 3 || ownLate != (ownSlow ? late : 0)) {
+				*error = std::string("a-late-capture-names-the-writer-that-made-it-late: with the ") + (ownSlow ? "host's" : "other peer's") +
+				         " writer slow, " + std::to_string(ownLate) + " of " + std::to_string(late) + " late captures were the host's own late saves";
+				return false;
+			}
+		}
+		std::cout << "[net-world-join-selftest] PASS a_late_capture_names_the_writer_that_made_it_late" << std::endl;
+		return true;
+	}
+
 	bool TestWorldCaptureKeepsOneImageInFlight(std::string* error) {
 		NetMatchService service;
 		service.m_IsHost = true;
@@ -10356,6 +10400,7 @@ namespace RTE {
 			if (!TestALostCaptureIsNamedAgain(&error)) return Fail(error);
 			if (!TestAHeldHostKeepsTheAutosaveCadence(&error)) return Fail(error);
 			if (!TestAHostsLostOwnReportDoesNotStopTheSchedule(&error)) return Fail(error);
+			if (!TestALateCaptureNamesTheWriterThatMadeItLate(&error)) return Fail(error);
 			if (!TestAProvisionalHostWritesNothing(&error)) return Fail(error);
 			if (!TestNoCaptureIsNamedOverAPendingActivation(&error)) return Fail(error);
 			if (!TestNoCaptureIsNamedBeforeTheAgreedFirstFrame(&error)) return Fail(error);

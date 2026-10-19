@@ -3903,10 +3903,18 @@ static std::string ResyncSaveName() {
 		return finished;
 	}
 
+	void NetMatchService::SetSaverOverdue(bool overdue, uint64_t tick) {
+		if (overdue != m_SaverOverdue) System::PrintDiagnosticLine(std::format("[autosave] saver overdue={} tick={}", overdue ? 1 : 0, tick));
+		m_SaverOverdue = overdue;
+		SaverThreads::SetOverdue(overdue);
+	}
+
 	void NetMatchService::ResetCheckpointSchedule() {
-		SaverThreads::SetOverdue(false);
+		SetSaverOverdue(false, static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
 		m_ScheduledCaptures.clear();
 		m_PeriodicWaitSince = 0;
+		m_PeriodicOwnWriterWaited = false;
+		m_OwnLateCaptureTick = 0;
 		m_OpenCaptureTick = 0;
 		m_CaptureWriters.clear();
 		m_CheckpointHolders.clear();
@@ -4028,6 +4036,7 @@ static std::string ResyncSaveName() {
 		if (output.capture && interval > 0 && m_NextAutosaveSimTime >= 0 && input.now >= m_NextAutosaveSimTime) {
 			m_NextAutosaveSimTime += ((input.now - m_NextAutosaveSimTime) / interval + 1) * interval;
 			m_PeriodicWaitSince = 0;
+			m_PeriodicOwnWriterWaited = false;
 		}
 		bool ask = input.manualRequested;
 		if (ask && input.hostProvisional) {
@@ -4061,7 +4070,11 @@ static std::string ResyncSaveName() {
 		// fresher base. The ask and the deadline stay pending, and the command is named at the first tick the writer is ready.
 		const bool writersBusy = input.unwritten != 0 || !input.writerReady || (m_OpenCaptureTick != 0 && (input.tick <= m_OpenCaptureTick || !m_CaptureWriters.empty()));
 		if (writersBusy) {
-			if (!input.paused && interval > 0 && m_NextAutosaveSimTime >= 0 && input.now + static_cast<int64_t>(input.lead) * tickLength >= m_NextAutosaveSimTime && m_PeriodicWaitSince == 0) m_PeriodicWaitSince = input.tick;
+			if (!input.paused && interval > 0 && m_NextAutosaveSimTime >= 0 && input.now + static_cast<int64_t>(input.lead) * tickLength >= m_NextAutosaveSimTime) {
+				if (m_PeriodicWaitSince == 0) m_PeriodicWaitSince = input.tick;
+				// The due capture waits on this machine's own writer, not only on another peer's report.
+				if (input.unwritten != 0 || !input.writerReady) m_PeriodicOwnWriterWaited = true;
+			}
 			return output;
 		}
 		m_OpenCaptureTick = 0;
@@ -4083,7 +4096,9 @@ static std::string ResyncSaveName() {
 			if (!periodicDue) return;
 			output.periodicLateTicks = std::max<int64_t>(0, static_cast<int64_t>(input.lead) - (m_NextAutosaveSimTime - input.now) / tickLength);
 			output.periodicWaitedTicks = m_PeriodicWaitSince ? static_cast<int64_t>(input.tick - m_PeriodicWaitSince) : 0;
+			output.periodicOwnLate = m_PeriodicOwnWriterWaited && output.periodicLateTicks > 0;
 			m_PeriodicWaitSince = 0;
+			m_PeriodicOwnWriterWaited = false;
 		};
 		if (input.ownSeatHeld) {
 			// Playing voters agree a frame for the held host. Keep the same authorization and one-capture gate as a base
@@ -4313,7 +4328,7 @@ static std::string ResyncSaveName() {
 		if (ScenarioRunner::HasPendingLockstepWorldSegment()) SealWorldReplaySegment();
 		AppendCommittedJoinFrame(tick);
 		if (!ScenarioRunner::IsLockstepControllerSyncActive() || m_AutosaveMatchId.empty() || !m_Coordinator) {
-			SaverThreads::SetOverdue(false);
+			SetSaverOverdue(false, tick);
 			return;
 		}
 		AutosaveTickInput input;
@@ -4342,17 +4357,21 @@ static std::string ResyncSaveName() {
 		AutosaveTickOutput output = StepAutosaveSchedule(input);
 		{
 			// This machine's own save that its busy writer keeps from being named or taken: the next periodic one once its
-			// deadline passed, or the host player's own manual ask. A joiner's or returner's base waits for the writer in the
-			// game's idle time, so the host never pays for another player's join or return.
+			// deadline passed, a periodic one its writer made late while it is written, or the host player's own manual ask. A
+			// joiner's or returner's base waits for the writer in the game's idle time, so the host never pays for another
+			// player's join or return, and a capture another peer's writer made late costs this machine nothing.
 			const int64_t interval = static_cast<int64_t>(m_MatchAutosaveSeconds) * g_TimerMan.GetTicksPerSecond();
 			const int64_t dueAt = m_IsHost && m_NextAutosaveSimTime >= 0 ? m_NextAutosaveSimTime : m_CaptureAnchorSimTime + interval;
 			const bool periodicDue = interval > 0 && !paused && m_CaptureAnchorSimTime >= 0 && input.now >= dueAt;
 			const bool asked = m_IsHost && output.manualPending;
-			SaverThreads::SetOverdue((periodicDue || asked) && g_ActivityMan.AutosaveWriterBusy());
+			if (output.periodicOwnLate && m_OpenCaptureTick > tick) m_OwnLateCaptureTick = m_OpenCaptureTick;
+			if (m_OwnLateCaptureTick != 0 && tick > m_OwnLateCaptureTick) m_OwnLateCaptureTick = 0;
+			const bool lateOwnSave = std::any_of(m_AwaitedAutosaves.begin(), m_AwaitedAutosaves.end(), [](const AwaitedAutosave& entry) { return entry.ownLate; });
+			SetSaverOverdue((periodicDue || asked || lateOwnSave) && g_ActivityMan.AutosaveWriterBusy(), tick);
 		}
 		if (output.periodicLateTicks >= 0) {
-			System::PrintDiagnosticLine(std::format("[autosave] periodic due named at={} late_ticks={} waited_ticks={} held={}", tick, output.periodicLateTicks,
-			                                        output.periodicWaitedTicks, input.ownSeatHeld ? 1 : 0));
+			System::PrintDiagnosticLine(std::format("[autosave] periodic due named at={} late_ticks={} waited_ticks={} held={} own_writer={}", tick, output.periodicLateTicks,
+			                                        output.periodicWaitedTicks, input.ownSeatHeld ? 1 : 0, output.periodicOwnLate ? 1 : 0));
 		}
 		if (output.requestPrivateBase) (void)m_Coordinator->RequestPrivateBaseCapture();
 		else if (m_IsHost && (!input.ownSeatHeld || input.hostProvisional)) m_Coordinator->ClearPrivateBaseCaptureRequest();
@@ -4429,7 +4448,7 @@ static std::string ResyncSaveName() {
 					m_PrivateBaseRefusal.clear();
 				}
 				// The queue is not the verdict: the worker walks the graph off this thread and may still refuse.
-				m_AwaitedAutosaves.push_back(AwaitedAutosave{tick, joinCapture});
+				m_AwaitedAutosaves.push_back(AwaitedAutosave{tick, joinCapture, m_OwnLateCaptureTick != 0 && tick == m_OwnLateCaptureTick});
 				// The segment holds this tick's frames from here; it opens when the archive validates and is
 				// dropped with it when the capture is refused.
 				RollWorldReplaySegment(tick);

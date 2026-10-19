@@ -460,6 +460,7 @@ namespace RTE {
 			bool manualRefused = false; //!< Host: the ask came while its play was provisional; nothing is saved.
 			int64_t periodicLateTicks = -1; //!< Host: how far past its deadline a periodic capture is taken, -1 when none is named.
 			int64_t periodicWaitedTicks = 0; //!< Host: of that, the ticks the due capture waited for its writers.
+			bool periodicOwnLate = false; //!< Host: this machine's own busy writer kept that capture past its deadline.
 		};
 		/// The checkpoint schedule at one tick boundary, with the capture and the stream left to the caller.
 		/// Every peer captures at each tick the host names; the host names the next one only once every
@@ -1436,6 +1437,7 @@ namespace RTE {
 		friend bool TestALostCaptureIsNamedAgain(std::string* error);
 		friend bool TestAHeldHostKeepsTheAutosaveCadence(std::string* error);
 		friend bool TestAHostsLostOwnReportDoesNotStopTheSchedule(std::string* error);
+		friend bool TestALateCaptureNamesTheWriterThatMadeItLate(std::string* error);
 		friend bool TestAProvisionalHostWritesNothing(std::string* error);
 		friend bool TestNoCaptureIsNamedOverAPendingActivation(std::string* error);
 		friend bool TestNoCaptureIsNamedBeforeTheAgreedFirstFrame(std::string* error);
@@ -1546,6 +1548,11 @@ namespace RTE {
 		uint32_t m_MatchAutosaveSeconds = 0; //!< The cadence the round agreed on, read once so the tick path never chases the runner.
 		int64_t m_NextAutosaveSimTime = -1;
 		uint64_t m_PeriodicWaitSince = 0; //!< Host: the first tick a due periodic capture found its writers busy, 0 when none waits.
+		bool m_PeriodicOwnWriterWaited = false; //!< Host: this machine's own writer was busy while the due periodic capture waited.
+		uint64_t m_OwnLateCaptureTick = 0; //!< Host: the capture named late for its own writer, until it is taken.
+		bool m_SaverOverdue = false; //!< The overdue state last given this machine's saver.
+		/// Gives the saver its overdue state and logs each change, with the tick it changed at.
+		void SetSaverOverdue(bool overdue, uint64_t tick);
 		int64_t m_LastAutosaveSimTime = -1;
 		int64_t m_CaptureAnchorSimTime = -1; //!< When this peer last took a capture, or first counted toward one.
 		AutosaveIdentity m_AutosaveIdentity; //!< What every checkpoint of this match is stamped with.
@@ -1910,7 +1917,7 @@ namespace RTE {
 		uint64_t m_CommittedRingGeneration = 0; //!< The authority generation the record was last kept under; a handover renames the round, not its record.
 		int64_t m_WorldSpectatorsFree = 0; //!< The world's free watcher count, published for the directory row.
 		// A capture the simulation queued and whose verdict the writer thread has not given yet.
-		struct AwaitedAutosave { uint64_t tick = 0; bool joinCapture = false; };
+		struct AwaitedAutosave { uint64_t tick = 0; bool joinCapture = false; bool ownLate = false; };
 		std::vector<AwaitedAutosave> m_AwaitedAutosaves;
 		std::set<uint64_t> m_ScheduledCaptures; //!< Ticks the host named that this peer has not reached.
 		uint64_t m_OpenCaptureTick = 0; //!< Host: the capture it named last, until every writer reported it.
