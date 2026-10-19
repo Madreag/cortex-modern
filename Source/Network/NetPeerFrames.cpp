@@ -253,9 +253,13 @@ namespace RTE {
 		// Name every retained owner, but only the seats actually playing in this group. Held owners are not invented voters
 		// to make the groups equal: the directory arbitrates a split of any size.
 		uint32_t voting = members;
-		const uint32_t owners = PeerVotingOwners(voting, frame, PeerVotingScope::History);
-		if (owners == 0 || voting == owners) return;
+		const uint32_t voters = PeerVotingOwners(voting, frame);
+		if (voters == 0 || voting == voters) return;
 		request.queryOnly = (voting & SeatBit(m_Config.localPeerId)) == 0;
+		// The halves compare and decide in History scope: a returner still in its neutral interval on one half is an owner on both.
+		uint32_t named = members;
+		uint32_t owners = PeerVotingOwners(named, frame, PeerVotingScope::History);
+		if (owners == 0) owners = voters;
 		uint32_t retained = 0;
 		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer)
 			if (!m_RemovedPeers.contains(peer) && !IsSeatReleased(peer)) retained |= SeatBit(peer);
@@ -282,7 +286,7 @@ namespace RTE {
 		// Preserve the pre-hold electorate. Once the local hold is installed its absent seats no longer vote, but the outstanding
 		// directory question still refers to the original split and must keep being polled while the survivors play.
 		auto [question, inserted] = m_PeerSplitArbitrations.try_emplace(split, PeerSplitArbitration{request, owners, {}});
-		if (question->second.asked == 0 && !request.queryOnly) question->second.asked = voting & owners;
+		if (question->second.asked == 0 && !request.queryOnly) question->second.asked = voting;
 		// Poll the current request for this split, including a reader's query of the other half. Retain the original
 		// electorate and installed hold boundary: changing the request must neither displace its answer nor rename history.
 		if (!inserted) question->second.request = request;
