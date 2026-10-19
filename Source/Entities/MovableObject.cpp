@@ -59,6 +59,34 @@ AbstractClassInfo(MovableObject, SceneObject);
 std::unique_ptr<MovableObject::CheckpointCounters> MovableObject::s_OwnedCheckpointCounters;
 thread_local std::atomic<long>* MovableObject::s_PrivateUID = nullptr;
 thread_local std::atomic<long>* MovableObject::s_PrivateRegistration = nullptr;
+thread_local MovableObject::UniqueIDLanes* MovableObject::s_UniqueIDLanes = nullptr;
+thread_local size_t MovableObject::s_UniqueIDLane = 0;
+
+long MovableObject::GetNextUniqueID() {
+	if (UniqueIDLanes* lanes = s_UniqueIDLanes; lanes && !s_PrivateUID) {
+		return lanes->m_Base + 1 + lanes->m_Taken[s_UniqueIDLane]++ * static_cast<long>(lanes->m_Taken.size()) + static_cast<long>(s_UniqueIDLane);
+	}
+	return ++MutableCheckpointCounters().uid;
+}
+
+MovableObject::UniqueIDLanes::UniqueIDLanes(size_t lanes) : m_Base(MutableCheckpointCounters().uid.load()), m_Taken(lanes, 0) {}
+
+MovableObject::UniqueIDLanes::~UniqueIDLanes() {
+	const long longest = m_Taken.empty() ? 0 : *std::max_element(m_Taken.begin(), m_Taken.end());
+	if (longest > 0) {
+		MutableCheckpointCounters().uid = m_Base + longest * static_cast<long>(m_Taken.size());
+	}
+}
+
+MovableObject::UniqueIDLanes::Lane::Lane(UniqueIDLanes& lanes, size_t lane) : m_PreviousLanes(s_UniqueIDLanes), m_PreviousLane(s_UniqueIDLane) {
+	s_UniqueIDLanes = &lanes;
+	s_UniqueIDLane = lane;
+}
+
+MovableObject::UniqueIDLanes::Lane::~Lane() {
+	s_UniqueIDLanes = m_PreviousLanes;
+	s_UniqueIDLane = m_PreviousLane;
+}
 
 MovableObject::CounterReferences MovableObject::MutableCheckpointCounters() {
 	if (s_PrivateUID) return {*s_PrivateUID, *s_PrivateRegistration};

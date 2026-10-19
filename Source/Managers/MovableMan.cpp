@@ -190,7 +190,12 @@ namespace {
 
 	template <typename Work>
 	void RunStateTasks(size_t count, Work&& work) {
-		auto tasks = SubmitPoolTasks(count, std::forward<Work>(work), count);
+		// What a state's task creates is numbered from that state's lane, never in the order the tasks ran.
+		MovableObject::UniqueIDLanes lanes(count);
+		auto tasks = SubmitPoolTasks(count, [&lanes, &work](int start, int end) {
+			MovableObject::UniqueIDLanes::Lane lane(lanes, static_cast<size_t>(start));
+			work(start, end);
+		}, count);
 		FinishPoolTasks(tasks);
 	}
 
