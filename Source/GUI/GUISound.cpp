@@ -5,9 +5,15 @@
 #include "MusicMan.h"
 #include "MovableObject.h"
 #include "ContentFile.h"
+#include "CheckpointFrozenContainers.h"
+#include <algorithm>
 #include <array>
+#include <cstddef>
+#include <cstring>
+#include <thread>
 #include <unordered_map>
 #include <iostream>
+#include <vector>
 
 using namespace RTE;
 
@@ -180,6 +186,25 @@ struct GUISoundCheckpoint {
             &source.m_AreaPickedSound, &source.m_ObjectPickedSound, &source.m_PurchaseMadeSound,
             &source.m_PlacementBlip, &source.m_PlacementThud, &source.m_PlacementGravel};
     }
+    static bool InStorage(const SoundSet& set) {
+        if (!CheckpointNativeStorage::Owns(&set)) return false;
+        if (!set.m_SoundData.empty() && !CheckpointNativeStorage::Owns(set.m_SoundData.data())) return false;
+        if (!set.m_SubSoundSets.empty() && !CheckpointNativeStorage::Owns(set.m_SubSoundSets.data())) return false;
+        return std::all_of(set.m_SubSoundSets.begin(), set.m_SubSoundSets.end(), [](const SoundSet* child) { return child && InStorage(*child); });
+    }
+    // The interface's sets are made at startup, before checkpoint storage; a save reads each one through its boundary's pages.
+    static void PrepareStorage(GUISound& manager) {
+        CheckpointNativeStorage::AllocationScope retained(true);
+        for (SoundContainer* sound: Members(manager)) {
+            RetainCheckpointLinks(sound->m_PlayingChannels);
+            RetainCheckpointLinks(sound->m_Groups);
+            if (!sound->m_TopLevelSoundSet || InStorage(*sound->m_TopLevelSoundSet)) continue;
+            auto set = MakeCheckpointNativeShared<SoundSet>();
+            set->Create(*sound->m_TopLevelSoundSet);
+            set->SetOwnerContainer(sound);
+            sound->m_TopLevelSoundSet = std::move(set);
+        }
+    }
     // Each loaded sample's asset path, the smallest where one sound loaded under several: read once for a whole capture, not per sample.
     using SamplePaths = std::unordered_map<const void*, std::string>;
     static SamplePaths LoadedSamplePaths() {
@@ -211,11 +236,12 @@ struct GUISoundCheckpoint {
         for (size_t i = 0; i < members.size(); ++i) result.sounds[i] = {members[i]->SaveCheckpoint(), CaptureSet(*members[i]->m_TopLevelSoundSet, paths)};
         return result;
     }
-    static std::string SaveCapturedSet(const SoundSet& source, const SamplePaths& paths) {
+    static std::string SaveCapturedSet(const SoundSet& original) {
+        const auto& source = *CheckpointNativeStorage::Source(&original);
         CheckpointWriter writer("GUISoundSet1");
         writer(source.m_SoundSelectionCycleMode, source.m_CurrentSelection, source.m_SoundData.size());
-        for (const auto& sample: source.m_SoundData) {
-            const std::string path = SamplePath(paths, sample.SoundObject);
+        for (const auto& sample: CheckpointValues(source.m_SoundData)) {
+            const std::string path = ContentFile::ReadCheckpointSamplePath(sample.SoundObject);
             writer(CheckpointWriter::Native([&] {
                 CheckpointWriter value("GUISoundSample1");
                 value(sample.SoundFile, path, sample.Offset, sample.MinimumAudibleDistance, sample.AttenuationStartDistance);
@@ -223,18 +249,17 @@ struct GUISoundCheckpoint {
             }));
         }
         writer(source.m_SubSoundSets.size());
-        for (const auto* child: source.m_SubSoundSets) {
+        for (const auto* child: CheckpointValues(source.m_SubSoundSets)) {
             if (!child) throw std::runtime_error("null GUI sound subset");
-            writer(CheckpointWriter::Native([&] { return SaveCapturedSet(*child, paths); }));
+            writer(CheckpointWriter::Native([&] { return SaveCapturedSet(*child); }));
         }
         return writer.Text();
     }
     static std::string SaveCaptured(const GUISound& source) {
         CheckpointWriter writer("GUISound1");
-        const SamplePaths paths = LoadedSamplePaths();
         for (const auto* sound: Members(const_cast<GUISound&>(source))) writer(CheckpointWriter::Native([&] {
             CheckpointWriter value("GUISoundContainer1");
-            value(*sound, CheckpointWriter::Native([&] { return SaveCapturedSet(*sound->m_TopLevelSoundSet, paths); }));
+            value(*sound, CheckpointWriter::Native([&] { return SaveCapturedSet(*sound->m_TopLevelSoundSet); }));
             return value.Text();
         }));
         return writer.Text();
@@ -331,7 +356,52 @@ struct GUISoundCheckpoint {
             return false;
         }
     }
+    // A save on another thread reads every interface set as its boundary left it, however the menus play on.
+    static std::string FrozenSetsMismatch(GUISound& manager) {
+        CheckpointNativeStorage::AllocationScope storage(true);
+        struct WorldMode {
+            bool previous = CheckpointNativeStorage::SetWorldEnabled(true);
+            ~WorldMode() { CheckpointNativeStorage::SetWorldEnabled(previous); }
+        } world;
+        ContentFile::InvalidateCheckpointSamples();
+        ContentFile::PrepareCheckpointSamples();
+        g_AudioMan.PrepareCheckpointValues();
+        manager.PrepareCheckpointValues();
+        auto& set = manager.FundsChangedSound()->GetTopLevelSoundSet();
+        if (!InStorage(set)) return "an interface sound set stayed outside checkpoint storage";
+        if (set.m_SoundData.size() < 2) return "the interface fixture has too few samples";
+        const auto previous = set.m_CurrentSelection;
+        struct Restore { SoundSet& set; std::pair<bool, int> value; ~Restore() { set.m_CurrentSelection = value; } } restore{set, previous};
+        set.m_CurrentSelection = {false, 0};
+        const auto save = [] { return CheckpointWriter::CaptureNative([] { return g_GUISound.SaveCheckpoint(); }).Text(); };
+        const std::string expected = save();
+        CheckpointNativeStorage::Root audioRoot(&g_AudioMan);
+        CheckpointNativeStorage::Root guiRoot(&manager);
+        const auto [sampleSource, sampleBytes] = ContentFile::LoadedSampleRegistry();
+        std::vector<std::max_align_t> sampleHeader((sampleBytes + sizeof(std::max_align_t) - 1) / sizeof(std::max_align_t));
+        auto pages = CheckpointNativeStorage::Prepare();
+        audioRoot.Freeze(); guiRoot.Freeze();
+        std::memcpy(sampleHeader.data(), sampleSource, sampleBytes);
+        for (const auto& part: pages) part->Arm();
+        set.m_CurrentSelection = {false, 1};
+        std::string saved, failure;
+        std::jthread saver([&] {
+            try {
+                const std::array roots{audioRoot.Range(), guiRoot.Range(), CheckpointNativeStorage::RootRange{sampleSource, sampleHeader.data(), sampleBytes}};
+                CheckpointNativeStorage::ReadScope read(pages, roots);
+                saved = save();
+            } catch (const std::exception& error) { failure = error.what(); }
+        });
+        saver.join();
+        if (!failure.empty()) return "the interface sounds did not save from their boundary: " + failure;
+        return saved == expected ? std::string{} : "a saved interface set follows its selection after the boundary";
+    }
     static bool SelfTest(GUISound& manager) {
+        if (const std::string mismatch = FrozenSetsMismatch(manager); !mismatch.empty()) {
+            std::cout << "[gui-sound-checkpoint-selftest] " << mismatch << std::endl;
+            return false;
+        }
+        std::cout << "[gui-sound-checkpoint-selftest] frozen_interface_sets_keep_their_boundary_selection PASS" << std::endl;
         const std::string original = manager.SaveCheckpoint(), originalMusic = g_MusicMan.SaveCheckpoint(), originalAudio = g_AudioMan.SaveCheckpoint();
         const RandomGenerator originalRNG = g_RenderRNG;
         bool ok = true;
@@ -376,6 +446,10 @@ struct GUISoundCheckpoint {
         return ok;
     }
 };
+}
+
+void GUISound::PrepareCheckpointValues() {
+    if (CheckpointNativeStorage::Enabled()) GUISoundCheckpoint::PrepareStorage(*this);
 }
 
 std::string GUISound::SaveCheckpoint() const {

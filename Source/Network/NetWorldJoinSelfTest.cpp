@@ -8051,6 +8051,57 @@ namespace RTE {
 		return true;
 	}
 
+	// A periodic capture named past its deadline is the host's own late save exactly when the host's own writer was busy
+	// while it waited: one that waited only for another peer's report, or for the host's own report on its way, costs the
+	// host nothing.
+	bool TestALateCaptureNamesTheWriterThatMadeItLate(std::string* error) {
+		for (const bool ownSlow: {true, false}) {
+			NetMatchService service;
+			service.m_IsHost = true;
+			service.m_AutosaveMatchId = "00000000deadbeef-000000000000000a";
+			service.m_MatchAutosaveSeconds = 1;
+			const int64_t tickLength = g_TimerMan.GetTicksPerSecond() / 60;
+			std::map<uint64_t, std::vector<NetMatchService::CheckpointNote>> stream;
+			std::vector<std::pair<uint64_t, uint64_t>> writer;
+			std::set<uint64_t> busy;
+			size_t late = 0, ownLate = 0, misnamed = 0;
+			for (uint64_t tick = 1; tick <= 600; ++tick) {
+				NetMatchService::AutosaveTickInput input;
+				input.tick = tick; input.now = static_cast<int64_t>(tick) * tickLength;
+				if (const auto due = stream.find(tick); due != stream.end()) input.applied = due->second;
+				input.writers = {1, 2}; input.lead = 5; input.localPeer = 1;
+				while (!writer.empty() && writer.front().second <= tick) { input.finished.push_back(writer.front().first); writer.erase(writer.begin()); }
+				input.unwritten = writer.size();
+				if (!writer.empty()) busy.insert(tick);
+				const NetMatchService::AutosaveTickOutput output = service.StepAutosaveSchedule(input);
+				if (output.periodicLateTicks > 0) {
+					++late;
+					if (output.periodicOwnLate) ++ownLate;
+					// The capture's deadline was its late ticks before this one; its own writer was busy at some tick since.
+					const auto since = busy.lower_bound(tick - static_cast<uint64_t>(output.periodicLateTicks));
+					if (output.periodicOwnLate != (since != busy.end() && *since <= tick)) ++misnamed;
+				}
+				if (output.capture) {
+					// One writer takes 90 ticks against the 60-tick schedule; the other reports 10 ticks after the capture.
+					writer.emplace_back(tick, tick + (ownSlow ? 90 : 10));
+					stream[tick + (ownSlow ? 10 : 90)].push_back({2, NetGameCheckpoint::Written, tick});
+				}
+				for (NetMatchService::CheckpointNote note: output.send) {
+					note.sender = 1;
+					stream[tick + 4].push_back(note);
+				}
+			}
+			if (late < 3 || misnamed != 0 || (ownSlow ? ownLate < 3 : ownLate != 0)) {
+				*error = std::string("a-late-capture-names-the-writer-that-made-it-late: with the ") + (ownSlow ? "host's" : "other peer's") +
+				         " writer slow, " + std::to_string(ownLate) + " of " + std::to_string(late) + " late captures were the host's own late saves, " +
+				         std::to_string(misnamed) + " named against what its writer did";
+				return false;
+			}
+		}
+		std::cout << "[net-world-join-selftest] PASS a_late_capture_names_the_writer_that_made_it_late" << std::endl;
+		return true;
+	}
+
 	bool TestWorldCaptureKeepsOneImageInFlight(std::string* error) {
 		NetMatchService service;
 		service.m_IsHost = true;
@@ -8540,6 +8591,41 @@ namespace RTE {
 			return false;
 		}
 		std::cout << "[net-world-join-selftest] PASS a_stuck_private_image_is_retaken_once_then_refused" << std::endl;
+		return true;
+	}
+
+	// A returning seat whose base was taken and is still being written waits for it however long the writer takes; once no base
+	// is on its way the seat waits the unserved bound again from that moment, and only then is it refused.
+	bool TestAReturnerWaitsForABaseOnItsWay(std::string* error) {
+		NetMatchService host;
+		host.m_IsHost = true;
+		auto config = NetMatchConfigUtil::MakeDefault(0x9A35);
+		std::string setupError;
+		if (!host.m_WorldJoin.ConfigureMatchRejoins(config, 1, 1000.0 / 60.0, &setupError) || !host.m_WorldJoin.BeginRejoin(43, 2, 2, 3, "returning", 1000, &setupError)) {
+			*error = "the base-on-its-way row could not open a rejoin: " + setupError;
+			return false;
+		}
+		constexpr uint64_t unserved = 2 * NetMatchService::c_PrivateImageWaitMs;
+		host.m_PrivateBasePending = NetWorldCheckpointImage{};
+		host.AnswerStalledReturnersLocked(1000 + 3 * unserved);
+		if (host.m_WorldJoin.FindSession(43) == nullptr) {
+			*error = "a returning seat was refused while its base was taken and still being written";
+			return false;
+		}
+		const uint64_t written = 1000 + 3 * unserved + 1;
+		host.m_PrivateBasePending.reset();
+		host.AnswerStalledReturnersLocked(written);
+		host.AnswerStalledReturnersLocked(written + unserved);
+		if (host.m_WorldJoin.FindSession(43) == nullptr) {
+			*error = "a returning seat was refused before the unserved bound passed with no base on its way";
+			return false;
+		}
+		host.AnswerStalledReturnersLocked(written + unserved + 1);
+		if (host.m_WorldJoin.FindSession(43) != nullptr) {
+			*error = "a returning seat kept waiting past the unserved bound with no base on its way";
+			return false;
+		}
+		std::cout << "[net-world-join-selftest] PASS a_returner_waits_for_a_base_on_its_way" << std::endl;
 		return true;
 	}
 
@@ -10321,6 +10407,7 @@ namespace RTE {
 			if (!TestALostCaptureIsNamedAgain(&error)) return Fail(error);
 			if (!TestAHeldHostKeepsTheAutosaveCadence(&error)) return Fail(error);
 			if (!TestAHostsLostOwnReportDoesNotStopTheSchedule(&error)) return Fail(error);
+			if (!TestALateCaptureNamesTheWriterThatMadeItLate(&error)) return Fail(error);
 			if (!TestAProvisionalHostWritesNothing(&error)) return Fail(error);
 			if (!TestNoCaptureIsNamedOverAPendingActivation(&error)) return Fail(error);
 			if (!TestNoCaptureIsNamedBeforeTheAgreedFirstFrame(&error)) return Fail(error);
@@ -10329,6 +10416,7 @@ namespace RTE {
 			if (!TestAHealNamesTheNextCaptureAfresh(&error)) return Fail(error);
 			if (!TestAHealNamesACheckpointEveryPeerHolds(&error)) return Fail(error);
 			if (!TestAStuckPrivateImageIsRetakenOnceThenRefused(&error)) return Fail(error);
+			if (!TestAReturnerWaitsForABaseOnItsWay(&error)) return Fail(error);
 			if (!TestAPrivateReturnFollowsTheRoundOnTheRoster(&error)) return Fail(error);
 			if (!TestALeaveBetweenRoundsKeepsTheSeat(&error)) return Fail(error);
 			if (!TestAResumedLobbyHoldsADroppedSeat(&error)) return Fail(error);

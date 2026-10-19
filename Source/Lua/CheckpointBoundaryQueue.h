@@ -4,6 +4,7 @@
 #include "SteadyClock.h"
 #include "FloatingPointEnvironment.h"
 #include "ThreadMan.h"
+#include "System.h"
 
 #include <atomic>
 #include <functional>
@@ -16,6 +17,7 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <exception>
 #include <memory>
@@ -52,6 +54,11 @@ namespace RTE::CheckpointLua {
 			m_Refresh.store(true, std::memory_order_release); Wake();
 		}
 		bool Ready() const noexcept { return m_State.load(std::memory_order_acquire) == State::Ready; }
+		/// Whether the saver is still on its way to a prepared plan: writing a capture, retiring it, or preparing the next one.
+		bool Busy() const noexcept {
+			const State state = m_State.load(std::memory_order_acquire);
+			return state != State::Ready && state != State::Failed && state != State::Stopped;
+		}
 		/// Whether a capture is near: the saver then commits and warms the prepared plan's copies, and otherwise gives them back.
 		void SetWarm(bool warm) noexcept {
 			HeapOwner::KeepCopiesWarm(warm);
@@ -223,6 +230,13 @@ namespace RTE::CheckpointLua {
 						if (m_Refused) { try { m_Refused(m_Plan->header, std::current_exception()); } catch (...) {} }
 					}
 					m_Plan->done.set_value(completed);
+					// Test lever CCCP_TEST_SLOW_CAPTURE_RETIRE_MS=<ms>: a finished capture takes that much longer to retire.
+					static const int slowRetire = [] { const char* value = std::getenv("CCCP_TEST_SLOW_CAPTURE_RETIRE_MS"); return value ? std::atoi(value) : 0; }();
+					if (slowRetire > 0) {
+						static std::once_flag named;
+						std::call_once(named, [] { System::PrintDiagnosticLine("[checkpoint-lever] slow_capture_retire_ms=" + std::to_string(slowRetire)); });
+						std::this_thread::sleep_for(std::chrono::milliseconds(slowRetire));
+					}
 					// The image and all its fences retire before the next preparation.
 					Publish(State::Preparing); continue;
 				}
