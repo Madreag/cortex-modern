@@ -1735,7 +1735,7 @@ namespace RTE {
 		bool ValidatePeerCaptureBridge(const NetHostMigrationMessage& proposal) const;
 		void AppendPeerCaptureCommand(NetLockstepReadyFrame& ready) const;
 		void TryCommitPeerBridge(uint64_t frame, uint64_t nowMs, uint8_t kind = 0);
-		void InstallPeerBridge(const NetHostMigrationMessage& certificate, uint64_t nowMs);
+		void InstallPeerBridge(const NetHostMigrationMessage& certificate, uint64_t nowMs, bool fromCommittedTail = false);
 		/// Takes the decisions kept for their frame, in frame order.
 		/// @return Whether the next frame waits on a decision: one kept for it, one this peer voted for, or a return proposed for it of a seat
 		/// still held, while it is undecided.

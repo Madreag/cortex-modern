@@ -818,6 +818,47 @@ namespace RTE {
 			return passed;
 		}
 
+		// A seat read privately from the host's half at a split is offered the other half's lone hold of the host directly; the
+		// history it reads still has the host playing at that frame, so only the tail's own record may hold a seat for it.
+		static bool PrivateReaderTakesHoldsWithItsTail(std::string* error) {
+			bool passed = true;
+			const auto check = [&](bool ok, const std::string& why) {
+				if (!ok) { passed = false; *error += why + "; "; std::cout << "[private-reader-tail-holds] FAIL " << why << std::endl; }
+			};
+			for (bool fromTail: {false, true}) {
+				Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
+				peer.m_Config.peerFrameGroups = true; peer.m_Config.localPeerId = 3; peer.m_Config.authorityPeerId = 1;
+				peer.m_Config.peerCount = peer.m_Config.matchConfig.peerCount = 3;
+				peer.m_Config.matchConfig.players.resize(2); peer.m_Config.matchConfig.players.push_back({3, 2, false, "Third"});
+				peer.m_Config.matchConfig.successorOrder = {2, 3};
+				peer.m_RoundConfigHash = NetMatchConfigUtil::HashConfig(peer.m_Config.matchConfig);
+				peer.m_RemotePeerIds = {1, 2}; peer.m_RemoteTransports = {{1, 41}, {2, 42}};
+				peer.m_MigrationPhase = NetHostMigrationPhase::None;
+				peer.m_PeerBridges[3] = {50, 50, true, std::nullopt, {}, 3};
+				peer.m_PeerFrameHolds[3][50] = true;
+				peer.m_FrameGroupMembers = 3; peer.m_FrameGroupChanges = {{1, 7}, {50, 3}};
+				peer.m_Stats.nextFrame = 150; peer.m_LastCompletedSimulationTick = 149;
+				peer.m_MigrationHistory[149] = {1, 2, 3};
+				auto vote = peer.PeerFrameMessage(NetHostMigrationMessageType::PeerBridge);
+				vote.senderPeerId = vote.successorPeerId = 2; vote.frame = vote.boundary = 150;
+				vote.preparedFrame = 0; vote.connectedMask = vote.voterMask = 2; vote.members = {1};
+				const auto prefix = peer.PeerFramePrefix(149); vote.bytes.assign(prefix.begin(), prefix.end()); vote.totalBytes = vote.bytes.size();
+				std::vector<uint8_t> signedVote;
+				if (!NetHostMigrationCodec::Encode(vote, peer.m_Config.migrationKey, signedVote)) { *error = "the lone hold vote did not encode"; return false; }
+				auto certificate = vote; certificate.type = NetHostMigrationMessageType::PeerBridgeCommit; certificate.bytes = {1};
+				for (unsigned shift = 0; shift < 32; shift += 8) certificate.bytes.push_back(static_cast<uint8_t>(signedVote.size() >> shift));
+				certificate.bytes.insert(certificate.bytes.end(), signedVote.begin(), signedVote.end()); certificate.totalBytes = certificate.bytes.size();
+				peer.InstallPeerBridge(certificate, 1000, fromTail);
+				const bool held = peer.m_PeerBridges.contains(1) && peer.IsSeatUnderAI(1, 150);
+				const bool recorded = peer.m_PeerBridgeCertificates.contains({150, NetPeerFrameDetail::DecisionKind(vote)});
+				if (fromTail) check(held && recorded, "the hold carried by the read history's own record was not installed");
+				else check(!held && !recorded && peer.m_PendingPeerDecisions.empty() && !peer.TakePendingPeerDecisions(1000),
+				    "a private reader installed another continuation's direct hold: held=" + std::to_string(held) + " recorded=" + std::to_string(recorded) +
+				    " pending=" + std::to_string(peer.m_PendingPeerDecisions.size()));
+			}
+			return passed;
+		}
+
 		static void ConfigureDelay(NetLockstepCoordinator& peer, DelayWire& wire, unsigned mode, uint16_t delay) {
 			Configure(peer, wire);
 			peer.m_Config.localPeerId = peer.m_Config.authorityPeerId = 1;
@@ -32280,6 +32321,12 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS foreign_history_keeps_an_active_continuation\n[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "private-reader-tail-holds") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::PrivateReaderTakesHoldsWithItsTail(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS a_private_reader_takes_holds_only_with_its_tail\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "tail-witness-retention") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::CertifiedTailKeepsItsWitnesses(&error)) return fail(error);
@@ -32715,6 +32762,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::DirectHoldScope, "a_foreign_local_hold_requires_the_readers_healed_history");
 		row(&SessionPlaneRecoveryTest::LoneMigrationFollowsItsAuthority, "lone_migration_follows_its_authority");
 		row(&SessionPlaneRecoveryTest::ForeignHistoryKeepsAnActiveContinuation, "foreign_history_keeps_an_active_continuation");
+		row(&SessionPlaneRecoveryTest::PrivateReaderTakesHoldsWithItsTail, "a_private_reader_takes_holds_only_with_its_tail");
 		row(&SessionPlaneRecoveryTest::TailHoldSignersAreNotAnotherPlayingHalf, "tail_hold_signers_are_not_another_playing_half");
 		row(&SessionPlaneRecoveryTest::CertifiedTailKeepsItsWitnesses, "certified_tail_keeps_its_witnesses");
 
