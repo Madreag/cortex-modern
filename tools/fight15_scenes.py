@@ -425,16 +425,19 @@ def game_scenes():
          matching_log_lines=[r"^\[net-match\] brain lost: .+$", r"^\[net-match\] activity end: .+$"])
 
     host, joiner = place("host"), place("joiner")
-    host += key("F6") + [wait(panel_open=True), wait(held_peer="Joiner")]
+    # The host reads the seat while its player is away at the menu; the player presses Rejoin Match after that.
+    host += key("F6") + [wait(panel_open=True), wait(held_peer="Joiner"), dict(op="wait_file", path="{PROBE_DIR_joiner}/left.json", within_ms=120000)]
     host += capture("left-seat-held") + [dict(op="assert", equals=dict(service="Running", local_actor_alive=True), held_peer="Joiner"),
             dict(op="assert_control", control="NetworkSeatDetail@Joiner", text_contains="AI", fits=True, inside="NetworkSeats"),
             # The status box tells the host why the seat is held; its numbers stay behind Show network diagnostics.
             dict(op="assert_control", control="LabelNetMatchStatus", text_contains="Joiner: Left", text_lacks=STATUS_NUMBERS, fits=True, inside="BoxNetMatchStatus"),
-            wait(returned_peer="Joiner", within_ms=90000)] + key("F6") + [wait(panel_open=False)]
+            dict(op="signal", name="left-read"), wait(returned_peer="Joiner", within_ms=90000)] + key("F6") + [wait(panel_open=False)]
     host += capture("rejoined-host") + [dict(op="assert_scene", input_player=0, equals=dict(alive=True, brain_count=2)), dict(op="assert_relay")] + complete_live_scene("host", 7)
     joiner += key("Escape") + [wait(screen="Pause"), menu("activate ButtonLeaveMatch"), wait(screen="PauseLeaveConfirm")]
     joiner += capture("leave-consequence", "PauseLeaveConfirm") + [menu("assert_text_fits ButtonLeaveConfirm"), menu("activate ButtonLeaveConfirm"),
-               wait(screen="MultiplayerScreen", scope="menu"), menu("activate ButtonMultiplayerReconnect"), wait(service="Running")]
+               wait(screen="MultiplayerScreen", scope="menu"), dict(op="signal", name="left", scope="menu"),
+               dict(op="wait_file", path="{PROBE_DIR_host}/left-read.json", scope="menu", within_ms=120000),
+               menu("activate ButtonMultiplayerReconnect"), wait(service="Running")]
     joiner += capture("rejoined-joiner") + [dict(op="assert_scene", input_player=0, equals=dict(alive=True, brain_count=2)), dict(op="assert_relay")] + complete_live_scene("joiner", 7)
     emit(7, "Leave holds the live seat to AI and Rejoin Match returns the same player",
          game_menu("host"), game_menu("joiner"), game_probe(host), game_probe(joiner),
