@@ -1248,8 +1248,9 @@ void NetModerationGUI::Refresh() {
 			requests += row.decision->applicants;
 		}
 	}
+	// The status box says this player's own held seat; the panel's line says how everyone else is.
 	const bool ownHeld = OwnRosterSeatHeld() || ScenarioRunner::IsLockstepOwnSeatHeld();
-	std::string summary = NetPlayerPresentation::PlayingSummary(ownHeld, away, awayRow ? awayRow->name : std::string());
+	std::string summary = ownHeld && away == 0 ? "Everyone else is playing" : NetPlayerPresentation::PlayingSummary(false, away, awayRow ? awayRow->name : std::string());
 	if (requests) summary += requests == 1 ? " - 1 request to join" : " - " + std::to_string(requests) + " requests to join";
 	m_Summary->SetText(FitLine(m_LabelFont, summary, m_Summary->GetWidth()));
 	// The host's own line leads, then a page of the other players' rows, above the status line that says what an action will do
