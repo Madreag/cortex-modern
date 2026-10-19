@@ -31415,8 +31415,50 @@ namespace {
 			return done("");
 		}
 
-		static bool AnnouncedLoneDepartureEnds(std::string* error) {
-			const auto done = [&](const std::string& why) { ScenarioRunner::ClearControllerReplayError(); return ReportReleasedClaimsRow("announced_single_survivor_ends_without_host_rejoin", why, error); };
+		static bool AnnouncedLoneDepartureHandsOver(std::string* error) {
+			const auto done = [&](const std::string& why) { ScenarioRunner::ClearControllerReplayError(); return ReportReleasedClaimsRow("announced_single_survivor_keeps_the_game", why, error); };
+			// Arms: direct play, with no referee; a directory round, whose referee decides the host change.
+			for (const bool directory: {false, true}) {
+				const std::string arm = directory ? "directory: " : "direct: ";
+				ReleasePathRound round;
+				round.refereeEnabled = directory;
+				round.drainThrough = 29; round.produceThrough.fill(29);
+				if (!round.Start(47430, true, false, 2)) return done(arm + round.failure);
+				if (!directory) for (auto& peer: round.peers) peer.m_Config.hostChangeReferee = nullptr;
+				for (int pass = 0; pass < 400 && round.peers[1].GetResumeFrame() != 30; ++pass) round.Pump();
+				if (round.peers[1].GetResumeFrame() != 30) return done(arm + "the lone survivor did not finish boundary 29");
+				HostReturnAdmission admission;
+				admission.wallMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
+				if (!admission.Start(round.match, &round.failure)) return done(arm + round.failure);
+				auto& leaver = g_NetMatchService;
+				Borrow borrowed(leaver, round.peers[0]);
+				TicketPath path("Userdata/host-ticket-return/lone-host.ticket");
+				if (!Install(leaver, round, admission, 1, &round.failure)) return done(arm + round.failure);
+				admission.hostTicket.hostAddress = "loopback:47430";
+				admission.hostTicket.issuedAtUnixMs = admission.wallMs;
+				leaver.m_TicketStore.SetPath(NetMatchService::s_TicketStorePath);
+				if (!leaver.m_TicketStore.Store(admission.hostTicket, &round.failure)) return done(arm + round.failure);
+				// A leave is a drop: the host's one connected survivor takes the round and plays on, and the leaver keeps its seat.
+				if (leaver.HostLeaveOutcome() != NetHostLeaveOutcome::HandsOver) return done(arm + "one connected survivor does not permit handover");
+				leaver.LeaveMatch("Left the match");
+				round.alive[0] = false; round.hostWire.Stop();
+				for (int pass = 0; pass < 4000 && (round.peers[1].GetHostPeerId() != 2 || round.peers[1].IsMigrating()); ++pass) round.Pump();
+				if (round.peers[1].GetHostPeerId() != 2 || !round.peers[1].IsRunning() || round.peers[1].GetMigrationResult().boundary != 29)
+					return done(arm + "the lone survivor did not take the round at boundary 29: state=" + std::string(NetLockstepCoordinator::StateName(round.peers[1].GetState())) +
+					    " host=" + std::to_string(round.peers[1].GetHostPeerId()) + " migrating=" + std::to_string(round.peers[1].IsMigrating()) +
+					    " phase=" + std::to_string(static_cast<int>(round.peers[1].m_MigrationPhase)) + " announced=" + std::to_string(round.peers[1].m_MigrationHostAnnounced) +
+					    " boundary=" + std::to_string(round.peers[1].GetMigrationResult().boundary) + " successor=" + std::to_string(round.peers[1].m_MigrationSuccessor) +
+					    " chosen=" + std::to_string(round.peers[1].m_MigrationChoice.has_value()) + " reach=" + std::to_string(round.peers[1].m_MigrationReach.votes) + "/" +
+					    std::to_string(round.peers[1].m_MigrationReach.seats) + " answers=" + std::to_string(round.peers[1].m_MigrationAnswers.size()) + "/" +
+					    std::to_string(round.peers[1].m_MigrationExpected.size()) + " reason=" + round.peers[1].GetStats().timeoutReason);
+				NetH4TicketRecord retained;
+				if (leaver.m_TicketStore.Load(admission.wallMs, retained, &round.failure) != NetH4TicketLoadResult::Loaded) return done(arm + "the leaver lost its ticket");
+			}
+			return done("");
+		}
+
+		static bool ExplicitEndWithOneSurvivorEnds(std::string* error) {
+			const auto done = [&](const std::string& why) { ScenarioRunner::ClearControllerReplayError(); return ReportReleasedClaimsRow("an_explicit_end_with_one_survivor_ends_the_match", why, error); };
 			ReleasePathRound round;
 			round.drainThrough = 29; round.produceThrough.fill(29);
 			if (!round.Start(47430, true, false, 2)) return done(round.failure);
@@ -31426,19 +31468,6 @@ namespace {
 			admission.wallMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count());
 			if (!admission.Start(round.match, &round.failure)) return done(round.failure);
 			auto& service = g_NetMatchService;
-			{
-				Borrow borrowed(service, round.peers[0]);
-				TicketPath path("Userdata/host-ticket-return/lone-host.ticket");
-				if (!Install(service, round, admission, 1, &round.failure)) return done(round.failure);
-				if (service.HostLeaveOutcome() != NetHostLeaveOutcome::EndsMatch) return done("one connected survivor permits an announced handover");
-				service.LeaveMatch("Left the match");
-				service.ScanStoredTicket();
-				if (!service.m_IsHost || service.m_State != NetMatchServiceState::Completed || service.LeaveKeepsRejoin() ||
-				    service.m_TicketStore.HasRecord() || service.m_ReconnectUx.GetOffer() == NetReconnectOffer::Available ||
-				    service.m_ReconnectHost.GetRoster().stage != NetRosterStage::Ended)
-					return done("the announced host with one survivor keeps a live match or a rejoin offer");
-			}
-			Reset();
 			Borrow borrowed(service, round.peers[1]);
 			TicketPath path("Userdata/host-ticket-return/lone-survivor.ticket");
 			if (!Install(service, round, admission, 2, &round.failure)) return done(round.failure);
@@ -32062,12 +32091,12 @@ namespace {
 		std::string error;
 		const char* selected = std::getenv("CCCP_SEAT_ADMISSION_CASE");
 		bool passed = true, ran = false;
-		for (const auto& [name, test]: std::array<std::pair<const char*, bool (*)(std::string*)>, 10>{{
+		for (const auto& [name, test]: std::array<std::pair<const char*, bool (*)(std::string*)>, 11>{{
 		    {"G1", SeatAdmissionServiceTest::FutureRemovalRollsBack}, {"G3", SeatAdmissionServiceTest::LeaverFindsSuccessor},
 		    {"G4", SeatAdmissionServiceTest::OpenedSeatJoinsThroughImage}, {"K2", SeatAdmissionServiceTest::EncodedRemovalFitsBothCapsules},
 		    {"K3", SeatAdmissionServiceTest::KickWithdrawsOpenedActivation}, {"K4", SeatAdmissionServiceTest::RepeatedRemovalKeepsCapacity},
 		    {"K1", SeatAdmissionServiceTest::LeaverWalksTwoSuccessors}, {"K5", SeatAdmissionServiceTest::AuthenticatedAdmissionRaces},
-		    {"K7", SeatAdmissionServiceTest::AnnouncedLoneDepartureEnds}, {"G5", SeatAdmissionServiceTest::HeldSeatsOwnLinkCarriesItsCatchUp}}}) {
+		    {"K7", SeatAdmissionServiceTest::AnnouncedLoneDepartureHandsOver}, {"K7E", SeatAdmissionServiceTest::ExplicitEndWithOneSurvivorEnds}, {"G5", SeatAdmissionServiceTest::HeldSeatsOwnLinkCarriesItsCatchUp}}}) {
 			if (selected && *selected && std::strcmp(selected, name) != 0) continue;
 			SeatAdmissionServiceTest::Reset();
 			passed &= test(&error); ran = true;
