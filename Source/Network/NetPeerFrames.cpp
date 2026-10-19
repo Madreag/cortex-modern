@@ -296,6 +296,9 @@ namespace RTE {
 		const uint32_t voters = PeerVotingOwners(voting, frame);
 		if (voters == 0 || voting == voters) return;
 		request.queryOnly = (voting & SeatBit(m_Config.localPeerId)) == 0;
+		// A group smaller than half of the seats that played together before the split never asks the referee to rule for itself: the
+		// seat with the problem does not decide for the others. It queries and plays on, and the larger half's question rules.
+		if (2 * std::popcount(voting) < std::popcount(PeerFrameMembersAt(split))) request.queryOnly = true;
 		// The halves compare and decide in History scope: a returner still in its neutral interval on one half is an owner on both.
 		uint32_t named = members;
 		uint32_t owners = PeerVotingOwners(named, frame, PeerVotingScope::History);
