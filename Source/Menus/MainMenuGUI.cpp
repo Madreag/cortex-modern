@@ -1377,6 +1377,8 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 		// The setup is ordinary: the host edits it here, everyone else reads the agreed one.
 		const NetLobbySnapshot snapshot = g_NetMatchService.GetLobbySnapshot();
 		OpenHostOptions(false);
+		// The host's Edit setup is what to play and with whom; the network's tuning stays behind Advanced.
+		m_HostOptionsSetupOnly = snapshot.isHost;
 		ShowHostOptionsPage(c_HostOptionsRulesPage);
 		if (snapshot.isHost && snapshot.startCountdownRunning && !snapshot.startCommitted) {
 			m_HostOptionsStatusLabel->SetText("The start countdown stopped while you change the setup.");
@@ -1846,6 +1848,7 @@ void MainMenuGUI::CreateHostOptionsControls() {
 	m_HostSeatDlgKick = dynamic_cast<GUIButton*>(get("ButtonHostSeatDlgKick"));
 	m_HostSeatDlgBan = dynamic_cast<GUIButton*>(get("ButtonHostSeatDlgBan"));
 	m_HostSeatDlgActionHint = dynamic_cast<GUILabel*>(get("LabelHostSeatDlgActionHint"));
+	m_HostSessEndHint = dynamic_cast<GUILabel*>(get("LabelHostSessEndHint"));
 	m_HostSeatDlgStatus = dynamic_cast<GUILabel*>(get("LabelHostSeatDlgStatus"));
 	m_HostBannedDialog = dynamic_cast<GUICollectionBox*>(get("HostBannedDialog"));
 	m_HostBannedPick = dynamic_cast<GUIComboBox*>(get("ComboHostBannedPick"));
@@ -2178,6 +2181,8 @@ std::string MainMenuGUI::HostSummaryText() const {
 void MainMenuGUI::OpenHostOptions(bool setupDraft) {
 	m_HostOptionsSetupDraft = setupDraft;
 	m_HostOptionsReadOnly = false;
+	m_HostOptionsSetupOnly = false;
+	m_HostSessEndArmed = false;
 	m_HostOptionsSeatRow = -1;
 	m_HostSeatDlgModerationRow = -1;
 	m_HostSeatDlgRemovalSeat.reset();
@@ -2425,7 +2430,12 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 		}
 	}
 	// The title names the panel and the selector names the page; the client's read-only view is the match's details.
-	m_HostOptionsTitle->SetText(m_HostOptionsReadOnly ? "M A T C H   D E T A I L S" : "A D V A N C E D");
+	m_HostOptionsTitle->SetText(m_HostOptionsReadOnly ? "M A T C H   D E T A I L S" : m_HostOptionsSetupOnly ? "E D I T   S E T U P" : "A D V A N C E D");
+	for (int page = 0; page < c_HostOptionsPageCount; ++page) {
+		if (m_HostOptionsTabs[page]) m_HostOptionsTabs[page]->SetVisible(!m_HostOptionsSetupOnly || page <= c_HostOptionsRulesPage);
+	}
+	if (m_HostOptionsSetupOnly && m_HostOptionsPage > c_HostOptionsRulesPage) ShowHostOptionsPage(c_HostOptionsRulesPage);
+	m_MainMenuButtons[MenuButton::HostOptionsDefaultsButton]->SetVisible(!m_HostOptionsSetupOnly);
 	const bool editable = !m_HostOptionsReadOnly;
 
 	// Seats page.
@@ -2881,6 +2891,9 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 	}
 	HostOptSetEditable(m_MainMenuButtons[MenuButton::HostSessionBannedButton], true);
 	HostOptSetEditable(m_MainMenuButtons[MenuButton::HostSessionEndButton], editable && !m_HostOptionsSetupDraft);
+	if (!editable || m_HostOptionsSetupDraft) m_HostSessEndArmed = false;
+	m_MainMenuButtons[MenuButton::HostSessionEndButton]->SetText(m_HostSessEndArmed ? "Confirm end" : "End session");
+	if (m_HostSessEndHint) m_HostSessEndHint->SetText(m_HostSessEndArmed ? "Press Confirm end to close the game for every player" : "Closes the game for every player");
 
 	if (GUILabel* rejoin = m_HostRecRejoinLabel) {
 		// A build without its cryptography cannot prove who a returning player is: the line says so rather than claim it.
@@ -3512,6 +3525,7 @@ void MainMenuGUI::ShowHostSeatDetails(int row) {
 	if (row < 0 || row >= static_cast<int>(m_HostOptionsDraft.players.size())) return;
 	m_HostOptionsSeatRow = row;
 	m_HostSeatDlgModerationRow = -1;
+	m_HostSeatDlgArmed = SeatDialogArm::None;
 	m_HostSeatDlgActionHint->SetText("");
 	RefreshHostSeatDialog();
 	OpenMultiplayerDialog(m_HostSeatDialog, m_HostOptionsPanel);
@@ -3609,6 +3623,9 @@ void MainMenuGUI::RefreshHostSeatDialog() {
 	const bool humanSeat = host && owned && !paused && !slot.cpu && slot.peerId != 0 && slot.peerId != localPeerId;
 	m_HostSeatDlgKick->SetEnabled(humanSeat);
 	m_HostSeatDlgBan->SetEnabled(humanSeat);
+	if (!humanSeat) m_HostSeatDlgArmed = SeatDialogArm::None;
+	m_HostSeatDlgKick->SetText(m_HostSeatDlgArmed == SeatDialogArm::Kick ? "Confirm kick" : "Kick player");
+	m_HostSeatDlgBan->SetText(m_HostSeatDlgArmed == SeatDialogArm::Ban ? "Confirm ban" : "Ban this session");
 	if (m_HostSeatDlgActionHint->GetText().empty() || !humanSeat) {
 		m_HostSeatDlgActionHint->SetText(humanSeat ? "Seat actions apply to this player."
 		                                         : (slot.cpu ? "CPU seats are the host's to retype, not to moderate."
@@ -3679,6 +3696,7 @@ void MainMenuGUI::ShowHostBannedDialog() {
 }
 
 void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl) {
+	if (guiEventControl != m_MainMenuButtons[MenuButton::HostSessionEndButton]) m_HostSessEndArmed = false;
 	// The other half of the refresh's model: a control the refresh rewrites from the draft must reach the draft from here, in the
 	// frame its change arrives, or the next frame puts the old value back under the player's hand. A list still open holds an
 	// uncommitted pick, and the team row's controls still show the team it left.
@@ -3749,6 +3767,7 @@ void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl
 		return;
 	}
 	if (guiEventControl == m_HostSeatDlgWait || guiEventControl == m_HostSeatDlgApprove || guiEventControl == m_HostSeatDlgCancel) {
+		m_HostSeatDlgArmed = SeatDialogArm::None;
 		if (m_HostSeatDlgModerationRow >= 0) {
 			const NetModerationAction action = guiEventControl == m_HostSeatDlgWait    ? NetModerationAction::Wait
 			                                   : guiEventControl == m_HostSeatDlgApprove ? NetModerationAction::Substitute
@@ -3766,9 +3785,22 @@ void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl
 		                           ? m_HostOptionsDraft.players[m_HostOptionsSeatRow].peerId : 0;
 		const std::string refusal = NetHostSeatRemovalRefusal(g_NetMatchService.GetState(), m_HostSeatDlgRemovalSeat.has_value(), peerId, verb);
 		if (!refusal.empty()) {
+			m_HostSeatDlgArmed = SeatDialogArm::None;
 			m_HostSeatDlgActionHint->SetText(refusal);
 			return;
 		}
+		// The first press names what the second does, as the Players panel's own removals do.
+		const SeatDialogArm arm = action == NetParticipantRemovalAction::Kick ? SeatDialogArm::Kick : SeatDialogArm::Ban;
+		if (m_HostSeatDlgArmed != arm) {
+			m_HostSeatDlgArmed = arm;
+			const std::string& name = m_HostOptionsDraft.players[m_HostOptionsSeatRow].displayName;
+			m_HostSeatDlgActionHint->SetText(arm == SeatDialogArm::Kick ? "Press Confirm kick to remove " + name + " from this session"
+			                                                           : "Press Confirm ban to ban " + name + " from this session");
+			RefreshHostSeatDialog();
+			g_GUISound.ItemChangeSound()->Play();
+			return;
+		}
+		m_HostSeatDlgArmed = SeatDialogArm::None;
 		const NetKickBanResult result =
 			g_NetMatchService.RemoveParticipant(NetSelectModerationSeat(*m_HostSeatDlgRemovalSeat), action);
 		if (result == NetKickBanResult::Ok || result == NetKickBanResult::Queued) {
@@ -3832,6 +3864,7 @@ void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl
 		return;
 	}
 	if (guiEventControl == m_MainMenuButtons[MenuButton::HostSeatDialogCloseButton]) {
+		m_HostSeatDlgArmed = SeatDialogArm::None;
 		m_HostOptionsSeatRow = -1;
 		m_HostSeatDlgModerationRow = -1;
 		m_HostSeatDlgRemovalSeat.reset();
@@ -3857,6 +3890,12 @@ void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl
 		return;
 	}
 	if (guiEventControl == m_MainMenuButtons[MenuButton::HostSessionEndButton]) {
+		if (!m_HostSessEndArmed) {
+			m_HostSessEndArmed = true;
+			g_GUISound.ItemChangeSound()->Play();
+			return;
+		}
+		m_HostSessEndArmed = false;
 		// Same end the lobby's Leave runs; the panel closes with it.
 		g_NetMatchService.Destroy();
 		m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;

@@ -498,6 +498,11 @@ namespace RTE {
 		uint64_t m_HostOptionsBaseRevision = 0;         //!< The adopted revision the draft was seeded from.
 		bool m_HostOptionsSetupDraft = false;           //!< True while the draft feeds a new lobby's request.
 		bool m_HostOptionsReadOnly = false;             //!< A client reads the adopted config; it cannot edit it.
+		bool m_HostOptionsSetupOnly = false;            //!< The lobby's Edit setup: the game's setup pages alone, without Advanced's.
+		enum class SeatDialogArm { None, Kick, Ban };
+		SeatDialogArm m_HostSeatDlgArmed = SeatDialogArm::None; //!< A removal the dialog waits to have confirmed.
+		bool m_HostSessEndArmed = false;                //!< End session waits to have its second press.
+		GUILabel* m_HostSessEndHint = nullptr;
 		GUICollectionBox* m_JoinAddressDialog = nullptr; //!< Join by address: the address and port boxes.
 		GUILabel* m_JoinSelectedLabel = nullptr;         //!< The selected game's details, or why it cannot be joined.
 		bool m_JoinAttemptActive = false;                //!< A join started from this screen and not yet in its lobby.
