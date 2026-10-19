@@ -1402,6 +1402,34 @@ namespace RTE {
 			return true;
 		}
 
+		static bool HeldHostHashesStayPrivateInFrameGroups(std::string* error) {
+			// A frame group's held seat, host included, plays off the round until it returns; the host-routed round's held host
+			// still simulates it, so only there does its hash count.
+			for (bool groups: {false, true}) for (bool held: {false, true}) {
+				DelayWire wire; NetLockstepCoordinator peer; Configure(peer, wire);
+				peer.m_Config.peerFrameGroups = groups; peer.m_Config.substituteSlowPeers = true;
+				peer.m_MigrationPhase = NetHostMigrationPhase::None;
+				peer.m_RemotePeerIds = {1, 3}; peer.m_RemoteTransports = {{1, 41}, {3, 43}}; peer.m_RemoteStartsReceived = {1, 3};
+				if (held && groups) peer.m_PeerBridges[1] = {4400, 4400, true, std::nullopt, {}, 6};
+				else if (held) peer.m_AiHeldSeats[1] = 4400;
+				std::array<uint8_t, 32> ours{}, theirs{};
+				ours.fill(0x11); theirs.fill(0x22);
+				if (!peer.SubmitLocalChecksum(4410, ours, error)) return false;
+				NetLockstepChecksum host; host.senderPeerId = 1; host.frame = 4410; host.hash = theirs; host.roundId = 77;
+				peer.HandleChecksum(host, 41);
+				const bool stopped = peer.m_PendingRecoveryStop && peer.m_PendingRecoveryStop->reason == NetLockstepStopReason::Desync;
+				const std::string arm = std::string(groups ? "frame groups" : "host-routed") + (held ? ", host held" : ", host playing");
+				std::cout << "[held-host-hash] " << arm << " mismatches=" << peer.m_Stats.checksumMismatches << " desync_stop=" << stopped << std::endl;
+				if (groups && held && (stopped || peer.m_Stats.checksumMismatches != 0)) {
+					*error = "a frame group stopped for a desync on a held host's private hash (" + arm + ")"; return false;
+				}
+				if (!(groups && held) && (!stopped || peer.m_Stats.checksumMismatches != 1)) {
+					*error = "a differing hash from a host that plays the round was not a desync (" + arm + ")"; return false;
+				}
+			}
+			return true;
+		}
+
 		static bool FixedDelayReturnFollowsTheMeasuredLink(std::string* error) {
 			// A Fixed match admits a returner whose measured link fits its delay and refuses one that does not, naming both; the
 			// returner's published restart is not link time.
@@ -32967,6 +32995,12 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS every_mode_sizes_live_and_return_from_the_link\n[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "held-host-hash") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::HeldHostHashesStayPrivateInFrameGroups(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS held_host_hashes_stay_private_in_frame_groups\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "fixed-return-link") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::FixedDelayReturnFollowsTheMeasuredLink(&error)) return fail(error);
@@ -33292,6 +33326,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::MissingOrZeroLinkNeverUsesReceipts, "missing_or_zero_rtt_never_uses_machine_receipts");
 		row(&SessionPlaneRecoveryTest::LinkSizingInEveryMode, "every_mode_sizes_live_and_return_from_the_link");
 		row(&SessionPlaneRecoveryTest::FixedDelayReturnFollowsTheMeasuredLink, "a_fixed_return_follows_the_measured_link");
+		row(&SessionPlaneRecoveryTest::HeldHostHashesStayPrivateInFrameGroups, "held_host_hashes_stay_private_in_frame_groups");
 		row(&SessionPlaneRecoveryTest::ReaderLinksContributeToInputRunway, "reader_links_contribute_to_input_runway");
 		row(&SessionPlaneRecoveryTest::LinkRiseHasNoResizeCooldown, "link_rise_has_no_resize_cooldown");
 		row(&SessionPlaneRecoveryTest::LinkFallNeedsFiveMeasuredSeconds, "link_fall_requires_five_continuous_measured_seconds");
