@@ -819,34 +819,26 @@ namespace RTE {
 				}
 				return impaired && humanHas && !heldHas ? impaired : nullptr;
 			}
-			// The owner's input for the frame reached the human side before it showed the frame and the held side only after it showed it:
-			// late, never lost. Section 11.1's local hold then splits the two sides at their own bounds.
-			const InputWireObservation* LateInput(uint8_t owner, uint8_t human, uint8_t held, uint64_t frame, uint64_t humanAt, uint64_t heldAt) const {
-				if (owner == held) return nullptr;
-				const InputWireObservation* late = nullptr;
-				bool humanHas = human == owner;
-				for (auto it = inputEvidence.lower_bound(frame); it != inputEvidence.end() && it->first - frame < NetLockstepCodec::c_PeerInputWindowTicks; ++it) {
-					const auto& observation = it->second;
-					if (observation.impaired || (observation.receiver != human && observation.receiver != held) || !InputWindowContains(observation.packet, owner, frame)) continue;
-					if (observation.receiver == human && observation.at <= humanAt) humanHas = true;
-					if (observation.receiver == held) {
-						if (observation.at <= heldAt) return nullptr;
-						if (!late || observation.at < late->at) late = &observation;
-					}
+			// The first copy of any seat's input for the frame, or of any acceptor's receipt covering it, that reached this side only after it
+			// showed the frame: traffic it needed for the frame and did not have, which landed late and was never lost.
+			std::string LateTraffic(uint8_t side, uint64_t frame, uint64_t shownAt) const {
+				for (uint8_t owner = 1; owner <= row.seats; ++owner) {
+					if (owner == side) continue;
+					uint64_t first = UINT64_MAX;
+					for (auto it = inputEvidence.lower_bound(frame); it != inputEvidence.end() && it->first - frame < NetLockstepCodec::c_PeerInputWindowTicks; ++it)
+						if (!it->second.impaired && it->second.receiver == side && InputWindowContains(it->second.packet, owner, frame)) first = std::min(first, it->second.at);
+					if (first != UINT64_MAX && first > shownAt) return "late_input_of=" + std::to_string(owner) + " delivered_ms=" + std::to_string(first) + " shown_ms=" + std::to_string(shownAt);
 				}
-				return humanHas ? late : nullptr;
-			}
-			// The acceptor's receipt covering the held seat's own input at the frame reached the held seat only after it showed the frame.
-			const InputWireObservation* LateReceipt(uint8_t acceptor, uint8_t held, uint64_t frame, uint64_t heldAt) const {
-				if (acceptor == held) return nullptr;
-				const InputWireObservation* late = nullptr;
+				std::map<std::pair<uint8_t, uint8_t>, uint64_t> receipts;
 				for (auto it = receiptEvidence.upper_bound(frame); it != receiptEvidence.end(); ++it) {
 					const auto& observation = it->second;
-					if (observation.impaired || observation.receiver != held || observation.packet.senderPeerId != acceptor || observation.packet.successorPeerId != held) continue;
-					if (observation.at <= heldAt) return nullptr;
-					if (!late || observation.at < late->at) late = &observation;
+					if (observation.impaired || observation.receiver != side || observation.packet.senderPeerId == side) continue;
+					auto& first = receipts.try_emplace({observation.packet.senderPeerId, observation.packet.successorPeerId}, UINT64_MAX).first->second;
+					first = std::min(first, observation.at);
 				}
-				return late;
+				for (const auto& [pair, first]: receipts) if (first > shownAt)
+					return "late_receipt_of=" + std::to_string(pair.first) + "_for_" + std::to_string(pair.second) + " delivered_ms=" + std::to_string(first) + " shown_ms=" + std::to_string(shownAt);
+				return {};
 			}
 			std::string returnInsideInputs;
 			// The random driver's round: its schedule decides every link, rate and reachability below.
@@ -1537,6 +1529,9 @@ namespace RTE {
 			std::vector<HoldBoundaries> installedBoundaries;
 			std::vector<std::vector<std::map<uint64_t, NetHash32>>> discardedHistories;
 			std::array<std::array<uint64_t, 5>, 5> compared{}, splitFrom{};
+			// A divergence with no cause yet, and since when: a late input or receipt proves its lateness only once it lands.
+			std::array<std::array<std::pair<uint64_t, uint64_t>, 5>, 5> unexplained{};
+			static constexpr uint64_t c_LateEvidenceMs = 2000;
 			// FLAGGED fixture departure: two histories that diverged under a proven split stay apart until an image return replaces one,
 			// whoever authors their later frames - a reader of one half that returns into it carries that half's separation.
 			std::array<std::array<uint64_t, 5>, 5> pairSeparatedFrom{};
@@ -1761,6 +1756,7 @@ namespace RTE {
 				for (auto& late: lateSplits) if (!late.resolvedAt && (late.a == seat || late.b == seat)) late.resolvedAt = hub.now;
 				for (uint8_t other = 1; other <= hub.row.seats; ++other) {
 					compared[std::min(seat, other)][std::max(seat, other)] = 0; pairSeparatedFrom[std::min(seat, other)][std::max(seat, other)] = 0;
+					unexplained[std::min(seat, other)][std::max(seat, other)] = {};
 				}
 			}
 			bool InputSplitCausedHold(uint8_t seat, uint64_t since, uint64_t until, uint8_t troubled, uint64_t from, uint64_t to) const {
@@ -1769,10 +1765,11 @@ namespace RTE {
 					    cause.faultAt >= from && cause.faultAt < to && cause.faultAt <= since && since <= cause.observedAt && cause.observedAt <= until;
 				});
 			}
-			bool CompareHistories(std::string& error) {
+			bool CompareHistories(std::string& error, bool finalVerdict = false) {
 				for (uint8_t a = 1; a <= hub.row.seats; ++a) for (uint8_t b = a + 1; b <= hub.row.seats; ++b) {
 					const auto& left = worlds[a - 1]; const auto& right = worlds[b - 1];
 					const uint64_t common = std::min(left.applied, right.applied);
+					bool awaitingEvidence = false;
 					for (uint64_t frame = compared[a][b] + 1; frame <= common; ++frame) {
 						const uint32_t l = frameMembers[a - 1].at(frame), r = frameMembers[b - 1].at(frame);
 						const uint8_t authorA = frameAuthors[a - 1].at(frame), authorB = frameAuthors[b - 1].at(frame);
@@ -1809,17 +1806,20 @@ namespace RTE {
 								const bool heldInHuman = ((humanLeft ? l : r) & (1U << ((humanLeft ? b : a) - 1))) != 0;
 								const auto* cause = hub.InputPartition(owner, humanLeft ? a : b, humanLeft ? b : a, frame, human.shownAt.at(frame), held.shownAt.at(frame));
 								if (!cause && heldInHuman) cause = hub.ReceiptPartition(owner, humanLeft ? b : a, frame, held.shownAt.at(frame));
-								if (!cause) {
-									const auto* late = hub.LateInput(owner, humanLeft ? a : b, humanLeft ? b : a, frame, human.shownAt.at(frame), held.shownAt.at(frame));
-									if (!late && heldInHuman) late = hub.LateReceipt(owner, humanLeft ? b : a, frame, held.shownAt.at(frame));
-									if (!late) continue;
-									lateSplits.push_back({a, b, owner, frame, hub.now, 0});
-									sawSplit = splitHistories = true;
-									DiagnosticLine() << "[session-plane-late-input-split] frame=" << frame << " owner=" << unsigned(owner)
-									    << " human_author=" << unsigned(humanLeft ? a : b) << " held_author=" << unsigned(humanLeft ? b : a)
-									    << (late->packet.type == NetHostMigrationMessageType::PeerReceipt ? " late_receipt_ms=" : " late_input_ms=") << late->at
-									    << " held_shown_ms=" << held.shownAt.at(frame) << " delivered_before_hold=0 lost=0" << std::endl;
-									break;
+								if (!cause) continue;
+								inputSplits[a][b][frame] = 0; separated = frame; sawSplit = true;
+								inputSplitCauses.push_back({humanLeft ? a : b, humanLeft ? b : a, cause->packet.senderPeerId, cause->receiver,
+								    cause->at, std::max(human.shownAt.at(frame), held.shownAt.at(frame))});
+								DiagnosticLine() << "[session-plane-input-partition] frame=" << frame << " owner=" << unsigned(owner)
+								    << " human_author=" << unsigned(humanLeft ? a : b) << " held_author=" << unsigned(humanLeft ? b : a)
+								    << (cause->packet.type == NetHostMigrationMessageType::PeerReceipt ? " exact_impaired_receipt=1" : " exact_impaired_input=1") << " delivered_before_hold=0" << std::endl;
+								break;
+							}
+						}
+						if (separated && frame >= separated && (l & first) && (r & second) && l != r) {
+							if (!pairSeparatedFrom[a][b]) pairSeparatedFrom[a][b] = frame;
+							splitHistories = true; continue;
+						}
 						// Section 11.1: the side that holds a seat the other plays showed the frame without traffic the other had - an input for it, or a
 						// receipt covering it, that reached this side only afterwards: late, never lost. The two sides' own bounds parted them.
 						const std::string leftAi = left.aiAt.contains(frame) ? left.aiAt.at(frame) : "", rightAi = right.aiAt.contains(frame) ? right.aiAt.at(frame) : "";
@@ -1855,28 +1855,13 @@ namespace RTE {
 							}
 						}
 						if (!finalVerdict && hub.now < waiting.second + c_LateEvidenceMs) { compared[a][b] = frame - 1; awaitingEvidence = true; break; }
-								}
-								inputSplits[a][b][frame] = 0; separated = frame; sawSplit = true;
-								inputSplitCauses.push_back({humanLeft ? a : b, humanLeft ? b : a, cause->packet.senderPeerId, cause->receiver,
-								    cause->at, std::max(human.shownAt.at(frame), held.shownAt.at(frame))});
-								DiagnosticLine() << "[session-plane-input-partition] frame=" << frame << " owner=" << unsigned(owner)
-								    << " human_author=" << unsigned(humanLeft ? a : b) << " held_author=" << unsigned(humanLeft ? b : a)
-								    << (cause->packet.type == NetHostMigrationMessageType::PeerReceipt ? " exact_impaired_receipt=1" : " exact_impaired_input=1") << " delivered_before_hold=0" << std::endl;
-								break;
-							}
-							if (const auto* late = OpenLateSplit(a, b); late && late->frame == frame) continue;
-						}
-						if (separated && frame >= separated && (l & first) && (r & second) && l != r) {
-							if (!pairSeparatedFrom[a][b]) pairSeparatedFrom[a][b] = frame;
-							splitHistories = true; continue;
-						}
 						error = "histories differ at displayed frame " + std::to_string(frame) + ": peer " + std::to_string(a) + " members=" + std::to_string(l) +
 						    " peer " + std::to_string(b) + " members=" + std::to_string(r) + "; authority ruling requires equal history within a half and after image return" +
-						    "; now_ms=" + std::to_string(hub.now) + " live_split=" + std::to_string(hub.LiveSplit(a, b)) + " separated_frame=" + std::to_string(separated) +
+						    "; now_ms=" + std::to_string(hub.now) + " first_seen_ms=" + std::to_string(waiting.second) + " live_split=" + std::to_string(hub.LiveSplit(a, b)) + " separated_frame=" + std::to_string(separated) +
 						    " authors=" + std::to_string(authorA) + "/" + std::to_string(authorB) + " ai=" + (left.aiAt.contains(frame) ? left.aiAt.at(frame) : "none") + "/" + (right.aiAt.contains(frame) ? right.aiAt.at(frame) : "none");
 						return false;
 					}
-					compared[a][b] = common;
+					if (!awaitingEvidence) compared[a][b] = common;
 				}
 				uint64_t floor = UINT64_MAX;
 				for (uint8_t a = 1; a <= hub.row.seats; ++a) for (uint8_t b = a + 1; b <= hub.row.seats; ++b) floor = std::min(floor, compared[a][b]);
@@ -2073,7 +2058,7 @@ namespace RTE {
 					}
 					hashedThrough = 0; sharedDigests.clear(); roundStartMs = hub.now;
 					if (const auto unresolved = UnresolvedLateSplits(); !unresolved.empty()) { error = unresolved + " before the round ended"; return false; }
-					compared = {}; splitFrom = {}; inputSplits = {}; inputSplitCauses.clear(); lateSplits.clear(); sawSplit = splitHistories = false;
+					compared = {}; splitFrom = {}; inputSplits = {}; inputSplitCauses.clear(); lateSplits.clear(); unexplained = {}; sawSplit = splitHistories = false;
 					imageTasks.clear(); imageTasks.resize(hub.row.seats);
 					directRuling = 0;
 					std::fill(lostAt.begin(), lostAt.end(), 0); std::fill(lostFrame.begin(), lostFrame.end(), 0);
@@ -2367,7 +2352,7 @@ namespace RTE {
 				while (hub.now <= end) if (!Step(error) || !CheckBound(error) || !RecoverImages(error)) return false;
 				if (row.refaultPercent && !hub.refaultEnd) { error = "the subject never came back, so its second slowdown never began"; return false; }
 				while (hub.refaultEnd && hub.now <= hub.refaultEnd + c_TestReturnAllowanceMs + 4000) if (!Step(error) || !CheckBound(error) || !RecoverImages(error)) return false;
-				if (!FinishImageReturns(error)) return false;
+				if (!FinishImageReturns(error) || !CompareHistories(error, true)) return false;
 				if (error = UnresolvedLateSplits(); !error.empty()) return false;
 				if (row.hung && row.subject == 1 && row.gapMs > 15000)
 					for (uint8_t seat = 2; seat <= row.seats; ++seat) if (firstAdminChangeMs[seat - 1] == UINT64_MAX) {
@@ -2465,7 +2450,6 @@ namespace RTE {
 			if (const auto twice = fixture.TwoReturnFrames(); !twice.empty()) co_return fail(twice);
 			const uint8_t seats = fixture.hub.row.seats;
 			uint8_t proposer = donor;
-			// Before the first named capture the round's agreed start is the base every seat committed; its tail replays from frame 1.
 			const uint32_t rttMs = static_cast<uint32_t>(2 * fixture.hub.Delay(seat, donor));
 			const uint64_t round = fixture.peers[donor - 1]->GetRoundId();
 			const uint32_t incarnation = fixture.peers[donor - 1]->GetConfig().peerIncarnations.at(seat) + 1;
@@ -2481,6 +2465,7 @@ namespace RTE {
 			for (auto* wire: fixture.hub.wires) if (wire->owner == seat) wire->keepReturnCertificates = wire->keepImageTail = true;
 			uint64_t common = fixture.worlds[donor - 1].applied;
 			for (uint8_t peer: survivors) common = std::min(common, fixture.worlds[peer - 1].applied);
+			// Before the first named capture the round's agreed start is the base every seat committed; its tail replays from frame 1.
 			const uint64_t base = common - common % 60;
 			if (base && !fixture.committed[donor - 1].contains(base))
 				co_return fail("fixture retained no committed capture record at frame " + std::to_string(base) +
@@ -2745,6 +2730,8 @@ namespace RTE {
 				// The driver's original capacity property gives a machine with no surplus no finite catch-up deadline.
 				// It stays a private reader under the AI; every survivor is still checked on every step, with no wait exemption.
 				fixture.imageWithoutHeadroom[seat - 1] = true;
+				// The arbitration stopped this side and it plays no continuation of its own: its return is the capacity property's to judge.
+				for (auto& late: fixture.lateSplits) if (!late.resolvedAt && (late.a == seat || late.b == seat)) late.resolvedAt = fixture.hub.now;
 				co_return fixture.CheckBound(error);
 			}
 			if (!agreed || replay.applied + 1 != activation) co_return fail("the private replay did not reach an activation every survivor certified: donor=" +
@@ -2990,7 +2977,7 @@ namespace RTE {
 				if (variant == 2) { fixture.hub.now = 100; fixture.hub.ObserveInput(receipt, 2, false); }
 				fixture.hub.now = 200;
 				std::string why;
-				const bool accepted = fixture.CompareHistories(why), expected = variant == 0;
+				const bool accepted = fixture.CompareHistories(why, true), expected = variant == 0;
 				if (accepted != expected) {
 					error = "causal receipt-history oracle variant=" + std::to_string(variant) + " expected_split=" + std::to_string(expected) + ": " + why; return false;
 				}
@@ -3018,7 +3005,7 @@ namespace RTE {
 				// Negatives: no proven split; the two seats of one half differing; a frame whose members omit its own author.
 				if (variant == 2) fixture.worlds[0].hashes[2][0] = 9;
 				std::string why;
-				const bool accepted = fixture.CompareHistories(why), expected = variant == 0;
+				const bool accepted = fixture.CompareHistories(why, true), expected = variant == 0;
 				if (accepted != expected) {
 					error = "returned-reader history oracle variant=" + std::to_string(variant) + " expected_split=" + std::to_string(expected) + ": " + why; return false;
 				}
@@ -3056,7 +3043,7 @@ namespace RTE {
 				if (variant == 8) { fixture.hub.now = 75; fixture.hub.ObserveInput(packet, 1, false); }
 				fixture.hub.now = 200;
 				std::string why;
-				const bool accepted = fixture.CompareHistories(why), expected = variant == 0 || variant == 8;
+				const bool accepted = fixture.CompareHistories(why, true), expected = variant == 0 || variant == 8;
 				if (accepted != expected) {
 					error = "causal wire-history oracle variant=" + std::to_string(variant) + " expected_split=" + std::to_string(expected) + ": " + why; return false;
 				}
@@ -3080,16 +3067,16 @@ namespace RTE {
 						fixture.frameMembers[peer].push_back(3); fixture.frameAuthors[peer].push_back(peer + 1);
 					}
 					fixture.hub.now = 210;
-					if (!fixture.CompareHistories(why)) { error = "a healed input partition rejected its common history"; return false; }
+					if (!fixture.CompareHistories(why, true)) { error = "a healed input partition rejected its common history"; return false; }
 					fixture.compared = {};
-					if (!fixture.CompareHistories(why)) { error = "a healed input partition lost its earlier causal history"; return false; }
+					if (!fixture.CompareHistories(why, true)) { error = "a healed input partition lost its earlier causal history"; return false; }
 					if (!fixture.HasSplitHistoryAt(1, 1) || fixture.HasSplitHistoryAt(1, 2)) { error = "a decision used causal history outside its split interval"; return false; }
 					for (size_t peer = 0; peer < 2; ++peer) {
 						fixture.worlds[peer].applied = 3; fixture.worlds[peer].hashes[3] = {}; fixture.worlds[peer].shownAt[3] = 220;
 						fixture.frameMembers[peer].push_back(peer == 0 ? 3 : 2); fixture.frameAuthors[peer].push_back(peer + 1);
 					}
 					fixture.worlds[1].hashes[3][0] = 1; fixture.worlds[1].aiAt[3] = "1"; fixture.hub.now = 220;
-					if (fixture.CompareHistories(why)) { error = "a healed input partition excused a later fork with no wire fault"; return false; }
+					if (fixture.CompareHistories(why, true)) { error = "a healed input partition excused a later fork with no wire fault"; return false; }
 				}
 			}
 			return true;
@@ -3265,44 +3252,44 @@ namespace RTE {
 			for (auto& world: fixture.worlds) { world.applied = 1; world.hashes[1] = {}; }
 			fixture.worlds[1].hashes[1][0] = 1;
 			std::string why;
-			if (fixture.CompareHistories(why)) { error = "fixture accepted different histories without a real split"; return false; }
+			if (fixture.CompareHistories(why, true)) { error = "fixture accepted different histories without a real split"; return false; }
 			fixture.splitFrom[1][2] = 1;
-			if (!fixture.CompareHistories(why)) { error = "fixture rejected two actually separated, disjoint playing groups: " + why; return false; }
+			if (!fixture.CompareHistories(why, true)) { error = "fixture rejected two actually separated, disjoint playing groups: " + why; return false; }
 			fixture.compared = {}; fixture.frameMembers[0][1] = fixture.frameMembers[1][1] = 3;
-			if (fixture.CompareHistories(why)) { error = "fixture excused disagreement between mutually included playing authors"; return false; }
+			if (fixture.CompareHistories(why, true)) { error = "fixture excused disagreement between mutually included playing authors"; return false; }
 			fixture.frameMembers[0][1] = fixture.frameMembers[1][1] = 1;
-			if (fixture.CompareHistories(why)) { error = "fixture excused disagreement inside one half"; return false; }
+			if (fixture.CompareHistories(why, true)) { error = "fixture excused disagreement inside one half"; return false; }
 			fixture.frameMembers[1][1] = 2; fixture.hub.row.internet = false;
 			// The revised direct contract permits two continuations before the heal; it still requires the actual losing image to adopt one history.
-			if (!fixture.CompareHistories(why)) { error = "fixture rejected independent direct continuations before heal: " + why; return false; }
+			if (!fixture.CompareHistories(why, true)) { error = "fixture rejected independent direct continuations before heal: " + why; return false; }
 			fixture.compared = {}; fixture.frameAuthors[1][1] = 1;
-			if (fixture.CompareHistories(why)) { error = "fixture excused different hashes in an image's adopted author history"; return false; }
+			if (fixture.CompareHistories(why, true)) { error = "fixture excused different hashes in an image's adopted author history"; return false; }
 			fixture.frameAuthors[1][1] = 2;
 			fixture.worlds[1].hashes[1] = fixture.worlds[0].hashes[1];
-			if (!fixture.CompareHistories(why)) { error = "fixture rejected the adopted image history"; return false; }
+			if (!fixture.CompareHistories(why, true)) { error = "fixture rejected the adopted image history"; return false; }
 			// At a real cut one local hold may precede the other half consuming its inputs already in flight.
 			Fixture causal; causal.hub.row.seats = 3; causal.worlds.resize(3);
 			causal.frameMembers = {{0, 1}, {0, 7}, {0, 7}}; causal.frameAuthors = {{0, 1}, {0, 2}, {0, 3}};
 			causal.ObserveSplit(1, 2); causal.ObserveSplit(1, 3);
 			for (auto& world: causal.worlds) { world.applied = 1; world.hashes[1] = {}; }
 			causal.worlds[1].hashes[1][0] = causal.worlds[2].hashes[1][0] = 1;
-			const bool asymmetricHold = causal.CompareHistories(why);
+			const bool asymmetricHold = causal.CompareHistories(why, true);
 			// Two cut authors can still include each other while one holds a third sender and the other consumes its buffered input.
 			Fixture overlap; overlap.hub.row.seats = 3; overlap.worlds.resize(3);
 			overlap.frameMembers = {{0, 7}, {0, 6}, {0, 7}}; overlap.frameAuthors = {{0, 1}, {0, 2}, {0, 3}};
 			overlap.ObserveSplit(1, 2); overlap.ObserveSplit(2, 3);
 			for (auto& world: overlap.worlds) { world.applied = 1; world.hashes[1] = {}; }
 			overlap.worlds[1].hashes[1][0] = 1;
-			const bool asymmetricThirdSender = overlap.CompareHistories(why);
+			const bool asymmetricThirdSender = overlap.CompareHistories(why, true);
 			// The connected half still has one history, even while the cut pair's installed masks overlap.
 			causal.compared = {}; causal.compared[1][2] = causal.compared[1][3] = 1;
 			causal.worlds[2].hashes[1][0] = 2;
-			const bool connectedHalfRejected = !causal.CompareHistories(why) && why.find("peer 2 members=7 peer 3 members=7") != std::string::npos;
+			const bool connectedHalfRejected = !causal.CompareHistories(why, true) && why.find("peer 2 members=7 peer 3 members=7") != std::string::npos;
 			Fixture frontier; frontier.worlds.resize(2); frontier.worlds[0].applied = 7; frontier.worlds[1].applied = 9;
 			frontier.ObserveSplit(1, 2);
 			const bool sharedPrefix = frontier.splitFrom[1][2] == 8;
 			fixture.compared = {}; fixture.worlds[1].hashes[1][0] = 1; fixture.splitFrom[1][2] = 2;
-			const bool priorHistoryRejected = !fixture.CompareHistories(why);
+			const bool priorHistoryRejected = !fixture.CompareHistories(why, true);
 			fixture.playingMaxWait = {0, 51}; fixture.waitAt = {0, 0}; fixture.waitPlaying = {true, true};
 			fixture.hub.row.internet = fixture.hub.row.directoryDown = true;
 			if (fixture.CheckBound(why)) { error = "fixture waived a playing half's bound during a directory outage"; return false; }
@@ -3628,6 +3615,7 @@ namespace RTE {
 			while (hub.now <= schedule.endMs && !fixture.roundOver)
 				if (!fixture.Step(error) || !fixture.CheckBound(error) || !fixture.RecoverImages(error)) return failed(error + " at " + std::to_string(hub.now) + " ms");
 			if (!fixture.FinishImageReturns(error)) return failed(error);
+			if (!fixture.CompareHistories(error, true)) return failed(error + " at " + std::to_string(hub.now) + " ms");
 			if (const auto unresolved = fixture.UnresolvedLateSplits(); !unresolved.empty()) return failed(unresolved);
 			const uint64_t end = hub.now;
 			for (uint8_t seat = 1; seat <= schedule.seats; ++seat) {
