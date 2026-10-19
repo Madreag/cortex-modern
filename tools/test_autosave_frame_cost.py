@@ -135,26 +135,32 @@ def classify(windows, saves, dues, bases, warmup, saver=None):
     return kinds, overdue
 
 
-def uncaused(saver, saves, dues, events, near=30, slack=120):
+def uncaused(saver, saves, dues, events, interval=0, near=30, slack=120):
     """The spans the peer's saver logged as overdue that no cause found in the log explains: a deadline that passed while the
     peer's own capture was unwritten (a written save's tick is known to within a frame-pace window), a periodic save named
     late for the peer's own writer - the save written last before the naming is the peer's own and ends at it - or a
-    manual save. A base is another player's save and causes none."""
+    manual save. A base is another player's save and causes none, unless the late own naming named it. The deadlines are
+    the namings' and, with the interval known, the cadence's: each repeats every interval, and a base starts its own."""
     if saver is None:
         return []
     bases = set(events['base_ticks'])
     own = [(start, end) for start, end in saves if start not in bases]
+    deadlines = set(dues)
+    if interval > 0:
+        last = max([end for _, end in saves] + [end for _, end in saver] + list(dues) + [0])
+        for first in list(dues) + [base + interval - 4 for base in bases]:
+            deadlines.update(range(first, last + interval, interval))
     found = []
     for start, end in saver:
         at_deadline = any(due - 1 <= start <= due + near and any(s0 <= due + near and e0 + 60 >= due and end <= e0 + slack for s0, e0 in own)
-                          for due in dues)
+                          for due in deadlines)
         own_late = False
         for named, own_writer in events['namings']:
             if not own_writer or not named - 2 <= start <= named + near:
                 continue
             before = [save for save in saves if save[1] <= named + 60 and save[0] < named]
             last = max(before, key=lambda save: save[1]) if before else None
-            written = [e1 for s1, e1 in own if named <= s1 <= named + near]
+            written = [e1 for s1, e1 in saves if named <= s1 <= named + near]
             if last and last[0] not in bases and named - last[1] <= slack and written and end <= written[0] + slack:
                 own_late = True
         manual = any(start - 600 <= tick <= end + 600 for tick in events['manual'])
@@ -194,7 +200,7 @@ def log_text(run_dir, role):
     return path.read_text(errors='replace') if path.exists() else ''
 
 
-def analyze(run_dir, warmup):
+def analyze(run_dir, warmup, interval=0):
     """Each peer's windows placed and summarized from a run's logs; the client follows the host's agreed deadlines."""
     host_dues = timeline(log_text(run_dir, 'host'), True)[2]
     peers = {}
@@ -202,7 +208,7 @@ def analyze(run_dir, warmup):
         windows, saves, _, bases, holds, saver, events = timeline(log_text(run_dir, role), role == 'host')
         kinds, overdue = classify(windows, saves, host_dues, bases, warmup, saver)
         peers[role] = {'kinds': summary(windows, kinds, holds, local), 'saves': saves, 'overdue_spans': overdue, 'bases': bases,
-                       'logs_overdue': saver is not None, 'uncaused_overdue_spans': uncaused(saver, saves, host_dues, events)}
+                       'logs_overdue': saver is not None, 'uncaused_overdue_spans': uncaused(saver, saves, host_dues, events, interval)}
         idle = peers[role]['kinds']['idle']
         if idle['windows']:
             peers[role]['ratios_to_idle'] = {k: [round(r, 3) for r in ratios(v, idle)] for k, v in peers[role]['kinds'].items() if v['windows']}
@@ -250,7 +256,7 @@ def judge(out, cfg, references, warmup, failure, exits_ok):
     the captures, refusals, the return and the returned seat's saves."""
     rejoin, after_count = cfg.get('client_rejoin', 0), cfg.get('saves_after_return', 0)
     judged, in_run = {}, {}
-    peers = analyze(out, warmup)
+    peers = analyze(out, warmup, 60 * cfg.get('autosave_seconds', 0))
     for role in ('host', 'client'):
         idle, save, base = (peers[role]['kinds'][k] for k in ('idle', 'save', 'base'))
         saves, bases = peers[role]['saves'], peers[role]['bases']
