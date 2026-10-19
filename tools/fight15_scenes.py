@@ -410,7 +410,7 @@ def game_scenes():
         steps += [lobby_wait(peer)]
         steps += capture(f"brain-loss-{peer}", "MultiplayerScreen")
         # The lobby names the loss in a player's words; the rule's script line stays in the log and the Details dialog.
-        steps += [menu("assert_label LabelLastMatchSummary Brain"), menu("assert_label LabelLastMatchSummary Joiner's brain was destroyed"),
+        steps += [menu("assert_label LabelLastMatchSummary Joiner's brain was destroyed"),
                   menu("assert_label_absent LabelLastMatchSummary .lua"), menu("assert_label_absent LabelLastMatchSummary tick"),
                   menu("assert_text_fits LabelLastMatchSummary"), dict(op="finish")]
     checks = scene_checks("host", host) + scene_checks("joiner", joiner)
