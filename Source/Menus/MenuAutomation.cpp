@@ -1672,7 +1672,8 @@ namespace RTE::MenuAutomation {
 		}
 		const auto now = RTE::SteadyClock::now();
 		const double span = s_LastEvaluated.time_since_epoch().count() == 0 ? c_DrawWindowSeconds * 1000 : std::chrono::duration<double, std::milli>(now - s_LastEvaluated).count();
-		s_FrameSpanMs = std::clamp(span + 1.0, 1.0, c_DrawWindowSeconds * 1000);
+		// Shown means drawn since the last check, which ran after the frame before: a slow frame is still one frame.
+		s_FrameSpanMs = std::max(span + 1.0, 1.0);
 		s_LastEvaluated = now;
 		std::vector<ShownLine> lines;
 		bool linesRead = false;
