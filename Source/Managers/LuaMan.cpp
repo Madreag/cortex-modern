@@ -4448,15 +4448,15 @@ static bool ClassDerivesFrom(const luabind::detail::class_rep* rep, const char* 
 	return false;
 }
 
-// Whether a luabind class is a MovableObject (1), a PieSlice (2), a PieMenu (3) or none of them (0), noted on the class the
-// first time it is asked.
+// Whether a luabind class is a MovableObject (1), a PieSlice (2), a PieMenu (3), a SoundContainer (4) or none of them (0),
+// noted on the class the first time it is asked.
 static int EngineHandleKind(const luabind::detail::class_rep* rep) {
 	if (!rep) {
 		return 0;
 	}
 	int kind = rep->engine_kind();
 	if (kind < 0) {
-		kind = ClassDerivesFrom(rep, "MovableObject") ? 1 : ClassDerivesFrom(rep, "PieSlice") ? 2 : ClassDerivesFrom(rep, "PieMenu") ? 3 : 0;
+		kind = ClassDerivesFrom(rep, "MovableObject") ? 1 : ClassDerivesFrom(rep, "PieSlice") ? 2 : ClassDerivesFrom(rep, "PieMenu") ? 3 : ClassDerivesFrom(rep, "SoundContainer") ? 4 : 0;
 		rep->set_engine_kind(kind);
 	}
 	return kind;
@@ -4464,7 +4464,8 @@ static int EngineHandleKind(const luabind::detail::class_rep* rep) {
 
 static bool IsMovableObjectClass(const luabind::detail::class_rep* rep) { return EngineHandleKind(rep) == 1; }
 
-// A handle naming a MovableObject, a PieSlice or a PieMenu keeps that object's memory while the handle lives.
+// A handle naming a MovableObject, a PieSlice or a PieMenu keeps that object's memory while the handle lives; one naming a sound
+// an object let go keeps that sound alive.
 static void NoteBorrowedHandle(luabind::detail::object_rep* handle) {
 	// A saver's handles name its own frozen copies, which never return to a pool.
 	if (luabind::detail::saved_objects.copy) return;
@@ -4474,6 +4475,7 @@ static void NoteBorrowedHandle(luabind::detail::object_rep* handle) {
 		case 1: handle->set_life_owner(static_cast<MovableObject*>(entity)->NoteLuaHandle(), &Entity::ReleaseLuaHandle); break;
 		case 2: handle->set_life_owner(static_cast<PieSlice*>(entity)->NoteLuaHandle(), &Entity::ReleaseLuaHandle); break;
 		case 3: handle->set_life_owner(static_cast<PieMenu*>(entity)->NoteLuaHandle(), &Entity::ReleaseLuaHandle); break;
+		case 4: handle->set_life_owner(static_cast<SoundContainer*>(entity)->NoteLuaHandle(), &SoundContainer::ReleaseLuaHandle); break;
 		default: break;
 	}
 }
@@ -17987,6 +17989,8 @@ void LuaMan::WaitForAsyncGarbageCollection() {
 	m_GarbageCollectionTask.wait();
 	// The collecting threads only unlink; the destructors are ours to run, in state order.
 	LuabindObjectWrapper::ApplyQueuedEntityDeletions();
+	// The sounds objects let go and the last handles to them have released, all in one place on every peer.
+	g_AudioMan.DeleteReleasedSoundContainers();
 }
 
 long long LuaMan::GetTotalHeapBytes() {
