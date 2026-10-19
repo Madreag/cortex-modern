@@ -619,10 +619,16 @@ def seat_dialog_scene():
             "activate ButtonHostSeatDetails1", "wait_ms 900", "assert_visible HostSeatDialog 1", "assert_label LabelHostSeatDlgName Joiner"]
     host = host_setup() + seat + ["video_mark kick-dialog-host", "assert_enabled ButtonHostSeatDlgKick 1", "assert_enabled ButtonHostSeatDlgBan 1",
             "assert_text_fits LabelHostSeatDlgActionHint", "assert_no_overlap LabelHostSeatDlgActionHint ButtonHostSeatDlgBan"]
-    host += ["activate ButtonHostSeatDlgKick", "wait_ms 1200", "assert_visible HostSeatDialog 0", "activate ButtonHostOptBack", "wait_substate Lobby 30",
+    host += ["activate ButtonHostSeatDlgKick", "wait_ms 600", "assert_visible HostSeatDialog 1", "assert_label ButtonHostSeatDlgKick Confirm kick",
+             "assert_label LabelHostSeatDlgActionHint Press Confirm kick to remove Joiner from this session", "assert_text_fits LabelHostSeatDlgActionHint",
+             "assert_text_fits ButtonHostSeatDlgKick", "video_mark kick-confirm-host",
+             "activate ButtonHostSeatDlgKick", "wait_ms 1200", "assert_visible HostSeatDialog 0", "activate ButtonHostOptBack", "wait_substate Lobby 30",
              "wait_label LabelLobbyPlayer1 Open seat", "video_mark kicked-host", "wait_file {PROBE_DIR_joiner}/kicked.json 90",
              "wait_connected 2 90", "wait_label LabelLobbyPlayer1 Joiner", "video_mark readmitted-after-kick-host"]
-    host += seat + ["assert_enabled ButtonHostSeatDlgBan 1", "activate ButtonHostSeatDlgBan", "wait_ms 1200", "assert_visible HostSeatDialog 0",
+    host += seat + ["assert_enabled ButtonHostSeatDlgBan 1", "activate ButtonHostSeatDlgBan", "wait_ms 600", "assert_visible HostSeatDialog 1",
+             "assert_label ButtonHostSeatDlgBan Confirm ban", "assert_label LabelHostSeatDlgActionHint Press Confirm ban to ban Joiner from this session",
+             "assert_text_fits LabelHostSeatDlgActionHint", "video_mark ban-confirm-host",
+             "activate ButtonHostSeatDlgBan", "wait_ms 1200", "assert_visible HostSeatDialog 0",
              "activate TabHostPageSession", "wait_ms 600", "activate ButtonHostSessBanned", "wait_ms 900", "assert_visible HostBannedDialog 1",
              "assert_label LabelHostBannedList Joiner", "assert_label LabelHostBannedList session", "video_mark banned-list-host",
              "wait_file {PROBE_DIR_joiner}/refused.json 120", "activate ButtonHostBannedRemove", "wait_ms 900",
@@ -642,7 +648,8 @@ def seat_dialog_scene():
     host[-3:-3] = ["touch_file {PROBE_DIR}/scene-end.json"]
     joiner[-3:-3] = ["touch_file {PROBE_DIR}/scene-end.json"]
     done = probe([dict(op="wait_file", path="{PROBE_DIR}/scene-end.json", scope="menu", within_ms=400000), dict(op="assert_relay", scope="menu"), dict(op="finish")], 400000)
-    marks = {"host": ["kick-dialog-host", "kicked-host", "readmitted-after-kick-host", "banned-list-host", "ban-lifted-host", "readmitted-after-ban-host"],
+    marks = {"host": ["kick-dialog-host", "kick-confirm-host", "kicked-host", "readmitted-after-kick-host", "ban-confirm-host", "banned-list-host", "ban-lifted-host",
+                      "readmitted-after-ban-host"],
              "joiner": ["kicked-joiner", "readmitted-after-kick-joiner", "banned-joiner", "ban-refused-joiner", "readmitted-after-ban-joiner"]}
     checks = [dict(id=mark, peer=peer, mark=mark, screen="MultiplayerScreen", what="The lobby seat dialog's removal reached the player and the Banned players list lifted the ban.",
                    events=[f"^video_mark {mark}"]) for peer, names in marks.items() for mark in names]
@@ -665,7 +672,11 @@ def recovery_defaults_scene():
             "assert_text_fits ComboHostRecAutosaveInterval", "assert_label LabelHostRecAutosaveHint 1 to 60 minutes, or off",
             "assert_text_fits LabelHostRecAutosaveHint",
             "combo_select ComboHostRecAutosaveInterval 10 minutes", "assert_label ComboHostRecAutosaveInterval 10 minutes", "activate ButtonHostOptApply",
-            "wait_ms 900", "video_mark recovery-applied-host", "activate ButtonHostOptBack", "wait_substate Lobby 30", "touch_file {PROBE_DIR}/applied.json"]
+            "wait_ms 900", "video_mark recovery-applied-host", "activate TabHostPageSeats", "wait_ms 600", "activate ButtonHostSeatDetails1", "wait_ms 900",
+            "assert_visible HostSeatDialog 1", "video_mark seat-words-host", "assert_label ButtonHostSeatDlgWait Keep for Joiner",
+            "assert_label ButtonHostSeatDlgApprove Let someone join", "assert_label ButtonHostSeatDlgCancel Cancel this approval",
+            "assert_text_fits ButtonHostSeatDlgWait", "assert_text_fits ButtonHostSeatDlgApprove", "assert_text_fits ButtonHostSeatDlgCancel",
+            "activate ButtonHostSeatDlgClose", "wait_ms 600", "activate ButtonHostOptBack", "wait_substate Lobby 30", "touch_file {PROBE_DIR}/applied.json"]
     host += ["wait_file {PROBE_DIR_joiner}/scene-end.json 120", "touch_file {PROBE_DIR}/scene-end.json"] + lobby_exit()
     # The joiner's Match details read the cadence the host applied.
     joiner = join_setup() + ["wait_file {PROBE_DIR_host}/applied.json 120", "wait_ms 1200", "activate ButtonLobbyEditSetup", "wait_ms 600",
@@ -796,8 +807,10 @@ NEWCOMER_SETTINGS = {"SessionDirectoryUrl": "directory.broserver.com", "NetworkH
 def relay_by_hand(peer):
     """A newcomer's first visit to Settings > Network: the defaults read as shipped, then Relay only picked by hand for the gate's relay."""
     return ["activate ButtonMainToOptions", "wait_ms 600", "select_settings_page Network", "wait_ms 450", "select_settings_page Network:Basics", "wait 3",
-            f"video_mark network-defaults-{peer}", "assert_label LabelNetworkConnectionValue Automatic", "assert_label ComboMatchStatusWidget When needed",
-            "assert_text_fits LabelNetworkConnectionValue",
+            f"video_mark network-defaults-{peer}", "assert_label LabelMatchStatusWidget Match status box",
+            "assert_label LabelMatchStatusWidgetHint Shows the match's state while someone is placing, waiting or away",
+            "assert_text_fits LabelMatchStatusWidgetHint", "assert_label LabelNetworkConnectionValue Automatic", "assert_label ComboMatchStatusWidget When needed",
+            "assert_text_fits LabelNetworkConnectionValue", "assert_text_fits LabelMatchStatusWidget",
             # Outside a match the Files page reads this computer's own hosting default, under that name.
             "activate ButtonNetworkAdvanced", "wait 4", "select_settings_page Network:Files", "wait 4", f"video_mark files-default-{peer}",
             "assert_label LabelNetAutosaveHost Your hosting default", "assert_label LabelNetAutosave On", "assert_label LabelNetAutosaveInterval Every 5 minutes",
@@ -831,6 +844,103 @@ def newcomer_scene(number, size):
          host, joiner, game_probe(host_steps), game_probe(joiner_steps), checks, size=size, settings=NEWCOMER_SETTINGS, timeout=420)
 
 
+def lobby_scene_pair(host_extra, joiner_extra=()):
+    """A lobby both players open by hand; the host's and joiner's own checks follow, then both leave it."""
+    host = host_setup() + list(host_extra) + ["touch_file {PROBE_DIR}/scene-end.json", "wait_file {PROBE_DIR_joiner}/scene-end.json 120"] + lobby_exit()
+    joiner = join_setup() + list(joiner_extra) + ["touch_file {PROBE_DIR}/scene-end.json", "wait_file {PROBE_DIR_host}/scene-end.json 300"] + lobby_exit()
+    done = probe([dict(op="wait_file", path="{PROBE_DIR}/scene-end.json", scope="menu", within_ms=300000), dict(op="assert_relay", scope="menu"),
+                  dict(op="finish")], 320000)
+    return host, joiner, done
+
+
+def marked(mark, peer, what, events):
+    return dict(id=mark, peer=peer, mark=mark, screen="MultiplayerScreen", what=what, events=events)
+
+
+def setup_doors_scene():
+    """D8 and D9: Edit setup is the game's setup alone; Advanced holds every page; ending the session asks first."""
+    host = ["activate ButtonLobbyEditSetup", "wait_ms 600", "assert_substate HostOptions", "video_mark edit-setup-host",
+            "assert_label LabelHostOptionsTitle E D I T   S E T U P", "assert_visible TabHostPageSeats 1", "assert_visible TabHostPageRules 1",
+            "assert_visible TabHostPageConnection 0", "assert_visible TabHostPageTiming 0", "assert_visible TabHostPageRecovery 0",
+            "assert_visible TabHostPageFiles 0", "assert_visible TabHostPageSession 0", "assert_visible ButtonHostOptDefaults 0",
+            "activate ButtonHostOptBack", "wait_substate Lobby 30",
+            "activate ButtonLobbyOptions", "wait_ms 600", "assert_substate HostOptions", "video_mark advanced-host",
+            "assert_label LabelHostOptionsTitle A D V A N C E D", "assert_visible TabHostPageConnection 1", "assert_visible TabHostPageSession 1",
+            "activate TabHostPageSession", "wait_ms 600", "activate ButtonHostSessEnd", "wait_ms 600", "assert_substate HostOptions",
+            "assert_label ButtonHostSessEnd Confirm end", "assert_label LabelHostSessEndHint Press Confirm end to close the game for every player",
+            "assert_text_fits LabelHostSessEndHint", "video_mark end-confirm-host", "activate TabHostPageRules", "wait_ms 400", "activate TabHostPageSession",
+            "wait_ms 600", "assert_label ButtonHostSessEnd End session", "activate ButtonHostOptBack", "wait_substate Lobby 30"]
+    joiner = ["activate ButtonLobbyEditSetup", "wait_ms 600", "assert_substate HostOptions", "video_mark match-details-joiner",
+              "assert_label LabelHostOptionsTitle M A T C H   D E T A I L S", "assert_visible TabHostPageTiming 1",
+              "activate ButtonHostOptBack", "wait_substate Lobby 30"]
+    host, joiner, done = lobby_scene_pair(host, joiner)
+    checks = [marked("edit-setup-host", "host", "Edit setup shows the game's setup alone, under its own title.",
+                     ["^assert_label LabelHostOptionsTitle \"E D I T   S E T U P\".*PASS", "^assert_visible TabHostPageConnection 0.*PASS"]),
+              marked("advanced-host", "host", "Advanced shows every page under its own title.", ["^assert_label LabelHostOptionsTitle \"A D V A N C E D\".*PASS"]),
+              marked("end-confirm-host", "host", "End session asks for a second press and names its consequence; another page disarms it.",
+                     ["^assert_label ButtonHostSessEnd \"Confirm end\".*PASS", "^assert_label ButtonHostSessEnd \"End session\".*PASS"]),
+              marked("match-details-joiner", "joiner", "A joined player still reads every page of the match's details.",
+                     ["^assert_label LabelHostOptionsTitle \"M A T C H   D E T A I L S\".*PASS"])]
+    emit(26, "Edit setup and Advanced are two doors; ending the session asks first", host, joiner, done, done, checks, timeout=300)
+
+
+TIMING_HINTS = {"ComboHostNetPolicy": "Automatic sizes each player's delay from their ping; Fixed uses the numbers you type",
+                "TextHostNetMinDelay": "No player's delay drops below this; a higher floor rides out spikes but every press lands later",
+                "TextHostNetSlowBound": "How late a player may fall before the AI holds their seat; lower keeps everyone else smooth",
+                "ComboHostNetRedundancy": "Each packet repeats this many earlier ticks; more rides out lost packets but uses more bandwidth"}
+
+
+def timing_page_scene():
+    """D10 and D12: the Timing page has no control that does nothing, and each row says what its choice costs."""
+    host = ["activate ButtonLobbyOptions", "wait_ms 600", "assert_substate HostOptions", "activate TabHostPageTiming", "wait_ms 600", "video_mark timing-host",
+            "assert_no_caption CollectionBoxHostPageTiming Recalculate", "assert_visible LabelHostNetPing 1", "assert_text_fits LabelHostNetPing",
+            "assert_label_absent LabelHostNetSlowPolicyHint later version"]
+    for control, hint in TIMING_HINTS.items():
+        host += [f"focus {control}", "wait_ms 300", f"assert_label LabelHostNetOptionHint {hint}", "assert_text_fits LabelHostNetOptionHint"]
+    host += ["activate ButtonHostOptBack", "wait_substate Lobby 30"]
+    host, joiner, done = lobby_scene_pair(host)
+    checks = [marked("timing-host", "host", "The Timing page holds no do-nothing control; each row's hint names what its choice costs.",
+                     ["^assert_no_caption CollectionBoxHostPageTiming .*PASS"] + [f"^assert_label LabelHostNetOptionHint .*PASS" for _ in TIMING_HINTS])]
+    emit(27, "The Timing page: no do-nothing control, a cost hint for every row", host, joiner, done, done, checks, timeout=300)
+
+
+HOSTING_HINTS = {"RadioNetworkDelayAuto": "Automatic sizes each player's delay from their ping; Fixed uses the frames below",
+                 "TextNetworkIdleWait": "Minutes an open lobby waits with nobody joining before it closes",
+                 "TextNetworkPathHorizon": "Ticks AI route searches may take; longer avoids pauses on slow machines, AI orders start later",
+                 "CheckboxNetworkAutoRepair": "A match that falls out of step reloads the host's copy on every machine"}
+
+
+def hosting_pages(peer):
+    """Settings > Network: the Hosting page edits only the games this computer hosts, each row saying what it costs."""
+    lines = ["activate ButtonMainToOptions", "wait_ms 600", "select_settings_page Network", "wait_ms 450", "select_settings_page Network:Basics", "wait 3",
+             "activate ButtonNetworkAdvanced", "wait 4", "select_settings_page Network:Player", "wait 4", f"video_mark hosting-page-{peer}",
+             "assert_visible CheckboxNetworkToasts 0", "assert_visible CheckboxNetworkPrediction 0", "assert_visible CheckboxNetworkDiagnostics 0"]
+    for control, hint in HOSTING_HINTS.items():
+        lines += [f"focus {control}", "wait_ms 300", f"assert_label LabelNetworkHostingHint {hint}", "assert_text_fits LabelNetworkHostingHint"]
+    lines += ["select_settings_page Network:Chat", "wait 4", f"video_mark in-match-page-{peer}", "assert_label TabNetPageChat In match",
+              "assert_visible CheckboxNetworkToasts 1", "assert_visible CheckboxNetworkPrediction 1", "assert_visible CheckboxNetworkDiagnostics 1",
+              "assert_label LabelNetworkPredictionHint Your own units answer at once; the match confirms each move a moment later",
+              "assert_text_fits LabelNetworkPredictionHint", "post_command ButtonBackToMainMenu", "wait_ms 900", "assert_screen MainScreen"]
+    return lines
+
+
+def hosting_page_scene():
+    """D12: this computer's hosting defaults sit apart from its in-match options, and the router row says what it opens."""
+    host = ["wait_ms 1800"] + hosting_pages("host") + host_setup()[1:]
+    host[host.index("activate TabHostPageConnection"):host.index("activate TabHostPageConnection") + 1] = [
+        "activate TabHostPageConnection", "assert_label CheckHostPortMap Ask my router to open the game port - players connect directly",
+        "assert_text_fits CheckHostPortMap"]
+    host += ["touch_file {PROBE_DIR}/scene-end.json", "wait_file {PROBE_DIR_joiner}/scene-end.json 120"] + lobby_exit()
+    joiner = ["wait_ms 1800"] + hosting_pages("joiner") + join_setup()[1:] + ["touch_file {PROBE_DIR}/scene-end.json", "wait_file {PROBE_DIR_host}/scene-end.json 300"] + lobby_exit()
+    done = probe([dict(op="wait_file", path="{PROBE_DIR}/scene-end.json", scope="menu", within_ms=300000), dict(op="finish")], 320000)
+    checks = [marked(f"hosting-page-{peer}", peer, "The Hosting page holds only hosting defaults, each with what it costs.",
+                     ["^assert_visible CheckboxNetworkPrediction 0.*PASS", "^assert_label LabelNetworkHostingHint .*PASS"]) for peer in ("host", "joiner")]
+    checks += [marked(f"in-match-page-{peer}", peer, "This computer's in-match options have their own page.", ["^assert_label TabNetPageChat \"In match\".*PASS"])
+               for peer in ("host", "joiner")]
+    emit(28, "Hosting defaults and this computer's in-match options on their own pages; the router row says what it opens",
+         host, joiner, done, done, checks, timeout=300)
+
+
 def menu_scenes():
     own_seat_held_scene()
     seat_dialog_scene()
@@ -841,6 +951,9 @@ def menu_scenes():
     second_rematch_scene()
     for number, size in ((23, "640x360"), (24, "960x540"), (25, "1280x720")):
         newcomer_scene(number, size)
+    setup_doors_scene()
+    timing_page_scene()
+    hosting_page_scene()
 
 
 def main(argv):
