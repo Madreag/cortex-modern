@@ -1441,6 +1441,8 @@ namespace RTE {
 		/// This is needed because of a very awkward and ugly old code path where controllers were updated in the middle of update, and various mods relied of this behaviour for actions that were therefore delayed by a frame
 		/// Ideally we wouldn't need this, but this is all very fragile code and I'd prefer to avoid breaking things.
 		void PreControllerUpdate();
+		/// Runs every threaded state's ThreadedUpdate hooks in the synced pass's order, one after another.
+		void RunThreadedUpdatePass(const std::string& threadedUpdate);
 		void RunThreadedSyncedUpdatePass(bool globalMoidOrder);
 
 		uint64_t m_SyncedPassSkippedDeadEntries = 0; //!< Entries the last threaded synced pass refused to touch because a script in that pass had freed the object.

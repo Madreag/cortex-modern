@@ -106,6 +106,9 @@ namespace RTE {
 		bool s_WorldCatchUpWindowPaced = false; //!< Whether every frame of it stopped on its time or its ceiling, with the tail still ahead.
 		bool s_WorldCatchUpFramePaced = false; //!< Whether this frame stopped on its time or its ceiling.
 		int s_OwnSeatCatchUpBudget = 0;
+		int s_OwnSeatCatchUpGranted = 0; //!< The ticks this frame's own-seat catch-up granted past the round's pace.
+		RTE::SteadyClock::time_point s_OwnSeatCatchUpLastGrant;
+		std::chrono::microseconds s_OwnSeatCatchUpTickTime{0}; //!< What a granted tick took lately, from one grant to the next in a frame.
 		uint64_t s_PeerCatchUpBudgetAtMs = 0;
 		double s_PeerCatchUpCredit = 0;
 		int s_FenceTraceFrames = 0; //!< Reclaim-gap frames whose inputs are still traced, fence by fence.
@@ -1579,6 +1582,7 @@ namespace RTE {
 		const double frameMs = s_WorldCatchUpUntilDraw ? untilDrawMs : c_DefaultDeltaTimeS * 1000.0 - drawMs - c_FrameMarginMs;
 		s_WorldCatchUpFrameTime = std::chrono::microseconds(static_cast<int64_t>(std::max(0.0, frameMs) * 1000.0));
 		s_OwnSeatCatchUpBudget = c_WorldCatchUpTicksPerRealFrame;
+		s_OwnSeatCatchUpGranted = 0;
 		NetLockstepPlaneGuard plane;
 		const uint64_t nowMs = NetLockstepNowMs();
 		(void)RebaseInputDelayClock(nowMs);
@@ -1612,18 +1616,29 @@ namespace RTE {
 		return IsLockstepControllerSyncActive() ? "[net-tick-cost]" : s_WorldCatchUpActive ? "[catchup-tick-cost]" : "[sp-tick-cost]";
 	}
 
-	bool ScenarioRunner::TakeOwnSeatCatchUpGrant(uint64_t nextSimTick) {
+	bool ScenarioRunner::TakeOwnSeatCatchUpGrant(uint64_t nextSimTick, RTE::SteadyClock::time_point now) {
 		NetLockstepPlaneGuard plane;
 		if (s_OwnSeatCatchUpBudget <= 0 || !s_LockstepCoordinator || !s_LockstepCoordinator->HasReadyFrame(nextSimTick)) return false;
 		const double ordinaryWaitMs = std::max(0.0, static_cast<double>(g_TimerMan.GetDeltaTimeTicks() - g_TimerMan.GetSimAccumulator()) *
 		    1000.0 / g_TimerMan.GetTicksPerSecond());
-		if (s_LockstepCoordinator->PeerFrameCatchUpActive(ordinaryWaitMs)) return true;
-		// A returned reader's neutral interval follows the surviving displayed clock.
-		if (s_LockstepCoordinator->UsesPeerFrameGroups()) return false;
-		// A seat that came back from the committed tail stands a trip behind the round's inputs: it closes that trip through its reclaim gap.
-		const uint8_t local = s_LockstepCoordinator->GetConfig().localPeerId;
-		if (!s_LockstepCoordinator->IsOwnHostSeatHeld() && !s_LockstepCoordinator->IsSeatReclaimGap(local, nextSimTick)) return false;
-		--s_OwnSeatCatchUpBudget;
+		const bool catchingUp = s_LockstepCoordinator->PeerFrameCatchUpActive(ordinaryWaitMs);
+		if (!catchingUp) {
+			// A returned reader's neutral interval follows the surviving displayed clock.
+			if (s_LockstepCoordinator->UsesPeerFrameGroups()) return false;
+			// A seat that came back from the committed tail stands a trip behind the round's inputs: it closes that trip through its reclaim gap.
+			const uint8_t local = s_LockstepCoordinator->GetConfig().localPeerId;
+			if (!s_LockstepCoordinator->IsOwnHostSeatHeld() && !s_LockstepCoordinator->IsSeatReclaimGap(local, nextSimTick)) return false;
+		}
+		// The returning player's screen keeps its rate: one tick past the round's pace a frame always closes the gap, and any more
+		// run only while the next still fits before the frame's draw.
+		if (s_OwnSeatCatchUpGranted > 0) {
+			const auto tick = std::chrono::duration_cast<std::chrono::microseconds>(now - s_OwnSeatCatchUpLastGrant);
+			s_OwnSeatCatchUpTickTime = s_OwnSeatCatchUpTickTime.count() == 0 ? tick : (s_OwnSeatCatchUpTickTime * 3 + tick) / 4;
+			if (now - s_WorldCatchUpFrameBegan + (s_WorldCatchUpUntilDraw ? std::chrono::microseconds{0} : s_OwnSeatCatchUpTickTime) > s_WorldCatchUpFrameTime) return false;
+		}
+		s_OwnSeatCatchUpLastGrant = now;
+		++s_OwnSeatCatchUpGranted;
+		if (!catchingUp) --s_OwnSeatCatchUpBudget;
 		return true;
 	}
 

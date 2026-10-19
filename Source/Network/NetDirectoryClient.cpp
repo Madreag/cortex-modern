@@ -371,10 +371,10 @@ namespace RTE {
 		if (m_IceRequest || m_BaseUrl.empty() || !m_Factory) return false;
 		const uint64_t nowMs = m_HttpTransport ? NetDirectoryRetry::NowMs() : m_NowMs;
 		const bool hostRequest = request.method == "POST";
-		// Fetching an existing offer does not spend a host's mint allowance.
+		// A joiner's fetch mints its own login, so it spends the same relay allowance as a host's request.
 		if (nowMs < m_IceRetries[hostRequest ? 1 : 0].nextMs || (m_HttpTransport &&
 		    (!NetDirectoryBudget::Ready(m_BaseUrl, m_InstallKey, "general", nowMs) ||
-		     (hostRequest && !NetDirectoryBudget::Ready(m_BaseUrl, m_InstallKey, "relay", nowMs))))) return false;
+		     !NetDirectoryBudget::Ready(m_BaseUrl, m_InstallKey, "relay", nowMs)))) return false;
 		m_IceSessionId = request.path.rfind("/v1/sessions/", 0) == 0 ? request.path.substr(13, request.path.find('/', 13) - 13) : std::string();
 		if (m_HttpTransport && NetDirectoryBudget::SessionEnded(m_BaseUrl, m_InstallKey, m_IceSessionId, nowMs)) return false;
 		m_IceError.clear();
@@ -412,16 +412,20 @@ namespace RTE {
 		m_IceRelayRefused = reply.statusCode == 502 && reply.body.find("\"relay_provider_refused\"") != std::string::npos;
 		m_IceRetryable = false;
 		m_IceRetryDelayMs = 500;
-		if (reply.statusCode == 200 && reply.error.empty() && NetRelayConfig::FromJson(reply.body, offer) && offer.Usable(now)) {
+		const uint64_t directoryNow = static_cast<uint64_t>(std::max<int64_t>(1, static_cast<int64_t>(now) + m_DirectoryClockOffset));
+		if (reply.statusCode == 200 && reply.error.empty() && NetRelayConfig::FromJson(reply.body, offer) && offer.Usable(directoryNow)) {
+			offer.expiresAt = static_cast<uint64_t>(std::max<int64_t>(1, static_cast<int64_t>(offer.expiresAt) - m_DirectoryClockOffset));
 			m_IceServers = std::move(offer);
 			m_IceError.clear(); retry.Succeeded();
 		} else {
 			if (!m_IceServers.Usable(now)) m_IceServers = {};
-			m_IceRetryable = !m_IceRelayRefused && reply.statusCode != 403;
+			// A directory with no relay of its own has none to lend, whatever relay the host brought.
+			const bool unlent = !m_IceHostRequest && reply.statusCode == 503 && reply.body.find("\"relay_not_configured\"") != std::string::npos;
+			m_IceRetryable = !m_IceRelayRefused && !unlent && reply.statusCode != 403;
 			const uint64_t steady = m_HttpTransport ? NetDirectoryRetry::NowMs() : m_NowMs;
 			const uint64_t until = retry.Failed(steady, reply.statusCode, reply.body, reply.retryAfter, m_IceHostRequest ? "relay-mint" : "relay-fetch");
 			m_IceRetryDelayMs = static_cast<uint32_t>(std::min<uint64_t>(until - steady, UINT32_MAX));
-			if (m_HttpTransport && reply.statusCode == 429) NetDirectoryBudget::Refused(m_BaseUrl, m_InstallKey, m_IceHostRequest ? "relay" : "general", steady, until, reply.body);
+			if (m_HttpTransport && reply.statusCode == 429) NetDirectoryBudget::Refused(m_BaseUrl, m_InstallKey, "relay", steady, until, reply.body);
 			if (NetDirectoryRetry::SessionGone(reply.statusCode, reply.body)) {
 				m_IceRetryable = false;
 				if (m_HttpTransport) NetDirectoryBudget::EndSession(m_BaseUrl, m_InstallKey, m_IceSessionId, steady);
@@ -429,6 +433,7 @@ namespace RTE {
 			m_IceError = m_IceRelayRefused
 			                 ? (m_IceHostRequest ? "The relay service refused your request. Check Relay in the lobby and retry."
 			                                     : "The host's relay refused the credentials. Ask the host to check Relay in the lobby.")
+			             : unlent ? "This directory has no relay login to lend before you join. Switch Connection to Automatic, or set your own relay."
 			             : reply.statusCode == 429 ? "The relay service is busy. Wait briefly and retry joining."
 			             : reply.statusCode == 403 ? "The directory refused the relay request. Refresh the game list and retry."
 			             : "The relay login is not ready. Retry joining after the host's relay reconnects.";

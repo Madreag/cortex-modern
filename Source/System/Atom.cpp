@@ -1832,7 +1832,8 @@ int Atom::Travel(float travelTime, bool autoTravel) {
 	// Both point sets are archived through the owner, and this is the one write of them that a
 	// resting object can still reach.
 	if (!m_TrailPoints.empty() || !m_LastTrailPoints.empty()) TouchCheckpoint();
-	m_LastTrailPoints = m_TrailPoints;
+	// This update's trail becomes the last one by trading buffers, not by copying one into the other.
+	m_LastTrailPoints.swap(m_TrailPoints);
 	m_TrailPoints.clear();
 
 	SceneMan::SetTerrainEventContext(m_OwnerMO ? static_cast<long>(m_OwnerMO->GetUniqueID()) : 0);

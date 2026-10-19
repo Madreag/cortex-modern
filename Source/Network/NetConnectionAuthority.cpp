@@ -102,6 +102,9 @@ namespace RTE {
 					return "Your connection protocol is " + std::to_string(NetSeatLease::c_Version) + "; the directory uses " + std::to_string(remote) + ". Update the game or directory so the versions match.";
 				}
 				if (code == "match_ended") { refused = ended = true; return "The host ended this match. Choose another game."; }
+				// A clock refusal names the directory's time, and the next request is signed on it.
+				if (code == "connection_clock" && body.contains("directory_time") && body["directory_time"].is_number_unsigned())
+					return "This device's clock differs from the directory's. Reconnecting signs on the directory's clock; Cancel returns to Multiplayer.";
 				if (response.statusCode == 404 && code == "not_found") {
 					refused = ended = true;
 					return "This match is no longer in the directory. Choose another game.";
@@ -184,7 +187,10 @@ namespace RTE {
 	NetConnectionAuthority::~NetConnectionAuthority() = default;
 	void NetConnectionAuthority::Suspend() {
 		std::lock_guard lock(m_Mutex);
-		m_CheckIn.reset(); m_Bootstrap.reset(); m_Operations.clear(); m_LocalLease.reset(); m_HostToken.clear();
+		m_CheckIn.reset(); m_Bootstrap.reset(); m_LocalLease.reset(); m_HostToken.clear();
+		// Queued removals outlive the suspension and go out under the next host token.
+		std::erase_if(m_Operations, [](const auto& item) { return !item.second.removal; });
+		for (auto& [key, operation]: m_Operations) { (void)key; operation.request.reset(); }
 		m_HostChange.reset(); m_HostChangeRequest.reset(); m_HostChangeReply = {}; m_HostChangeToken.clear();
 		m_FrameTie.reset(); m_FrameTieQuestions.clear(); m_ActiveFrameTie.reset(); m_NextFrameTieQuestion = 0;
 		m_HostSigningKey.fill(0);
@@ -204,12 +210,17 @@ namespace RTE {
 		m_Suspended = false;
 	}
 	void NetConnectionAuthority::Configure(NetParticipantIdentityStore* player, std::string baseUrl, std::string installKey, std::string certPin) {
+		{
+			std::lock_guard network(m_NetworkMutex);
+			if (!m_LanBrowser) m_LanBrowser = std::make_unique<NetLanDiscovery>();
+			(void)m_LanBrowser->StartBrowser();
+		}
 		std::lock_guard lock(m_Mutex);
-		if (!m_LanBrowser) m_LanBrowser = std::make_unique<NetLanDiscovery>();
-		(void)m_LanBrowser->StartBrowser();
+		while (!baseUrl.empty() && baseUrl.back() == '/') baseUrl.pop_back();
+		if (!baseUrl.empty() && !baseUrl.starts_with("https://")) baseUrl = "https://" + baseUrl;
+		// Another directory keeps another clock.
+		if (baseUrl != m_BaseUrl) m_DirectoryClockOffset = 0;
 		m_Player = player; m_BaseUrl = std::move(baseUrl); m_InstallKey = std::move(installKey); m_CertPin = std::move(certPin);
-		while (!m_BaseUrl.empty() && m_BaseUrl.back() == '/') m_BaseUrl.pop_back();
-		if (!m_BaseUrl.empty() && !m_BaseUrl.starts_with("https://")) m_BaseUrl = "https://" + m_BaseUrl;
 		if (m_Instance == NetAuthBytes16{}) (void)GetNetAuthCrypto().RandomBytes(m_Instance.data(), m_Instance.size());
 	}
 	void NetConnectionAuthority::SetDirectory(std::string sessionId, std::string hostToken, uint32_t hostGeneration, std::string authorityKey) {
@@ -222,7 +233,8 @@ namespace RTE {
 			m_CheckIns = m_NextCheckIn = m_NextBootstrap = 0; m_BootstrapWanted = m_Refused = m_Ended = false; m_Error.clear();
 			m_CheckedGeneration = m_RelayGeneration = UINT32_MAX;
 		}
-		if (!m_HostToken.empty() && hostToken.empty()) { m_Operations.clear(); m_Removals.clear(); }
+		// A host handing its token on stops issuing seats; its removals wait for the next token.
+		if (!m_HostToken.empty() && hostToken.empty()) std::erase_if(m_Operations, [](const auto& item) { return !item.second.removal; });
 		if (m_HostToken != hostToken || m_HostGeneration != hostGeneration)
 			for (auto& [key, operation]: m_Operations) { (void)key; operation.error.clear(); }
 		m_SessionId = std::move(sessionId); m_HostToken = std::move(hostToken); m_HostGeneration = hostGeneration;
@@ -320,9 +332,13 @@ namespace RTE {
 
 	void NetConnectionAuthority::Remove(const NetParticipantId& player, const std::string& name, bool ban) {
 		std::lock_guard lock(m_Mutex);
-		if (m_SessionId.empty() || m_HostToken.empty()) return;
+		// A removal made before the host holds its directory token waits for one.
+		if (m_SessionId.empty()) return;
 		const std::string key = "remove:" + Hex(player);
-		if (!m_Removals.insert(key).second) return;
+		const auto [known, added] = m_Removals.try_emplace(key, ban);
+		// A ban after a kick of the same player is a new answer for the directory.
+		if (!added && (!ban || known->second)) return;
+		known->second = ban;
 		Operation operation; operation.removal = true;
 		operation.body = json{{"connection_protocol", NetSeatLease::c_Version}, {"operation", "remove"}, {"token", m_HostToken}, {"host_generation", m_HostGeneration},
 			{"participant", Hex(player)}, {"name", name}, {"action", ban ? "banned" : "removed"}}.dump();
@@ -383,7 +399,25 @@ namespace RTE {
 		while (!m_TieRequests.empty() && nowMs >= m_TieRequests.front() && nowMs - m_TieRequests.front() >= 60100) m_TieRequests.pop_front();
 		return CanRequest(nowMs) && m_TieRequests.size() < c_TieRequestsPerMinute;
 	}
+	void NetConnectionAuthority::NoteDirectoryClock(const std::string& body) {
+		if (m_UnixSeconds == 0) return;
+		const auto reply = json::parse(body, nullptr, false);
+		if (!reply.is_object()) return;
+		const auto time = reply.find("directory_time");
+		if (time == reply.end() || !time->is_number_unsigned()) return;
+		const uint64_t directory = time->get<uint64_t>();
+		if (directory == 0 || directory > (uint64_t{1} << 40)) return;
+		// A second of reply delay is not a clock change; the times this clock rebases stay put.
+		const int64_t offset = static_cast<int64_t>(directory) - static_cast<int64_t>(m_UnixSeconds);
+		if (offset - m_DirectoryClockOffset >= 2 || m_DirectoryClockOffset - offset >= 2) m_DirectoryClockOffset = offset;
+	}
+	uint64_t NetConnectionAuthority::DirectoryNowLocked(uint64_t localUnixSeconds) const {
+		const int64_t shifted = static_cast<int64_t>(localUnixSeconds) + m_DirectoryClockOffset;
+		return shifted > 0 ? static_cast<uint64_t>(shifted) : 1;
+	}
+	uint64_t NetConnectionAuthority::DirectoryNow(uint64_t localUnixSeconds) const { std::lock_guard lock(m_Mutex); return DirectoryNowLocked(localUnixSeconds); }
 	uint64_t NetConnectionAuthority::FailedReply(const NetHttpClient::Response& response, NetDirectoryRetry& retry, uint64_t nowMs, const char* path) {
+		NoteDirectoryClock(response.body);
 		const uint64_t until = retry.Failed(nowMs, response.statusCode, response.body, response.retryAfter, path);
 		bool refused = false, ended = false;
 		m_Error = ReplyError(response, refused, ended);
@@ -413,6 +447,7 @@ namespace RTE {
 				if (op.request->Poll() == NetHttpClient::PollResult::Pending) { ++active; ++it; continue; }
 				const auto response = op.request->GetResponse(); op.request.reset();
 				if (response.statusCode == 200 && response.error.empty()) {
+					NoteDirectoryClock(response.body);
 					if (op.removal) {
 						const auto body = json::parse(response.body, nullptr, false);
 						std::string error;
@@ -432,7 +467,7 @@ namespace RTE {
 					if (ended) { m_Ended = m_Refused = true; NetDirectoryBudget::EndSession(m_BaseUrl, m_InstallKey, m_SessionId, steadyMs); }
 				}
 			}
-			if (!op.request && !op.issued && op.error.empty() && steadyMs >= op.retryAt && steadyMs >= (op.removal ? m_RemoveRetry : m_IssueRetry).nextMs && active < 1 && CanRequest(steadyMs)) {
+			if (!op.request && !op.issued && op.error.empty() && !m_HostToken.empty() && steadyMs >= op.retryAt && steadyMs >= (op.removal ? m_RemoveRetry : m_IssueRetry).nextMs && active < 1 && CanRequest(steadyMs)) {
 				// Host migration may rotate the directory token while this request waits.
 				auto body = json::parse(op.body); body["token"] = m_HostToken; body["host_generation"] = m_HostGeneration;
 				op.request = StartRequest("POST", body.dump()); if (op.request) ++active;
@@ -445,6 +480,7 @@ namespace RTE {
 			if (m_Bootstrap->Poll() == NetHttpClient::PollResult::Pending) return;
 			const auto response = m_Bootstrap->GetResponse(); m_Bootstrap.reset();
 			if (response.statusCode == 200 && response.error.empty()) {
+				NoteDirectoryClock(response.body);
 				NetConnectionHost host; std::string error;
 				if (ReadHostReply(response.body, host, error)) { m_Host = std::move(host); m_BootstrapWanted = false; m_Error.clear(); m_BootstrapRetry.Succeeded(); }
 				else m_NextBootstrap = FailedReply(response, m_BootstrapRetry, steadyMs, "seat-bootstrap");
@@ -455,7 +491,7 @@ namespace RTE {
 	std::string NetConnectionAuthority::SignedSeatRequest(const std::string& operation, uint64_t unixSeconds, const NetHostChangeRequest* change, const NetFrameTieRequest* tie) {
 		NetAuthBytes16 nonce{};
 		if (!GetNetAuthCrypto().RandomBytes(nonce.data(), nonce.size())) return {};
-		json contents{{"session_id", m_SessionId}, {"seat_token", m_LocalLease->token}, {"nonce", Hex(nonce)}, {"instance", Hex(m_Instance)}, {"sent_at", unixSeconds},
+		json contents{{"session_id", m_SessionId}, {"seat_token", m_LocalLease->token}, {"nonce", Hex(nonce)}, {"instance", Hex(m_Instance)}, {"sent_at", DirectoryNowLocked(unixSeconds)},
 			{"route", {{"ice_identity", m_Route.iceIdentity}, {"ice_virtual_port", m_Route.iceVirtualPort}, {"listen_port", m_Route.listenPort}, {"listen_addrs", m_Route.listenAddrs}, {"generation", m_Route.generation}, {"state", m_Route.state}}}};
 		if (!change && !m_HostToken.empty()) contents["host"] = {{"token", m_HostToken}, {"generation", m_HostGeneration}};
 		if (change) {
@@ -480,6 +516,7 @@ namespace RTE {
 			const auto response = m_CheckIn->GetResponse(); m_CheckIn.reset();
 			m_NextCheckIn = steadyMs + 5000;
 			if (response.statusCode == 200 && response.error.empty()) {
+				NoteDirectoryClock(response.body);
 				NetSeatLease lease; std::string error;
 				if (!ReadLeaseReply(response.body, lease, error) || !lease.SameSeat(*m_LocalLease) || lease.participant != m_Player->PublicId()) { m_NextCheckIn = FailedReply(response, m_CheckInRetry, steadyMs, "seat-check-in"); return; }
 				m_LocalLease = std::move(lease); ++m_CheckIns; m_CheckedGeneration = m_CheckInGeneration; m_Error.clear();
@@ -490,7 +527,9 @@ namespace RTE {
 					if (body.contains("host")) { NetConnectionHost host; if (ReadHostReply(body.at("host").dump(), host, error)) m_Host = std::move(host); else { m_Error = error; m_Refused = !error.empty(); } }
 					if (body.contains("relay")) {
 						NetRelayConfig relay;
-						if (NetRelayConfig::FromJson(body.at("relay").dump(), relay) && relay.Usable(unixSeconds)) {
+						// The directory's expiry moves onto this machine's clock, where every reader of the login judges it.
+						if (NetRelayConfig::FromJson(body.at("relay").dump(), relay) && relay.Usable(DirectoryNowLocked(unixSeconds))) {
+							relay.expiresAt = static_cast<uint64_t>(std::max<int64_t>(1, static_cast<int64_t>(relay.expiresAt) - m_DirectoryClockOffset));
 							m_Relay = std::move(relay);
 							if (body.value("relay_current", false)) m_RelayGeneration = m_CheckInGeneration;
 						}
@@ -724,39 +763,57 @@ namespace RTE {
 		}
 	}
 
+	void NetConnectionAuthority::ProbeLanHosts(uint64_t steadyMs, std::map<uint64_t, NetConnectionRoute>& directHosts) {
+		m_LanBrowser->Tick(steadyMs);
+		auto hosts = m_LanBrowser->GetHosts(steadyMs);
+		std::sort(hosts.begin(), hosts.end(), [](const auto& a, const auto& b) { return a.lastSeenMs > b.lastSeenMs; });
+		for (const auto& host: hosts) {
+			if (host.matchId == 0 || host.port == 0) continue;
+			const auto found = directHosts.find(host.matchId);
+			if (found != directHosts.end() && found->second.generation >= host.hostGeneration) continue;
+			NetConnectionRoute route;
+			route.listenPort = host.port; route.listenAddrs = {host.address}; route.generation = host.hostGeneration;
+			directHosts[host.matchId] = std::move(route);
+		}
+	}
+
 	void NetConnectionAuthority::Update(uint64_t steadyMs, uint64_t unixSeconds) {
+		// The LAN browser and the adapter scan run outside m_Mutex: a sim tick's tie query never waits on them.
+		std::optional<std::map<uint64_t, NetConnectionRoute>> directHosts;
+		std::optional<NetworkProbe> probe;
+		uint64_t lanSequence = 0;
+		{
+			std::lock_guard network(m_NetworkMutex);
+			if (m_LanBrowser) { directHosts.emplace(); ProbeLanHosts(steadyMs, *directHosts); lanSequence = ++m_LanSequence; }
+			probe = ProbeNetwork(steadyMs, unixSeconds);
+		}
 		std::lock_guard lock(m_Mutex);
 		m_LastUpdateMs = steadyMs;
-		if (m_LanBrowser) {
-			m_LanBrowser->Tick(steadyMs);
-			m_DirectHosts.clear();
-			auto hosts = m_LanBrowser->GetHosts(steadyMs);
-			std::sort(hosts.begin(), hosts.end(), [](const auto& a, const auto& b) { return a.lastSeenMs > b.lastSeenMs; });
-			for (const auto& host: hosts) {
-				if (host.matchId == 0 || host.port == 0) continue;
-				const auto found = m_DirectHosts.find(host.matchId);
-				if (found != m_DirectHosts.end() && found->second.generation >= host.hostGeneration) continue;
-				NetConnectionRoute route;
-				route.listenPort = host.port; route.listenAddrs = {host.address}; route.generation = host.hostGeneration;
-				m_DirectHosts[host.matchId] = std::move(route);
-			}
-		}
-		ObserveNetwork(steadyMs, unixSeconds);
+		m_UnixSeconds = unixSeconds;
+		// A slower caller's older reading never replaces a newer one.
+		if (directHosts && lanSequence > m_AppliedLan) { m_AppliedLan = lanSequence; m_DirectHosts = std::move(*directHosts); }
+		if (probe && probe->sequence > m_AppliedProbe) { m_AppliedProbe = probe->sequence; ApplyNetwork(std::move(*probe)); }
 		if (m_Suspended) { PollBootstrap(steadyMs); return; }
 		// Pending frame and host decisions use the request budget before routine check-ins.
 		PollOperations(steadyMs); PollBootstrap(steadyMs); PollHostChange(steadyMs, unixSeconds); PollFrameTie(steadyMs, unixSeconds); PollCheckIn(steadyMs, unixSeconds);
 	}
 
-	void NetConnectionAuthority::ObserveNetwork(uint64_t steadyMs, uint64_t unixSeconds) {
+	std::optional<NetConnectionAuthority::NetworkProbe> NetConnectionAuthority::ProbeNetwork(uint64_t steadyMs, uint64_t unixSeconds) {
 		const bool resumed = m_LastWallSeconds != 0 && unixSeconds > m_LastWallSeconds + 20;
 		m_LastWallSeconds = unixSeconds;
-		if (!resumed && steadyMs < m_NextNetworkProbe) return;
+		if (!resumed && steadyMs < m_NextNetworkProbe) return std::nullopt;
 		m_NextNetworkProbe = steadyMs + 2000;
-		auto addresses = NetLanDiscovery::GetLocalAddresses();
-		const uint32_t native = GnsTransport::LocalRouteRevision();
-		if (resumed || addresses != m_NetworkAddresses || native != m_NativeRouteRevision) {
-			m_NativeRouteRevision = native;
-			m_NetworkAddresses = std::move(addresses); ++m_NetworkRevision; ++m_Route.generation;
+		NetworkProbe probe;
+		probe.addresses = m_AddressSource ? m_AddressSource() : NetLanDiscovery::GetLocalAddresses();
+		probe.nativeRevision = GnsTransport::LocalRouteRevision();
+		probe.resumed = resumed;
+		probe.sequence = ++m_ProbeSequence;
+		return probe;
+	}
+	void NetConnectionAuthority::ApplyNetwork(NetworkProbe probe) {
+		if (probe.resumed || probe.addresses != m_NetworkAddresses || probe.nativeRevision != m_NativeRouteRevision) {
+			m_NativeRouteRevision = probe.nativeRevision;
+			m_NetworkAddresses = std::move(probe.addresses); ++m_NetworkRevision; ++m_Route.generation;
 			m_NextCheckIn = 0;
 		}
 	}

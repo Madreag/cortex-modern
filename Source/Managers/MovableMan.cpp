@@ -194,6 +194,9 @@ namespace {
 		FinishPoolTasks(tasks);
 	}
 
+	std::unordered_set<const Actor*> s_LockstepLocalActors; //!< The actors this machine produces input for in this tick's controller pass.
+	std::vector<std::vector<Actor*>> s_AIStateActors; //!< Per threaded state, the actors its AI task runs this tick.
+
 	class ScopedAIActor {
 	public:
 		explicit ScopedAIActor(Actor* actor) noexcept : m_Previous(g_CurrentAIActor) { g_CurrentAIActor = actor; }
@@ -592,6 +595,32 @@ static std::vector<MovableObject*> SortedRegisteredMOs(const LuaStateWrapper& st
 	}
 	std::sort(sorted.begin(), sorted.end(), MOUniqueIDLess());
 	return sorted;
+}
+
+// One step of the global script order: an object as the snapshot read it, and the state its hooks run on.
+struct GlobalScriptVisit {
+	SyncedUpdateEntry entry;
+	LuaStateWrapper* state = nullptr;
+};
+
+// Every threaded state's registered objects in the snapshot order. One sort of all of them is the order a merge of the
+// per-state lists gives, without a heap operation per object, and it orders on the identity stored at snapshot time, never
+// on the object: an earlier script of the same pass may have deleted it.
+static std::vector<GlobalScriptVisit> GlobalScriptOrder() {
+	LuaStatesArray& states = g_LuaMan.GetThreadedScriptStates();
+	size_t registeredCount = 0;
+	for (const LuaStateWrapper& luaState: states) {
+		registeredCount += luaState.GetRegisteredMOs().size();
+	}
+	std::vector<GlobalScriptVisit> visits;
+	visits.reserve(registeredCount);
+	for (LuaStateWrapper& luaState: states) {
+		for (MovableObject* mo: luaState.GetRegisteredMOs()) {
+			visits.push_back({{mo, mo->GetUniqueID(), mo->GetID(), mo->GetScriptRegistrationSerial()}, &luaState});
+		}
+	}
+	std::sort(visits.begin(), visits.end(), [](const GlobalScriptVisit& lhs, const GlobalScriptVisit& rhs) { return SyncedUpdateEntryEarlier(lhs.entry, rhs.entry); });
+	return visits;
 }
 
 static std::vector<ControllerFrame> SnapshotControllerFrames(const CheckpointDeque<Actor*>& actors) {
@@ -6337,6 +6366,29 @@ static void ForgetActivitySlots(MovableObject* object) {
 	}
 }
 
+void MovableMan::RunThreadedUpdatePass(const std::string& threadedUpdate) {
+	// These hooks read and write each other's objects, so they run in the synced pass's one order across every state:
+	// what one reads of another is the same on every machine, however many cores this one has.
+	LuaMan::ScopedThreadLuaStateOverride context;
+	const uint64_t unregistrationsAtSnapshot = LuaStateWrapper::RegisteredMOUnregistrationCount();
+	LuaStateWrapper* currentState = nullptr;
+	for (const GlobalScriptVisit& visit: GlobalScriptOrder()) {
+		if (currentState != visit.state) {
+			g_LuaMan.SetThreadLuaStateOverride(visit.state);
+			currentState = visit.state;
+		}
+		MovableObject* mo = visit.entry.object;
+		// An earlier hook of this pass may have freed it, on any state.
+		if (LuaStateWrapper::RegisteredMOUnregistrationCount() != unregistrationsAtSnapshot && !visit.state->IsRegisteredMO(mo)) {
+			continue;
+		}
+		if (ValidMO(mo->GetRootParent())) {
+			mo->RunScriptedFunctionInAppropriateScripts(threadedUpdate, false, false, {}, {}, {});
+		}
+	}
+	g_LuaMan.SetThreadLuaStateOverride(nullptr);
+}
+
 void MovableMan::RunThreadedSyncedUpdatePass(bool globalMoidOrder) {
 	LuaMan::ScopedThreadLuaStateOverride context;
 	const std::string syncedUpdate = "SyncedUpdate"; // avoid string reconstruction
@@ -6374,28 +6426,8 @@ void MovableMan::RunThreadedSyncedUpdatePass(bool globalMoidOrder) {
 		return;
 	}
 
-	struct Visit {
-		SyncedUpdateEntry entry;
-		LuaStateWrapper* state = nullptr;
-	};
-	// Every state's registered set in one sort: the snapshot order is total, so this is the order a merge
-	// of the per-state lists gives, without a heap operation per object. It orders on the identity stored
-	// at snapshot time, never on the object: an earlier script in this same pass may have deleted it.
-	size_t registeredCount = 0;
-	for (const LuaStateWrapper& luaState: g_LuaMan.GetThreadedScriptStates()) {
-		registeredCount += luaState.GetRegisteredMOs().size();
-	}
-	std::vector<Visit> visits;
-	visits.reserve(registeredCount);
-	for (LuaStateWrapper& luaState: g_LuaMan.GetThreadedScriptStates()) {
-		for (MovableObject* mo: luaState.GetRegisteredMOs()) {
-			visits.push_back({{mo, mo->GetUniqueID(), mo->GetID(), mo->GetScriptRegistrationSerial()}, &luaState});
-		}
-	}
-	std::sort(visits.begin(), visits.end(), [](const Visit& lhs, const Visit& rhs) { return SyncedUpdateEntryEarlier(lhs.entry, rhs.entry); });
-
 	LuaStateWrapper* currentState = nullptr;
-	for (const Visit& visit: visits) {
+	for (const GlobalScriptVisit& visit: GlobalScriptOrder()) {
 		if (currentState != visit.state) {
 			g_LuaMan.SetThreadLuaStateOverride(visit.state);
 			currentState = visit.state;
@@ -7920,22 +7952,7 @@ void MovableMan::Update() {
 			}
 		}
 
-		LuaStatesArray& luaStates = g_LuaMan.GetThreadedScriptStates();
-		// One Lua state per task; the assert below requires it regardless of pool size.
-		RunStateTasks(luaStates.size(), [&](int start, int end) {
-			RTEAssert(start + 1 == end, "Threaded script state being updated across multiple threads!");
-			LuaStateWrapper& luaState = luaStates[start];
-			LuaMan::ScopedThreadLuaStateOverride stateOverride(&luaState, true);
-			PoolUpdateTaskProbe probe;
-			probe.FailIfRequested(static_cast<size_t>(start), luaStates.size());
-
-			for (MovableObject* mo: SortedRegisteredMOs(luaState)) {
-				if (ValidMO(mo->GetRootParent())) {
-					mo->RunScriptedFunctionInAppropriateScripts(threadedUpdate, false, false, {}, {}, {});
-				}
-			}
-		});
-		if (s_PoolUpdateProbe.active.load(std::memory_order_relaxed)) s_PoolUpdateProbe.continued.fetch_add(1, std::memory_order_relaxed);
+		RunThreadedUpdatePass(threadedUpdate);
 	}
 
 	{
@@ -8337,7 +8354,8 @@ void MovableMan::Travel() {
 // An actor's travel and update draw from a per-actor per-tick stream, so a preview of the actor draws
 // exactly what its canonical tick will.
 void MovableMan::TravelStage(MovableObject* mo, bool actor) {
-	DeterministicMORNGScope rng(mo->GetUniqueID(), Hash("ActorTravel"), actor);
+	static const uint64_t rngPhase = Hash("ActorTravel");
+	DeterministicMORNGScope rng(mo->GetUniqueID(), rngPhase, actor);
 	static const uint64_t soundPhase = Hash("Travel");
 	SoundSimulationScope sounds(mo->GetUniqueID(), soundPhase);
 	if (!mo->IsUpdated()) {
@@ -8359,14 +8377,20 @@ void MovableMan::PreControllerStage(Actor* actor) {
 }
 
 void MovableMan::UpdateStage(MovableObject* mo, bool actor) {
-	DeterministicMORNGScope rng(mo->GetUniqueID(), Hash("ActorUpdate"), actor);
+	static const uint64_t rngPhase = Hash("ActorUpdate");
+	DeterministicMORNGScope rng(mo->GetUniqueID(), rngPhase, actor);
 	static const uint64_t soundPhase = Hash("Update");
 	SoundSimulationScope sounds(mo->GetUniqueID(), soundPhase);
 	mo->Update();
 
-	g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::ScriptsUpdate);
-	mo->UpdateScripts();
-	g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::ScriptsUpdate);
+	// Only an object with scripts spends script time; timing every particle's call read the clock twice for nothing.
+	if (mo->HasAnyScripts()) {
+		g_PerformanceMan.StartPerformanceMeasurement(PerformanceMan::ScriptsUpdate);
+		mo->UpdateScripts();
+		g_PerformanceMan.StopPerformanceMeasurement(PerformanceMan::ScriptsUpdate);
+	} else {
+		mo->UpdateScripts();
+	}
 
 	mo->ApplyImpulses();
 }
@@ -8456,8 +8480,10 @@ void MovableMan::UpdateControllers() {
 		ScenarioRunner::SetControllerReplayError(std::string("tick ") + std::to_string(simTick) + " lockstep stopped: " + (reason.empty() ? "coordinator not running" : reason));
 		return;
 	}
+	// Under lockstep the actors this machine runs are read from the network plane once, below, before the pass produces anything.
+	s_LockstepLocalActors.clear();
 	auto isLocalControllerActor = [&](const Actor* actor) {
-		return !ScenarioRunner::WorldCatchUpActive() && (!lockstepActive || (!ScenarioRunner::IsHostMigrationCatchUp() && IsLockstepLocalActor(actor)));
+		return !ScenarioRunner::WorldCatchUpActive() && (!lockstepActive || s_LockstepLocalActors.contains(actor));
 	};
 	// Release last tick's quarantined joiners here, where the controller wire takes over;
 	// a same-tick joiner stays held through its join tick and a corpse stays disabled.
@@ -8509,6 +8535,15 @@ void MovableMan::UpdateControllers() {
 	// The pass that samples this machine's seats and runs its AI owns the input it produces; the sim keeps
 	// the frame the wire committed for this tick until the frames are snapshotted.
 	std::vector<long int> producingActors;
+	if (lockstepActive) {
+		// One answer per actor for the whole pass: every step agrees on it, and the AI tasks never wait on the plane's lock.
+		NetLockstepPlaneGuard plane;
+		if (!ScenarioRunner::IsHostMigrationCatchUp()) {
+			for (const Actor* actor: CheckpointActorValues().m_Actors) {
+				if (IsLockstepLocalActor(actor)) s_LockstepLocalActors.insert(actor);
+			}
+		}
+	}
 	if (lockstepActive) {
 		producingActors = BeginLockstepProducingPass(CheckpointActorValues().m_Actors, isLocalControllerActor);
 	}
@@ -8656,18 +8691,29 @@ void MovableMan::UpdateControllers() {
 			}
 		}
 
+		// The AI hooks run one task per state at once: what they decide leaves this machine only as its controllers and commands.
 		LuaStatesArray& luaStates = g_LuaMan.GetThreadedScriptStates();
+		// Each task walks only its own state's actors that this machine runs, in actor order.
+		s_AIStateActors.resize(luaStates.size());
+		for (std::vector<Actor*>& stateActors: s_AIStateActors) stateActors.clear();
+		for (Actor* actor: CheckpointActorValues().m_Actors) {
+			const int stateIndex = g_LuaMan.GetStateIndex(actor->GetLuaState());
+			if (stateIndex > 0 && isLocalControllerActor(actor)) s_AIStateActors[stateIndex - 1].push_back(actor);
+		}
 		RunStateTasks(luaStates.size(), [&](int start, int end) {
 			RTEAssert(start + 1 == end, "Threaded script state being updated across multiple threads!");
 			LuaStateWrapper& luaState = luaStates[start];
 			LuaMan::ScopedThreadLuaStateOverride stateOverride(&luaState, true);
-			for (Actor* actor: CheckpointActorValues().m_Actors) {
-				if (actor->GetLuaState() == &luaState && actor->ObjectScriptsInitialized() && isLocalControllerActor(actor) && actor->GetController()->ShouldUpdateAIThisFrame()) {
+			PoolUpdateTaskProbe probe;
+			probe.FailIfRequested(static_cast<size_t>(start), luaStates.size());
+			for (Actor* actor: s_AIStateActors[start]) {
+				if (actor->ObjectScriptsInitialized() && actor->GetController()->ShouldUpdateAIThisFrame()) {
 					ScopedAIActor actorContext(actor);
 					actor->RunScriptedFunctionInAppropriateScripts("ThreadedUpdateAI", false, true, {}, {}, {});
 				}
 			}
 		});
+		if (s_PoolUpdateProbe.active.load(std::memory_order_relaxed)) s_PoolUpdateProbe.continued.fetch_add(1, std::memory_order_relaxed);
 
 		drainDeferredEquips();
 		drainDeferredWaypoints();

@@ -303,7 +303,7 @@ namespace RTE {
 		/// The census line a running tick's cost is written under: a lockstep round's, a world catch-up's replay or single player's.
 		static const char* TickCostCensusTag();
 		/// A host whose own seat the AI holds, or a seat inside its own reclaim gap, runs its ready frames faster than real time, like a world joiner, until it is back.
-		static bool TakeOwnSeatCatchUpGrant(uint64_t nextSimTick);
+		static bool TakeOwnSeatCatchUpGrant(uint64_t nextSimTick, RTE::SteadyClock::time_point now = RTE::SteadyClock::now());
 		/// Whether a stopped coordinator holds the controller update this tick. A world joiner applying
 		/// its committed tail is driven by that tail, not by the coordinator, so it is not held.
 		static bool LockstepStopHoldsControllers();

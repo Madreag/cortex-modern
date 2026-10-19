@@ -367,7 +367,8 @@ class ConnectionAuthority:
         instance = bounded_hex(data, "instance", 16).hex()
         sent = bounded_int(data, "sent_at", 1, 2**53 - 1)
         if abs(now - sent) > REQUEST_WINDOW_SECONDS:
-            raise ConnectionErrorReply(409, "connection_clock", "This device's clock differs from the directory. Correct its clock and rejoin.")
+            # The directory's own time lets a client sign its next request on this clock.
+            raise ConnectionErrorReply(409, "connection_clock", "This device's clock differs from the directory. Correct its clock and rejoin.", directory_time=int(now))
         token = self._read_token(sid, data.get("seat_token"))
         route = data.get("route", {})
         if (not isinstance(route, dict) or set(route) - {"ice_identity", "ice_virtual_port", "listen_port", "listen_addrs", "generation", "state"}
@@ -652,7 +653,7 @@ class ConnectionAuthority:
 
     def _reply(self, sid: str, record: dict[str, Any], seat: dict[str, Any], now: float) -> dict[str, Any]:
         peers = [dict(seat=item["seat"], name=item["name"], route=item["route"]) for item in record["seats"].values() if item["participant"] not in record["removed"]]
-        result = dict(connection_protocol=CONNECTION_PROTOCOL, authority_key=self.public_key, seat_token=self._token(sid, seat, seat["lease_issued"]), seat=seat["seat"], generation=seat["generation"], expires_at=seat["lease_issued"] + SEAT_TOKEN_SECONDS, check_in_s=CHECK_IN_SECONDS, route_revision=record["route_revision"], peers=peers)
+        result = dict(connection_protocol=CONNECTION_PROTOCOL, authority_key=self.public_key, seat_token=self._token(sid, seat, seat["lease_issued"]), seat=seat["seat"], generation=seat["generation"], expires_at=seat["lease_issued"] + SEAT_TOKEN_SECONDS, check_in_s=CHECK_IN_SECONDS, route_revision=record["route_revision"], peers=peers, directory_time=int(now))
         if seat["relay"] and seat["relay"].get("expires_at", 0) > now:
             result["relay"] = seat["relay"]
         return result

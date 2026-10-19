@@ -120,6 +120,8 @@ VALID_STATES = frozenset({"lobby", "running"})
 TURN_MIN_TTL = 300
 TURN_MAX_TTL = 86400
 TURN_REQUESTS_PER_MIN = 4
+# A joiner's own login lasts its first dial; once seated, its check-ins renew the seat's.
+BOOTSTRAP_RELAY_TTL = 600
 REGISTER_STR_FIELDS = (
     "name",
     "activity",
@@ -168,12 +170,14 @@ def optional_generation(data: dict[str, Any]) -> Optional[int]:
 
 
 class TurnError(Exception):
-    def __init__(self, status: int, code: str, retry_after_s: int = 0) -> None:
+    def __init__(self, status: int, code: str, retry_after_s: int = 0, budget: str = "") -> None:
         super().__init__(code)
         self.status = status
         self.body = {"error": code}
         if retry_after_s:
             self.body["retry_after_s"] = retry_after_s
+        if budget:
+            self.body["budget"] = budget
 
 
 def clean_ice_servers(value: Any) -> list[dict[str, Any]]:
@@ -765,7 +769,7 @@ class SessionDirectory:
                 ice_identity=sess.fields.get("ice_identity", ""), ice_virtual_port=sess.fields.get("ice_virtual_port", 0),
                 listen_addrs=sess.fields["listen_addrs"], listen_port=sess.fields["listen_port"], join_mode=sess.fields["join_mode"],
                 state=sess.state, name=sess.fields["name"], session=sess.as_list_row(now), relay_enabled=sess.ice_offer is not None,
-                host_retry_after_s=max(0, int(sess.host_signal_retry_until - now + .999)))
+                host_retry_after_s=max(0, int(sess.host_signal_retry_until - now + .999)), directory_time=int(time.time()))
 
     def connection_request(self, session_id: str, data: dict[str, Any], now: float, install_key: str) -> dict[str, Any]:
         connection_version(data)
@@ -1477,7 +1481,7 @@ class SessionDirectory:
                 raise PermissionError("forbidden")
             limited = self.turn_limiter.probe(install_key, now, False)
             if limited:
-                raise TurnError(429, "rate_limited_key", limited[1]["retry_after_s"])
+                raise TurnError(429, "rate_limited_key", limited[1]["retry_after_s"], "relay")
             self.turn_limiter.commit(install_key, now, False)
             sess.ice_generation += 1
             generation = sess.ice_generation
@@ -1510,19 +1514,31 @@ class SessionDirectory:
                 generation=generation, expires_at=offer['expires_at'], server_count=len(offer['iceServers'])), sort_keys=True))
             return offer
 
-    def get_ice_servers(self, session_id: str, now: float) -> dict[str, Any]:
+    def get_ice_servers(self, session_id: str, install_key: str, now: float) -> dict[str, Any]:
+        """A requester's own short login for its first dial; the match's, a seat's or a fixed account never leaves here."""
         with self._lock:
             # An expired running listing still routes survivor signals during the
-            # existing resume grace. Those dials also need its unexpired offer.
+            # existing resume grace. Those dials also need a relay login.
             sess = self._signalling(session_id, now)
             if not sess:
                 raise KeyError(session_id)
-            if not sess.ice_offer or sess.ice_offer["expires_at"] <= int(time.time()):
+            if sess.ice_offer is None:
                 # A client must tell a relay that refused the host from a match that has none.
                 if sess.ice_refused:
                     raise TurnError(502, "relay_provider_refused")
                 raise TurnError(404, "relay_offer_unavailable")
-            return sess.ice_offer
+            if not valid_install_key(install_key):
+                raise PermissionError("forbidden")
+            limited = self.turn_limiter.probe(install_key, now, False)
+            if limited:
+                raise TurnError(429, "rate_limited_key", limited[1]["retry_after_s"], "relay")
+            self.turn_limiter.commit(install_key, now, False)
+        wall = int(time.time())
+        offer = self.turn_provider.mint(session_id, min(BOOTSTRAP_RELAY_TTL, self.turn_max_ttl), wall)
+        LOGGER.info('relay_bootstrap_offer_issued %s', json.dumps(dict(session_id=session_id,
+            provider=self.turn_provider._config.get('backend', 'cloudflare'), expires_at=offer['expires_at'],
+            server_count=len(offer['iceServers'])), sort_keys=True))
+        return offer
 
     def hear_host(self, session_id: str, data: dict[str, Any], now: float, retry_s: float = 0) -> bool:
         """A valid heartbeat is liveness evidence even when its update must wait."""
@@ -2157,7 +2173,7 @@ def make_handler(store: SessionDirectory) -> type[BaseHTTPRequestHandler]:
                     self._send(200, store.host_end_status(parse_session_id(parts[2]), now))
                     return
                 if len(parts) == 4 and parts[:2] == ["v1", "sessions"] and parts[3] == "ice-servers":
-                    self._send(200, store.get_ice_servers(parse_session_id(parts[2]), now))
+                    self._send(200, store.get_ice_servers(parse_session_id(parts[2]), self.headers.get("X-Install-Key", ""), now))
                     return
                 if parts == ["v1", "sessions"]:
                     limit = LIST_LIMIT_DEFAULT

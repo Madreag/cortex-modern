@@ -4026,6 +4026,10 @@ namespace RTE {
 				if (!TestRecoveryUsesListedMatch(&error)) return fail(error);
 				if (selected) { std::cout << "[net-directory-selftest] PASS" << std::endl; return 0; }
 			}
+			if (!selected || std::string(selected) == "connections") {
+				if (!NetConnectionSelfTest::Run(&error)) return fail(error);
+				if (selected) { std::cout << "[net-directory-selftest] PASS" << std::endl; return 0; }
+			}
 			if (selected && std::string(selected) == "host-post-wait") {
 				if (!TestHostPostWaitWithoutPolling(&error)) return fail(error);
 				std::cout << "[net-directory-selftest] PASS" << std::endl;
