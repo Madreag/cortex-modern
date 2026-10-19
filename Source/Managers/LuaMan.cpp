@@ -7276,6 +7276,8 @@ end
 	std::vector<std::string> problems;
 	const bool captured = dropped && g_ActivityMan.RunWorldCaptureWindow([] {}, [] {}, problems);
 	lua.RunScriptString("if _KeptSlices then MovableMan:RemoveActor(_KeptSlices.holder) end; _KeptSlices = nil; collectgarbage('collect')");
+	// The device's own script kept the slices it found in its holder's menu too, in its own state.
+	for (LuaStateWrapper& state: g_LuaMan.GetThreadedScriptStates()) state.RunScriptString("collectgarbage('collect')");
 	LuabindObjectWrapper::ApplyQueuedEntityDeletions();
 	LuabindObjectWrapper::ApplyQueuedDeletions();
 	size_t leaked = 0;
@@ -9204,6 +9206,9 @@ bool LuaStateWrapper::CapturePreparedScriptGraphs(const CheckpointLua::Boundary&
 					FrozenCaptureStats& part; RTE::SteadyClock::time_point started; uint64_t cpu;
 					~Cost() { ++part.userdata; part.nativeUs += std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - started).count(); part.nativeCpu += CheckpointThreadCpuUnits() - cpu; }
 				} cost{part, started, CheckpointThreadCpuUnits()};
+				// Test lever CC_TEST_CAPTURE_NATIVE_TRACE=1: each native a script holds, named before the saver copies it.
+				static const bool trace = [] { const char* value = std::getenv("CC_TEST_CAPTURE_NATIVE_TRACE"); return value && std::string_view(value) == "1"; }();
+				if (trace) std::cout << std::format("[capture-native] class={} owned={} at={} retained={}", bindings.Class(type)->name(), owned, pointer, Entity::RetainedMemoryHolds(pointer, 1)) << std::endl;
 				if (bindings.Class(type)->type() == LUABIND_TYPEID(LuaStateWrapper)) return &worker;
 				if (const auto offset = bindings.BaseOffset(type, "Entity")) {
 					const auto* entity = reinterpret_cast<const Entity*>(static_cast<const char*>(pointer) + *offset);
@@ -9216,9 +9221,6 @@ bool LuaStateWrapper::CapturePreparedScriptGraphs(const CheckpointLua::Boundary&
 					// An activity the world no longer has (a rejoin's image load replaced it) can stay in the capture helper's own maps,
 					// which the copy carries and the serializer skips; it is never read.
 					if (!owned && bindings.DerivesFrom(type, "Activity") && !LuaScriptGraphNativeCaptureScope::Current()->LiveActivity(entity)) return nullptr;
-					// Test lever CC_TEST_CAPTURE_NATIVE_TRACE=1: each native a script holds, named before the saver freezes it.
-					static const bool trace = [] { const char* value = std::getenv("CC_TEST_CAPTURE_NATIVE_TRACE"); return value && std::string_view(value) == "1"; }();
-					if (trace) std::cout << std::format("[capture-native] class={} owned={} at={} retained={}", bindings.Class(type)->name(), owned, static_cast<const void*>(entity), Entity::RetainedMemoryHolds(entity, 1)) << std::endl;
 					try {
 						void* result = reinterpret_cast<char*>(snapshot->Object(entity)) - *offset;
 						if (bindings.DerivesFrom(type, "PieSlice") || bindings.DerivesFrom(type, "PieMenu")) return LuaScriptGraphNativeCaptureScope::Current()->NoteSliceCopy(result, pointer);
