@@ -2296,6 +2296,18 @@ namespace {
 		return minutes >= NetMatchConfigUtil::c_MinReturnWindowMinutes && minutes <= NetMatchConfigUtil::c_MaxReturnWindowMinutes ? static_cast<uint8_t>(minutes) : 0;
 	}
 
+	/// A decision button's caption with its player's name fitted into the button's own width.
+	void HostOptCaption(GUIFont* font, GUIButton* button, const std::string& before, const std::string& name, const std::string& after) {
+		if (!button || !font) return;
+		std::string kept = name, shown = name;
+		const int room = button->GetWidth() - 12;
+		while (!kept.empty() && font->CalculateWidth(before + shown + after) > room) {
+			kept.pop_back();
+			shown = kept + "...";
+		}
+		if (button->GetText() != before + shown + after) button->SetText(before + shown + after);
+	}
+
 	/// The seconds an autosave choice's words name ("5 minutes (default)", "90 seconds"); 0 for anything else.
 	uint32_t HostOptAutosaveSecondsOf(const std::string& name) {
 		char* unit = nullptr;
@@ -3539,6 +3551,9 @@ void MainMenuGUI::RefreshHostSeatDialog() {
 	}
 	const NetMatchPlayerSlot& slot = m_HostOptionsDraft.players[m_HostOptionsSeatRow];
 	m_HostSeatDlgName->SetText("Name: " + slot.displayName);
+	GUIFont* buttonFont = m_SubMenuScreenGUIControlManager->GetSkin()->GetFont("FontLarge.png");
+	HostOptCaption(buttonFont, m_HostSeatDlgWait, "Keep for ", slot.displayName.empty() ? std::string("its player") : slot.displayName, "");
+	m_HostSeatDlgCancel->SetText("Cancel this approval");
 	m_HostSeatDlgSeat->SetText("Seat " + std::to_string(m_HostOptionsSeatRow + 1));
 	m_HostSeatDlgTeam->SetText("Team: Team " + std::to_string(slot.team + 1));
 	m_HostSeatDlgState->SetText(slot.cpu ? "Kind: CPU player" : "Kind: human seat");
@@ -3601,11 +3616,17 @@ void MainMenuGUI::RefreshHostSeatDialog() {
 			if (m_HostSeatDlgApplicantList->GetSelectedIndex() != chosen) m_HostSeatDlgApplicantList->SetSelectedIndex(chosen);
 			m_HostSeatDlgApplicantList->SetEnabled(host && !asking.empty());
 		}
+		std::string chosenName;
+		for (const NetH4ApplicantView& applicant : mrow->view.applicants) {
+			if (applicant.connection == mrow->applicant) chosenName = applicant.displayName;
+		}
+		HostOptCaption(buttonFont, m_HostSeatDlgApprove, "Let ", chosenName.empty() ? std::string("someone") : chosenName, " join");
 		HostOptSetEditable(m_HostSeatDlgWait, host && NetModerationUx::Available(*mrow, NetModerationAction::Wait));
 		HostOptSetEditable(m_HostSeatDlgApprove, host && NetModerationUx::Available(*mrow, NetModerationAction::Substitute));
 		HostOptSetEditable(m_HostSeatDlgCancel, host && NetModerationUx::Available(*mrow, NetModerationAction::Cancel));
 	} else {
 		m_HostSeatDlgApplicants->SetText("Nobody is asking for this seat");
+		HostOptCaption(buttonFont, m_HostSeatDlgApprove, "Let ", "someone", " join");
 		if (m_HostSeatDlgApplicantList) {
 			m_HostSeatDlgApplicantList->ClearList();
 			m_HostSeatDlgApplicantList->SetEnabled(false);
@@ -4988,6 +5009,15 @@ void MainMenuGUI::RefreshModerationControls(const NetLobbySnapshot& snapshot) {
 		const NetModerationUx::Row& seat = m_ModerationUx.GetRow(row);
 		m_ModerationSeatLabels[row]->SetText(seat.text);
 		m_ModerationApplicantButtons[row]->SetText(seat.applicantText);
+		// The host's decision in the Players panel's words.
+		std::string chosenName;
+		for (const NetH4ApplicantView& applicant : seat.view.applicants) {
+			if (applicant.connection == seat.applicant) chosenName = applicant.displayName;
+		}
+		GUIFont* buttonFont = m_SubMenuScreenGUIControlManager->GetSkin()->GetFont("FontLarge.png");
+		HostOptCaption(buttonFont, m_ModerationWaitButtons[row], "Keep for ", seat.view.displayName.empty() ? std::string("its player") : seat.view.displayName, "");
+		HostOptCaption(buttonFont, m_ModerationSubstituteButtons[row], "Let ", chosenName.empty() ? std::string("someone") : chosenName, " join");
+		m_ModerationCancelButtons[row]->SetText("Cancel this approval");
 		m_ModerationApplicantButtons[row]->SetEnabled(seat.view.actionsAvailable && (seat.applicants > 1 || (seat.applicants && seat.applicant == c_InvalidNetPeerId)));
 		m_ModerationWaitButtons[row]->SetEnabled(NetModerationUx::Available(seat, NetModerationAction::Wait));
 		m_ModerationSubstituteButtons[row]->SetEnabled(NetModerationUx::Available(seat, NetModerationAction::Substitute));
