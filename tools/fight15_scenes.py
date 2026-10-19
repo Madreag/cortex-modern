@@ -815,7 +815,7 @@ def relay_by_hand(peer):
             "activate ButtonNetworkAdvanced", "wait 4", "select_settings_page Network:Files", "wait 4", f"video_mark files-default-{peer}",
             "assert_label LabelNetAutosaveHost Your hosting default", "assert_label LabelNetAutosave On", "assert_label LabelNetAutosaveInterval Every 5 minutes",
             "assert_text_fits LabelNetAutosaveHost", "select_settings_page Network:Basics", "wait 3", "activate ButtonNetworkConnectionChange", "wait 4",
-            "assert_label ComboNetworkConnection Automatic", "combo_select ComboNetworkConnection Relay only", "wait_ms 600",
+            f"video_mark relay-by-hand-{peer}", "assert_label ComboNetworkConnection Automatic", "combo_select ComboNetworkConnection Relay only", "wait_ms 600",
             "assert_label ComboNetworkConnection Relay only", "assert_text_fits LabelNetworkConnectionHint", "post_command ButtonBackToMainMenu", "wait_ms 900",
             "assert_screen MainScreen"]
 
@@ -832,9 +832,13 @@ def newcomer_scene(number, size):
     for peer, steps in (("host", host_steps), ("joiner", joiner_steps)):
         steps += complete_live_scene(peer, number)
     checks = [dict(id=f"network-defaults-{peer}", peer=peer, mark=f"network-defaults-{peer}", screen="SettingsScreen",
-                   what="A newcomer's Settings > Network reads Automatic and When needed, and the hand picks Relay only.",
-                   events=["^assert_label LabelNetworkConnectionValue \"Automatic\".*PASS", "^assert_label ComboNetworkConnection \"Relay only\".*PASS"])
+                   what="A newcomer's Settings > Network reads Automatic and When needed.",
+                   events=["^assert_label LabelNetworkConnectionValue \"Automatic\".*PASS", "^assert_label ComboMatchStatusWidget \"When needed\".*PASS"])
               for peer in ("host", "joiner")]
+    checks += [dict(id=f"relay-by-hand-{peer}", peer=peer, mark=f"relay-by-hand-{peer}", screen="SettingsScreen",
+                    what="The connection reads Automatic until the hand picks Relay only for the gate's relay.",
+                    events=["^assert_label ComboNetworkConnection \"Automatic\".*PASS", "^assert_label ComboNetworkConnection \"Relay only\".*PASS"])
+               for peer in ("host", "joiner")]
     checks += [dict(id=f"files-default-{peer}", peer=peer, mark=f"files-default-{peer}", screen="SettingsScreen",
                     what="Outside a match the Files page shows this computer's hosting default, on every five minutes, under its own name.",
                     events=["^assert_label LabelNetAutosaveHost \"Your hosting default\".*PASS", "^assert_label LabelNetAutosave \"On\".*PASS",
