@@ -268,6 +268,27 @@ namespace RTE {
 		return PeerGroupHasAuthority(withOwnVote.connectedMask, proposal.frame);
 	}
 
+	bool NetLockstepCoordinator::HoldEmptiesTheRound(const NetHostMigrationMessage& hold, bool signing) const {
+		if (hold.preparedFrame != 0 || hold.members.empty()) return false;
+		uint64_t last = hold.frame;
+		for (const auto& [peer, bridge]: m_PeerBridges) if (bridge.committedHold && !bridge.returnFrame) last = std::max(last, bridge.fromFrame);
+		// A hold signed here and not yet installed takes its seat too, at whatever frame it was placed.
+		uint32_t signedHolds = 0;
+		if (signing) for (auto votes = m_PeerBridgeVotes.lower_bound({m_Stats.nextFrame, 0}); votes != m_PeerBridgeVotes.end(); ++votes) {
+			if (!IsHoldDecision(votes->first.second) || m_PeerBridgeCertificates.contains(votes->first)) continue;
+			const auto own = votes->second.find(m_Config.localPeerId);
+			if (own == votes->second.end() || own->second.voterMask == 0 || SameBridge(own->second, hold)) continue;
+			for (uint8_t peer: own->second.members) signedHolds |= SeatBit(peer);
+			last = std::max(last, votes->first.first);
+		}
+		uint32_t named = 0;
+		for (uint8_t peer: hold.members) named |= SeatBit(peer);
+		const uint32_t held = PeerHeldSeatsAt(last) | signedHolds;
+		const uint32_t local = SeatBit(m_Config.localPeerId);
+		if (signing && (held & local) != 0 && (named & ~local) != 0) return true;
+		return (PeerRetainedSeatsAt(last) & ~(held | named)) == 0;
+	}
+
 	bool NetLockstepCoordinator::VotedOtherPeerReturn(const NetHostMigrationMessage& proposal) const {
 		if (proposal.preparedFrame != 1) return false;
 		uint32_t named = 0;
@@ -560,6 +581,7 @@ namespace RTE {
 		}
 		proposal.totalBytes = static_cast<uint32_t>(proposal.bytes.size());
 		if (!ValidatePeerBridge(proposal) && !(ownYield && CoSignsOwnHold(proposal))) return false;
+		if (HoldEmptiesTheRound(proposal, true)) return false;
 		const PeerDecisionKey decision{proposal.frame, DecisionKind(proposal)};
 		if (m_PeerBridgeCertificates.contains(decision)) return false;
 		auto& votes = m_PeerBridgeVotes[decision];
@@ -770,6 +792,14 @@ namespace RTE {
 					for (uint8_t peer: agreed.members) contested = contested || read.remoteFrameCounts.contains(peer);
 			}
 			if (shown || (ruling != m_PeerFrameTieWinners.end() ? (ruling->second & agreed.connectedMask) == 0 : contested)) { refused("private reader"); return; }
+		}
+		// A round keeps a playing seat: a hold that would leave none is not taken, and the seat it names plays on alone. A reader still
+		// takes the history it reads and the ruling half's hold: the hold set against that one is the stopped half's.
+		if (agreed.preparedFrame == 0 && !fromCommittedTail && HoldEmptiesTheRound(agreed, false)) {
+			const auto ruling = m_PeerFrameTieWinners.find(PeerSplitEpoch(certificate.frame));
+			if (!IsLocalPrivateReaderAt(agreed.frame) || ruling == m_PeerFrameTieWinners.end() || (ruling->second & agreed.connectedMask) == 0) {
+				refused("no playing seat"); return;
+			}
 		}
 		if (agreed.preparedFrame == 1) {
 			if (ReturnCrossesDeparture(agreed, m_PeerOwnershipChanges)) { refused("owner changed"); return; }

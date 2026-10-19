@@ -529,6 +529,7 @@ namespace RTE {
 					    (vote.voterMask == 0 && !(vote.preparedFrame == 0 && vote.members.size() == 1 && vote.members.front() == m_Config.localPeerId)) ||
 					    (vote.voterMask != 0 && vote.voterMask != SeatBit(peer))) continue;
 					if (!ValidatePeerBridge(vote) && !CoSignsOwnHold(vote)) continue;
+					if (HoldEmptiesTheRound(vote, true)) continue;
 					// A stored proposal keeps the same single-return promise as an
 					// immediate reply; waiting for a later plane tick cannot add a second signature.
 					if (VotedOtherPeerReturn(vote)) continue;

@@ -1719,6 +1719,9 @@ namespace RTE {
 		/// Whether this peer already voted a return of one of the proposal's seats at another frame that is still undecided: a held seat
 		/// returns once, so a member backs one return of it until that one is certified or played past.
 		bool VotedOtherPeerReturn(const NetHostMigrationMessage& proposal) const;
+		/// Whether this hold, with every hold this peer has installed (and, to sign it, every hold it has signed), would hold every seat of
+		/// the round; to sign it, also whether a seat held or that signed its own hold would hold another. The round keeps a playing seat.
+		bool HoldEmptiesTheRound(const NetHostMigrationMessage& hold, bool signing) const;
 		bool PeerBridgeHasInputConflict(const NetHostMigrationMessage& proposal) const;
 		void ResolvePeerBridgeInputConflicts(uint64_t nowMs);
 		bool DecodePeerBridgeCertificate(const NetHostMigrationMessage& certificate, NetHostMigrationMessage& agreed, uint32_t& voters) const;

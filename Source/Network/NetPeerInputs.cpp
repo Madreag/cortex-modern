@@ -439,7 +439,7 @@ namespace RTE {
 			if (own != votes.end() && own->second.voterMask != 0 && !SameBridge(own->second, message)) return true;
 			const auto previous = votes.find(message.senderPeerId);
 			if (previous == votes.end() || (previous->second.voterMask == 0 && !invitation)) votes.insert_or_assign(message.senderPeerId, message);
-			if ((own == votes.end() || own->second.voterMask == 0) && !VotedOtherPeerReturn(message)) {
+			if ((own == votes.end() || own->second.voterMask == 0) && !VotedOtherPeerReturn(message) && !HoldEmptiesTheRound(message, true)) {
 				auto reply = message;
 				reply.senderPeerId = m_Config.localPeerId;
 				reply.appliedFrame = m_LastCompletedSimulationTick.value_or(0);

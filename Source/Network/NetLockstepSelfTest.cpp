@@ -800,6 +800,80 @@ namespace RTE {
 			return passed;
 		}
 
+		// Two machines slowed together: the host's own hold is signed or installed, and a hold of the client crosses it. A round keeps a
+		// playing seat - that hold is neither signed nor installed, and the client plays on alone - and a held seat holds nobody.
+		static bool RoundKeepsAPlayingSeat(std::string* error) {
+			bool passed = true;
+			const auto check = [&](bool ok, const std::string& why) {
+				if (!ok) { passed = false; *error += why + "; "; std::cout << "[round-keeps-a-player] FAIL " << why << std::endl; }
+			};
+			const auto peerOf = [](NetLockstepCoordinator& peer, Wire& wire, uint8_t local, uint8_t seats) {
+				Configure(peer, wire);
+				peer.m_Config.peerFrameGroups = true; peer.m_Config.localPeerId = local; peer.m_Config.authorityPeerId = 1;
+				peer.m_Config.peerCount = peer.m_Config.matchConfig.peerCount = seats;
+				peer.m_Config.matchConfig.players.resize(2);
+				if (seats == 3) peer.m_Config.matchConfig.players.push_back({3, 2, false, "Third"});
+				peer.m_Config.matchConfig.successorOrder = seats == 3 ? std::vector<uint8_t>{2, 3} : std::vector<uint8_t>{2};
+				peer.m_RoundConfigHash = NetMatchConfigUtil::HashConfig(peer.m_Config.matchConfig);
+				peer.m_RemotePeerIds.clear(); peer.m_RemoteTransports.clear();
+				for (uint8_t other = 1; other <= seats; ++other) if (other != local) { peer.m_RemotePeerIds.push_back(other); peer.m_RemoteTransports[other] = 40 + other; }
+				peer.m_MigrationPhase = NetHostMigrationPhase::None;
+				peer.m_FrameGroupMembers = (1U << seats) - 1; peer.m_FrameGroupChanges = {{1, (1U << seats) - 1}};
+				peer.m_Stats.nextFrame = 150; peer.m_LastCompletedSimulationTick = 149;
+				peer.m_MigrationHistory[149] = {1, 2, 3};
+			};
+			const auto hold = [](NetLockstepCoordinator& peer, uint8_t sender, uint8_t held, uint32_t group, uint64_t frame) {
+				auto vote = peer.PeerFrameMessage(NetHostMigrationMessageType::PeerBridge);
+				vote.senderPeerId = vote.successorPeerId = sender; vote.frame = vote.boundary = frame;
+				vote.preparedFrame = 0; vote.connectedMask = group; vote.voterMask = 1U << (sender - 1); vote.members = {held};
+				const auto prefix = peer.PeerFramePrefix(frame - 1); vote.bytes.assign(prefix.begin(), prefix.end()); vote.totalBytes = vote.bytes.size();
+				return vote;
+			};
+			{
+				// The host signed its own hold at 150; a hold of the client it would then propose leaves no seat playing.
+				Wire wire; NetLockstepCoordinator host; peerOf(host, wire, 1, 2);
+				auto own = hold(host, 1, 1, 2, 150);
+				host.m_PeerBridgeVotes[{150, NetPeerFrameDetail::DecisionKind(own)}][1] = own;
+				const auto client = hold(host, 1, 2, 1, 150);
+				check(host.HoldEmptiesTheRound(client, true), "a seat that signed its own hold signed a hold of the other seat too");
+				check(!host.HoldEmptiesTheRound(own, true), "the host's own hold, alone, was refused");
+				Wire wire3; NetLockstepCoordinator three; peerOf(three, wire3, 1, 3);
+				auto ownOf3 = hold(three, 1, 1, 6, 150);
+				three.m_PeerBridgeVotes[{150, NetPeerFrameDetail::DecisionKind(ownOf3)}][1] = ownOf3;
+				const auto other = hold(three, 1, 2, 5, 150);
+				check(three.HoldEmptiesTheRound(other, true), "a seat that signed its own hold would hold another");
+				check(!three.HoldEmptiesTheRound(other, false), "a hold that leaves the third seat playing was refused to install");
+				Wire wireFree; NetLockstepCoordinator free; peerOf(free, wireFree, 1, 2);
+				check(!free.HoldEmptiesTheRound(hold(free, 1, 2, 1, 150), true), "an ordinary hold of the other seat was refused");
+			}
+			for (bool crossing: {true, false}) {
+				// The client installed the host's hold at 140. The co-signed certificate holding the client too would empty the round.
+				Wire wire; NetLockstepCoordinator client; peerOf(client, wire, 2, 2);
+				if (crossing) {
+					client.m_PeerBridges[1] = {140, 140, true, std::nullopt, {}, 2};
+					client.m_PeerFrameHolds[1][140] = true; client.m_FrameGroupChanges[140] = 2; client.m_FrameGroupMembers = 2;
+				}
+				auto vote = hold(client, 1, 2, 1, 150);
+				std::vector<uint8_t> hostVote, clientVote;
+				auto consent = vote; consent.senderPeerId = 2; consent.voterMask = 2;
+				if (!NetHostMigrationCodec::Encode(vote, client.m_Config.migrationKey, hostVote) || !NetHostMigrationCodec::Encode(consent, client.m_Config.migrationKey, clientVote)) {
+					*error = "the crossing votes did not encode"; return false;
+				}
+				auto certificate = vote; certificate.type = NetHostMigrationMessageType::PeerBridgeCommit; certificate.bytes = {2}; certificate.voterMask = 3;
+				for (const auto* signedVote: {&hostVote, &clientVote}) {
+					for (unsigned shift = 0; shift < 32; shift += 8) certificate.bytes.push_back(static_cast<uint8_t>(signedVote->size() >> shift));
+					certificate.bytes.insert(certificate.bytes.end(), signedVote->begin(), signedVote->end());
+				}
+				certificate.totalBytes = certificate.bytes.size();
+				client.InstallPeerBridge(certificate, 1000);
+				const bool held = client.m_PeerBridges.contains(2) && client.IsSeatUnderAI(2, 150);
+				if (crossing) check(!held && client.PeerFrameMembersAt(150) == 2, "the hold that left the round without a playing seat was installed: held=" + std::to_string(held) +
+				    " members=" + std::to_string(client.PeerFrameMembersAt(150)));
+				else check(held, "the co-signed hold of the client was refused with the host playing");
+			}
+			return passed;
+		}
+
 		// A reader's subscription went to a donor whose link then lost most packets, and a repair asked the other donor for an earlier
 		// range. The retry of the lost frames goes to the donor that was not asked for them.
 		static bool TailRetryAsksAnotherDonor(std::string* error) {
@@ -32381,6 +32455,12 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS a_private_reader_plays_only_the_history_it_reads\n[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "round-keeps-a-player") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::RoundKeepsAPlayingSeat(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS a_round_keeps_a_playing_seat\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "tail-retry-donor") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::TailRetryAsksAnotherDonor(&error)) return fail(error);
@@ -32829,6 +32909,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::LoneMigrationFollowsItsAuthority, "lone_migration_follows_its_authority");
 		row(&SessionPlaneRecoveryTest::ForeignHistoryKeepsAnActiveContinuation, "foreign_history_keeps_an_active_continuation");
 		row(&SessionPlaneRecoveryTest::TailRetryAsksAnotherDonor, "a_tail_retry_asks_another_donor_than_the_one_that_failed");
+		row(&SessionPlaneRecoveryTest::RoundKeepsAPlayingSeat, "a_round_keeps_a_playing_seat");
 		row(&SessionPlaneRecoveryTest::PrivateReaderPlaysOnlyTheHistoryItReads, "a_private_reader_plays_only_the_history_it_reads");
 		row(&SessionPlaneRecoveryTest::TailHoldSignersAreNotAnotherPlayingHalf, "tail_hold_signers_are_not_another_playing_half");
 		row(&SessionPlaneRecoveryTest::CertifiedTailKeepsItsWitnesses, "certified_tail_keeps_its_witnesses");
