@@ -11487,7 +11487,8 @@ static std::string ResyncSaveName() {
 		NetMatchServiceRequest request = BuildTicketRejoinRequest(record, playerName, liveWorldTarget);
 		if (!liveRoute.host && (!liveRoute.address.empty() || !liveRoute.sessionId.empty())) {
 			request.address = liveRoute.address;
-			request.sessionId = liveRoute.sessionId;
+			// An ICE route signals through the directory, so it keeps the seat's session unless it names its own; a direct route needs none.
+			if (!liveRoute.sessionId.empty() || !liveRoute.address.starts_with("ice:")) request.sessionId = liveRoute.sessionId;
 			request.port = liveRoute.port;
 		}
 		return request;
