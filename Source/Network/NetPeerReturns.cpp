@@ -374,7 +374,13 @@ namespace RTE {
 		if (votes == m_PeerTailVotes.end()) return false;
 		const auto heard = m_PeerFrameWitnesses.find(frame);
 		const auto same = [](const PeerTailVote& a, const PeerTailVote& b) { return a.members == b.members && a.prefix == b.prefix && a.prepared == b.prepared && a.bytes == b.bytes; };
-		for (const auto& [donor, vote]: votes->second) {
+		// A record that continues the history this seat displays, or the record it already took for the frame before, comes first.
+		std::optional<NetHash32> continued;
+		if (frame > m_Config.startFrame && frame == m_Stats.nextFrame) continued = PeerFramePrefix(frame - 1);
+		else if (const auto before = m_PeerPreparedPrefixes.find(frame - 1); frame > m_Config.startFrame && before != m_PeerPreparedPrefixes.end()) continued = before->second;
+		for (const bool continuing: {true, false}) for (const auto& [donor, vote]: votes->second) {
+			if (continued && (vote.prefix == *continued) != continuing) continue;
+			if (!continued && !continuing) break;
 			// A remote group's tail is history, not authority to turn an active excluded owner into a private reader.
 			// Its installed standing hold (or the heal's no-continuation exchange) must establish that role first.
 			if ((vote.members & SeatBit(m_Config.localPeerId)) == 0 &&
@@ -422,8 +428,24 @@ namespace RTE {
 	bool NetLockstepCoordinator::ApplyPeerCommittedTail(uint64_t frame, uint64_t nowMs) {
 		const auto kept = m_PeerCommittedTail.find(frame);
 		if (kept == m_PeerCommittedTail.end()) return false;
-		if (frame > m_Config.startFrame && (!m_PeerTailPrefixes.contains(frame) || m_PeerTailPrefixes.at(frame) != PeerFramePrefix(frame - 1))) {
+		if (frame > m_Config.startFrame && !m_PeerTailPrefixes.contains(frame)) {
 			Fail(NetLockstepStopReason::ProtocolError, frame, "the committed tail differs from displayed history at frame " + std::to_string(frame)); return false;
+		}
+		if (frame > m_Config.startFrame && m_PeerTailPrefixes.at(frame) != PeerFramePrefix(frame - 1)) {
+			// No donor gives this frame on the history this seat displays: it read another continuation's records before this one. It returns
+			// through a private image from the frame it began reading, never by playing a second continuation over the first.
+			if (m_GrantedSimulationTick) return false;
+			m_PeerCommittedTail.erase(kept); m_PeerTailPrefixes.erase(frame); m_PeerPreparedPrefixes.erase(frame);
+			m_PeerTailVotes.erase(frame); m_PeerTailDecisions.erase(frame);
+			const auto own = m_PeerBridges.find(m_Config.localPeerId);
+			m_Stats.nextFrame = GetResumeFrame();
+			m_ReadyFrames.clear();
+			m_LocalSeatHeld = true; m_LocalHoldFrame = std::min(m_Stats.nextFrame, own != m_PeerBridges.end() ? own->second.fromFrame : m_Stats.nextFrame);
+			m_State = NetLockstepState::Stopped;
+			m_Stats.timeoutReason = "PeerHeld:the committed tail continues another history; returning through a private image";
+			DiagnosticLine() << "[net-peer-tail-continuation] local=" << static_cast<int>(m_Config.localPeerId) << " frame=" << frame
+			                 << " hold_frame=" << m_LocalHoldFrame << " now_ms=" << nowMs << " action=image_return" << std::endl;
+			return false;
 		}
 		NetLockstepReadyFrame ready;
 		if (!DecodeMigrationFrame(kept->second, frame, ready)) {
