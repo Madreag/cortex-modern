@@ -7214,8 +7214,9 @@ _CaptureWindow.liveSlice.Enabled = enabled
 }
 
 // A script keeps its holder's slices of a device's sub-menu, as the Coalition grenade launcher's does, the device leaves the
-// holder's hands and the next devices are made before a save: every kept handle still names its own slice's memory, the save
-// carries it as gone instead of refusing it, and the memory returns once the handles go.
+// holder's hands and the next devices are made into the world before a save: every kept handle still names its own slice's
+// memory, the save carries it as gone instead of refusing it, and the memory returns once the handles go. A device a script
+// makes and keeps outside the world saves beside it.
 static bool RunKeptSliceCases(LuaStateWrapper& lua) {
 	lua_State* const L = lua.GetLuaState();
 	const Entity::ClassInfo* sliceType = Entity::ClassInfo::GetClass("PieSlice");
@@ -7248,16 +7249,29 @@ for slice in options.SubPieMenu.PieSlices do _KeptSlices.kept[#_KeptSlices.kept 
 		lua_pop(L, 2);
 	}
 	// A kept slice's memory is its own while it is retained for the handles or back in its pool; anything else took it.
+	const auto states = [&kept, sliceBytes] {
+		std::string text;
+		for (size_t index = 0; index < kept.size(); ++index) {
+			const bool retained = MovableObject::RetainedMemoryHolds(kept[index], sliceBytes);
+			text += std::format("{}{}={}", index ? "," : "", index + 1, retained ? "kept" : PieSliceFreed(kept[index]) ? "free" : "taken");
+		}
+		return text;
+	};
 	const auto ownMemory = [sliceBytes](const void* address) { return MovableObject::RetainedMemoryHolds(address, sliceBytes) || PieSliceFreed(address); };
 	bool dropped = false;
 	size_t taken = 0;
+	std::string afterDrop;
 	if (planted && !kept.empty()) {
 		dropped = lua.RunScriptString(R"lua(
 _KeptSlices.holder:UnequipArms()
-_KeptSlices.spares = {}
-for index = 1, 24 do _KeptSlices.spares[index] = CreateHDFirearm("Constructor", "Base.rte") end
+for index = 1, 24 do
+	local device = CreateHDFirearm("Constructor", "Base.rte")
+	device.Pos = Vector(1000 + index * 4, 120)
+	MovableMan:AddItem(device)
+end
 )lua") == 0;
 		for (const void* address: kept) if (!ownMemory(address)) ++taken;
+		afterDrop = states();
 	}
 	std::vector<std::string> problems;
 	const bool captured = dropped && g_ActivityMan.RunWorldCaptureWindow([] {}, [] {}, problems);
@@ -7265,20 +7279,28 @@ for index = 1, 24 do _KeptSlices.spares[index] = CreateHDFirearm("Constructor", 
 	LuabindObjectWrapper::ApplyQueuedEntityDeletions();
 	LuabindObjectWrapper::ApplyQueuedDeletions();
 	size_t leaked = 0;
-	std::string leakedAt;
-	for (size_t index = 0; index < kept.size(); ++index) {
-		if (!MovableObject::RetainedMemoryHolds(kept[index], sliceBytes)) continue;
-		++leaked;
-		leakedAt += (leakedAt.empty() ? "" : ",") + std::to_string(index + 1);
-	}
+	for (const void* address: kept) if (MovableObject::RetainedMemoryHolds(address, sliceBytes)) ++leaked;
+	const std::string afterCollect = states();
 	if (!planted || !dropped || kept.empty()) std::cout << "[capture-window-selftest] FAIL: kept-slice-fixture: the held device's sub-menu slices could not be kept and dropped" << std::endl;
-	if (taken > 0) std::cout << "[capture-window-selftest] FAIL: kept-slice-memory-taken: " << taken << " of " << kept.size() << " slice handles kept past their device name memory the next devices took before the save" << std::endl;
+	if (taken > 0) std::cout << "[capture-window-selftest] FAIL: kept-slice-memory-taken: " << taken << " of " << kept.size() << " slice handles kept past their device name memory the next devices took before the save (" << afterDrop << ")" << std::endl;
 	for (const std::string& problem: problems) std::cout << "[capture-window-selftest] FAIL: kept-slice-save-refused: " << problem << std::endl;
 	if (dropped && !captured && problems.empty()) std::cout << "[capture-window-selftest] FAIL: kept-slice-save-failed: the save with kept slices did not complete and named no problem" << std::endl;
-	if (leaked > 0) std::cout << "[capture-window-selftest] FAIL: kept-slice-memory-leaked: " << leaked << " slices' memory stayed out of the pool after their handles were collected (kept entries " << leakedAt << ")" << std::endl;
-	const bool passed = planted && dropped && !kept.empty() && taken == 0 && captured && problems.empty() && leaked == 0;
-	if (passed) std::cout << "[capture-window-selftest] PASS a_slice_kept_past_its_device_keeps_its_memory_and_saves_as_gone kept=" << kept.size() << std::endl;
-	return passed;
+	if (leaked > 0) std::cout << "[capture-window-selftest] FAIL: kept-slice-memory-leaked: " << leaked << " slices' memory stayed out of the pool after their handles were collected (" << afterCollect << ")" << std::endl;
+	const bool slicesPassed = planted && dropped && !kept.empty() && taken == 0 && captured && problems.empty() && leaked == 0;
+	if (slicesPassed) std::cout << "[capture-window-selftest] PASS a_slice_kept_past_its_device_keeps_its_memory_and_saves_as_gone kept=" << kept.size() << std::endl;
+	// A device a script makes and keeps outside the world saves.
+	const bool ownPlanted = lua.RunScriptString("_KeptDevice = CreateHDFirearm('Constructor', 'Base.rte')") == 0;
+	std::vector<std::string> ownProblems;
+	const bool ownCaptured = ownPlanted && g_ActivityMan.RunWorldCaptureWindow([] {}, [] {}, ownProblems);
+	lua.RunScriptString("_KeptDevice = nil; collectgarbage('collect')");
+	LuabindObjectWrapper::ApplyQueuedEntityDeletions();
+	LuabindObjectWrapper::ApplyQueuedDeletions();
+	for (const std::string& problem: ownProblems) std::cout << "[capture-window-selftest] FAIL: script-device-save-refused: " << problem << std::endl;
+	if (ownPlanted && !ownCaptured && ownProblems.empty()) std::cout << "[capture-window-selftest] FAIL: script-device-save-failed: the save with a script's own device did not complete and named no problem" << std::endl;
+	if (!ownPlanted) std::cout << "[capture-window-selftest] FAIL: script-device-fixture: a script could not make its own device" << std::endl;
+	const bool devicePassed = ownPlanted && ownCaptured && ownProblems.empty();
+	if (devicePassed) std::cout << "[capture-window-selftest] PASS a_device_a_script_keeps_outside_the_world_saves" << std::endl;
+	return slicesPassed && devicePassed;
 }
 
 static int ScriptGraphGlobalScript(lua_State* L) {
