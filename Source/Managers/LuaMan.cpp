@@ -6300,6 +6300,18 @@ static int ScriptGraphOwnerReference(lua_State* L) {
 	return 1;
 }
 
+// A frozen walk pushes an engine object by its bytes at the boundary: luabind reads the type of whatever it pushes, and the
+// live object may be gone by now and its memory another's. The saver's push hook still names the original.
+template<class T> static void PushBoundaryObject(lua_State* L, T* object) {
+	if constexpr (std::is_base_of_v<Entity, T>) {
+		if (object && s_GraphNativeCapture && CheckpointNativeStorage::Reading()) {
+			luabind::object(L, const_cast<T*>(static_cast<const T*>(CheckpointNativeSnapshot::Source(static_cast<const Entity*>(object))))).push(L);
+			return;
+		}
+	}
+	luabind::object(L, object).push(L);
+}
+
 static int ScriptGraphOwnerReferenceDescriptor(lua_State* L, const luabind::detail::object_rep* rep) {
 	const auto found = [&](auto* owner, const char* property, int index) {
 		lua_pushliteral(L, "owner-ref");
@@ -6318,7 +6330,7 @@ static int ScriptGraphOwnerReferenceDescriptor(lua_State* L, const luabind::deta
 			}
 			if (!manager || manager->ptr() != &g_PrimitiveMan) { lua_settop(L, top); lua_pushnil(L); }
 			else { if (lua_gettop(L) > top + 1) lua_replace(L, top + 1); lua_settop(L, top + 1); }
-		} else luabind::object(L, owner).push(L);
+		} else PushBoundaryObject(L, owner);
 		lua_pushstring(L, property);
 		lua_pushinteger(L, index);
 		lua_pushboolean(L, (rep->flags() & luabind::detail::object_rep::constant) != 0);
@@ -6553,7 +6565,7 @@ static int ScriptGraphNative(lua_State* L) {
 			const std::string state = controller->SaveCheckpoint();
 			lua_pushlstring(L, state.data(), state.size());
 		}
-		luabind::object(L, controller->GetControlledActor()).push(L);
+		PushBoundaryObject(L, controller->GetControlledActor());
 		return 3;
 	}
 	if (className == "PathRequest" && owned) {
