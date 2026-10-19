@@ -4448,26 +4448,33 @@ static bool ClassDerivesFrom(const luabind::detail::class_rep* rep, const char* 
 	return false;
 }
 
-// Whether a luabind class is a MovableObject, noted on the class the first time it is asked.
-static bool IsMovableObjectClass(const luabind::detail::class_rep* rep) {
+// Whether a luabind class is a MovableObject (1), a PieSlice (2), a PieMenu (3) or none of them (0), noted on the class the
+// first time it is asked.
+static int EngineHandleKind(const luabind::detail::class_rep* rep) {
 	if (!rep) {
-		return false;
+		return 0;
 	}
 	int kind = rep->engine_kind();
 	if (kind < 0) {
-		kind = ClassDerivesFrom(rep, "MovableObject") ? 1 : 0;
+		kind = ClassDerivesFrom(rep, "MovableObject") ? 1 : ClassDerivesFrom(rep, "PieSlice") ? 2 : ClassDerivesFrom(rep, "PieMenu") ? 3 : 0;
 		rep->set_engine_kind(kind);
 	}
-	return kind == 1;
+	return kind;
 }
 
-// A handle naming a MovableObject keeps that object's memory while the handle lives.
+static bool IsMovableObjectClass(const luabind::detail::class_rep* rep) { return EngineHandleKind(rep) == 1; }
+
+// A handle naming a MovableObject, a PieSlice or a PieMenu keeps that object's memory while the handle lives.
 static void NoteBorrowedHandle(luabind::detail::object_rep* handle) {
 	// A saver's handles name its own frozen copies, which never return to a pool.
 	if (luabind::detail::saved_objects.copy) return;
-	if (!handle->has_life_owner() && handle->ptr() && IsMovableObjectClass(handle->crep())) {
-		auto* object = static_cast<MovableObject*>(static_cast<Entity*>(handle->ptr()));
-		handle->set_life_owner(object->NoteLuaHandle(), &MovableObject::ReleaseLuaHandle);
+	if (handle->has_life_owner() || !handle->ptr()) return;
+	auto* entity = static_cast<Entity*>(handle->ptr());
+	switch (EngineHandleKind(handle->crep())) {
+		case 1: handle->set_life_owner(static_cast<MovableObject*>(entity)->NoteLuaHandle(), &Entity::ReleaseLuaHandle); break;
+		case 2: handle->set_life_owner(static_cast<PieSlice*>(entity)->NoteLuaHandle(), &Entity::ReleaseLuaHandle); break;
+		case 3: handle->set_life_owner(static_cast<PieMenu*>(entity)->NoteLuaHandle(), &Entity::ReleaseLuaHandle); break;
+		default: break;
 	}
 }
 
@@ -4585,11 +4592,12 @@ template<class Visit> static void ForEachPieMenu(const PieMenu* menu, const std:
 	}
 }
 
-// Whether an entity's memory is back in its pool - a slot a native pool holds free or a block the class pool holds returned.
+// Whether an entity is gone: its memory back in its pool - a slot a native pool holds free or a block the class pool holds
+// returned - or kept out of it only for the Lua handles still naming it.
 static bool PieEntityFreed(const char* className, const void* entity) {
 	const Entity::ClassInfo* type = Entity::ClassInfo::GetClass(className);
 	const size_t bytes = type ? type->CheckpointInstanceBytes() : 0;
-	return bytes && (CheckpointNativeStorage::FreeSlotHolds(entity, bytes) || type->PoolHolds(entity, bytes));
+	return bytes && (CheckpointNativeStorage::FreeSlotHolds(entity, bytes) || type->PoolHolds(entity, bytes) || Entity::RetainedMemoryHolds(entity, bytes));
 }
 
 static bool PieSliceFreed(const void* slice) { return PieEntityFreed("PieSlice", slice); }
@@ -6338,7 +6346,7 @@ static int ScriptGraphOwnerReferenceDescriptor(lua_State* L, const luabind::deta
 	};
 	const auto* type = rep->crep();
 	// A pie slice is named by its place in a known actor's pie menu tree, else as a preset, else by its address for the graph to
-	// find in a script's own menu - with whether its memory is back in its pool - and never read.
+	// find in a script's own menu - with whether it is gone - and never read.
 	if (s_GraphNativeCapture && type && std::strcmp(type->name(), "PieSlice") == 0) {
 		const void* slice = s_GraphNativeCapture->SliceSource(rep->ptr());
 		if (const auto* place = s_GraphNativeCapture->PieSliceOwner(slice)) return found(const_cast<Actor*>(place->owner), ("pie-slice:" + place->path).c_str(), 0);
@@ -6958,10 +6966,10 @@ _EngineHandles.unreached = _UnreachedPieMenu and _UnreachedPieMenu:GetFirstPieSl
 }
 
 // A world capture fences the world on the simulation thread and walks the script graphs on the saver while the game plays on:
-// the next objects made take the slots a dropped device's slices freed or a gone target's released memory, and a live slice
-// nothing reaches can be freed before the walk reaches its handle. Each is judged as it stood at the fence - the dropped slice
-// is carried as gone and the waypoint as the position it read though new objects hold their memory, and the live slice is
-// refused by name though its slot is free when the walk gets there. An actor deleted in the window is copied as it stood,
+// a dropped device's slice keeps its memory for the handle naming it while the next objects are made, a gone target's released
+// memory is taken by them, and a live slice nothing reaches can be freed before the walk reaches its handle. Each is judged as
+// it stood at the fence - the dropped slice is carried as gone and the waypoint as the position it read though new objects hold
+// its memory, and the live slice is refused by name though its slot is free when the walk gets there. An actor deleted in the window is copied as it stood,
 // its pie menu read from the menu's frozen bytes though other bytes hold the live memory.
 static bool RunCaptureWindowCases(LuaStateWrapper& lua) {
 	lua_State* const L = lua.GetLuaState();
@@ -7021,16 +7029,17 @@ end
 _CaptureWindow.dropper, _CaptureWindow.gone = _CaptureWindow.holding(520)
 assert(_CaptureWindow.gone ~= nil, "a held Constructor put no options slice into its holder's menu")
 )lua") == 0;
-	// The device is dropped once the saver is prepared, so its slice is free at the fence; a new holder's menu takes the slot
-	// before the walk.
-	bool goneFreedAtFence = false, reusedInWindow = false, goneCaptured = false;
+	// The device is dropped once the saver is prepared: its slice's memory waits for the handle at the fence, and a new holder's
+	// menu made before the walk takes other memory.
+	bool goneKeptAtFence = false, keptInWindow = false, goneCaptured = false;
 	std::vector<std::string> goneProblems;
 	if (planted) {
 		const void* gone = slice("gone");
+		const auto kept = [&] { return gone && sliceBytes && MovableObject::RetainedMemoryHolds(gone, sliceBytes) && !freed(gone); };
 		goneCaptured = capture([&] { lua.RunScriptString("_CaptureWindow.dropper:UnequipArms()"); }, [&] {
-			goneFreedAtFence = freed(gone);
+			goneKeptAtFence = kept();
 			lua.RunScriptString("_CaptureWindow.taker = _CaptureWindow.holding(760)");
-			reusedInWindow = !freed(gone);
+			keptInWindow = kept();
 		}, goneProblems);
 	}
 	const bool goneCarried = goneCaptured && !named(goneProblems);
@@ -7193,9 +7202,9 @@ _CaptureWindow.liveSlice.Enabled = enabled
 		}
 	}
 	lua.RunScriptString("if _CaptureWindow then MovableMan:RemoveActor(_CaptureWindow.dropper); if _CaptureWindow.taker then MovableMan:RemoveActor(_CaptureWindow.taker) end; if _CaptureWindow.liveHolder then MovableMan:RemoveActor(_CaptureWindow.liveHolder) end end; _CaptureWindow = nil; collectgarbage()");
-	const bool passed = liveCaptures == 2 && liveRestores == 2 && recordAnswers && goneFreedAtFence && reusedInWindow && goneCarried && retainedAtFence && takenInWindow && vectorCarried && liveAtFence && freedInWindow &&
+	const bool passed = liveCaptures == 2 && liveRestores == 2 && recordAnswers && goneKeptAtFence && keptInWindow && goneCarried && retainedAtFence && takenInWindow && vectorCarried && liveAtFence && freedInWindow &&
 	                    unreachedRefused && menuAtFence && menuMemoryTaken && deadMenuCopied;
-	std::cout << "[capture-window-selftest] live_device_captures=" << liveCaptures << " live_device_restores=" << liveRestores << " record_answers_as_of_fence=" << recordAnswers << " planted=" << planted << " freed_at_fence=" << goneFreedAtFence << " reused_in_window=" << reusedInWindow
+	std::cout << "[capture-window-selftest] live_device_captures=" << liveCaptures << " live_device_restores=" << liveRestores << " record_answers_as_of_fence=" << recordAnswers << " planted=" << planted << " kept_at_fence=" << goneKeptAtFence << " kept_in_window=" << keptInWindow
 	          << " freed_slice_carried=" << goneCarried << " retained_at_fence=" << retainedAtFence << " retained_taken_in_window=" << takenInWindow << " gone_vector_carried=" << vectorCarried
 	          << " live_at_fence=" << liveAtFence << " freed_in_window=" << freedInWindow << " unreached_refused_by_name=" << unreachedRefused
 	          << " menu_at_fence=" << menuAtFence << " menu_memory_taken=" << menuMemoryTaken << " gone_actor_menu_copied=" << deadMenuCopied << std::endl;

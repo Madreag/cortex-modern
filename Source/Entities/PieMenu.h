@@ -34,6 +34,14 @@ namespace RTE {
 		PieMenu();
 		CheckpointSnapshotMethods(PieMenu);
 
+		/// Notes one more Lua handle naming this menu.
+		/// @return The record the handle lets go of when it is collected.
+		LuaHandles* NoteLuaHandle() { return Entity::NoteLuaHandle(m_LuaHandles.record); }
+
+		/// Keeps a deleted menu's memory out of its class pool while a Lua handle names it.
+		/// @return Whether the memory stays out of the pool.
+		static bool RetainPooledMemory(PieMenu* menu, void* memory, Entity::ClassInfo& pool) { return RetainMemoryForLuaHandles(menu->m_LuaHandles.record, memory, pool); }
+
 		/// Makes the PieMenu object ready for use.
 		/// @return An error return value signaling success or any particular failure. Anything below 0 is an error signal.
 		int Create() override;
@@ -379,6 +387,7 @@ namespace RTE {
 		static const std::unordered_map<Directions, Directions> c_CounterClockwiseDirections; //!< A map of Directions to the Direction that is CCW from them, for moving between PieQuadrants with the keyboard.
 
 		static Entity::ClassInfo m_sClass; //!< ClassInfo for this class.
+		LuaHandleSlot m_LuaHandles; //!< Created when a Lua handle first names this menu; never cleared by Clear().
 		static BITMAP* s_CursorBitmap; //!< A static pointer to the bitmap to use as the cursor in any menu.
 
 		GUIFont* m_LargeFont; //!< A pointer to the large font from FrameMan. Not owned here.

@@ -7,6 +7,7 @@
 #include "Serializable.h"
 #include "RTEError.h"
 
+#include <atomic>
 #include <cstdint>
 #include <cstddef>
 #include <mutex>
@@ -261,9 +262,50 @@ namespace RTE {
 		};
 #pragma endregion
 
-		/// Whether a deleted object's memory stays out of its class pool for now. Only a MovableObject that a Lua handle still names keeps it.
+		/// Whether a deleted object's memory stays out of its class pool for now. Only an object a Lua handle still names keeps it.
 		/// @return Whether the memory stays out of the pool.
 		static bool RetainPooledMemory(Entity*, void*, ClassInfo&) { return false; }
+
+		/// The Lua handles naming an object or one of its fields, and whether the object is gone. A gone object's memory stays
+		/// out of its class pool until its last handle is collected, so a script that kept a handle reads the same bytes on every machine.
+		struct LuaHandles {
+			uint32_t count = 0; //!< The handles naming the object or one of its fields.
+			bool gone = false; //!< Whether the object is deleted and its memory waits for its last handle.
+			std::atomic<LuaHandles*>* slot = nullptr; //!< The record field of the object the record belongs to.
+			ClassInfo* pool = nullptr; //!< The class pool the memory returns to.
+			void* memory = nullptr; //!< The deleted object's memory.
+			LuaHandles* retainedPrevious = nullptr; //!< The retained list's neighbours while the memory waits for its last handle.
+			LuaHandles* retainedNext = nullptr;
+		};
+
+		/// An object's record of the Lua handles naming it; a copy of the object starts with none.
+		struct LuaHandleSlot {
+			std::atomic<LuaHandles*> record{nullptr};
+			LuaHandleSlot() = default;
+			LuaHandleSlot(const LuaHandleSlot&) {}
+			LuaHandleSlot& operator=(const LuaHandleSlot&) { return *this; }
+		};
+
+		/// Notes one more Lua handle naming the object whose record field this is.
+		/// @param slot The object's record field.
+		/// @return The record the handle lets go of when it is collected.
+		static LuaHandles* NoteLuaHandle(std::atomic<LuaHandles*>& slot);
+
+		/// Lets one Lua handle go; the last handle of a deleted object returns its memory to the pool.
+		/// @param record What NoteLuaHandle returned.
+		static void ReleaseLuaHandle(void* record);
+
+		/// Keeps a deleted object's memory out of its class pool while a Lua handle names it.
+		/// @param slot The deleted object's record field, which its destructors leave as it was.
+		/// @return Whether the memory stays out of the pool.
+		static bool RetainMemoryForLuaHandles(std::atomic<LuaHandles*>& slot, void* memory, ClassInfo& pool);
+
+		/// Gets how many deleted objects' memory Lua handles keep out of their pools now.
+		/// @return The count of retained memory blocks.
+		static int GetRetainedPoolMemoryCount();
+
+		/// Whether bytes at an address lie in a deleted object's memory that Lua handles keep out of its pool.
+		static bool RetainedMemoryHolds(const void* address, size_t bytes);
 
 #pragma region Creation
 		/// Constructor method used to instantiate a Entity in system memory. Create() should be called before using the Entity.
