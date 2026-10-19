@@ -979,6 +979,43 @@ namespace RTE {
 		// Seat 1 held seat 3 at its bound at frame 150 while seat 2 had already played seat 3's input there. A witness of a frame both
 		// applied shows the other continuation: the member is held at the next frame, the groups are disjoint, and the healed
 		// histories or the directory choose between them. A directory decision naming seats of both continuations is the asker's.
+		static bool OnlyASeatCountingThisOneIsAnotherContinuation(std::string* error) {
+			// Arms: the host's records differ on three frames after it held this seat - a split, which the heal decides, so the seats
+			// still playing its input keep it; a member that counts this seat in its group differs on three frames that arrive out of
+			// order - another history inside the group.
+			for (bool mutual: {false, true}) {
+				Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
+				peer.m_Config.peerFrameGroups = true; peer.m_Config.authorityPeerId = 1;
+				peer.m_RemotePeerIds = {1, 3}; peer.m_RemoteTransports = {{1, 41}, {3, 43}};
+				peer.m_MigrationPhase = NetHostMigrationPhase::None;
+				peer.m_FrameGroupMembers = 7; peer.m_FrameGroupChanges = {{1, 7}};
+				for (uint64_t frame = 140; frame <= 160; ++frame) peer.m_MigrationHistory[frame] = {static_cast<uint8_t>(frame), 2, 3};
+				peer.m_LastCompletedSimulationTick = peer.m_LastDeliveredFrame = 160; peer.m_Stats.nextFrame = 161;
+				NetHash32 elsewhere{}; elsewhere.fill(0x5A);
+				const std::vector<uint64_t> arrivals = mutual ? std::vector<uint64_t>{154, 153, 155} : std::vector<uint64_t>{153, 154, 155};
+				for (uint64_t frame: arrivals) {
+					auto witness = peer.PeerFrameMessage(NetHostMigrationMessageType::PeerReceipt);
+					witness.senderPeerId = witness.successorPeerId = 1;
+					witness.preparedFrame = UINT64_MAX; witness.frame = witness.appliedFrame = frame;
+					witness.voterMask = mutual ? 7 : 1;
+					witness.bytes.assign(elsewhere.begin(), elsewhere.end()); witness.bytes.insert(witness.bytes.end(), elsewhere.begin(), elsewhere.end());
+					witness.totalBytes = static_cast<uint32_t>(witness.bytes.size());
+					std::vector<uint8_t> signedBytes; NetHostMigrationMessage authenticated;
+					if (!NetHostMigrationCodec::Encode(witness, peer.m_Config.migrationKey, signedBytes) ||
+					    !NetHostMigrationCodec::Decode(signedBytes, peer.m_Config.migrationKey, authenticated) || !peer.HandlePeerFrameMessage(authenticated, 1200)) {
+						*error = "a witness did not traverse the authenticated peer wire"; return false;
+					}
+				}
+				const auto flagged = peer.m_PeerOtherContinuations.find(1);
+				if (mutual ? flagged == peer.m_PeerOtherContinuations.end() || flagged->second != 153 : flagged != peer.m_PeerOtherContinuations.end()) {
+					*error = mutual ? "a member counting this seat whose records differed on three frames, out of order, was not seen as another continuation" :
+					                  "a host that had held this seat was held as another continuation inside the group still playing its input";
+					return false;
+				}
+			}
+			return true;
+		}
+
 		static bool OtherContinuationBecomesASplit(std::string* error) {
 			bool passed = true;
 			const auto check = [&](bool ok, const std::string& why) {
@@ -33074,6 +33111,12 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS an_open_vote_asks_for_its_frames_record_at_once\n[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "mutual-continuation") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::OnlyASeatCountingThisOneIsAnotherContinuation(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS only_a_seat_counting_this_one_is_another_continuation\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "held-host-hash") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::HeldHostHashesStayPrivateInFrameGroups(&error)) return fail(error);
@@ -33408,6 +33451,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::HeldHostHashesStayPrivateInFrameGroups, "held_host_hashes_stay_private_in_frame_groups");
 		row(&SessionPlaneRecoveryTest::AnOpenVoteAsksForItsFramesRecordAtOnce, "an_open_vote_asks_for_its_frames_record_at_once");
 		row(&SessionPlaneRecoveryTest::ADirectMigrationNeedsThisSeatsGroup, "a_direct_migration_needs_this_seats_group");
+		row(&SessionPlaneRecoveryTest::OnlyASeatCountingThisOneIsAnotherContinuation, "only_a_seat_counting_this_one_is_another_continuation");
 		row(&SessionPlaneRecoveryTest::ReaderLinksContributeToInputRunway, "reader_links_contribute_to_input_runway");
 		row(&SessionPlaneRecoveryTest::LinkRiseHasNoResizeCooldown, "link_rise_has_no_resize_cooldown");
 		row(&SessionPlaneRecoveryTest::LinkFallNeedsFiveMeasuredSeconds, "link_fall_requires_five_continuous_measured_seconds");
