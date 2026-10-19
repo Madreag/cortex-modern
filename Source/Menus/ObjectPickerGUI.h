@@ -56,6 +56,12 @@ namespace RTE {
 		/// @return
 		bool IsVisible() const { return m_PickerState != PickerState::Disabled; }
 
+		/// Whether the picker has finished sliding in and takes the player's input.
+		bool IsOpen() const { return m_PickerState == PickerState::Enabled; }
+
+		/// The picker's own controls, for a scripted hand that clicks its rows as a player does.
+		GUIControlManager* AutomationManager() const { return m_GUIControlManager.get(); }
+
 		/// Reports whether the menu is enabled or not.
 		/// @return
 		bool IsEnabled() const { return m_PickerState == PickerState::Enabled || m_PickerState == PickerState::Enabling; }
