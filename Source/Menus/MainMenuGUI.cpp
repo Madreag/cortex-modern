@@ -1086,6 +1086,18 @@ void MainMenuGUI::HandleBackNavigation(bool backButtonPressed) {
 	}
 }
 
+namespace {
+	/// Whether a notification is a control's commit. Every control type numbers its notifications from zero, so the message is read
+	/// against the type that sent it: a button's Pushed, Clicked and UnPushed must not pass as a slider's, a tab's or a combo's commit.
+	bool CommitsOnNotification(GUIEvent& event) {
+		GUIControl* control = event.GetControl();
+		const int message = event.GetMsg();
+		return (dynamic_cast<GUITab*>(control) && message == GUITab::UnPushed) || (dynamic_cast<GUIComboBox*>(control) && message == GUIComboBox::Closed) ||
+		       (dynamic_cast<GUICheckbox*>(control) && message == GUICheckbox::Changed) || (dynamic_cast<GUISlider*>(control) && message == GUISlider::Changed) ||
+		       (dynamic_cast<GUITextBox*>(control) && message == GUITextBox::Enter);
+	}
+} // namespace
+
 bool MainMenuGUI::HandleInputEvents() {
 	if (m_ActiveMenuScreen == MenuScreen::MainScreen) {
 		int mouseX = 0;
@@ -1168,10 +1180,7 @@ bool MainMenuGUI::HandleInputEvents() {
 			// typed; waiting for Apply loses it the moment the click moves the focus.
 			DraftHostOptionsFromControls();
 		} else if (guiEvent.GetType() == GUIEvent::Notification && m_ActiveMenuScreen == MenuScreen::MultiplayerScreen &&
-		           m_MultiplayerSubScreen == MultiplayerSubScreen::HostOptions &&
-		           (guiEvent.GetMsg() == GUITab::UnPushed || guiEvent.GetMsg() == GUIComboBox::Closed ||
-		            guiEvent.GetMsg() == GUICheckbox::Changed || guiEvent.GetMsg() == GUISlider::Changed ||
-		            guiEvent.GetMsg() == GUITextBox::Enter)) {
+		           m_MultiplayerSubScreen == MultiplayerSubScreen::HostOptions && CommitsOnNotification(guiEvent)) {
 			// Tabs, combos, checks and sliders on the options pages notify rather than Command; only
 			// the commit-flavoured ones reach the handler (a hover must never switch the page).
 			HandleMultiplayerScreenInputEvents(guiEvent.GetControl());
