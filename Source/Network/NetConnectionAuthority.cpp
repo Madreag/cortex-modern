@@ -210,9 +210,12 @@ namespace RTE {
 		m_Suspended = false;
 	}
 	void NetConnectionAuthority::Configure(NetParticipantIdentityStore* player, std::string baseUrl, std::string installKey, std::string certPin) {
+		{
+			std::lock_guard network(m_NetworkMutex);
+			if (!m_LanBrowser) m_LanBrowser = std::make_unique<NetLanDiscovery>();
+			(void)m_LanBrowser->StartBrowser();
+		}
 		std::lock_guard lock(m_Mutex);
-		if (!m_LanBrowser) m_LanBrowser = std::make_unique<NetLanDiscovery>();
-		(void)m_LanBrowser->StartBrowser();
 		while (!baseUrl.empty() && baseUrl.back() == '/') baseUrl.pop_back();
 		if (!baseUrl.empty() && !baseUrl.starts_with("https://")) baseUrl = "https://" + baseUrl;
 		// Another directory keeps another clock.
@@ -741,40 +744,57 @@ namespace RTE {
 		}
 	}
 
+	void NetConnectionAuthority::ProbeLanHosts(uint64_t steadyMs, std::map<uint64_t, NetConnectionRoute>& directHosts) {
+		m_LanBrowser->Tick(steadyMs);
+		auto hosts = m_LanBrowser->GetHosts(steadyMs);
+		std::sort(hosts.begin(), hosts.end(), [](const auto& a, const auto& b) { return a.lastSeenMs > b.lastSeenMs; });
+		for (const auto& host: hosts) {
+			if (host.matchId == 0 || host.port == 0) continue;
+			const auto found = directHosts.find(host.matchId);
+			if (found != directHosts.end() && found->second.generation >= host.hostGeneration) continue;
+			NetConnectionRoute route;
+			route.listenPort = host.port; route.listenAddrs = {host.address}; route.generation = host.hostGeneration;
+			directHosts[host.matchId] = std::move(route);
+		}
+	}
+
 	void NetConnectionAuthority::Update(uint64_t steadyMs, uint64_t unixSeconds) {
+		// The LAN browser and the adapter scan run outside m_Mutex: a sim tick's tie query never waits on them.
+		std::optional<std::map<uint64_t, NetConnectionRoute>> directHosts;
+		std::optional<NetworkProbe> probe;
+		uint64_t lanSequence = 0;
+		{
+			std::lock_guard network(m_NetworkMutex);
+			if (m_LanBrowser) { directHosts.emplace(); ProbeLanHosts(steadyMs, *directHosts); lanSequence = ++m_LanSequence; }
+			probe = ProbeNetwork(steadyMs, unixSeconds);
+		}
 		std::lock_guard lock(m_Mutex);
 		m_LastUpdateMs = steadyMs;
-		if (m_LanBrowser) {
-			m_LanBrowser->Tick(steadyMs);
-			m_DirectHosts.clear();
-			auto hosts = m_LanBrowser->GetHosts(steadyMs);
-			std::sort(hosts.begin(), hosts.end(), [](const auto& a, const auto& b) { return a.lastSeenMs > b.lastSeenMs; });
-			for (const auto& host: hosts) {
-				if (host.matchId == 0 || host.port == 0) continue;
-				const auto found = m_DirectHosts.find(host.matchId);
-				if (found != m_DirectHosts.end() && found->second.generation >= host.hostGeneration) continue;
-				NetConnectionRoute route;
-				route.listenPort = host.port; route.listenAddrs = {host.address}; route.generation = host.hostGeneration;
-				m_DirectHosts[host.matchId] = std::move(route);
-			}
-		}
-		ObserveNetwork(steadyMs, unixSeconds);
 		m_UnixSeconds = unixSeconds;
+		// A slower caller's older reading never replaces a newer one.
+		if (directHosts && lanSequence > m_AppliedLan) { m_AppliedLan = lanSequence; m_DirectHosts = std::move(*directHosts); }
+		if (probe && probe->sequence > m_AppliedProbe) { m_AppliedProbe = probe->sequence; ApplyNetwork(std::move(*probe)); }
 		if (m_Suspended) { PollBootstrap(steadyMs); return; }
 		// Pending frame and host decisions use the request budget before routine check-ins.
 		PollOperations(steadyMs); PollBootstrap(steadyMs); PollHostChange(steadyMs, unixSeconds); PollFrameTie(steadyMs, unixSeconds); PollCheckIn(steadyMs, unixSeconds);
 	}
 
-	void NetConnectionAuthority::ObserveNetwork(uint64_t steadyMs, uint64_t unixSeconds) {
+	std::optional<NetConnectionAuthority::NetworkProbe> NetConnectionAuthority::ProbeNetwork(uint64_t steadyMs, uint64_t unixSeconds) {
 		const bool resumed = m_LastWallSeconds != 0 && unixSeconds > m_LastWallSeconds + 20;
 		m_LastWallSeconds = unixSeconds;
-		if (!resumed && steadyMs < m_NextNetworkProbe) return;
+		if (!resumed && steadyMs < m_NextNetworkProbe) return std::nullopt;
 		m_NextNetworkProbe = steadyMs + 2000;
-		auto addresses = NetLanDiscovery::GetLocalAddresses();
-		const uint32_t native = GnsTransport::LocalRouteRevision();
-		if (resumed || addresses != m_NetworkAddresses || native != m_NativeRouteRevision) {
-			m_NativeRouteRevision = native;
-			m_NetworkAddresses = std::move(addresses); ++m_NetworkRevision; ++m_Route.generation;
+		NetworkProbe probe;
+		probe.addresses = m_AddressSource ? m_AddressSource() : NetLanDiscovery::GetLocalAddresses();
+		probe.nativeRevision = GnsTransport::LocalRouteRevision();
+		probe.resumed = resumed;
+		probe.sequence = ++m_ProbeSequence;
+		return probe;
+	}
+	void NetConnectionAuthority::ApplyNetwork(NetworkProbe probe) {
+		if (probe.resumed || probe.addresses != m_NetworkAddresses || probe.nativeRevision != m_NativeRouteRevision) {
+			m_NativeRouteRevision = probe.nativeRevision;
+			m_NetworkAddresses = std::move(probe.addresses); ++m_NetworkRevision; ++m_Route.generation;
 			m_NextCheckIn = 0;
 		}
 	}
