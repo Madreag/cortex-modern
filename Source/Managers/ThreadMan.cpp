@@ -1,10 +1,13 @@
 #include "ThreadMan.h"
 #include "SteadyClock.h"
 
+#include <algorithm>
+#include <cerrno>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <format>
+#include <limits>
 #include <string>
 
 #ifdef _MSC_VER
@@ -27,8 +30,8 @@
 using namespace RTE;
 
 namespace {
-	// In a lockstep match a saver thread runs at the game's own priority while a slice is open and below it while parked: on
-	// a machine whose cores are all busy, a thread kept below everything else would get none of the time the game leaves it.
+	// A saver thread takes the game's own priority only while its machine's own save is overdue and it works beside the game;
+	// in the game's idle time it stays below the game's threads, in a match as in single player.
 	thread_local int t_SaverRaised = -1;
 	void SetSaverRaised(bool raised) {
 		if (t_SaverRaised == static_cast<int>(raised)) return;
@@ -40,6 +43,31 @@ namespace {
 #endif
 		// Linux keeps its lowered nice value: an unprivileged thread cannot raise it again, and the scheduler's fair share keeps it running.
 	}
+
+	// The calling thread's scheduling level as the platform reports it back: the Windows priority, the macOS QoS class, the Linux nice value.
+	int ThreadPriorityLevel() {
+#ifdef _WIN32
+		return GetThreadPriority(GetCurrentThread());
+#elif defined(__APPLE__)
+		qos_class_t qos = QOS_CLASS_UNSPECIFIED;
+		int relative = 0;
+		if (pthread_get_qos_class_np(pthread_self(), &qos, &relative) != 0) return (std::numeric_limits<int>::min)();
+		return static_cast<int>(qos);
+#else
+		errno = 0;
+		const int nice = getpriority(PRIO_PROCESS, static_cast<id_t>(syscall(SYS_gettid)));
+		return errno != 0 ? (std::numeric_limits<int>::min)() : nice;
+#endif
+	}
+
+#ifdef _WIN32
+	constexpr int c_SaverLowest = THREAD_PRIORITY_LOWEST, c_SaverRaised = THREAD_PRIORITY_NORMAL;
+#elif defined(__APPLE__)
+	constexpr int c_SaverLowest = static_cast<int>(QOS_CLASS_UTILITY), c_SaverRaised = static_cast<int>(QOS_CLASS_DEFAULT);
+#else
+	// A Linux saver stays at nice 10 throughout.
+	constexpr int c_SaverLowest = 10, c_SaverRaised = 10;
+#endif
 }
 
 void SaverThreads::Enter() {
@@ -142,26 +170,34 @@ void SaverThreads::SetOverdue(bool overdue) {
 }
 
 std::string SaverThreads::PrioritySelfTestMismatch() {
-#ifdef _WIN32
-	const bool wasMatch = s_MatchPriority.load(std::memory_order_acquire);
-	const auto inSlice = [](bool inMatch) {
-		int priority = THREAD_PRIORITY_ERROR_RETURN;
-		std::thread saver([&] {
-			Enter();
-			SetMatchPriority(inMatch);
-			LendTickStart(5000000);
-			CheckSlice();
-			priority = GetThreadPriority(GetCurrentThread());
-			CloseSlice();
-		});
-		saver.join();
-		return priority;
-	};
-	const int single = inSlice(false), match = inSlice(true);
-	SetMatchPriority(wasMatch);
-	if (single != THREAD_PRIORITY_LOWEST) return std::format("a saver thread outside a match ran at priority {} inside a slice", single);
-	if (match != THREAD_PRIORITY_NORMAL) return std::format("a saver thread in an autosaving match ran at priority {} inside a slice", match);
+	const bool wasOverdue = s_Overdue.load(std::memory_order_acquire);
+	int entered = 0, inSlice = 0, overdue = 0, after = 0;
+	std::thread saver([&] {
+		Enter();
+		entered = ThreadPriorityLevel();
+		LendTickStart(5000000);
+		CheckSlice();
+		inSlice = ThreadPriorityLevel();
+		SetOverdue(true);
+		CheckSlice();
+		overdue = ThreadPriorityLevel();
+		SetOverdue(false);
+		CheckSlice();
+		after = ThreadPriorityLevel();
+		CloseSlice();
+	});
+	saver.join();
+	SetOverdue(wasOverdue);
+#if defined(_WIN32) || defined(__APPLE__)
+	const int lowest = c_SaverLowest, raised = c_SaverRaised;
+#else
+	// A process already nicer than 10 keeps its own value; the saver is never raised.
+	const int lowest = (std::max)(entered, c_SaverLowest), raised = lowest;
 #endif
+	if (entered != lowest) return std::format("a saver thread entered at level {} instead of its lowest {}", entered, lowest);
+	if (inSlice != lowest) return std::format("a saver thread in a slice ran at level {} instead of its lowest {}", inSlice, lowest);
+	if (overdue != raised) return std::format("a saver thread with an overdue save ran at level {} instead of {}", overdue, raised);
+	if (after != lowest) return std::format("a saver thread stayed at level {} after its save stopped being overdue", after);
 	return {};
 }
 
@@ -172,7 +208,7 @@ void SaverThreads::CheckSlice() {
 		return;
 	}
 	if (NowUs() < s_SliceEndUs.load(std::memory_order_acquire) && (s_SliceLent.load(std::memory_order_acquire) || s_GameWork.load(std::memory_order_acquire) == 0)) {
-		if (s_Lowered) SetSaverRaised(s_MatchPriority.load(std::memory_order_acquire));
+		if (s_Lowered) SetSaverRaised(false);
 		return;
 	}
 	WaitForSlice();
@@ -222,15 +258,12 @@ void SaverThreads::WaitForSlice() {
 	struct Unpark { ~Unpark() { s_Parked.fetch_sub(1, std::memory_order_relaxed); } } unpark;
 	for (;;) {
 		if (s_Gating.load(std::memory_order_acquire) == 0 || s_Lent.load(std::memory_order_acquire) > 0 || s_Overdue.load(std::memory_order_acquire)) {
-			if (s_Lowered) SetSaverRaised(s_MatchPriority.load(std::memory_order_acquire) || s_Overdue.load(std::memory_order_acquire));
+			if (s_Lowered) SetSaverRaised(s_Overdue.load(std::memory_order_acquire));
 			return;
 		}
 		const int64_t now = NowUs(), sliceEnd = s_SliceEndUs.load(std::memory_order_acquire);
 		if (now < sliceEnd) {
-			if (s_SliceLent.load(std::memory_order_acquire) || s_GameWork.load(std::memory_order_acquire) == 0) {
-				if (s_Lowered) SetSaverRaised(s_MatchPriority.load(std::memory_order_acquire));
-				return;
-			}
+			if (s_SliceLent.load(std::memory_order_acquire) || s_GameWork.load(std::memory_order_acquire) == 0) return;
 			// Game work that never ends may itself wait on something the saver holds.
 			if (now - began > c_StuckTickUs) {
 				if (s_ReportedStuckAtUs.exchange(began) != began) {

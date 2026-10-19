@@ -74,16 +74,13 @@ namespace RTE {
 		/// The game loop's side: a tick starts, and the saver stops at its next yield.
 		static void CloseSlice() noexcept;
 
-		/// While a save is due and this machine's writer is still busy, the saver works beside the game instead of in its idle
-		/// time, so the due save is taken as soon as the writer can write it: the machine that is late pays for its own save.
+		/// While this machine's own save is due and its writer is still busy, the saver works beside the game at the game's
+		/// priority instead of in its idle time, so the due save is taken as soon as the writer can write it: the machine that
+		/// is late pays for its own save. Otherwise a saver stays below the game, in a match as in single player.
 		static void SetOverdue(bool overdue);
 
-		/// While an autosaving lockstep match runs, a saver thread takes the game's priority inside the slices it is given;
-		/// single player keeps it below the game's, as it always ran.
-		static void SetMatchPriority(bool inMatch) noexcept { s_MatchPriority.store(inMatch, std::memory_order_release); }
-
-		/// Self-test: a saver thread given a slice keeps its lowest priority outside an autosaving match and takes the game's
-		/// inside one. Empty when it does, else what was seen.
+		/// Self-test: a saver thread given a slice keeps its lowest priority, and only an overdue save raises it to the game's.
+		/// Empty when it does, else what was seen.
 		static std::string PrioritySelfTestMismatch();
 
 		/// The game loop's side when it has left the saver no idle time for a while: the tick starting now lends the saver its
@@ -147,7 +144,6 @@ namespace RTE {
 		static inline std::atomic<bool> s_SliceLent{false};
 		static inline std::atomic<int> s_Parked{0};
 		static inline std::atomic<bool> s_Overdue{false};
-		static inline std::atomic<bool> s_MatchPriority{false};
 	};
 
 	/// Runs work(index) for every index below a count on a pool, the items taken in index order by whichever thread comes

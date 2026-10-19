@@ -3905,7 +3905,6 @@ static std::string ResyncSaveName() {
 
 	void NetMatchService::ResetCheckpointSchedule() {
 		SaverThreads::SetOverdue(false);
-		SaverThreads::SetMatchPriority(false);
 		m_ScheduledCaptures.clear();
 		m_PeriodicWaitSince = 0;
 		m_OpenCaptureTick = 0;
@@ -4315,10 +4314,8 @@ static std::string ResyncSaveName() {
 		AppendCommittedJoinFrame(tick);
 		if (!ScenarioRunner::IsLockstepControllerSyncActive() || m_AutosaveMatchId.empty() || !m_Coordinator) {
 			SaverThreads::SetOverdue(false);
-			SaverThreads::SetMatchPriority(false);
 			return;
 		}
-		SaverThreads::SetMatchPriority(true);
 		AutosaveTickInput input;
 		input.tick = tick;
 		input.now = g_TimerMan.GetSimTimeTicks();
@@ -4344,12 +4341,13 @@ static std::string ResyncSaveName() {
 		}
 		AutosaveTickOutput output = StepAutosaveSchedule(input);
 		{
-			// A capture this peer's busy writer keeps from being named or taken: the next periodic one once its deadline
-			// passed, the host's manual ask, or a joiner's base.
+			// This machine's own save that its busy writer keeps from being named or taken: the next periodic one once its
+			// deadline passed, or the host player's own manual ask. A joiner's or returner's base waits for the writer in the
+			// game's idle time, so the host never pays for another player's join or return.
 			const int64_t interval = static_cast<int64_t>(m_MatchAutosaveSeconds) * g_TimerMan.GetTicksPerSecond();
 			const int64_t dueAt = m_IsHost && m_NextAutosaveSimTime >= 0 ? m_NextAutosaveSimTime : m_CaptureAnchorSimTime + interval;
 			const bool periodicDue = interval > 0 && !paused && m_CaptureAnchorSimTime >= 0 && input.now >= dueAt;
-			const bool asked = m_IsHost && (output.manualPending || m_WorldCapturePending || m_PrivateBaseRequested);
+			const bool asked = m_IsHost && output.manualPending;
 			SaverThreads::SetOverdue((periodicDue || asked) && g_ActivityMan.AutosaveWriterBusy());
 		}
 		if (output.periodicLateTicks >= 0) {
