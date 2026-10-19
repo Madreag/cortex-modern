@@ -1802,7 +1802,11 @@ void MovableObject::SetHitWhatTerrMaterial(unsigned char matID) {
 	CheckpointChange changed(*this, [this] { return CheckpointFields(m_LastCollisionSimFrameNumber, m_TerrainMatHit); });
 	m_TerrainMatHit = matID;
 	m_LastCollisionSimFrameNumber = g_MovableMan.GetSimUpdateFrameNumber();
-	RunScriptedFunctionInAppropriateScripts("OnCollideWithTerrain", false, false, {}, {std::to_string(m_TerrainMatHit)});
+	// Every atom that touches terrain lands here; an object with no script functions has no hook to build a call for.
+	if (!m_FunctionsAndScripts.empty()) {
+		static const std::string onCollideWithTerrain = "OnCollideWithTerrain";
+		RunScriptedFunctionInAppropriateScripts(onCollideWithTerrain, false, false, {}, {std::to_string(m_TerrainMatHit)});
+	}
 }
 
 Vector MovableObject::GetTotalForce() {
