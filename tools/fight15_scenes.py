@@ -1022,8 +1022,8 @@ def apply_for_held_seat_scene():
              dict(op="assert_control", control=seat_row("Substitute"), equals=dict(enabled=True), text_contains="Let Newcomer join")]
     host += press(seat_row("Substitute")) + [dict(op="assert_control", control=seat_row("Substitute"), text_contains="Confirm: let Newcomer join")]
     host += press(seat_row("Substitute")) + capture("newcomer-let-in-host")
-    # The newcomer joins the running match through its image; the host watches the seat until the AI hands it over.
-    host += key("F6") + [wait(panel_open=False), wait(ai_held_peer_ids=[], within_ms=180000), wait(sim_advanced=600, within_ms=120000)] + capture("newcomer-playing-host")
+    # The newcomer joins the running match through its image; the host watches its seat until the newcomer plays it.
+    host += key("F6") + [wait(panel_open=False), wait(returned_peer="Newcomer", within_ms=180000), wait(sim_advanced=600, within_ms=120000)] + capture("newcomer-playing-host")
     host += [dict(op="assert", equals=dict(service="Running", local_actor_alive=True)), dict(op="assert_relay")] + pause_end() + [lobby_wait("host", other="Newcomer"), dict(op="finish")]
     leaver = place("joiner") + key("Escape") + [wait(screen="Pause"), menu("activate ButtonLeaveMatch"), wait(screen="PauseLeaveConfirm"),
                                                 menu("activate ButtonLeaveConfirm"), wait(screen="MultiplayerScreen", scope="menu"),
