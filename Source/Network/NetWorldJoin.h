@@ -807,8 +807,9 @@ namespace RTE {
 		NetWorldJoinSession* Find(NetPeerId connection);
 		/// E: the lead ahead of the committed frame, never at or behind the input already sent.
 		uint64_t ChooseActivationTick(uint64_t nowFrame, uint64_t leadFrames = c_NetWorldActivationLeadFrames) const;
-		/// How far ahead a session's activation is placed: a world joiner's whole lead, a private return its proposal's notice and the bound.
-		uint64_t ActivationLeadFrames(const NetWorldJoinSession& session) const;
+		/// How far ahead a session's activation is placed: a world joiner's whole lead; a private return at the head of its tail its proposal's
+		/// notice and the bound.
+		uint64_t ActivationLeadFrames(const NetWorldJoinSession& session, uint64_t behind) const;
 		uint8_t AllocateSpectatorLobbyPeer() const;
 		std::string m_IdentityPath;
 
