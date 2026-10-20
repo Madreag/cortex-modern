@@ -299,8 +299,8 @@ namespace RTE {
 		uint16_t slowPlayerBoundTicks = NetMatchConfigUtil::c_DefaultSlowPlayerBoundTicks;
 		NetSlowPlayerPolicy slowPlayerPolicy = NetSlowPlayerPolicy::Substitute;
 		uint16_t inputDelayFrames = 0;
-		bool autosaveEnabled = false;
-		uint32_t autosaveIntervalSeconds = 0;
+		bool autosaveEnabled = true;
+		uint32_t autosaveIntervalSeconds = NetMatchConfigUtil::c_DefaultAutosaveIntervalSeconds;
 		uint8_t idleWaitMinutes = 10;
 		bool automaticRepair = true;
 		uint8_t frameRedundancyTicks = NetMatchConfigUtil::c_DefaultFrameRedundancyTicks;
@@ -447,6 +447,8 @@ namespace RTE {
 			bool ownSeatHeld = false; //!< Host: its own seat is held, so what it sends rides no frame the round plays.
 			bool manualRequested = false; //!< Host: the host asked to save the match and no capture has taken the ask yet.
 			bool hostProvisional = false; //!< Host: it reaches no majority, so its play may not be the match's and nothing is written.
+			bool writerBusy = false; //!< This peer's writer is still writing or preparing a capture.
+			bool writerJoinWork = false; //!< That work is only a joiner's or returner's base: another player's save.
 		};
 		struct AutosaveTickOutput {
 			bool requestPrivateBase = false; //!< Held host: ask the playing voters to agree a base capture, without naming a tick on held input.
@@ -466,6 +468,11 @@ namespace RTE {
 		/// Every peer captures at each tick the host names; the host names the next one only once every
 		/// writer has reported the last one finished, so no peer holds more than one unwritten capture.
 		AutosaveTickOutput StepAutosaveSchedule(const AutosaveTickInput& input);
+		/// Whether this machine's saver works at the game's priority after that boundary: its own save is overdue while its writer is busy.
+		bool SaverOverdue(const AutosaveTickInput& input, const AutosaveTickOutput& output) const;
+		/// Whether the writer holds only a joiner's or returner's base: it works in capture order, so a base is the newest capture
+		/// it took and no capture of this machine's own waits.
+		bool WriterHoldsOnlyJoinCaptures() const;
 		/// Host: asks every peer to save the match at the next tick the schedule may name, through the schedule's own
 		/// capture; the interval stays as it was. A client's ask only tells it who saves.
 		/// @return Whether the ask was taken.
@@ -1442,6 +1449,8 @@ namespace RTE {
 		friend bool TestAHeldHostKeepsTheAutosaveCadence(std::string* error);
 		friend bool TestAHostsLostOwnReportDoesNotStopTheSchedule(std::string* error);
 		friend bool TestALateCaptureNamesTheWriterThatMadeItLate(std::string* error);
+		friend bool TestAReturnersBaseIsTheMatchsSave(std::string* error);
+		friend bool TestAHostsOwnLateSaveFollowsItsCommand(std::string* error);
 		friend bool TestAProvisionalHostWritesNothing(std::string* error);
 		friend bool TestNoCaptureIsNamedOverAPendingActivation(std::string* error);
 		friend bool TestNoCaptureIsNamedBeforeTheAgreedFirstFrame(std::string* error);
@@ -1552,8 +1561,10 @@ namespace RTE {
 		uint32_t m_MatchAutosaveSeconds = 0; //!< The cadence the round agreed on, read once so the tick path never chases the runner.
 		int64_t m_NextAutosaveSimTime = -1;
 		uint64_t m_PeriodicWaitSince = 0; //!< Host: the first tick a due periodic capture found its writers busy, 0 when none waits.
-		bool m_PeriodicOwnWriterWaited = false; //!< Host: this machine's own writer was busy while the due periodic capture waited.
+		bool m_PeriodicOwnWriterWaited = false; //!< Host: this machine's own writer held the due periodic capture on the last tick it waited.
 		uint64_t m_OwnLateCaptureTick = 0; //!< Host: the capture named late for its own writer, until it is taken.
+		bool m_OwnLatePending = false; //!< Host: its late periodic save went to the playing voters; the capture they agree is its own late save.
+		bool m_WriterOnJoinCapture = false; //!< The newest capture this peer took is a joiner's or returner's base.
 		bool m_SaverOverdue = false; //!< The overdue state last given this machine's saver.
 		uint64_t m_SaverOverdueTick = 0; //!< The tick that state was given at.
 		/// Gives the saver its overdue state and logs each change, with the tick it changed at.

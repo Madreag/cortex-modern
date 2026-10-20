@@ -1629,6 +1629,25 @@ namespace RTE {
 
 	bool ScenarioRunner::TakeWorldCatchUpGrant(uint64_t nextSimTick, RTE::SteadyClock::time_point now) {
 		NetLockstepPlaneGuard plane;
+		// Test lever CC_TEST_CATCHUP_GRANT_DETAILS: the catch-up names what keeps the next tick back, every two seconds at most.
+		static const bool grantDetails = std::getenv("CC_TEST_CATCHUP_GRANT_DETAILS") != nullptr;
+		if (grantDetails && s_WorldCatchUpActive) {
+			static RTE::SteadyClock::time_point shownAt{};
+			const bool mayGrant = WorldCatchUpMayGrant(nextSimTick, s_WorldCatchUpBudget);
+			if (!mayGrant && now - shownAt >= std::chrono::seconds(2)) {
+				shownAt = now;
+				uint64_t first = 0, last = 0;
+				for (const NetLockstepFrame& frame: s_WorldCatchUpTail) {
+					first = first == 0 ? frame.targetFrame : std::min(first, frame.targetFrame);
+					last = std::max(last, frame.targetFrame);
+				}
+				System::PrintDiagnosticLine("[catchup-grant] next=" + std::to_string(nextSimTick) + " applied=" + std::to_string(s_WorldCatchUpAppliedThrough) +
+				                            " held=" + std::to_string(s_WorldCatchUpHeld) + " fence=" + std::to_string(s_WorldCatchUpFence) +
+				                            " activation=" + std::to_string(s_WorldCatchUpActivationTick) + " budget=" + std::to_string(s_WorldCatchUpBudget) +
+				                            " has_frame=" + std::to_string(WorldCatchUpHasFrame(nextSimTick)) + " tail=" + std::to_string(s_WorldCatchUpTail.size()) +
+				                            " tail_first=" + std::to_string(first) + " tail_last=" + std::to_string(last) + " floor=" + std::to_string(s_WorldCatchUpFloor));
+			}
+		}
 		if (!WorldCatchUpMayGrant(nextSimTick, s_WorldCatchUpBudget)) {
 			// A frame that spent its ceiling stopped on its pacing; one the tail's end, a fence or the hold stopped did not.
 			if (s_WorldCatchUpActive && s_WorldCatchUpBudget <= 0) s_WorldCatchUpFramePaced = true;
@@ -1641,6 +1660,14 @@ namespace RTE {
 			s_WorldCatchUpTickTime = s_WorldCatchUpTickTime.count() == 0 ? tick : (s_WorldCatchUpTickTime * 3 + tick) / 4;
 		}
 		if (granted >= s_WorldCatchUpFloor && now - s_WorldCatchUpFrameBegan + (s_WorldCatchUpUntilDraw ? std::chrono::microseconds{0} : s_WorldCatchUpTickTime) > s_WorldCatchUpFrameTime) {
+			if (grantDetails && granted == 0) {
+				static RTE::SteadyClock::time_point pacedAt{};
+				if (now - pacedAt >= std::chrono::seconds(2)) {
+					pacedAt = now;
+					System::PrintDiagnosticLine("[catchup-grant] paced next=" + std::to_string(nextSimTick) + " tick_us=" + std::to_string(s_WorldCatchUpTickTime.count()) +
+					                            " frame_us=" + std::to_string(s_WorldCatchUpFrameTime.count()) + " floor=" + std::to_string(s_WorldCatchUpFloor));
+				}
+			}
 			s_WorldCatchUpFramePaced = true;
 			return false;
 		}

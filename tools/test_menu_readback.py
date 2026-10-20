@@ -1622,9 +1622,11 @@ def scripts(case, port, root, size="960x540"):
                  "activate ButtonMultiplayerHostGame\nwait 5\n"
                  "assert_visible LabelHostInputDelayPolicy 0\nassert_visible TextHostInputDelay 0\nassert_visible TextHostPort 0\n"
                  "dump_host_options\n"
-                 # The seeded policy is automatic and Advanced's Timing page says so; autosave is off, so its interval box is off.
+                 # The seeded policy is automatic and Advanced's Timing page says so; autosave is on every five minutes by default,
+                 # and turned off its interval box is the disabled frame the dump below is read for.
                  "activate ButtonHostOptions\nwait 5\nactivate TabHostPageTiming\nwait 3\nassert_label ComboHostNetPolicy Automatic\ndump_host_options\n"
-                 "activate TabHostPageRecovery\nwait 3\nassert_enabled TextHostRecAutosaveInterval 0\ndump_host_options\n"
+                 "activate TabHostPageRecovery\nwait 3\nassert_enabled TextHostRecAutosaveInterval 1\nassert_label TextHostRecAutosaveInterval 300\n"
+                 "setcheck CheckHostRecAutosave 0\nwait_ms 500\nassert_checked CheckHostRecAutosave 0\nassert_enabled TextHostRecAutosaveInterval 0\ndump_host_options\n"
                  "activate ButtonHostOptBack\nwait 4\nassert_substate HostSetup\n"
                  f"setup_host_port {port}\ncombo_select ComboHostPlayers 2\n"
                  "activate ButtonMultiplayerCreate\nwait 15\nassert_substate Lobby\n"
@@ -2092,7 +2094,13 @@ def scripts(case, port, root, size="960x540"):
                  "assert_label ComboHostRecJoinHistory 10 minutes\n"
                  "combo_select ComboHostRecJoinLag 1 minute\nwait_ms 500\n"
                  "assert_label ComboHostRecJoinLag 1 minute\n")
-        text += ("setcheck CheckHostRecAutosave 1\nwait_ms 500\nassert_checked CheckHostRecAutosave 1\n"
+        # A new host saves every five minutes by default.
+        text += ("assert_checked CheckHostRecAutosave 1\nassert_enabled TextHostRecAutosaveInterval 1\n"
+                 "assert_label TextHostRecAutosaveInterval 300\n"
+                 "assert_label LabelHostRecLastSave Checkpoint every 300 sim seconds - none saved yet\n"
+                 "setcheck CheckHostRecAutosave 0\nwait_ms 500\nassert_checked CheckHostRecAutosave 0\n"
+                 "assert_label LabelHostRecLastSave No autosaves while this is off\n"
+                 "setcheck CheckHostRecAutosave 1\nwait_ms 500\nassert_checked CheckHostRecAutosave 1\n"
                  "assert_enabled TextHostRecAutosaveInterval 1\n"
                  # Switching autosave on from off starts at the shortest cadence, not the off zero.
                  "assert_label TextHostRecAutosaveInterval 60\n"
@@ -2108,7 +2116,7 @@ def scripts(case, port, root, size="960x540"):
                  "assert_label LabelHostRecLastSave Checkpoint every 3600 sim seconds - none saved yet\n"
                  "set_text TextHostRecAutosaveInterval 0\nwait_ms 500\n"
                  "assert_label LabelHostRecLastSave No autosaves while this is off\n"
-                 "assert_label LabelHostRecAutosaveHint Every 60 s to 60 min, or off (default)\n"
+                 "assert_label LabelHostRecAutosaveHint Every 60 s to 60 min; 5 min by default\n"
                  # A typed 0 is off at Apply too: the service accepts off instead of refusing an enabled zero.
                  # Apply publishes an open-seat lobby too; read the committed revision's
                  # confirmation rather than accepting a pending draft or stale edit hint.
