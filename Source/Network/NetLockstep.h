@@ -1338,6 +1338,8 @@ namespace RTE {
 
 		NetLockstepState GetState() const { NET_PLANE_CHECK(); return m_State; }
 		bool IsRunning() const { NET_PLANE_CHECK(); return m_State == NetLockstepState::Running; }
+		/// True while the host that formed the agreed start waits for the record to reach its farthest seat, so every seat's clock starts together.
+		bool AwaitingAlignedStart() const { NET_PLANE_CHECK(); return m_AlignedStartAtMs > m_TimingNowMs; }
 		/// Hands back the decisions a round heard before its start, for a round that will not start.
 		std::vector<std::pair<NetLockstepTiming, NetPeerId>> TakePreStartTiming() { NET_PLANE_CHECK(); return std::exchange(m_PreStartTiming, {}); }
 		bool HasReceivedAllRemoteStarts() const { NET_PLANE_CHECK(); return AllRemoteStartsReceived(); }
@@ -2273,6 +2275,7 @@ namespace RTE {
 		std::set<uint8_t> m_PeerStartupPublished; //!< Peers whose startup reading has reached us.
 		std::set<uint8_t> m_StartupLinksLost; //!< Link-loss facts before the agreed start; human startup remains required.
 		bool m_AgreedStartApplied = false;
+		uint64_t m_AlignedStartAtMs = 0; //!< When the agreed start reaches the host's farthest seat; the host's clock starts then.
 		std::optional<NetLockstepStart> m_AgreedStartRecord;
 		std::set<uint8_t> m_StartupHeldSeatStamps; //!< Boundary-held seats stamped on their first committed tick.
 		std::map<uint8_t, NetPeerId> m_LateStartReclaims; //!< Boundary-held seats whose late start still owes a reclaim.

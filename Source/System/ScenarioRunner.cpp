@@ -3530,7 +3530,7 @@ namespace RTE {
 		// A service match measures and republishes activity startup after the
 		// lobby handshake. Keep the sim on the lobby countdown until the agreed
 		// first frame is installed; no AI hold can judge this interval.
-		if (!s_LockstepCoordinator->IsRunning()) {
+		if (!s_LockstepCoordinator->IsRunning() || s_LockstepCoordinator->AwaitingAlignedStart()) {
 			s_PreSimWait = now;
 			return false;
 		}

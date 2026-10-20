@@ -5465,6 +5465,7 @@ namespace RTE {
 		m_StartupLinksLost.clear();
 		m_LocalStartupPublished = false;
 		m_AgreedStartApplied = false;
+		m_AlignedStartAtMs = 0;
 		m_AgreedStartRecord.reset();
 		m_StartupHeldSeatStamps.clear();
 		m_LateStartReclaims.clear();
@@ -10137,6 +10138,18 @@ namespace RTE {
 		m_AgreedStartRecord = record;
 		ApplyAgreedStart(record, nowMs);
 		(void)SendAgreedStart();
+		// Each seat starts its clock when this record reaches it. Started now, the host's clock would lead every seat's by its
+		// link for the whole round, and their inputs, sized for the link alone, would reach it late at every tick.
+		if (UsesPeerFrameGroups()) {
+			double farthestMs = 0;
+			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
+				if (peer == m_Config.localPeerId || (publishedPeerMask & (uint32_t{1} << (peer - 1))) == 0) continue;
+				const auto [wire, route] = PeerFrameRoute(peer);
+				const double rttMs = wire && wire->IsPeerPingMeasured(route) ? wire->GetPeerPingMs(route) : m_Stats.peers[peer].pingMs;
+				farthestMs = std::max(farthestMs, rttMs / 2);
+			}
+			m_AlignedStartAtMs = nowMs + static_cast<uint64_t>(std::ceil(farthestMs));
+		}
 	}
 
 

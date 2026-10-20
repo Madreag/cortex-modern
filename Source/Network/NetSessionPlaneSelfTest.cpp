@@ -2213,7 +2213,7 @@ namespace RTE {
 					if (lostAt[id - 1] && imageNeeded[id - 1] && !imageReading[id - 1]) {
 						error = "authority ruling: losing peer " + std::to_string(id) + " did not stop at decision frame " + std::to_string(lostFrame[id - 1]); return false;
 					}
-					if (!peer.IsRunning() || imageReading[id - 1]) continue;
+					if (!peer.IsRunning() || peer.AwaitingAlignedStart() || imageReading[id - 1]) continue;
 					const uint64_t boundNext = world.applied + 1;
 					ObserveBoundRole(id - 1, !peer.WaitsForPlacement() && !peer.IsLocalPrivateReaderAt(boundNext) && !peer.IsSeatUnderAI(id, boundNext) &&
 					    (s_FrameMembers(peer, boundNext) & (1U << (id - 1))));
