@@ -1096,9 +1096,11 @@ int NetModerationGUI::FillRow(Controls& controls, const PanelRow& row, size_t sl
 	const int listWidth = std::min(220, inner / 3);
 	const int buttonRoom = inner - listWidth - 12;
 	Caption(controls.actions[0], m_LabelFont, "Keep for ", row.name, "", buttonRoom / 3);
-	const bool letArmed = armed && m_Armed->kind == Armed::Kind::Let;
-	Caption(controls.actions[1], m_LabelFont, letArmed ? "Confirm: let " : "Let ", chosen ? applicant : std::string("someone"), " join", buttonRoom / 3);
 	Caption(controls.actions[2], m_LabelFont, "Cancel this approval", "", "", buttonRoom / 3);
+	const bool letArmed = armed && m_Armed->kind == Armed::Kind::Let;
+	// Let takes the room the other shown actions leave: the host reads whom the press lets in.
+	const int letRoom = buttonRoom - (row.opened ? 0 : controls.actions[0]->GetWidth() + 6) - (view.substituting ? controls.actions[2]->GetWidth() + 6 : 0);
+	Caption(controls.actions[1], m_LabelFont, letArmed ? "Confirm: let " : "Let ", chosen ? applicant : std::string("someone"), " join", std::max(buttonRoom / 3, letRoom));
 	int x = 10;
 	for (size_t action = 0; action < controls.actions.size(); ++action) {
 		// Cancel is there while an approval is on its way, and only then; an opened place has nobody to keep it for.
