@@ -464,6 +464,14 @@ namespace RTE {
 			// No donor gives this frame on the history this seat displays: it read another continuation's records before this one. It returns
 			// through a private image from the frame it began reading, never by playing a second continuation over the first.
 			if (m_GrantedSimulationTick) return false;
+			if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) {
+				DiagnosticLine detail;
+				detail << "[net-peer-tail-other-history] local=" << static_cast<int>(m_Config.localPeerId) << " frame=" << frame << " start=" << m_Config.startFrame
+				    << " effective_start=" << m_Stats.effectiveStartFrame << " displayed=" << m_LastCompletedSimulationTick.value_or(0) << " members=" << m_FrameGroupMembers;
+				if (const auto votes = m_PeerTailVotes.find(frame); votes != m_PeerTailVotes.end())
+					for (const auto& [donor, vote]: votes->second) detail << " donor" << static_cast<int>(donor) << "=" << vote.members << "/" << vote.confirmed << "/" << vote.through
+					    << "/" << (vote.prefix == PeerFramePrefix(frame - 1));
+			}
 			m_PeerCommittedTail.erase(kept); m_PeerTailPrefixes.erase(frame); m_PeerPreparedPrefixes.erase(frame);
 			m_PeerTailVotes.erase(frame); m_PeerTailDecisions.erase(frame);
 			const auto own = m_PeerBridges.find(m_Config.localPeerId);
