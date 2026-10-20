@@ -897,6 +897,11 @@ namespace RTE {
 			    certificate.frame <= m_LastCompletedSimulationTick.value_or(0)) { refused(privateReader ? "displayed" : "behind"); return; }
 		}
 		const uint64_t prefixFrame = agreed.preparedFrame != 0 || heldAhead ? agreed.boundary : certificate.frame - 1;
+		// Another seat's return whose boundary this seat has not yet played - a returner that started before it - is judged when it has.
+		if (agreed.preparedFrame == 1 && prefixFrame >= m_Stats.nextFrame && prefixFrame >= m_Config.startFrame && !m_MigrationHistory.contains(prefixFrame) &&
+		    std::find(agreed.members.begin(), agreed.members.end(), m_Config.localPeerId) == agreed.members.end()) {
+			refused("boundary ahead"); keep(); return;
+		}
 		const NetHash32 prefix = certificate.frame == m_Config.startFrame ? NetHash32{} : agreed.preparedFrame != 0 || heldAhead ? PeerAppliedFramePrefix(prefixFrame) : PeerFramePrefix(prefixFrame);
 		if ((agreed.preparedFrame != 4 && agreed.bytes.size() != prefix.size() + (agreed.preparedFrame == 1 ? 12 * agreed.members.size() : 0)) || agreed.bytes.size() < prefix.size() || !std::equal(prefix.begin(), prefix.end(), agreed.bytes.begin())) { refused("prefix"); return; }
 		size_t returnOffset = prefix.size();

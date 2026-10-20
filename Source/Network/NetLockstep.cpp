@@ -12592,6 +12592,11 @@ namespace RTE {
 			AdvertiseFrameWindow();
 			if (m_AgreedStartRecord && m_Config.localPeerId == GetHostPeerId()) (void)SendAgreedStart(start.localPeerId);
 		}
+		// A returner's round began after decisions for its live frames were certified: each member it starts with sends them.
+		if (UsesPeerFrameGroups() && m_AuthenticatedPeerMessage == start.localPeerId)
+			if (const auto back = m_ReclaimTransactions.find(start.localPeerId); back != m_ReclaimTransactions.end() && back->second.activationFrame == start.startFrame)
+				for (auto decision = m_PeerBridgeCertificates.lower_bound({start.startFrame, 0}); decision != m_PeerBridgeCertificates.end(); ++decision)
+					SendPeerFrameMessage(NetHostMigrationMessage(decision->second), NetTransportLane::ControlReliable, start.localPeerId);
 	}
 
 	void NetLockstepCoordinator::HandleRecoveryChunk(const NetLockstepRecoveryChunk& chunk, uint64_t nowMs, NetPeerId fromTransport) {
