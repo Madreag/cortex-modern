@@ -2472,16 +2472,19 @@ namespace RTE {
 		if (session->activationTick != 0) {
 			// A returner still closing at its measured rate keeps the activation that rate reaches; one that slowed is told the frame its rate
 			// reaches now, never a fixed lead that would undo it. Inside a quarter lead the activation is the lead itself, as when it was chosen.
+			// A rate measured over one window moves by more than the bound from window to window, so the frame it reaches moves the
+			// activation either way only past a window's worth of frames: within that the lead still primes the pipeline in time.
 			const bool closingOutside = closing && behind > c_NetWorldActivationLeadFrames / 4;
 			const uint64_t reaches = closingOutside ? nowFrame + static_cast<uint64_t>(std::ceil(behind / closingRate)) : nowFrame;
-			const bool late = closingOutside ? reaches + c_NetWorldActivationLeadFrames > session->activationTick + m_Config.slowPlayerBoundTicks
+			const bool late = closingOutside ? reaches + c_NetWorldActivationLeadFrames > session->activationTick + c_NetWorldClosingWindowFrames
 			                                 : behind > session->activationTrailFrames + m_Config.slowPlayerBoundTicks;
 			if (IsPrivateMatch() && !session->activationProposed && (nowFrame >= session->activationTick || late)) {
 				uint64_t later = 0;
 				if (ReannounceActivation(connection, nowFrame, &later, nullptr)) {
 					if (closingOutside) {
 						later = session->activationTick = std::max(later, reaches + c_NetWorldActivationLeadFrames);
-						session->activationTrailFrames = 0;
+						// As a fresh activation chosen at this rate, the return leaves the trail it shows now, up to a lead.
+						session->activationTrailFrames = std::max(std::min<uint64_t>(behind, c_NetWorldActivationLeadFrames), phaseWork.value_or(0));
 					} else session->activationTrailFrames = std::max(std::min<uint64_t>(behind, 2 * c_NetWorldActivationLeadFrames), phaseWork.value_or(0));
 					if (outActivationTick) *outActivationTick = later;
 					session->catchUpGate = "reannounced-trailing";
