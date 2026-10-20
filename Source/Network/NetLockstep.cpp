@@ -12473,7 +12473,7 @@ namespace RTE {
 				// A private reader cannot validate a future member's terms until replay supplies its admission, nor a survivor the terms of a
 				// seat it holds before the return's certificate reaches it: a returner that heard the certificate first may start first.
 				const auto held = m_PeerBridges.find(start.localPeerId);
-				const bool returnUnheard = held != m_PeerBridges.end() && held->second.committedHold && !held->second.returnFrame;
+				const bool returnUnheard = held != m_PeerBridges.end() && held->second.committedHold && !held->second.returnFrame && start.startFrame >= m_Stats.nextFrame;
 				if (UsesPeerFrameGroups() && (m_AwaitingReplayedSeatState || IsLocalPrivateReaderAt(GetResumeFrame()) || returnUnheard) &&
 				    start.startFrame > known.startFrame && StartMatchesConfig(known)) {
 					const auto pending = m_PrivateStarts.find(start.localPeerId);
