@@ -569,8 +569,20 @@ namespace RTE {
 			const auto deadline = PeerInputDeadlineMs(frame);
 			if (!deadline || nowMs + agreementMs < *deadline) return false;
 		}
+		// Past the bound, a hold this seat does not propose names why under the details lever, once per frame.
+		const auto refused = [&](const char* why) {
+			if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS") && m_ConsumerWaitingFrame == frame && nowMs >= m_ConsumerWaitStartMs &&
+			    nowMs - m_ConsumerWaitStartMs >= static_cast<uint64_t>(std::ceil(m_Config.slowPlayerBoundTicks * m_Config.simTickMs)) && m_RefusedHoldFrame != frame) {
+				m_RefusedHoldFrame = frame;
+				std::string members;
+				for (uint8_t peer: proposal.members) members += std::to_string(peer);
+				DiagnosticLine() << "[net-peer-hold-refused] local=" << static_cast<int>(m_Config.localPeerId) << " frame=" << frame << " hold_frame=" << proposal.frame
+				    << " members=" << members << " connected=" << proposal.connectedMask << " why=" << why << " now_ms=" << nowMs << std::endl;
+			}
+			return false;
+		};
 		const uint32_t proposers = proposal.preparedFrame == 1 ? m_FrameGroupMembers : proposal.connectedMask;
-		if (proposers == 0) return false;
+		if (proposers == 0) return refused("no proposer");
 		proposal.successorPeerId = static_cast<uint8_t>(std::countr_zero(proposers) + 1);
 		const NetHash32 prefix = frame == m_Config.startFrame ? NetHash32{} : proposal.preparedFrame != 0 || heldAhead ? PeerAppliedFramePrefix(proposal.boundary) : PeerFramePrefix(frame - 1);
 		proposal.bytes.assign(prefix.begin(), prefix.end());
@@ -588,10 +600,10 @@ namespace RTE {
 			PutSize(proposal.bytes, std::max<uint32_t>(1, m_Config.peerIncarnations[peer]));
 		}
 		proposal.totalBytes = static_cast<uint32_t>(proposal.bytes.size());
-		if (!ValidatePeerBridge(proposal) && !(ownYield && CoSignsOwnHold(proposal))) return false;
-		if (HoldEmptiesTheRound(proposal, true)) return false;
+		if (!ValidatePeerBridge(proposal) && !(ownYield && CoSignsOwnHold(proposal))) return refused("invalid");
+		if (HoldEmptiesTheRound(proposal, true)) return refused("empties the round");
 		const PeerDecisionKey decision{proposal.frame, DecisionKind(proposal)};
-		if (m_PeerBridgeCertificates.contains(decision)) return false;
+		if (m_PeerBridgeCertificates.contains(decision)) return refused("certified");
 		auto& votes = m_PeerBridgeVotes[decision];
 		const auto own = votes.find(m_Config.localPeerId);
 		// A matching proposal is still pending until its certificate is installed.
@@ -599,9 +611,9 @@ namespace RTE {
 		// and prevents the wire from delivering the other voters' answers.
 		if (own != votes.end()) {
 			if (own->second.voterMask != 0 || !SameBridge(own->second, proposal) || !PeerGroupMayHold(proposal.connectedMask, proposal.frame))
-				return false;
+				return refused(own->second.voterMask != 0 ? "own vote pending" : !SameBridge(own->second, proposal) ? "own vote differs" : "group may not hold");
 		}
-		if (VotedOtherPeerReturn(proposal)) return false;
+		if (VotedOtherPeerReturn(proposal)) return refused("voted another return");
 		const bool invitation = proposal.preparedFrame == 0 && !ownYield && !PeerGroupMayHold(proposal.connectedMask, proposal.frame);
 		// Asking the missing owner to consent is not a vote. Until it signs, a timely input must remain admissible: the owner
 		// may already have produced it and be unable to promise a cutoff. Only actual signatures can fence or certify a hold.

@@ -2258,6 +2258,7 @@ namespace RTE {
 		uint64_t m_FirstMissingMs = 0;
 		std::optional<uint64_t> m_LastDeliveredFrame;
 		uint64_t m_ConsumerWaitStartMs = 0;
+		uint64_t m_RefusedHoldFrame = 0; //!< The waited frame whose refused hold the details lever last named.
 		std::optional<uint64_t> m_ConsumerCostObservedAtMs;
 		std::vector<uint8_t> m_ConsumerCostPeers; //!< Missing human inputs during the last observed combat wait interval.
 		uint64_t m_LastTickMs = 0; //!< Our own last Tick; a gap in it is our park, not a peer's silence.

@@ -7348,7 +7348,10 @@ namespace RTE {
 				DiagnosticLine detail;
 				detail << "[net-frame-wait-inputs] local=" << static_cast<int>(m_Config.localPeerId) << " frame=" << frame << " members=" << m_FrameGroupMembers;
 				if (const auto sent = m_PeerInputSentAtMs.find(frame); sent != m_PeerInputSentAtMs.end()) detail << " input_sent_ms=" << sent->second;
-				detail << " now_ms=" << nowMs << " catching_up=" << PeerFrameCatchUpActive();
+				const auto deadline = PeerInputDeadlineMs(frame);
+				detail << " now_ms=" << nowMs << " catching_up=" << PeerFrameCatchUpActive() << " wait_start_ms=" << m_ConsumerWaitStartMs
+				       << " consumer_at_ms=" << m_PeerConsumerAtMs.value_or(0) << " deadline_ms=" << (deadline ? *deadline : -1.0)
+				       << " first_missing_ms=" << (m_FirstMissingFrame == frame ? m_FirstMissingMs : 0);
 				for (const auto& [peer, applied]: m_PeerAppliedThrough) {
 					const auto observed = m_PeerAppliedAtMs.find(peer);
 					detail << " clock=" << static_cast<int>(peer) << ":" << applied << "@"
