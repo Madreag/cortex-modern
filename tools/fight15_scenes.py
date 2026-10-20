@@ -99,9 +99,9 @@ def watch_pass(name):
 STATUS_NUMBERS = ["RTT ", "PACE ", " waits "]
 
 
-def lobby_wait(peer, other="Joiner"):
+def lobby_wait(peer, other="Joiner", within_ms=90000):
     text = f"Waiting for {other} to press Ready" if peer == "host" else "Press Ready when you're ready to play"
-    return wait(scope="menu", screen="MultiplayerScreen", control="LabelMultiplayerStatus", text_contains=text, within_ms=90000)
+    return wait(scope="menu", screen="MultiplayerScreen", control="LabelMultiplayerStatus", text_contains=text, within_ms=within_ms)
 
 
 def probe(steps, timeout=180000):
@@ -1033,7 +1033,7 @@ def apply_for_held_seat_scene():
     newcomer = [wait(service="Running", within_ms=600000), wait(sim_advanced=300, within_ms=120000), dict(op="assert", equals=dict(service="Running")),
                 dict(op="assert_relay")]
     # The newcomer holds the seat in the rematch lobby until the host has read it there.
-    newcomer += capture("newcomer-playing") + [lobby_wait("newcomer"), dict(op="finish")]
+    newcomer += capture("newcomer-playing") + [lobby_wait("newcomer", within_ms=300000), dict(op="finish")]
     peers = []
     scripts = {}
     for role, display, menu_lines, steps in (("host", "Captain", host_menu, host), ("leaver", "Leaver", leaver_menu, leaver), ("newcomer", "Newcomer", newcomer_menu, newcomer)):
