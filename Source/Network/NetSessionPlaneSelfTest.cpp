@@ -3372,9 +3372,13 @@ namespace RTE {
 				error = "fixture image replay did not consume its exact transported donor record"; return false;
 			}
 			std::string refusedTail;
-			if (ReadImageTail(imageReader.receivedImageTail.front(), 2, 77, 10, partial, received, refusedTail) ||
-			    ReadImageTail(imageReader.receivedImageTail.front(), 1, 78, 10, partial, received, refusedTail)) {
-				error = "fixture image replay accepted another donor or round"; return false;
+			if (ReadImageTail(imageReader.receivedImageTail.front(), 2, 77, 10, partial, received, refusedTail)) {
+				error = "fixture image replay accepted another donor"; return false;
+			}
+			// As the lobby does, a chunk of another round is dropped: nothing of it is read.
+			std::map<uint64_t, NetLockstepFrame> otherRound;
+			if (!ReadImageTail(imageReader.receivedImageTail.front(), 1, 78, 10, partial, otherRound, refusedTail) || !otherRound.empty()) {
+				error = "fixture image replay read another round's chunk"; return false;
 			}
 			auto truncated = chunk; truncated.bytes.pop_back();
 			if (ReadImageTail({1, NetTransportLane::BulkUnreliable, truncated}, 1, 77, 10, partial, received, refusedTail)) {
