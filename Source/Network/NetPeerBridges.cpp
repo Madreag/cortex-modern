@@ -984,8 +984,10 @@ namespace RTE {
 		if (agreed.preparedFrame == 2) {
 			if (agreed.members.size() != 1 || agreed.completeFrom == 0 || agreed.completeFrom > NetLockstepCodec::c_MaxPeerInputDelayFrames) return;
 			const uint8_t peer = agreed.members.front();
-			// Every delay the whole group certifies names its split afresh from its frame.
-			m_PeerSplitRenewals[agreed.frame] = agreed.connectedMask;
+			// A delay the whole group certifies names its split afresh from its frame once a tie under its present name is decided, so the
+			// next tie is a new question. With none decided there is nothing to renew, and a certificate one half never installed would
+			// name the two halves' split differently.
+			if (m_PeerFrameTieWinners.contains(PeerSplitEpoch(agreed.frame))) m_PeerSplitRenewals[agreed.frame] = agreed.connectedMask;
 			const bool restated = agreed.completeFrom == InputDelayAt(peer, agreed.frame);
 			ApplyInputDelayChange(peer, agreed.frame, static_cast<uint16_t>(agreed.completeFrom), nowMs);
 			if (restated) return;
