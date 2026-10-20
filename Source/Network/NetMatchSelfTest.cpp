@@ -18600,6 +18600,8 @@ namespace RTE {
 		}
 		NetH4ModerationSeat back; back.held = back.leftByChoice = back.reclaiming = true; back.holdCause = NetSeatHoldCause::Leave;
 		check(NetModerationUx::HoldCause(back) == "Rejoining", "a player on its way back read its old reason: " + NetModerationUx::HoldCause(back));
+		NetH4ModerationSeat arriving; arriving.held = arriving.dropped = arriving.joining = true; arriving.holdCause = NetSeatHoldCause::LinkDrop;
+		check(NetModerationUx::HoldCause(arriving) == "Joining", "a newcomer on its way to the seat read as lost: " + NetModerationUx::HoldCause(arriving));
 		NetMatchConfig rules;
 		rules.players = {{1, 0, false, "Host"}, {0, 1, true, "CPU opponent"}};
 		rules.teamRules[1].technologyIntent = "Coalition.rte";

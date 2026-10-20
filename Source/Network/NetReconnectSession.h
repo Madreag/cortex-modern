@@ -223,6 +223,7 @@ namespace RTE {
 		bool substituting = false;    //!< An approval is in flight for it.
 		NetAuthBytes16 substitutionTransaction{};
 		bool reclaiming = false;
+		bool joining = false;         //!< A newcomer the host gave the seat is on its way to it.
 		uint32_t incarnation = 0;
 		NetAuthBytes16 epoch{};
 		uint64_t holdUntilMs = 0;

@@ -2317,6 +2317,7 @@ namespace RTE {
 				entry.holdCause = row->holdCause;
 				entry.slowMachine = row->owner != 0 && row->phase == NetSeatPhase::Held && row->holdCause == NetSeatHoldCause::Capacity;
 				returning = row->owner != 0 && (row->phase == NetSeatPhase::RejoinImage || row->phase == NetSeatPhase::RejoinCatchUp);
+				entry.joining = row->owner != 0 && row->joining && row->phase == NetSeatPhase::Held;
 			}
 			entry.closed = IsHostOpened(seat);
 			entry.heldForReclaim = IsSeated(seat) && !IsHostOpened(seat);
