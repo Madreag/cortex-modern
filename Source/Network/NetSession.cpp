@@ -1871,7 +1871,11 @@ namespace RTE {
 			case NetRejectReason::SessionRulesMismatch: return "This match's rules do not match yours.";
 			case NetRejectReason::UserdataModulesNotAllowed: return "This host does not allow local userdata mods.";
 			case NetRejectReason::SessionFull: return "This match is full.";
-			case NetRejectReason::HostNotAccepting: return "The host is not accepting players right now.";
+			case NetRejectReason::HostNotAccepting:
+				// A declined request is the host's own answer to this player, in its words.
+				if (m_Role != NetSessionRole::Host && m_MismatchKey == "substitution" && !m_RejectSummary.empty())
+					return CleanHostNoticeText(m_RejectSummary, NetProtocol::c_MaxDiagnosticTextBytes);
+				return "The host is not accepting players right now.";
 			case NetRejectReason::Timeout: return "The connection timed out. Please try again.";
 			case NetRejectReason::SessionEnded: return "This session has ended.";
 			case NetRejectReason::SeatReassigned: return "The host gave your seat to another player.";
