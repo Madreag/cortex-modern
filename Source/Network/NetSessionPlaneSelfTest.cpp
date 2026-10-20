@@ -2698,8 +2698,10 @@ namespace RTE {
 				co_await std::suspend_always{};
 				if (!fixture.CheckBound(error)) co_return false;
 				// As the donor's service drops every return it serves when its own round is set aside, a donor that starts its own image
-				// return before this return is agreed ends it, and the seat asks again from the ruling half.
-				if (!proposed && fixture.imageReading[donor - 1]) {
+				// return before this return is agreed ends it, and the seat asks again from the ruling half. So does a donor held out of
+				// its own playing group: its committed history then grows only as fast as its own private catch-up.
+				const bool donorHeld = !(s_FrameMembers(*fixture.peers[donor - 1], fixture.worlds[donor - 1].applied + 1) & (1U << (donor - 1)));
+				if (!proposed && (fixture.imageReading[donor - 1] || donorHeld)) {
 					DiagnosticLine() << "[session-plane-image-donor-lost] returner=" << unsigned(seat) << " donor=" << unsigned(donor)
 					                 << " replay_applied=" << replay.applied << " now_ms=" << fixture.hub.now << std::endl;
 					fixture.imageReading[seat - 1] = false;
