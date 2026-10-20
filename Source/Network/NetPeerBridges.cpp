@@ -229,12 +229,21 @@ namespace RTE {
 		uint32_t named = 0;
 		for (uint8_t peer: proposal.members) named |= SeatBit(peer);
 		const auto sources = m_PeerSourceInputs.find(proposal.frame);
+		// A seat that accepted an input this hold replaces, its owner's input missing here, plays the continuation that input made.
+		const auto witnessOfReplacedInput = [&](uint8_t peer) {
+			for (uint8_t owner: proposal.members) {
+				if (owner == peer || (sources != m_PeerSourceInputs.end() && sources->second.contains(owner))) continue;
+				if (const auto receipts = m_PeerInputReceipts.find(owner); receipts != m_PeerInputReceipts.end())
+					if (const auto through = receipts->second.find(peer); through != receipts->second.end() && through->second > proposal.frame) return true;
+			}
+			return false;
+		};
 		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
 			const bool present = sources != m_PeerSourceInputs.end() && sources->second.contains(peer);
 			const bool neutral = IsSeatReclaimGap(peer, proposal.frame);
 			const auto ended = m_PeerRoundEnds.find(peer);
 			const bool departed = ended != m_PeerRoundEnds.end() && !ended->second.closedLink && proposal.frame >= ended->second.frame;
-			if (proposal.preparedFrame == 0 && (named & SeatBit(peer)) != 0 && !m_PeerOtherContinuations.contains(peer) &&
+			if (proposal.preparedFrame == 0 && (named & SeatBit(peer)) != 0 && !m_PeerOtherContinuations.contains(peer) && !witnessOfReplacedInput(peer) &&
 			    ((present && !PeerMissingInputReceipt(peer, proposal.frame)) || (neutral && !departed)) &&
 			    !(proposal.senderPeerId == GetHostPeerId() && present && !neutral && !HasPeerFrameRoute(peer))) return false;
 			if (!ahead && (proposal.connectedMask & SeatBit(peer)) != 0 && proposal.frame >= EffectiveStartOf(peer) && !neutral && !present) return false;
@@ -350,6 +359,20 @@ namespace RTE {
 			if (m_PeerOtherContinuations.contains(peer) || PeerMissingInputReceipt(peer, frame)) proposal.members.push_back(peer);
 			else if (frame < EffectiveStartOf(peer) || IsSeatReclaimGap(peer, frame) || sources->second.contains(peer)) proposal.connectedMask |= SeatBit(peer);
 			else proposal.members.push_back(peer);
+		}
+		// A witness that already accepted an input this seat lacks plays the continuation that input made: a hold of its owner here
+		// holds that witness too, alone if it must, and the split is arbitrated as any other.
+		for (bool moved = true; moved;) {
+			moved = false;
+			for (const uint8_t owner: std::vector<uint8_t>(proposal.members)) {
+				if (PeerMissingInputReceipt(owner, frame) || m_PeerOtherContinuations.contains(owner)) continue;
+				const auto receipts = m_PeerInputReceipts.find(owner);
+				if (receipts == m_PeerInputReceipts.end()) continue;
+				for (const auto& [peer, through]: receipts->second)
+					if (through > frame && peer != m_Config.localPeerId && (proposal.connectedMask & SeatBit(peer)) != 0) {
+						proposal.connectedMask &= ~SeatBit(peer); proposal.members.push_back(peer); moved = true;
+					}
+			}
 		}
 		// A machine that is losing its buffered lead can volunteer its own future cutoff before its survivors wait. Its local
 		// clocks and compute samples only propose: the same playing voters and common prefix still certify the hold.
