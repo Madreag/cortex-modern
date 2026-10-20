@@ -3664,6 +3664,7 @@ void MainMenuGUI::RefreshHostSeatDialog() {
 		m_HostSeatDlgActionHint->SetText(humanSeat ? "Seat actions apply to this player."
 		                                         : (slot.cpu ? "CPU seats are the host's to retype, not to moderate."
 		                                            : host && slot.peerId != 0 && slot.peerId == localPeerId ? "The host's own seat is never kicked or banned."
+		                                            : host && !owned && slot.peerId != 0 ? "Still joining - Kick and Ban open once seated."
 		                                            : host && !owned ? "No player holds this seat."
 		                                            : "Only the host can change who plays here."));
 	}
