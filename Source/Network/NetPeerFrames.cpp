@@ -328,7 +328,9 @@ namespace RTE {
 			if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) DiagnosticLine() << "[net-peer-tie-question] local=" << unsigned(m_Config.localPeerId)
 			    << " frame=" << frame << " split=" << split << " members=" << voting << " owners=" << owners << " query_only=" << request.queryOnly
 			    << " generation=" << request.generation << " host=" << request.host << " superseding=" << m_CertifiedSupersedingGeneration
-			    << " next=" << m_Stats.nextFrame << " displayed=" << m_LastCompletedSimulationTick.value_or(0) << " now_ms=" << nowMs << std::endl;
+			    << " next=" << m_Stats.nextFrame << " displayed=" << m_LastCompletedSimulationTick.value_or(0) << " whole=" << (PeerRetainedSeatsAt(frame) & ~PeerHeldSeatsAt(frame))
+			    << " renewal=" << (m_PeerSplitRenewals.upper_bound(frame) == m_PeerSplitRenewals.begin() ? 0 : std::prev(m_PeerSplitRenewals.upper_bound(frame))->first)
+			    << " now_ms=" << nowMs << std::endl;
 			m_PeerFrameTie = request; m_PeerFrameTieSinceMs = nowMs;
 		}
 		// Preserve the pre-hold electorate. Once the local hold is installed its absent seats no longer vote, but the outstanding
