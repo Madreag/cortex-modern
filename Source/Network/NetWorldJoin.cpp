@@ -2281,16 +2281,6 @@ namespace RTE {
 		return frame;
 	}
 
-	uint64_t NetWorldJoinHost::ActivationLeadFrames(const NetWorldJoinSession& session, uint64_t behind) const {
-		// A private return at the head of its tail - its reports a round trip behind, the tail's delivery and the report's own - primes its
-		// pipeline in its neutral interval after the activation; before it, the members need only the notice its proposal is sent with,
-		// and a bound for the report that brings it inside that notice. One further back keeps the whole lead to close on the round first.
-		if (!IsPrivateMatch() || session.returnNoticeFrames == 0 || m_SimTickMs <= 0) return c_NetWorldActivationLeadFrames;
-		const uint64_t linkFrames = static_cast<uint64_t>(std::ceil(session.tailLinkRttMs / m_SimTickMs));
-		if (behind > linkFrames + m_Config.slowPlayerBoundTicks) return c_NetWorldActivationLeadFrames;
-		return std::min<uint64_t>(c_NetWorldActivationLeadFrames, session.returnNoticeFrames + m_Config.slowPlayerBoundTicks);
-	}
-
 	void NetWorldJoinHost::NoteTailDatagramRefused(NetPeerId connection) {
 		if (NetWorldJoinSession* session = Find(connection)) ++session->tailRefused;
 	}
@@ -2485,13 +2475,12 @@ namespace RTE {
 			}
 			// A returner inside the lead has closed on the round by its own replay: the lead primes its pipeline. One still closing
 			// is given the frames its measured rate needs to reach the horizon too, so it is at its activation before the round is.
-			const uint64_t lead = ActivationLeadFrames(*session, behind);
-			uint64_t activation = std::max(ChooseActivationTick(nowFrame, lead), session->priorInputThrough + 1);
+			uint64_t activation = std::max(ChooseActivationTick(nowFrame), session->priorInputThrough + 1);
 			uint64_t trail = 0;
 			if (provesHeadroom && behind > c_NetWorldActivationLeadFrames / 4) {
 				if (!session->closingMeasured) return {0, 0, "closing-unmeasured", nullptr};
 				if (closing)
-					activation = std::max(activation, nowFrame + static_cast<uint64_t>(std::ceil(behind / closingRate)) + lead);
+					activation = std::max(activation, nowFrame + static_cast<uint64_t>(std::ceil(behind / closingRate)) + c_NetWorldActivationLeadFrames);
 				else trail = behind;
 			}
 			// Even at the head of its tail a returner trails the round by its link and the tail's own delivery: its return leaves it the trail it last
@@ -2508,14 +2497,13 @@ namespace RTE {
 			// activation either way only past a window's worth of frames: within that the lead still primes the pipeline in time.
 			const bool closingOutside = closing && behind > c_NetWorldActivationLeadFrames / 4;
 			const uint64_t reaches = closingOutside ? nowFrame + static_cast<uint64_t>(std::ceil(behind / closingRate)) : nowFrame;
-			const uint64_t lead = ActivationLeadFrames(*session, behind);
-			const bool late = closingOutside ? reaches + lead > session->activationTick + c_NetWorldClosingWindowFrames
+			const bool late = closingOutside ? reaches + c_NetWorldActivationLeadFrames > session->activationTick + c_NetWorldClosingWindowFrames
 			                                 : behind > session->activationTrailFrames + m_Config.slowPlayerBoundTicks;
 			if (IsPrivateMatch() && !session->activationProposed && (nowFrame >= session->activationTick || late)) {
 				uint64_t later = 0;
 				if (ReannounceActivation(connection, nowFrame, &later, nullptr)) {
 					if (closingOutside) {
-						later = session->activationTick = DistinctActivation(connection, std::max(later, reaches + lead));
+						later = session->activationTick = DistinctActivation(connection, std::max(later, reaches + c_NetWorldActivationLeadFrames));
 						// As a fresh activation chosen at this rate, the return leaves the trail it shows now, up to a lead.
 						session->activationTrailFrames = std::max(std::min<uint64_t>(behind, c_NetWorldActivationLeadFrames), phaseWork.value_or(0));
 					} else session->activationTrailFrames = std::max(std::min<uint64_t>(behind, 2 * c_NetWorldActivationLeadFrames), phaseWork.value_or(0));
@@ -2527,7 +2515,8 @@ namespace RTE {
 			// An activation set from a slower window comes forward once the replay reaches the round sooner, so a returner whose tail
 			// was starved while its rate was measured does not leave its seat to the AI past its own catch-up.
 			if (IsPrivateMatch() && !session->activationProposed) {
-				if (const Reach sooner = reach(); sooner.activation != 0 && sooner.activation + c_NetWorldClosingWindowFrames < session->activationTick) {
+				if (const Reach sooner = reach(); sooner.activation != 0 &&
+				    DistinctActivation(connection, sooner.activation) + c_NetWorldClosingWindowFrames < session->activationTick) {
 					session->activationTick = DistinctActivation(connection, sooner.activation);
 					session->activationTrailFrames = sooner.trail;
 					session->catchUpGate = "announced-sooner";
@@ -2557,10 +2546,10 @@ namespace RTE {
 		return true;
 	}
 
-	uint64_t NetWorldJoinHost::ChooseActivationTick(uint64_t nowFrame, uint64_t leadFrames) const {
+	uint64_t NetWorldJoinHost::ChooseActivationTick(uint64_t nowFrame) const {
 		// The lead is what the joiner needs to prime its pipeline; the floor is what the round has
 		// already sent, because those frames went out before this member was a peer of it.
-		return std::max(nowFrame + leadFrames, m_SentInputThrough + 1);
+		return std::max(nowFrame + c_NetWorldActivationLeadFrames, m_SentInputThrough + 1);
 	}
 
 	void NetWorldJoinHost::NoteCatchUpClock(NetPeerId connection, uint64_t nowMs) {
@@ -2609,7 +2598,7 @@ namespace RTE {
 			if (error) *error = "the joiner already missed a re-announced activation";
 			return false;
 		}
-		session->activationTick = DistinctActivation(connection, ChooseActivationTick(nowFrame, ActivationLeadFrames(*session, nowFrame > session->acknowledgedThrough ? nowFrame - session->acknowledgedThrough : 0)));
+		session->activationTick = DistinctActivation(connection, ChooseActivationTick(nowFrame));
 		session->acknowledgedActivation = 0;
 		session->lastReannounceProgress = session->acknowledgedThrough;
 		++session->activationReannounces;

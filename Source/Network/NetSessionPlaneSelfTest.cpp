@@ -2791,7 +2791,9 @@ namespace RTE {
 					uint64_t announced = 0;
 					// As the service does, the coordinator that will propose the return sizes how far it may trail, and the donor's notice how far ahead.
 					const auto& noticing = *fixture.peers[donor - 1];
-					join.NoteReturnNotice(12, ReturnNoticeTicks(noticing, seat, join.FindSession(12)->tailLinkRttMs, std::max(noticing.GetStats().nextFrame, noticing.SentInputThrough())));
+					const uint64_t noticeHead = std::max(noticing.GetStats().nextFrame, noticing.SentInputThrough());
+					const uint64_t placedFrom = fixture.worlds[donor - 1].applied;
+					join.NoteReturnNotice(12, ReturnNoticeTicks(noticing, seat, join.FindSession(12)->tailLinkRttMs, noticeHead) + (noticeHead > placedFrom ? noticeHead - placedFrom : 0));
 					const uint8_t sizing = fixture.ImageReturnProposer(donor);
 					join.NoteReturnTrailRoom(12, fixture.peers[sizing - 1]->PeerReturnTrailRoom(seat, fixture.ImageReturnRoute(sizing, seat).second, fixture.worlds[donor - 1].applied));
 					// FLAGGED fixture departure: each return has its own join host here; the service's one host sees every return's activation.

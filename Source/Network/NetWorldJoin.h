@@ -726,7 +726,7 @@ namespace RTE {
 		void NoteTailLinkRtt(NetPeerId connection, uint32_t rttMs);
 		/// Notes how far a returner's activation may trail the round, from the coordinator that will propose its return.
 		void NoteReturnTrailRoom(NetPeerId connection, uint64_t frames);
-		/// Notes how many frames ahead of a returner's activation its return is proposed, so its activation needs no longer lead.
+		/// Notes how many frames ahead of a returner's activation its return is proposed, which is how far apart two returns are placed.
 		void NoteReturnNotice(NetPeerId connection, uint64_t frames);
 		/// Frames other returns of the round hold that this host does not serve, so no two returns are placed at one frame.
 		void ReserveActivations(std::set<uint64_t> frames) { m_ReservedActivations = std::move(frames); }
@@ -808,10 +808,7 @@ namespace RTE {
 	private:
 		NetWorldJoinSession* Find(NetPeerId connection);
 		/// E: the lead ahead of the committed frame, never at or behind the input already sent.
-		uint64_t ChooseActivationTick(uint64_t nowFrame, uint64_t leadFrames = c_NetWorldActivationLeadFrames) const;
-		/// How far ahead a session's activation is placed: a world joiner's whole lead; a private return at the head of its tail its proposal's
-		/// notice and the bound.
-		uint64_t ActivationLeadFrames(const NetWorldJoinSession& session, uint64_t behind) const;
+		uint64_t ChooseActivationTick(uint64_t nowFrame) const;
 		/// The first frame from this one no other return of the round holds: a round agrees one return per frame.
 		uint64_t DistinctActivation(NetPeerId connection, uint64_t frame) const;
 		uint8_t AllocateSpectatorLobbyPeer() const;

@@ -5008,7 +5008,9 @@ static std::string ResyncSaveName() {
 			// The coordinator that proposes a return sizes how far its activation may trail the round.
 			if (prior) {
 				m_WorldJoin.NoteReturnTrailRoom(connection, m_Coordinator->PeerReturnTrailRoom(prior->assignedPeerId, connection, nowFrame));
-				m_WorldJoin.NoteReturnNotice(connection, ReturnNoticeTicksLocked(*prior, std::max(nowFrame, m_Coordinator->SentInputThrough())));
+				// The proposal waits until the activation is a notice past the head, which leads the frame activations are placed from.
+				const uint64_t head = std::max(nowFrame, m_Coordinator->SentInputThrough());
+				m_WorldJoin.NoteReturnNotice(connection, ReturnNoticeTicksLocked(*prior, head) + (head - nowFrame));
 			}
 			if (const uint64_t announced = ApplyWorldJoinReport(lobby, m_WorldJoin, report, connection, nowFrame, nowMs); announced != 0) {
 				if (previous && previous != announced) m_Coordinator->MoveObservationEpoch(previous, announced);
