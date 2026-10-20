@@ -319,6 +319,11 @@ namespace RTE {
 					break;
 				}
 			}
+			// A request that comes after the seat was first seen, or outlives the one chosen, is chosen in its place: the host acts on a named player.
+			if (index == seat.applicants.size() && !seat.applicants.empty()) {
+				m_Chosen[seat.stableSeat] = NetSelectModerationSeat(seat, seat.applicants.front().connection);
+				index = 0;
+			}
 			if (index == seat.applicants.size()) {
 				row.applicantText = seat.applicants.empty() ? "No requests" : "Choose a player";
 			} else {
