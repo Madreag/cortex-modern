@@ -748,7 +748,7 @@ def host_relay_readback(port):
         text += checks("ComboHostNetRelay", "CollectionBoxHostPageConnection")
         text += checks("LabelHostRelayHint", "CollectionBoxHostPageConnection")
         if state == RELAY_STATES[1]:
-            text += "assert_label LabelHostRelayHint login renews itself while the session runs\n"
+            text += "assert_label LabelHostRelayHint the game service's login renews while the session runs\n"
         if state == RELAY_STATES[2]:
             for suffix, value in (("Address", "relay.example:3478"), ("User", "fixed-user"), ("Pass", "fixed-password")):
                 text += f"set_text TextHostRelay{suffix} {value}\nwait 3\n"
@@ -766,8 +766,8 @@ def connection_readback():
     text += "assert_label LabelNetworkConnection Connection\nassert_label ComboNetworkConnection Automatic\n"
     text += "assert_label LabelNetworkStunServers STUN server list\n"
     text += f"assert_label TextNetworkStunServers {STUN_DEFAULT}\n"
-    # The player's relay hint makes the host options hint's claim: UDP only, a self-renewing directory login.
-    text += "assert_label LabelNetworkRelayHint UDP TURN only; no TCP/TLS relays. A host's directory login renews while the session runs.\n"
+    # The player's relay hint makes the host options hint's claim: UDP, TCP and TLS relays, a self-renewing directory login.
+    text += "assert_label LabelNetworkRelayHint Relays support UDP, TCP and TLS. A host's directory login renews while the session runs.\n"
     for control in CONNECTION_ROWS:
         text += f"assert_visible {control} 1\nassert_rect_inside {control} CollectionBoxNetPageConnection\nassert_rect_inside {control} viewport\n"
         if control != "TextNetworkStunServers":

@@ -21,6 +21,10 @@
    "enabled": true
   },
   {
+   "name": "ComboNetworkConnectionIndicator",
+   "enabled": true
+  },
+  {
    "name": "ButtonNetworkAdvanced",
    "enabled": true
   }
