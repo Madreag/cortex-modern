@@ -34,8 +34,9 @@ How the multiplayer screens behave, for players and for anyone changing them. Ev
   gives it away."
 - A newcomer who finds the match full can apply for a held seat. The host decides in the Players panel (F6), the lobby seat
   dialog or the lobby's Seats panel, all in the same words: `Keep for <player>`, `Let <newcomer> join`, `Cancel this
-  approval`, and for a request `Decline` or `Ban`. A declined newcomer reads "The host declined your request for this seat."
-  and may ask again.
+  approval`, and for a request `Decline` or `Ban`. In the Players panel `Let <newcomer> join`, `Decline` and `Ban` each ask
+  for a second press that names the player ("Confirm: let <newcomer> join"). A declined newcomer reads "The host declined
+  your request for this seat." and may ask again.
 - The Players panel names why each seat is held ("Left 2 min ago", "Connection lost 10 s ago", "Machine too slow") and any
   pending request; a request waits 20 seconds for the host's answer. Nobody loses a seat without the host's click.
 - Removing a player asks for a second press everywhere: the Players panel's `Remove` and `Ban`, the lobby seat dialog's
