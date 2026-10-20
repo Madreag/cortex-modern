@@ -5529,6 +5529,7 @@ static std::string ResyncSaveName() {
 					}
 					continue;
 				}
+				if (!session.activationReachable) continue;
 				// The returner reclaims only at the frame it was told, and a park re-stamps a reclaim it covers: an activation
 				// a named or agreed park may reach is moved past the park and told again, never scheduled into it.
 				const uint64_t simulated = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());

@@ -2852,6 +2852,8 @@ namespace RTE {
 						}
 						continue;
 					}
+					// As the service does, an activation the returner's last report no longer reaches is not proposed.
+					if (!session->activationReachable) continue;
 					// FLAGGED fixture departure: a refused proposal remains private and retries, as the service does.
 					std::string refusal;
 					++proposalAttempts;

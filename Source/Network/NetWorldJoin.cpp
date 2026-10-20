@@ -25,6 +25,7 @@
 #include <mutex>
 #include <random>
 #include <sstream>
+#include <string_view>
 #include <thread>
 #include <tuple>
 
@@ -2457,8 +2458,6 @@ namespace RTE {
 			// At the head of its tail the tail's arrival paces it, and keeping that pace is the proof.
 			if (provesHeadroom && behind > c_NetWorldActivationLeadFrames && !session->headroom.AboveRateOver(static_cast<uint64_t>(std::ceil(1000.0 / m_SimTickMs))))
 				return {0, 0, "capacity-unproven", "its replay has not run above the round's rate for a second"};
-			if (provesHeadroom && behind > c_NetWorldActivationLeadFrames / 4 && session->closingMeasured && session->closingRate < -0.1)
-				return {0, 0, "closing-losing", "its replay falls behind the round"};
 			// At the round's pace a returner trails by its link, which can be longer than the lead: its return leaves it that trail.
 			const bool roundPace = provesHeadroom && session->closingMeasured && closingRate <= 0.1;
 			// The world keeps producing while the joiner replays, so activation waits until the joiner is inside the lead, or at the round's
@@ -2473,6 +2472,9 @@ namespace RTE {
 				if (behind > reportTransit + m_Config.slowPlayerBoundTicks && !closing && !phaseWork)
 					return {0, 0, "trail-open", "its first input would reach the round past its bound"};
 			}
+			// Its spare work could close the trail, but its replay still falls behind: the tail starves it.
+			if (provesHeadroom && behind > c_NetWorldActivationLeadFrames / 4 && session->closingMeasured && session->closingRate < -0.1)
+				return {0, 0, "closing-losing", "its replay falls behind the round"};
 			// A returner inside the lead has closed on the round by its own replay: the lead primes its pipeline. One still closing
 			// is given the frames its measured rate needs to reach the horizon too, so it is at its activation before the round is.
 			uint64_t activation = std::max(ChooseActivationTick(nowFrame), session->priorInputThrough + 1);
@@ -2515,12 +2517,24 @@ namespace RTE {
 			// An activation set from a slower window comes forward once the replay reaches the round sooner, so a returner whose tail
 			// was starved while its rate was measured does not leave its seat to the AI past its own catch-up.
 			if (IsPrivateMatch() && !session->activationProposed) {
-				if (const Reach sooner = reach(); sooner.activation != 0 &&
-				    DistinctActivation(connection, sooner.activation) + c_NetWorldClosingWindowFrames < session->activationTick) {
+				const Reach sooner = reach();
+				// A returner whose replay stalls or runs slower than the round, or whose spare work cannot close its trail before its first
+				// input is due, is not proposed at the activation it was told: it keeps replaying with the AI in its seat until a report
+				// reaches a frame again. One starved by its tail is still proposed, as before it showed that.
+				const std::string_view gate = sooner.gate ? sooner.gate : "";
+				session->activationReachable = sooner.activation != 0 || (gate != "no-progress" && gate != "replay-slow" && gate != "trail-open");
+				// The trail its return leaves covers what its replay shows now, its spare work's alignment included; a report that happened
+				// to land at the head does not shrink it below what the round's lag already showed.
+				if (sooner.activation != 0) session->activationTrailFrames = std::max(session->activationTrailFrames, sooner.trail);
+				if (sooner.activation != 0 && DistinctActivation(connection, sooner.activation) + c_NetWorldClosingWindowFrames < session->activationTick) {
 					session->activationTick = DistinctActivation(connection, sooner.activation);
 					session->activationTrailFrames = sooner.trail;
 					session->catchUpGate = "announced-sooner";
 					if (outActivationTick) *outActivationTick = session->activationTick;
+					return true;
+				}
+				if (!session->activationReachable) {
+					session->catchUpGate = sooner.gate;
 					return true;
 				}
 			}

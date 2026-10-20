@@ -167,6 +167,7 @@ namespace RTE {
 		uint64_t activationTick = 0;      //!< E, announced before it arrives; 0 until scheduled.
 		uint64_t acknowledgedActivation = 0;
 		bool activationProposed = false;
+		bool activationReachable = true; //!< The last report still shows the returner reaching its announced activation in time.
 		bool activationCommitted = false;
 		uint64_t lastReannounceProgress = 0;
 		std::vector<uint8_t> pendingTail;
