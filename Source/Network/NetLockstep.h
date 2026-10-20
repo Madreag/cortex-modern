@@ -126,7 +126,7 @@ namespace RTE {
 		bool agreedStartRecord = false;
 		uint64_t agreedFirstFrame = 0;
 		uint64_t agreedEffectiveStartFrame = 0;
-		uint64_t agreedDeadlineMs = 0;
+		uint64_t agreedStartLeadMs = 0; //!< How long after sending this record the host starts its clock; every seat starts at that instant.
 		uint32_t publishedPeerMask = 0;
 		uint32_t heldPeerMask = 0;
 		std::array<uint64_t, 16> peerEffectiveStartFrames{};
@@ -1338,7 +1338,7 @@ namespace RTE {
 
 		NetLockstepState GetState() const { NET_PLANE_CHECK(); return m_State; }
 		bool IsRunning() const { NET_PLANE_CHECK(); return m_State == NetLockstepState::Running; }
-		/// True while the host that formed the agreed start waits for the record to reach its farthest seat, so every seat's clock starts together.
+		/// True until the instant the agreed start names, so every seat's clock starts together however long the record took to reach it.
 		bool AwaitingAlignedStart() const { NET_PLANE_CHECK(); return m_AlignedStartAtMs > m_TimingNowMs; }
 		/// Hands back the decisions a round heard before its start, for a round that will not start.
 		std::vector<std::pair<NetLockstepTiming, NetPeerId>> TakePreStartTiming() { NET_PLANE_CHECK(); return std::exchange(m_PreStartTiming, {}); }
@@ -2275,7 +2275,7 @@ namespace RTE {
 		std::set<uint8_t> m_PeerStartupPublished; //!< Peers whose startup reading has reached us.
 		std::set<uint8_t> m_StartupLinksLost; //!< Link-loss facts before the agreed start; human startup remains required.
 		bool m_AgreedStartApplied = false;
-		uint64_t m_AlignedStartAtMs = 0; //!< When the agreed start reaches the host's farthest seat; the host's clock starts then.
+		uint64_t m_AlignedStartAtMs = 0; //!< When this seat's clock starts: the instant the agreed start names for every seat.
 		std::optional<NetLockstepStart> m_AgreedStartRecord;
 		std::set<uint8_t> m_StartupHeldSeatStamps; //!< Boundary-held seats stamped on their first committed tick.
 		std::map<uint8_t, NetPeerId> m_LateStartReclaims; //!< Boundary-held seats whose late start still owes a reclaim.

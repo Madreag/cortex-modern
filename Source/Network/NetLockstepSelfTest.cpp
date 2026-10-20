@@ -5249,7 +5249,7 @@ namespace RTE {
 			agreed.agreedStartRecord = true;
 			agreed.agreedFirstFrame = 37;
 			agreed.agreedEffectiveStartFrame = 39;
-			agreed.agreedDeadlineMs = 0;
+			agreed.agreedStartLeadMs = 0;
 			agreed.publishedPeerMask = 3;
 			agreed.heldPeerMask = 0;
 			agreed.peerEffectiveStartFrames[0] = 39;

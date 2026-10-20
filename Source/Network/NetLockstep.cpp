@@ -535,7 +535,7 @@ namespace RTE {
 				AppendU8(out, 1);
 				AppendU64LE(out, payload.agreedFirstFrame);
 				AppendU64LE(out, payload.agreedEffectiveStartFrame);
-				AppendU64LE(out, payload.agreedDeadlineMs);
+				AppendU64LE(out, payload.agreedStartLeadMs);
 				AppendU32LE(out, payload.publishedPeerMask);
 				AppendU32LE(out, payload.heldPeerMask);
 				for (uint64_t frame: payload.peerEffectiveStartFrames) AppendU64LE(out, frame);
@@ -1555,7 +1555,7 @@ namespace RTE {
 				if (agreed) {
 					payload.agreedStartRecord = true;
 					if (!ReadOrTruncated(reader.ReadU64LE(payload.agreedFirstFrame) && reader.ReadU64LE(payload.agreedEffectiveStartFrame) &&
-					    reader.ReadU64LE(payload.agreedDeadlineMs) && reader.ReadU32LE(payload.publishedPeerMask) && reader.ReadU32LE(payload.heldPeerMask),
+					    reader.ReadU64LE(payload.agreedStartLeadMs) && reader.ReadU32LE(payload.publishedPeerMask) && reader.ReadU32LE(payload.heldPeerMask),
 					    reader, error, "agreed start boundary")) return false;
 					for (auto& frame: payload.peerEffectiveStartFrames)
 						if (!ReadOrTruncated(reader.ReadU64LE(frame), reader, error, "agreed peer start")) return false;
@@ -10066,7 +10066,18 @@ namespace RTE {
 		RefreshLeftSeatHolds();
 		DiagnosticLine() << "[net-match] agreed first frame=" << start.agreedFirstFrame
 		          << " effective_start=" << m_Stats.effectiveStartFrame
-		          << " startup_deadline_ms=" << start.agreedDeadlineMs << std::endl;
+		          << " start_lead_ms=" << start.agreedStartLeadMs << std::endl;
+		// Every seat starts its clock at the instant the record names: the host that long after sending it, a seat that long
+		// less its own trip from the host. A clock started on arrival would trail the host's by that trip for the whole round.
+		if (!boundaryPassed && UsesPeerFrameGroups() && start.agreedStartLeadMs != 0) {
+			const uint8_t host = GetHostPeerId();
+			double tripMs = 0;
+			if (host != m_Config.localPeerId) {
+				const auto [wire, route] = PeerFrameRoute(host);
+				tripMs = (wire && wire->IsPeerPingMeasured(route) ? wire->GetPeerPingMs(route) : m_Stats.peers[host].pingMs) / 2.0;
+			}
+			m_AlignedStartAtMs = nowMs + static_cast<uint64_t>(std::max(0.0, std::ceil(start.agreedStartLeadMs - tripMs)));
+		}
 		m_State = NetLockstepState::Running;
 		auto timing = std::move(m_PreStartTiming); m_PreStartTiming.clear();
 		for (const auto& [decision, source]: timing) HandleTiming(decision, nowMs, source);
@@ -10119,9 +10130,16 @@ namespace RTE {
 		record.agreedStartRecord = true;
 		record.agreedFirstFrame = m_Config.startFrame + startupFrames;
 		record.publishedPeerMask = publishedPeerMask;
-		// A wall-clock deadline is local state, not a deterministic boundary.  The host's frame record
-		// carries the agreed frames and masks only; each peer keeps the answer budget in its handshake state.
-		record.agreedDeadlineMs = 0;
+		// The record reaches its farthest published seat in half that seat's round trip; every seat starts then.
+		if (UsesPeerFrameGroups()) {
+			double farthestMs = 0;
+			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
+				if (peer == m_Config.localPeerId || (publishedPeerMask & (uint32_t{1} << (peer - 1))) == 0) continue;
+				const auto [wire, route] = PeerFrameRoute(peer);
+				farthestMs = std::max(farthestMs, (wire && wire->IsPeerPingMeasured(route) ? wire->GetPeerPingMs(route) : m_Stats.peers[peer].pingMs) / 2.0);
+			}
+			record.agreedStartLeadMs = static_cast<uint64_t>(std::ceil(farthestMs));
+		}
 		uint64_t firstCommitFrame = UINT64_MAX;
 		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
 			const auto delayIt = m_Config.peerInputDelayFrames.find(peer);
@@ -10138,18 +10156,6 @@ namespace RTE {
 		m_AgreedStartRecord = record;
 		ApplyAgreedStart(record, nowMs);
 		(void)SendAgreedStart();
-		// Each seat starts its clock when this record reaches it. Started now, the host's clock would lead every seat's by its
-		// link for the whole round, and their inputs, sized for the link alone, would reach it late at every tick.
-		if (UsesPeerFrameGroups()) {
-			double farthestMs = 0;
-			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
-				if (peer == m_Config.localPeerId || (publishedPeerMask & (uint32_t{1} << (peer - 1))) == 0) continue;
-				const auto [wire, route] = PeerFrameRoute(peer);
-				const double rttMs = wire && wire->IsPeerPingMeasured(route) ? wire->GetPeerPingMs(route) : m_Stats.peers[peer].pingMs;
-				farthestMs = std::max(farthestMs, rttMs / 2);
-			}
-			m_AlignedStartAtMs = nowMs + static_cast<uint64_t>(std::ceil(farthestMs));
-		}
 	}
 
 
