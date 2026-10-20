@@ -537,10 +537,13 @@ namespace RTE {
 		const bool cooperativeAhead = proposal.members.size() == 1 &&
 		    PeerGroupHasAuthority(proposal.connectedMask | SeatBit(proposal.members.front()), proposal.frame);
 		const bool localDeadline = PeerConsumerHoldDue(frame, nowMs);
+		// Another continuation's member that still feeds is held where the voters agree: each holding it at its own frame would leave
+		// the voters on different histories.
+		const bool agreedContinuation = otherContinuation && otherVoter && feeding;
 		// Newer arrivals cannot extend the consumer's deadline for an older missing input.
-		const bool heldAhead = (otherVoter || cooperativeAhead) && feeding && (ownYield || !localDeadline) && !otherContinuation;
+		const bool heldAhead = ((otherVoter || cooperativeAhead) && feeding && (ownYield || !localDeadline) && !otherContinuation) || agreedContinuation;
 		if (heldAhead) {
-			if (!slowMachine || (!ownYield && std::countr_zero(proposal.connectedMask) + 1 != m_Config.localPeerId)) return false;
+			if ((!slowMachine && !agreedContinuation) || (!ownYield && std::countr_zero(proposal.connectedMask) + 1 != m_Config.localPeerId)) return false;
 			for (const auto& [key, votes]: m_PeerBridgeVotes) {
 				if (!IsHoldDecision(key.second) || key.first <= frame || m_PeerBridgeCertificates.contains(key)) continue;
 				if (const auto own = votes.find(m_Config.localPeerId); own != votes.end())
@@ -576,7 +579,7 @@ namespace RTE {
 			} else proposal.frame = inFlight + static_cast<uint64_t>(std::ceil(rttMs / m_Config.simTickMs)) + m_Config.slowPlayerBoundTicks;
 		}
 		// A declared Leave has already ended its input; it needs no silence wait at that boundary.
-		if (proposal.preparedFrame == 0 && !declaredDeparture && !heldAhead && !(slowMachine && !otherVoter) && !otherContinuation) {
+		if (proposal.preparedFrame == 0 && !declaredDeparture && !heldAhead && !(slowMachine && !otherVoter) && !(otherContinuation && !otherVoter)) {
 			const uint64_t boundMs = static_cast<uint64_t>(std::ceil(m_Config.slowPlayerBoundTicks * m_Config.simTickMs));
 			// The startup consumer has no established buffered runway to spend.
 			// Its first missing inputs get the full bound from the actual wait.
@@ -735,8 +738,10 @@ namespace RTE {
 			if ((voters & required) != required) {
 				// Each survivor installs its own hold at the bound. The other survivors' signatures can still be in flight on a
 				// healthy long link; waiting a second round trip here would make their controls pay for the missing machine.
-				// Another continuation's members are held at once: this group no longer shares their history.
-				const bool otherContinuation = std::all_of(proposal.members.begin(), proposal.members.end(), [&](uint8_t peer) { return m_PeerOtherContinuations.contains(peer); });
+				// Another continuation's members are held at once where no other voter shares this group, or at the frame the voters
+				// agreed ahead: this group no longer shares their history.
+				const bool otherContinuation = std::all_of(proposal.members.begin(), proposal.members.end(), [&](uint8_t peer) { return m_PeerOtherContinuations.contains(peer); }) &&
+				    ((proposal.connectedMask & ~SeatBit(m_Config.localPeerId)) == 0 || proposal.boundary < proposal.frame);
 				if (frame != m_Stats.nextFrame || (!PeerConsumerHoldDue(frame, nowMs) && !otherContinuation)) return;
 			}
 		} else if ((voters & required) != required || (proposal.preparedFrame == 3 ? !PeerAdminCertificateValid(proposal, voters) : !PeerGroupHasAuthority(voters, frame))) return;
