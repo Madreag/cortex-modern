@@ -2266,9 +2266,15 @@ namespace RTE {
 
 	uint64_t NetWorldJoinHost::DistinctActivation(NetPeerId connection, uint64_t frame) const {
 		if (!IsPrivateMatch()) return frame;
+		// A return proposed inside another's notice starts its live round before that return's certificate reaches it: two returns are a
+		// notice and the bound apart, so each starts knowing the other.
+		const NetWorldJoinSession* own = FindSession(connection);
+		const uint64_t spacing = std::max<uint64_t>(1, (own ? own->returnNoticeFrames : 0) + m_Config.slowPlayerBoundTicks);
+		const auto near = [&](uint64_t at, uint64_t other) { return other != 0 && (at > other ? at - other : other - at) < spacing; };
 		const auto taken = [&](uint64_t at) {
-			return m_ReservedActivations.contains(at) || std::any_of(m_Sessions.begin(), m_Sessions.end(), [&](const NetWorldJoinSession& other) {
-				return other.connection != connection && other.phase == NetWorldJoinPhase::CatchingUp && other.activationTick == at;
+			return std::any_of(m_ReservedActivations.begin(), m_ReservedActivations.end(), [&](uint64_t other) { return near(at, other); }) ||
+			    std::any_of(m_Sessions.begin(), m_Sessions.end(), [&](const NetWorldJoinSession& other) {
+				return other.connection != connection && other.phase == NetWorldJoinPhase::CatchingUp && near(at, other.activationTick);
 			});
 		};
 		while (taken(frame)) ++frame;
