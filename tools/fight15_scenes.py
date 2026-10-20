@@ -1010,12 +1010,13 @@ def apply_for_held_seat_scene():
                              wait(renders=4)]
     host = place("host") + key("F6") + [wait(panel_open=True), wait(held_peer="Leaver", within_ms=90000)]
     host += capture("leaver-held-host") + [dict(op="assert_control", control=seat_row("Detail"), text_contains="Left ", fits=True, inside="NetworkSeats")]
-    host += [wait(control=seat_row("Applicant"), text_contains="Newcomer", within_ms=180000)] + capture("newcomer-asks-host")
+    # A hand waits to see the request: the hidden row keeps its last text once a request ends.
+    host += [wait(control=seat_row("Applicant"), text_contains="Newcomer", equals=dict(visible=True), within_ms=180000)] + capture("newcomer-asks-host")
     # Decline: the first press names what the second does.
     host += press(seat_row("DeclineApplicant")) + [dict(op="assert_control", control=seat_row("DeclineApplicant"), text_contains="Confirm: decline")]
     host += press(seat_row("DeclineApplicant")) + capture("declined-host")
     host += [dict(op="wait_file", path="{PROBE_DIR_newcomer}/declined.json", within_ms=120000),
-             wait(control=seat_row("Applicant"), text_contains="Newcomer", within_ms=180000)]
+             wait(control=seat_row("Applicant"), text_contains="Newcomer", equals=dict(visible=True), within_ms=180000)]
     host += [dict(op="mouse_down", control=seat_row("Applicant"), item=0), wait(control=seat_row("Applicant"), equals=dict(selected=0)),
              dict(op="mouse_up", control=seat_row("Applicant"), item=0), wait(renders=4),
              dict(op="assert_control", control=seat_row("Substitute"), equals=dict(enabled=True), text_contains="Let Newcomer join")]
