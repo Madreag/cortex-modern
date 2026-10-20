@@ -1557,6 +1557,7 @@ namespace RTE {
 			}
 			std::vector<bool> waitPlaying, imageReading, imageNeeded, imageWithoutHeadroom;
 			std::array<std::set<uint8_t>, 4> abandonedDonors; //!< The donors each seat's image return gave up when their own continuation was set aside.
+			std::array<uint64_t, 5> returnActivations{}; //!< Each returner's announced activation, which the round's one join host keeps distinct.
 			std::vector<ImageReturnTask> imageTasks;
 			std::vector<bool> splitParticipant;
 			std::vector<uint32_t> observedSplit;
@@ -2092,7 +2093,7 @@ namespace RTE {
 					compared = {}; splitFrom = {}; inputSplits = {}; inputSplitCauses.clear(); partitionOwners = {}; lateSplits.clear(); unexplained = {}; sawSplit = splitHistories = false;
 					imageTasks.clear(); imageTasks.resize(hub.row.seats);
 					// As the service's tail log, the committed record starts again with the round: frame numbers restart.
-					committed.assign(hub.row.seats, {}); for (auto& donors: abandonedDonors) donors.clear();
+					committed.assign(hub.row.seats, {}); for (auto& donors: abandonedDonors) donors.clear(); returnActivations = {};
 					directRuling = 0;
 					std::fill(lostAt.begin(), lostAt.end(), 0); std::fill(lostFrame.begin(), lostFrame.end(), 0);
 					std::fill(imageAt.begin(), imageAt.end(), 0); std::fill(imageReturns.begin(), imageReturns.end(), 0);
@@ -2788,6 +2789,10 @@ namespace RTE {
 					join.NoteReturnNotice(12, ReturnNoticeTicks(noticing, seat, join.FindSession(12)->tailLinkRttMs, std::max(noticing.GetStats().nextFrame, noticing.SentInputThrough())));
 					const uint8_t sizing = fixture.ImageReturnProposer(donor);
 					join.NoteReturnTrailRoom(12, fixture.peers[sizing - 1]->PeerReturnTrailRoom(seat, fixture.ImageReturnRoute(sizing, seat).second, fixture.worlds[donor - 1].applied));
+					// FLAGGED fixture departure: each return has its own join host here; the service's one host sees every return's activation.
+					std::set<uint64_t> others;
+					for (uint8_t other = 1; other <= seats; ++other) if (other != seat && fixture.returnActivations[other]) others.insert(fixture.returnActivations[other]);
+					join.ReserveActivations(others);
 					if (!join.NoteCatchUpProgress(12, report.applied, report.ticks, report.elapsed,
 					                            fixture.worlds[donor - 1].applied, &announced, &error)) co_return false;
 					if (announced && announced != activation) {
@@ -2796,7 +2801,7 @@ namespace RTE {
 						                 << " applied=" << report.applied << " horizon=" << fixture.worlds[donor - 1].applied << " closing_rate=" << announcing->closingRate
 						                 << " capacity_ratio=" << announcing->headroom.Ratio() << " trail=" << announcing->activationTrailFrames << " now_ms=" << fixture.hub.now << std::endl;
 					}
-					if (announced) activation = announced;
+					if (announced) activation = fixture.returnActivations[seat] = announced;
 					if (const char* gate = join.FindSession(12)->catchUpGate; gate && gate != lastGate) {
 						DiagnosticLine() << "[session-plane-image-gate] returner=" << unsigned(seat) << " gate=" << gate << " applied=" << report.applied
 						                 << " horizon=" << fixture.worlds[donor - 1].applied << " closing_rate=" << join.FindSession(12)->closingRate
@@ -2829,11 +2834,14 @@ namespace RTE {
 					if (activation <= head || (roundFrame > session->acknowledgedThrough ? roundFrame - session->acknowledgedThrough : 0) >
 					                              session->activationTrailFrames + serving.GetConfig().slowPlayerBoundTicks) {
 						uint64_t later = 0;
+						std::set<uint64_t> others;
+						for (uint8_t other = 1; other <= seats; ++other) if (other != seat && fixture.returnActivations[other]) others.insert(fixture.returnActivations[other]);
+						join.ReserveActivations(others);
 						if (join.ReannounceActivation(12, roundFrame, &later, nullptr)) {
 							DiagnosticLine() << "[session-plane-image-activation] returner=" << unsigned(seat) << " announced=" << later << " previous=" << activation
 							                 << " waits_for_tail=1 attempts=" << proposalAttempts << " last_head=" << previousHead << " head=" << head << " notice=" << noticeTicks << " round=" << roundFrame << " acknowledged=" << session->acknowledgedThrough
 							                 << " trail=" << session->activationTrailFrames << " replay=" << replay.applied << " now_ms=" << fixture.hub.now << std::endl;
-							activation = later;
+							activation = fixture.returnActivations[seat] = later;
 						}
 						continue;
 					}

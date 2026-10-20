@@ -2264,6 +2264,17 @@ namespace RTE {
 		if (NetWorldJoinSession* session = Find(connection)) session->returnNoticeFrames = frames;
 	}
 
+	uint64_t NetWorldJoinHost::DistinctActivation(NetPeerId connection, uint64_t frame) const {
+		if (!IsPrivateMatch()) return frame;
+		const auto taken = [&](uint64_t at) {
+			return m_ReservedActivations.contains(at) || std::any_of(m_Sessions.begin(), m_Sessions.end(), [&](const NetWorldJoinSession& other) {
+				return other.connection != connection && other.phase == NetWorldJoinPhase::CatchingUp && other.activationTick == at;
+			});
+		};
+		while (taken(frame)) ++frame;
+		return frame;
+	}
+
 	uint64_t NetWorldJoinHost::ActivationLeadFrames(const NetWorldJoinSession& session, uint64_t behind) const {
 		// A private return at the head of its tail - its reports a round trip behind, the tail's delivery and the report's own - primes its
 		// pipeline in its neutral interval after the activation; before it, the members need only the notice its proposal is sent with,
@@ -2498,7 +2509,7 @@ namespace RTE {
 				uint64_t later = 0;
 				if (ReannounceActivation(connection, nowFrame, &later, nullptr)) {
 					if (closingOutside) {
-						later = session->activationTick = std::max(later, reaches + lead);
+						later = session->activationTick = DistinctActivation(connection, std::max(later, reaches + lead));
 						// As a fresh activation chosen at this rate, the return leaves the trail it shows now, up to a lead.
 						session->activationTrailFrames = std::max(std::min<uint64_t>(behind, c_NetWorldActivationLeadFrames), phaseWork.value_or(0));
 					} else session->activationTrailFrames = std::max(std::min<uint64_t>(behind, 2 * c_NetWorldActivationLeadFrames), phaseWork.value_or(0));
@@ -2511,7 +2522,7 @@ namespace RTE {
 			// was starved while its rate was measured does not leave its seat to the AI past its own catch-up.
 			if (IsPrivateMatch() && !session->activationProposed) {
 				if (const Reach sooner = reach(); sooner.activation != 0 && sooner.activation + c_NetWorldClosingWindowFrames < session->activationTick) {
-					session->activationTick = sooner.activation;
+					session->activationTick = DistinctActivation(connection, sooner.activation);
 					session->activationTrailFrames = sooner.trail;
 					session->catchUpGate = "announced-sooner";
 					if (outActivationTick) *outActivationTick = session->activationTick;
@@ -2535,7 +2546,7 @@ namespace RTE {
 			return true;
 		}
 		session->activationTrailFrames = fresh.trail;
-		session->activationTick = fresh.activation;
+		session->activationTick = DistinctActivation(connection, fresh.activation);
 		if (outActivationTick) *outActivationTick = session->activationTick;
 		return true;
 	}
@@ -2592,7 +2603,7 @@ namespace RTE {
 			if (error) *error = "the joiner already missed a re-announced activation";
 			return false;
 		}
-		session->activationTick = ChooseActivationTick(nowFrame, ActivationLeadFrames(*session, nowFrame > session->acknowledgedThrough ? nowFrame - session->acknowledgedThrough : 0));
+		session->activationTick = DistinctActivation(connection, ChooseActivationTick(nowFrame, ActivationLeadFrames(*session, nowFrame > session->acknowledgedThrough ? nowFrame - session->acknowledgedThrough : 0)));
 		session->acknowledgedActivation = 0;
 		session->lastReannounceProgress = session->acknowledgedThrough;
 		++session->activationReannounces;

@@ -728,6 +728,8 @@ namespace RTE {
 		void NoteReturnTrailRoom(NetPeerId connection, uint64_t frames);
 		/// Notes how many frames ahead of a returner's activation its return is proposed, so its activation needs no longer lead.
 		void NoteReturnNotice(NetPeerId connection, uint64_t frames);
+		/// Frames other returns of the round hold that this host does not serve, so no two returns are placed at one frame.
+		void ReserveActivations(std::set<uint64_t> frames) { m_ReservedActivations = std::move(frames); }
 		void NoteTailChunkSent(NetPeerId connection, size_t bytes);
 		bool NoteTransferStarted(NetPeerId connection, uint64_t transferId, uint16_t totalChunks, uint64_t deliveredThrough);
 		/// Records that this bootstrap has been sent the match config, so a retried transfer does not
@@ -810,6 +812,8 @@ namespace RTE {
 		/// How far ahead a session's activation is placed: a world joiner's whole lead; a private return at the head of its tail its proposal's
 		/// notice and the bound.
 		uint64_t ActivationLeadFrames(const NetWorldJoinSession& session, uint64_t behind) const;
+		/// The first frame from this one no other return of the round holds: a round agrees one return per frame.
+		uint64_t DistinctActivation(NetPeerId connection, uint64_t frame) const;
 		uint8_t AllocateSpectatorLobbyPeer() const;
 		std::string m_IdentityPath;
 
@@ -822,6 +826,7 @@ namespace RTE {
 		NetWorldMetrics m_Metrics;
 		NetWorldCheckpointImage m_Image;
 		std::vector<NetWorldJoinSession> m_Sessions;
+		std::set<uint64_t> m_ReservedActivations; //!< Activations other returns of the round hold, when they are served elsewhere.
 		std::vector<std::pair<NetPeerId, NetWorldJoinRefusal>> m_Refused; //!< Connections already turned away.
 		uint64_t m_NextJoinOrder = 1;    //!< Stamped on every bootstrap, so promotion reads join order.
 		uint64_t m_Promotions = 0;
