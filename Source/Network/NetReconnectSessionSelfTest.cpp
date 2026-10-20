@@ -5262,6 +5262,20 @@ namespace RTE {
 					if (NetModerationAvailability(current, selected, NetModerationAction::Cancel) != NetH4ModerationResult::StaleSelection) return Fail("an old cancel retargeted a new approval");
 				}
 			}
+			NetH4ModerationSeat open = pressedAlice.view;
+			open.stableSeat = 12;
+			open.applicants.clear();
+			NetModerationUx fresh;
+			fresh.Refresh({open});
+			for (const int attempt: {5, 6}) {
+				open.applicants = {{73, 4, "Erin", 0, 20000, false, Ramp<16>(static_cast<uint8_t>(attempt))}};
+				fresh.Refresh({open});
+				if (fresh.GetRow(0).applicant != 73 || !NetModerationUx::Available(fresh.GetRow(0), NetModerationAction::Substitute)) {
+					return Fail(attempt == 5 ? "the first request to a seat nobody was chosen on was not chosen" : "a request made again after every request ended was not chosen");
+				}
+				open.applicants.clear();
+				fresh.Refresh({open});
+			}
 			return 0;
 		}
 
