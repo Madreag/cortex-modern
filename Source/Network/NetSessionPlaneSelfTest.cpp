@@ -1554,6 +1554,14 @@ namespace RTE {
 				for (const auto& late: lateSplits) if (!late.resolvedAt && ((late.a == a && late.b == b) || (late.a == b && late.b == a))) return &late;
 				return nullptr;
 			}
+			std::string UnreconvergedSeparations() const {
+				// A seat still replaying its image at the end - one whose machine cannot catch up stays there - has not yet replaced its history.
+				for (uint8_t a = 1; a <= hub.row.seats; ++a) for (uint8_t b = a + 1; b <= hub.row.seats; ++b)
+					if (pairSeparatedFrom[a][b] && !imageReading[a - 1] && !imageNeeded[a - 1] && !imageReading[b - 1] && !imageNeeded[b - 1])
+					return "histories differ from displayed frame " + std::to_string(pairSeparatedFrom[a][b]) + ": peers " + std::to_string(a) + " and " + std::to_string(b) +
+					       " parted under a proven split and were never reconverged by an image return";
+				return {};
+			}
 			std::string UnresolvedLateSplits() const {
 				for (const auto& late: lateSplits) if (!late.resolvedAt)
 					return "histories differ at displayed frame " + std::to_string(late.frame) + ": peers " + std::to_string(late.a) + " and " + std::to_string(late.b) +
@@ -1848,7 +1856,9 @@ namespace RTE {
 								break;
 							}
 						}
-						if (separated && frame >= separated && (l & first) && (r & second) && l != r) {
+						// A pair already apart under that cause stays apart on frames where their member sets agree again, until an image return
+						// replaces one history; the round's end requires that return.
+						if (separated && frame >= separated && (l & first) && (r & second) && (l != r || pairSeparatedFrom[a][b])) {
 							// FLAGGED fixture departure: each half holds the seat it cannot hear, so an owner first held on one side after the split has its own proven divergence.
 							if (authorA == a && authorB == b && frame > 0 && left.shownAt.contains(frame) && right.shownAt.contains(frame)) {
 								const uint32_t before = frameMembers[a - 1].at(frame - 1) ^ frameMembers[b - 1].at(frame - 1);
@@ -2408,6 +2418,7 @@ namespace RTE {
 				while (hub.refaultEnd && hub.now <= hub.refaultEnd + c_TestReturnAllowanceMs + 4000) if (!Step(error) || !CheckBound(error) || !RecoverImages(error)) return false;
 				if (!FinishImageReturns(error) || !CompareHistories(error, true)) return false;
 				if (error = UnresolvedLateSplits(); !error.empty()) return false;
+				if (error = UnreconvergedSeparations(); !error.empty()) return false;
 				if (row.hung && row.subject == 1 && row.gapMs > 15000)
 					for (uint8_t seat = 2; seat <= row.seats; ++seat) if (firstAdminChangeMs[seat - 1] == UINT64_MAX) {
 						error = "authority ruling: a hung host outlasted the hold window without roster administration migrating"; return false;
@@ -3792,6 +3803,7 @@ namespace RTE {
 			if (!fixture.FinishImageReturns(error)) return failed(error);
 			if (!fixture.CompareHistories(error, true)) return failed(error + " at " + std::to_string(hub.now) + " ms");
 			if (const auto unresolved = fixture.UnresolvedLateSplits(); !unresolved.empty()) return failed(unresolved);
+			if (const auto apart = fixture.UnreconvergedSeparations(); !apart.empty()) return failed(apart);
 			const uint64_t end = hub.now;
 			for (uint8_t seat = 1; seat <= schedule.seats; ++seat) {
 				if (fixture.heldSince[seat] != UINT64_MAX) fixture.heldSpans[seat].push_back({fixture.heldSince[seat], UINT64_MAX});
