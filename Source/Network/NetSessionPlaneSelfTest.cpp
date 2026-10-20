@@ -1577,6 +1577,7 @@ namespace RTE {
 			uint64_t freezeWallMs = 0;
 			std::vector<FixtureTickCredit> credits;
 			std::vector<uint64_t> queued, waitAt, maxWait, caughtAt;
+			std::vector<std::vector<NetGameCommand>> carriedCommands; //!< Commands of a sample the coordinator deferred, riding the seat's next one.
 			std::vector<uint64_t> releasedAt; //!< The engine's tick that released each seat's waited frame, which the bound is judged at.
 			std::vector<uint64_t> displayedAt, blackoutGap, returnedAt, postReturnWait, imageAt;
 			std::vector<uint64_t> firstDisplayedAt;
@@ -1921,7 +1922,7 @@ namespace RTE {
 				    row.tieBeforeAdministration || (row.gapMs && !row.frozen && !row.slowPercent && !row.inputsLost && !row.keepInputEvery);
 				// FLAGGED fixture departure: a stopped machine can require the same automatic image return as a split link.
 				if (maySplit || row.imageReturn || row.gapMs) { hub.row.captureFrames = true; hub.row.checkpointEveryFrames = 60; }
-				worlds.resize(row.seats); for (auto& world: worlds) world.sharedDigests = &sharedDigests; committed.resize(row.seats); credits.resize(row.seats); queued.resize(row.seats); waitAt.resize(row.seats); releasedAt.assign(row.seats, 0);
+				worlds.resize(row.seats); for (auto& world: worlds) world.sharedDigests = &sharedDigests; committed.resize(row.seats); credits.resize(row.seats); queued.resize(row.seats); carriedCommands.assign(row.seats, {}); waitAt.resize(row.seats); releasedAt.assign(row.seats, 0);
 				maxWait.resize(row.seats); caughtAt.resize(row.seats); settledDelay.resize(row.seats); settledChanges.resize(row.seats);
 				displayedAt.resize(row.seats); blackoutGap.resize(row.seats); returnedAt.resize(row.seats); postReturnWait.resize(row.seats); seenAI.resize(row.seats);
 				imageAt.resize(row.seats);
@@ -2100,7 +2101,7 @@ namespace RTE {
 					compared = {}; splitFrom = {}; inputSplits = {}; inputSplitCauses.clear(); partitionOwners = {}; lateSplits.clear(); unexplained = {}; sawSplit = splitHistories = false;
 					imageTasks.clear(); imageTasks.resize(hub.row.seats);
 					// As the service's tail log, the committed record starts again with the round: frame numbers restart.
-					committed.assign(hub.row.seats, {}); for (auto& donors: abandonedDonors) donors.clear(); returnActivations = {};
+					committed.assign(hub.row.seats, {}); for (auto& donors: abandonedDonors) donors.clear(); returnActivations = {}; carriedCommands.assign(hub.row.seats, {});
 					directRuling = 0;
 					std::fill(lostAt.begin(), lostAt.end(), 0); std::fill(lostFrame.begin(), lostFrame.end(), 0);
 					std::fill(imageAt.begin(), imageAt.end(), 0); std::fill(imageReturns.begin(), imageReturns.end(), 0);
@@ -2248,10 +2249,12 @@ namespace RTE {
 							ControllerFrame input; input.actorUniqueID = 1000 + id; input.analogMoveX = id * 100;
 							input.stateMask = (1ULL << MOVE_RIGHT) | (1ULL << WEAPON_FIRE) | (1ULL << BODY_JUMP);
 							const std::vector<ControllerFrame> controls = peer.GetConfig().matchConfig.dedicated && id == 1 ? std::vector<ControllerFrame>{} : std::vector<ControllerFrame>{input};
-							std::vector<NetGameCommand> commands;
+							std::vector<NetGameCommand> commands = std::exchange(carriedCommands[id - 1], {});
 							if (id == 1 && hub.row.checkpointEveryFrames && next % hub.row.checkpointEveryFrames == 0)
 								commands.push_back({1, NetGameCheckpoint{NetGameCheckpoint::Capture, next}});
-							if ((!commands.empty() || !peer.DeferLocalInput(next, controls)) && !peer.QueueLocalInput(next, controls, commands, &error)) return false;
+							// As the runner does, a sample the coordinator defers carries its commands to the seat's next one.
+							if (peer.DeferLocalInput(next, controls)) carriedCommands[id - 1] = std::move(commands);
+							else if (!peer.QueueLocalInput(next, controls, commands, &error)) return false;
 							queued[id - 1] = next;
 						}
 						NetLockstepReadyFrame ready;
