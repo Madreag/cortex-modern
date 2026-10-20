@@ -2016,6 +2016,8 @@ namespace RTE {
 					// FLAGGED fixture departure: a proven input partition discards its losing history just as a total cut does.
 					const auto after = inputSplits[a][b].upper_bound(frame);
 					if (after != inputSplits[a][b].begin() && (!std::prev(after)->second || frame <= std::prev(after)->second)) return true;
+					// Histories that already differ are split while their cause is still being judged, or while a late input's split is arbitrated.
+					if ((unexplained[a][b].first && unexplained[a][b].first <= frame) || (OpenLateSplit(a, b) && OpenLateSplit(a, b)->frame <= frame)) return true;
 				}
 				return false;
 			}
