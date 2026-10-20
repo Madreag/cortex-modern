@@ -1498,9 +1498,14 @@ namespace RTE {
 		// Every extra grant needs a phase goal and receipt runway; a receipt wait preserves the goal's bounded accrual.
 		struct FixtureTickCredit {
 			double ordinary = 0, accelerated = 0;
+			bool wasCatchingUp = false;
 			void Accrue(double elapsedMs, double ordinaryRate, double catchUpRate, bool catchingUp) {
 				ordinary = std::min(6.0, ordinary + elapsedMs * ordinaryRate / c_TestTickMs);
+				// FLAGGED fixture correction: the runner sets its budget once a real frame, and the frame in which catching up begins
+				// still has the budget it began with; the tick the round's clock owes then is never withheld for a budget accruing from zero.
+				if (catchingUp && !wasCatchingUp) accelerated = std::max(accelerated, 1.0);
 				accelerated = catchingUp ? std::min(6.0, accelerated + elapsedMs * catchUpRate / c_TestTickMs) : 0;
+				wasCatchingUp = catchingUp;
 			}
 			bool MayGrant(bool needed, bool canAccelerate) const {
 				if (needed && accelerated < 1) return false;
@@ -1516,7 +1521,7 @@ namespace RTE {
 				if (ordinary >= 1) ordinary -= 1;
 				if (catchingUp) accelerated -= 1;
 			}
-			void Reset() { ordinary = accelerated = 0; }
+			void Reset() { ordinary = accelerated = 0; wasCatchingUp = false; }
 		};
 		struct Fixture {
 			NetSeatRoster agreedRoster;
