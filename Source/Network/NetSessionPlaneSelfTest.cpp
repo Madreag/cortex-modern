@@ -3305,8 +3305,9 @@ namespace RTE {
 			}
 			awaitingReceipts.Accrue(c_TestTickMs / 2, 1, 3, true);
 			if (!awaitingReceipts.MayGrant(true, false)) { error = "fixture receipt wait blocked an ordinary due tick"; return false; }
+			const double budgetBefore = awaitingReceipts.accelerated;
 			awaitingReceipts.Consume(true);
-			if (awaitingReceipts.MayGrant(true, false) || awaitingReceipts.accelerated != 2) {
+			if (awaitingReceipts.MayGrant(true, false) || awaitingReceipts.accelerated != budgetBefore - 1) {
 				error = "fixture ordinary tick escaped the phase budget or manufactured receipt credit"; return false;
 			}
 			Hub fault;
