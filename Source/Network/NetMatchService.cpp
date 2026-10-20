@@ -5006,7 +5006,10 @@ static std::string ResyncSaveName() {
 			const auto* prior = m_WorldJoin.FindSession(connection);
 			const uint64_t previous = prior ? prior->activationTick : 0;
 			// The coordinator that proposes a return sizes how far its activation may trail the round.
-			if (prior) m_WorldJoin.NoteReturnTrailRoom(connection, m_Coordinator->PeerReturnTrailRoom(prior->assignedPeerId, connection, nowFrame));
+			if (prior) {
+				m_WorldJoin.NoteReturnTrailRoom(connection, m_Coordinator->PeerReturnTrailRoom(prior->assignedPeerId, connection, nowFrame));
+				m_WorldJoin.NoteReturnNotice(connection, ReturnNoticeTicksLocked(*prior, std::max(nowFrame, m_Coordinator->SentInputThrough())));
+			}
 			if (const uint64_t announced = ApplyWorldJoinReport(lobby, m_WorldJoin, report, connection, nowFrame, nowMs); announced != 0) {
 				if (previous && previous != announced) m_Coordinator->MoveObservationEpoch(previous, announced);
 				else m_Coordinator->SetObservationEpoch(announced);
@@ -5385,6 +5388,17 @@ static std::string ResyncSaveName() {
 		});
 	}
 
+	uint64_t NetMatchService::ReturnNoticeTicksLocked(const NetWorldJoinSession& session, uint64_t head) const {
+		uint64_t noticeTicks = 1;
+		for (const auto& [peer, stats]: m_Coordinator->GetStats().peers) {
+			if (peer == session.assignedPeerId || m_Coordinator->IsPeerGoneAtFrame(peer, head) || m_Coordinator->IsSeatUnderAI(peer, head)) continue;
+			noticeTicks = std::max(noticeTicks, static_cast<uint64_t>(std::ceil((stats.pingMs + stats.jitterMs) / m_Coordinator->GetConfig().simTickMs)));
+		}
+		// After the members agree, the returner starts its live round with them over its own link before it plays there: the
+		// notice is both trips and the bound.
+		return noticeTicks + static_cast<uint64_t>(std::ceil(session.tailLinkRttMs / m_Coordinator->GetConfig().simTickMs)) + m_Coordinator->GetConfig().slowPlayerBoundTicks;
+	}
+
 	void NetMatchService::DrivePrivateMatchRejoins(uint64_t nowMs) {
 		if (!m_Runner || !m_Session || !m_Coordinator || !m_WorldJoin.IsPrivateMatch()) return;
 		// A deferred repair starts once the returner is back, or past the headroom bound if it never gets there.
@@ -5499,14 +5513,7 @@ static std::string ResyncSaveName() {
 			if (session.activationTick == 0 || session.phase != NetWorldJoinPhase::CatchingUp) continue;
 			if (!m_PrivateActivations.contains(session.connection)) {
 				const uint64_t head = std::max(m_Coordinator->GetStats().nextFrame, m_Coordinator->SentInputThrough());
-				uint64_t noticeTicks = 1;
-				for (const auto& [peer, stats]: m_Coordinator->GetStats().peers) {
-					if (peer == session.assignedPeerId || m_Coordinator->IsPeerGoneAtFrame(peer, head) || m_Coordinator->IsSeatUnderAI(peer, head)) continue;
-					noticeTicks = std::max(noticeTicks, static_cast<uint64_t>(std::ceil((stats.pingMs + stats.jitterMs) / m_Coordinator->GetConfig().simTickMs)));
-				}
-				// After the members agree, the returner starts its live round with them over its own link before it plays there: the
-				// notice is both trips and the bound.
-				noticeTicks += static_cast<uint64_t>(std::ceil(session.tailLinkRttMs / m_Coordinator->GetConfig().simTickMs)) + m_Coordinator->GetConfig().slowPlayerBoundTicks;
+				const uint64_t noticeTicks = ReturnNoticeTicksLocked(session, head);
 				if (session.activationTick > head + noticeTicks + 1) continue;
 				const uint64_t nowFrame = m_Coordinator->GetStats().nextFrame;
 				const uint64_t behind = nowFrame > session.acknowledgedThrough ? nowFrame - session.acknowledgedThrough : 0;

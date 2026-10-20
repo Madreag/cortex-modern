@@ -2481,6 +2481,16 @@ namespace RTE {
 
 		// What a scheduled round got wrong: the property it broke (history, bound, return, or one of the round's rules), the shape of the
 		// failure as a word the driver groups by, and what the round showed.
+		// As NetMatchService::ReturnNoticeTicksLocked: the members' trip, the returner's own and the bound.
+		uint64_t ReturnNoticeTicks(const NetLockstepCoordinator& serving, uint8_t returner, uint32_t tailLinkRttMs, uint64_t head) {
+			uint64_t noticeTicks = 1;
+			for (const auto& [peer, stats]: serving.GetStats().peers) {
+				if (peer == returner || serving.IsPeerGoneAtFrame(peer, head) || serving.IsSeatUnderAI(peer, head)) continue;
+				noticeTicks = std::max(noticeTicks, static_cast<uint64_t>(std::ceil((stats.pingMs + stats.jitterMs) / serving.GetConfig().simTickMs)));
+			}
+			return noticeTicks + static_cast<uint64_t>(std::ceil(tailLinkRttMs / serving.GetConfig().simTickMs)) + serving.GetConfig().slowPlayerBoundTicks;
+		}
+
 		// The same private image/replay/reclaim path for an absent peer and for every player on a losing half.
 		ImageReturnTask ReadImageReturn(Fixture& fixture, uint8_t seat, uint8_t donor, std::string& error) {
 			const auto fail = [&](const std::string& detail) { error = "authority ruling image return: " + detail; return false; };
@@ -2767,7 +2777,9 @@ namespace RTE {
 						co_return fail("the private replay claimed more capacity than its supplied tick budget: reported=" +
 						    std::to_string(join.FindSession(12)->headroom.Ratio()) + " supplied=" + std::to_string(maximumReplayCapacity));
 					uint64_t announced = 0;
-					// As the service does, the coordinator that will propose the return sizes how far it may trail.
+					// As the service does, the coordinator that will propose the return sizes how far it may trail, and the donor's notice how far ahead.
+					const auto& noticing = *fixture.peers[donor - 1];
+					join.NoteReturnNotice(12, ReturnNoticeTicks(noticing, seat, join.FindSession(12)->tailLinkRttMs, std::max(noticing.GetStats().nextFrame, noticing.SentInputThrough())));
 					const uint8_t sizing = fixture.ImageReturnProposer(donor);
 					join.NoteReturnTrailRoom(12, fixture.peers[sizing - 1]->PeerReturnTrailRoom(seat, fixture.ImageReturnRoute(sizing, seat).second, fixture.worlds[donor - 1].applied));
 					if (!join.NoteCatchUpProgress(12, report.applied, report.ticks, report.elapsed,
@@ -2803,12 +2815,7 @@ namespace RTE {
 					// come forward or must move later is not fixed early; one the round passed or that the replay trails is announced again.
 					const auto& serving = *fixture.peers[donor - 1];
 					const uint64_t head = std::max(serving.GetStats().nextFrame, serving.SentInputThrough());
-					uint64_t noticeTicks = 1;
-					for (const auto& [peer, stats]: serving.GetStats().peers) {
-						if (peer == seat || serving.IsPeerGoneAtFrame(peer, head) || serving.IsSeatUnderAI(peer, head)) continue;
-						noticeTicks = std::max(noticeTicks, static_cast<uint64_t>(std::ceil((stats.pingMs + stats.jitterMs) / serving.GetConfig().simTickMs)));
-					}
-					noticeTicks += static_cast<uint64_t>(std::ceil(session->tailLinkRttMs / serving.GetConfig().simTickMs)) + serving.GetConfig().slowPlayerBoundTicks;
+					const uint64_t noticeTicks = ReturnNoticeTicks(serving, seat, session->tailLinkRttMs, head);
 					const uint64_t previousHead = lastSeenHead; lastSeenHead = head;
 					if (activation > head + noticeTicks + 1) continue;
 					// The trail is judged against the same horizon the progress reports are, the donor's applied world.

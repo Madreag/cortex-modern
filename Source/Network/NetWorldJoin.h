@@ -201,6 +201,7 @@ namespace RTE {
 		double tailAckRttMs = 0; //!< The shortest time from a datagram's first send to the report that passes it; 0 until measured.
 		uint32_t tailLinkRttMs = 0; //!< The link's own round trip to the returner, as its transport measures it; 0 until known.
 		uint64_t returnTrailRoomFrames = UINT64_MAX; //!< The most frames its return may trail by, as the round's coordinator sizes it; unbounded until told.
+		uint64_t returnNoticeFrames = 0; //!< The frames its return is proposed ahead of its activation, as the round's service sizes them; 0 until told.
 		uint64_t tailStalledAck = 0, tailStalledSinceMs = 0; //!< Where its replay was when it last kept the round's rate, and since when it has not.
 		uint64_t tailSentNew = 0, tailSentRepeat = 0, tailSentResend = 0, tailSentBytes = 0, tailRefused = 0, tailLoggedMs = 0; //!< The tail's traffic, logged every two seconds.
 		const char* catchUpGate = nullptr; //!< What the last catch-up report met on its way to an activation.
@@ -725,6 +726,8 @@ namespace RTE {
 		void NoteTailLinkRtt(NetPeerId connection, uint32_t rttMs);
 		/// Notes how far a returner's activation may trail the round, from the coordinator that will propose its return.
 		void NoteReturnTrailRoom(NetPeerId connection, uint64_t frames);
+		/// Notes how many frames ahead of a returner's activation its return is proposed, so its activation needs no longer lead.
+		void NoteReturnNotice(NetPeerId connection, uint64_t frames);
 		void NoteTailChunkSent(NetPeerId connection, size_t bytes);
 		bool NoteTransferStarted(NetPeerId connection, uint64_t transferId, uint16_t totalChunks, uint64_t deliveredThrough);
 		/// Records that this bootstrap has been sent the match config, so a retried transfer does not
@@ -803,7 +806,9 @@ namespace RTE {
 	private:
 		NetWorldJoinSession* Find(NetPeerId connection);
 		/// E: the lead ahead of the committed frame, never at or behind the input already sent.
-		uint64_t ChooseActivationTick(uint64_t nowFrame) const;
+		uint64_t ChooseActivationTick(uint64_t nowFrame, uint64_t leadFrames = c_NetWorldActivationLeadFrames) const;
+		/// How far ahead a session's activation is placed: a world joiner's whole lead, a private return its proposal's notice and the bound.
+		uint64_t ActivationLeadFrames(const NetWorldJoinSession& session) const;
 		uint8_t AllocateSpectatorLobbyPeer() const;
 		std::string m_IdentityPath;
 

@@ -1093,6 +1093,8 @@ namespace RTE {
 		/// The private rejoin driver looks at a ready connection the round no longer carries, and at one it still carries for a seat the
 		/// AI holds: a peer frame group keeps a slow seat's link in the round, and its player catches up in place on it.
 		static bool DrivesRejoinLink(bool inRound, bool heldAISeat) { return !inRound || heldAISeat; }
+		/// The frames a private return is proposed ahead of its activation: the members' trip, the returner's own and the bound.
+		uint64_t ReturnNoticeTicksLocked(const NetWorldJoinSession& session, uint64_t head) const;
 		/// A looked-at connection that is not its held seat's in-place route may take the private image when no join is open on it and
 		/// the round does not carry it.
 		static bool OffersImageOnLink(bool inRound, bool joinOpen) { return !joinOpen && !inRound; }
