@@ -2885,7 +2885,10 @@ namespace RTE {
 			// FLAGGED fixture departure: a survivor split off before the activation plays its own continuation, which never took this
 			// return; its view of the seat is that half's, ruled at its heal. A playing survivor that has not yet applied the activation
 			// still shows the hold the return ends. Every seat playing at the activation is checked from the activation on.
-			const uint32_t playingAtActivation = s_FrameMembers(*fixture.peers[donor - 1], activation);
+			// A member in its own return's neutral interval at the activation plays none of it, as the engine counts no vote from it.
+			uint32_t playingAtActivation = s_FrameMembers(*fixture.peers[donor - 1], activation);
+			for (uint8_t peer = 1; peer <= fixture.hub.row.seats; ++peer)
+				if (fixture.peers[donor - 1]->IsSeatReclaimGap(peer, activation)) playingAtActivation &= ~(1U << (peer - 1));
 			// FLAGGED fixture correction: an observer in a fault of its own (cut off, silent, hung, stopped, slow, late or lossy) holds a seat
 			// it cannot hear at its own bound, as section 11.1 has it; that view, and the hold it installed then, are its own fault's.
 			for (const uint64_t until = observationAt + 1000; fixture.hub.now <= until && !fixture.OwnTrouble(seat);) {
@@ -2903,7 +2906,7 @@ namespace RTE {
 			// A hold the returner's own fault caused is judged with every other hold, by its cause and its return in time.
 			const bool ownTrouble = fixture.OwnTrouble(seat);
 			for (uint8_t peer: survivors) {
-				const bool playing = (s_FrameMembers(*fixture.peers[donor - 1], activation) & (1U << (peer - 1))) != 0;
+				const bool playing = (playingAtActivation & (1U << (peer - 1))) != 0;
 				if (playing && !fixture.HoldFromOwnFault(peer, seat) && (!fixture.peers[peer - 1]->IsRunning() || (!ownTrouble &&
 				    (fixture.peers[peer - 1]->HasHeldAISeat(seat) || Bridges(*fixture.peers[peer - 1]).contains(seat)))))
 					co_return fail("the image return was held again after its certified activation: observer=" + std::to_string(peer) +
