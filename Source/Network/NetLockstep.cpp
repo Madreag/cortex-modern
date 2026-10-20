@@ -5843,7 +5843,8 @@ namespace RTE {
 		NetLockstepPlane::Check(&live, "StartCatchUpReplay (the live round)");
 		if (!StartReplay(transport, config, error)) return false;
 		for (const auto& [peer, terms]: live.m_Config.initialPeerStartTerms) m_Config.initialPeerStartTerms.try_emplace(peer, terms);
-		m_SeatBridgeSinceMs = live.m_SeatBridgeSinceMs;
+		// Only a hold the replayed history carries keeps its time: one the live branch installed itself is set aside with that branch.
+		for (const auto& [peer, since]: live.m_SeatBridgeSinceMs) if (m_Config.initialSeatHolds.contains(peer)) m_SeatBridgeSinceMs.try_emplace(peer, since);
 		// Scripted switches can still read the hold before the newest return.
 		for (const auto& [peer, transitions]: live.m_SeatTransitions)
 			for (const auto& [frame, state]: transitions) m_SeatTransitions[peer].try_emplace(frame, state);
