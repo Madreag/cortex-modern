@@ -2329,6 +2329,30 @@ namespace RTE {
 			return passed;
 		}
 
+		// A joiner held at 486 when its host ended the round at 494 waited for history no donor sent any more.
+		static bool HeldReaderEndsAtTheHostEnd(std::string* error) {
+			for (const bool member: {false, true}) {
+				Wire wire;
+				NetLockstepCoordinator reader;
+				Configure(reader, wire);
+				reader.m_Config.peerFrameGroups = true;
+				reader.m_MigrationPhase = NetHostMigrationPhase::None;
+				reader.m_DeferStops = true;
+				reader.m_FrameGroupMembers = member ? 7 : 5;
+				reader.m_LastCompletedSimulationTick = 485;
+				reader.m_Stats.nextFrame = 486;
+				reader.m_PendingCompleteStop = NetLockstepStop{1, NetLockstepStopReason::Complete, 494, "Match ended by host"};
+				reader.AdvanceReadyFrames(1000);
+				const bool held = !member && (!reader.IsStopped() || reader.GetStats().timeoutReason != "Complete:Match ended by host");
+				if (held || (member && !reader.IsRunning())) {
+					*error = std::string(member ? "a member playing to the host's end stopped short of it" : "a held seat out of history waited for the host's end") +
+					         ": block=" + reader.m_AdvanceBlock + " running=" + std::to_string(reader.IsRunning()) + " reason=" + reader.GetStats().timeoutReason;
+					return false;
+				}
+			}
+			return true;
+		}
+
 		static bool ReturnMembershipCases(std::string* error, bool checkAdmission) {
 			// Seed12: return2 at127 was signed while seat3 still played; hold3 at91 intervened.
 			for (bool returnFirst: {false, true}) for (uint8_t local: {1, 3}) for (bool removalFirst: {false, true}) {
@@ -33408,6 +33432,13 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS independently_certified_returns_keep_each_member\n[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "held-reader-host-end") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::HeldReaderEndsAtTheHostEnd(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS a_held_seat_ends_its_round_at_the_hosts_end" << std::endl;
+				std::cout << "[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "return-keeps-other-held") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::ReturnKeepsOtherSeatHeld(&error)) return fail(error);
@@ -33716,6 +33747,7 @@ namespace {
 
 		row(&SessionPlaneRecoveryTest::ConcurrentReturnMembership, "a_later_return_keeps_the_earlier_scheduled_return");
 		row(&SessionPlaneRecoveryTest::IndependentReturnMembership, "independently_certified_returns_keep_each_member");
+		row(&SessionPlaneRecoveryTest::HeldReaderEndsAtTheHostEnd, "a_held_seat_ends_its_round_at_the_hosts_end");
 		row(&SessionPlaneRecoveryTest::ReturnKeepsOtherSeatHeld, "a_return_cannot_return_another_held_seat");
 		row(&SessionPlaneRecoveryTest::FutureRemovalKeepsPastAuthority, "a_future_removal_keeps_the_past_directory_decision");
 		row(&SessionPlaneRecoveryTest::ReturnStartAdmission, "a_return_start_uses_its_certified_admission");
