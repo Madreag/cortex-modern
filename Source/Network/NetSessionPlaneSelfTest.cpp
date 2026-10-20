@@ -1719,7 +1719,10 @@ namespace RTE {
 					}
 					if (sawSplit && !hub.schedule) {
 						if (!peers[seat - 1]->IsRunning() || !Bridges(*peers[seat - 1]).empty()) {
-							error = "authority ruling: peer " + std::to_string(seat) + " did not rejoin live play after the split healed"; return false;
+							std::string bridged;
+							for (const auto& [held, from]: Bridges(*peers[seat - 1])) bridged += " " + std::to_string(held) + "@" + std::to_string(from);
+							error = "authority ruling: peer " + std::to_string(seat) + " did not rejoin live play after the split healed: running=" +
+							        std::to_string(peers[seat - 1]->IsRunning()) + " bridged=" + (bridged.empty() ? " none" : bridged); return false;
 						}
 					}
 				}
