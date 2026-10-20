@@ -1365,6 +1365,7 @@ namespace RTE {
 					peer.m_RoundConfigHash = NetMatchConfigUtil::HashConfig(peer.m_Config.matchConfig);
 				}
 				peer.CheckPeerFrameTie(120, 1, 950);
+				const auto asked = peer.m_PeerFrameTie;
 				auto vote = peer.PeerFrameMessage(NetHostMigrationMessageType::PeerBridge);
 				vote.senderPeerId = vote.successorPeerId = 2; vote.frame = vote.boundary = 100;
 				vote.preparedFrame = 0; vote.connectedMask = role == 0 ? 2 : 3; vote.voterMask = 2; vote.members = {static_cast<uint8_t>(role == 0 ? 1 : 3)};
@@ -1380,7 +1381,15 @@ namespace RTE {
 					check(peer.m_PeerBridgeCertificates.contains({100, NetPeerFrameDetail::DecisionKind(vote)}) && peer.m_FrameGroupMembers == 3, mode + " a matching historical hold was rejected");
 				} else check(!peer.m_PeerBridges.contains(role == 0 ? 1 : 3) && peer.m_FrameGroupMembers == (role == 0 ? 3U : 7U) &&
 				    peer.m_PendingPeerDecisions.empty(), mode + " foreign hold replaced played history");
-				check(peer.m_PeerFrameTie && !peer.m_PeerFrameTie->queryOnly && peer.m_PeerFrameTie->members == std::vector<uint16_t>{1}, mode + " foreign hold replaced the local arbitration question");
+				// The question is the one this seat asked before the hold arrived: its own group, a query first where it is under half.
+				const auto describe = [](const std::optional<NetFrameTieRequest>& tie) {
+					if (!tie) return std::string("none");
+					std::string text = "query_only=" + std::to_string(tie->queryOnly) + " members=";
+					for (uint16_t member: tie->members) text += std::to_string(member);
+					return text;
+				};
+				check(asked && asked->members == std::vector<uint16_t>{1} && asked->queryOnly == (role == 1) && peer.m_PeerFrameTie == asked,
+				    mode + " foreign hold replaced the local arbitration question: asked " + describe(asked) + ", now " + describe(peer.m_PeerFrameTie));
 			}
 			for (bool directory: {false, true}) for (unsigned role = 0; role < 3; ++role) {
 				Wire wire; NetLockstepCoordinator peer; configure(peer, wire, directory);
