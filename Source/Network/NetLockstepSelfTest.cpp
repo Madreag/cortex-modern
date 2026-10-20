@@ -2339,6 +2339,7 @@ namespace RTE {
 				reader.m_MigrationPhase = NetHostMigrationPhase::None;
 				reader.m_DeferStops = true;
 				reader.m_FrameGroupMembers = member ? 7 : 5;
+				reader.m_FrameGroupChanges = {{1, 7}, {486, reader.m_FrameGroupMembers}};
 				reader.m_LastCompletedSimulationTick = 485;
 				reader.m_Stats.nextFrame = 486;
 				reader.m_PendingCompleteStop = NetLockstepStop{1, NetLockstepStopReason::Complete, 494, "Match ended by host"};
