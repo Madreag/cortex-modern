@@ -99,8 +99,8 @@ def watch_pass(name):
 STATUS_NUMBERS = ["RTT ", "PACE ", " waits "]
 
 
-def lobby_wait(peer):
-    text = "Waiting for Joiner to press Ready" if peer == "host" else "Press Ready when you're ready to play"
+def lobby_wait(peer, other="Joiner"):
+    text = f"Waiting for {other} to press Ready" if peer == "host" else "Press Ready when you're ready to play"
     return wait(scope="menu", screen="MultiplayerScreen", control="LabelMultiplayerStatus", text_contains=text, within_ms=90000)
 
 
@@ -1004,7 +1004,7 @@ def apply_for_held_seat_scene():
                      "wait_label LabelMultiplayerLandingStatus The host declined your request for this seat", "video_mark newcomer-declined",
                      "touch_file {PROBE_DIR}/declined.json", "activate ButtonMultiplayerJoinGame", "wait_ms 600", *join_own_lobby(),
                      "wait_label_absent LabelJoinSelected cannot be joined", "activate ButtonMultiplayerConnect",
-                     *apply, "video_mark newcomer-applied-again", "wait_file {PROBE_DIR}/done.json 600", "wait_ms 1400", "exit"]
+                     *apply, "video_mark newcomer-applied-again", "wait_file {PROBE_DIR_host}/done.json 600", "wait_ms 1400", "exit"]
     seat_row = lambda part: f"NetworkSeat{part}@Leaver"
     press = lambda control: [dict(op="mouse_down", control=control), wait(control=control, equals=dict(pushed=True)), dict(op="mouse_up", control=control),
                              wait(renders=4)]
@@ -1024,7 +1024,7 @@ def apply_for_held_seat_scene():
     host += press(seat_row("Substitute")) + capture("newcomer-let-in-host")
     # The newcomer joins the running match through its image; the host watches the seat until the AI hands it over.
     host += key("F6") + [wait(panel_open=False), wait(ai_held_peer_ids=[], within_ms=180000), wait(sim_advanced=600, within_ms=120000)] + capture("newcomer-playing-host")
-    host += [dict(op="assert", equals=dict(service="Running", local_actor_alive=True)), dict(op="assert_relay")] + pause_end() + [lobby_wait("host"), dict(op="finish")]
+    host += [dict(op="assert", equals=dict(service="Running", local_actor_alive=True)), dict(op="assert_relay")] + pause_end() + [lobby_wait("host", other="Newcomer"), dict(op="finish")]
     leaver = place("joiner") + key("Escape") + [wait(screen="Pause"), menu("activate ButtonLeaveMatch"), wait(screen="PauseLeaveConfirm"),
                                                 menu("activate ButtonLeaveConfirm"), wait(screen="MultiplayerScreen", scope="menu"),
                                                 dict(op="signal", name="left", scope="menu")]
@@ -1032,7 +1032,8 @@ def apply_for_held_seat_scene():
     leaver += [dict(op="wait_file", path="{PROBE_DIR_host}/done.json", scope="menu", within_ms=900000), dict(op="finish")]
     newcomer = [wait(service="Running", within_ms=600000), wait(sim_advanced=300, within_ms=120000), dict(op="assert", equals=dict(service="Running")),
                 dict(op="assert_relay")]
-    newcomer += capture("newcomer-playing") + [wait(scope="menu", screen="MultiplayerScreen", within_ms=300000), dict(op="finish")]
+    # The newcomer holds the seat in the rematch lobby until the host has read it there.
+    newcomer += capture("newcomer-playing") + [lobby_wait("newcomer"), dict(op="finish")]
     peers = []
     scripts = {}
     for role, display, menu_lines, steps in (("host", "Captain", host_menu, host), ("leaver", "Leaver", leaver_menu, leaver), ("newcomer", "Newcomer", newcomer_menu, newcomer)):
