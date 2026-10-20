@@ -1740,6 +1740,8 @@ namespace RTE {
 		/// Whether this hold, with every hold this peer has installed (and, to sign it, every hold it has signed), would hold every seat of
 		/// the round; to sign it, also whether a seat held or that signed its own hold would hold another. The round keeps a playing seat.
 		bool HoldEmptiesTheRound(const NetHostMigrationMessage& hold, bool signing) const;
+		/// The candidates that accepted, directly or through another held seat, an input of a held owner that is missing here.
+		uint32_t PeerReplacedInputWitnesses(uint64_t frame, const std::vector<uint8_t>& held, uint32_t candidates) const;
 		bool PeerBridgeHasInputConflict(const NetHostMigrationMessage& proposal) const;
 		void ResolvePeerBridgeInputConflicts(uint64_t nowMs);
 		bool DecodePeerBridgeCertificate(const NetHostMigrationMessage& certificate, NetHostMigrationMessage& agreed, uint32_t& voters) const;
