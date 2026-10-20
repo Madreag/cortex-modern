@@ -2305,9 +2305,11 @@ namespace RTE {
 			entry.committed = IsSeated(seat);
 			entry.dropped = IsSeated(seat) && !seat.seat.local && !seat.seat.cpu && IsHolderAway(seat);
 			entry.held = IsSeated(seat) && !seat.seat.local && !seat.seat.cpu && RosterHoldsSeat(seat);
+			bool returning = false;
 			if (const NetRosterSeat* row = RosterSeatOf(seat)) {
 				entry.holdCause = row->holdCause;
 				entry.slowMachine = row->owner != 0 && row->phase == NetSeatPhase::Held && row->holdCause == NetSeatHoldCause::Capacity;
+				returning = row->owner != 0 && (row->phase == NetSeatPhase::RejoinImage || row->phase == NetSeatPhase::RejoinCatchUp);
 			}
 			entry.closed = IsHostOpened(seat);
 			entry.heldForReclaim = IsSeated(seat) && !IsHostOpened(seat);
@@ -2326,7 +2328,8 @@ namespace RTE {
 			entry.holdUntilMs = 0;
 			entry.substituteName = seat.substituteName;
 			entry.displayName = seat.holderName;
-			entry.reclaiming = std::any_of(m_PendingReclaims.begin(), m_PendingReclaims.end(), [&seat](const PendingReclaim& pending) {
+			// The roster brings the player back until it plays again, after its reclaim is answered too.
+			entry.reclaiming = returning || std::any_of(m_PendingReclaims.begin(), m_PendingReclaims.end(), [&seat](const PendingReclaim& pending) {
 				return !pending.superseded && !pending.proofFinished && pending.stableSeat == seat.seat.stableSeat;
 			});
 			const uint64_t awaySince = HolderAwaySinceMs(seat);
