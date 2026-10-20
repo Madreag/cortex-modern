@@ -1070,7 +1070,8 @@ int NetModerationGUI::FillRow(Controls& controls, const PanelRow& row, size_t sl
 	if (row.decision) {
 		const NetH4ModerationSeat& view = row.decision->view;
 		const std::string cause = NetModerationUx::HoldCause(view);
-		detail = "Team " + std::to_string(view.team + 1) + "  /  " + NetPlayerPresentation::State(row.peer, false, view.dropped, view.reclaiming) + (cause.empty() ? "" : "  /  " + cause) +
+		// The state already says a returning player is rejoining.
+		detail = "Team " + std::to_string(view.team + 1) + "  /  " + NetPlayerPresentation::State(row.peer, false, view.dropped, view.reclaiming) + (cause.empty() || view.reclaiming ? "" : "  /  " + cause) +
 		         (view.joinProgress.empty() ? "" : "  /  " + view.joinProgress);
 	}
 	if (!removable && running && !row.opened && !row.cpu) detail += "  /  changes are paused for a moment";

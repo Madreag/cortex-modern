@@ -257,6 +257,8 @@ namespace RTE {
 			return seconds < 60 ? std::to_string(seconds) + " s ago" : std::to_string(seconds / 60) + " min ago";
 		};
 		if (seat.closed) return {};
+		// A player on its way back is rejoining: what kept it away stopped counting when it reached the seat.
+		if (seat.reclaiming) return "Rejoining";
 		switch (seat.holdCause) {
 			case NetSeatHoldCause::Capacity: return "Machine too slow";
 			case NetSeatHoldCause::LateStream: return "Inputs arrived too late";

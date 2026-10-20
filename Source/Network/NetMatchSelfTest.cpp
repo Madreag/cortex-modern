@@ -18598,6 +18598,8 @@ namespace RTE {
 			NetH4ModerationSeat seat; seat.held = true; seat.holdCause = cause;
 			check(!NetModerationUx::HoldCause(seat).empty(), "a connected held seat lost cause " + std::string(NetSeatHoldCauseName(cause)));
 		}
+		NetH4ModerationSeat back; back.held = back.leftByChoice = back.reclaiming = true; back.holdCause = NetSeatHoldCause::Leave;
+		check(NetModerationUx::HoldCause(back) == "Rejoining", "a player on its way back read its old reason: " + NetModerationUx::HoldCause(back));
 		NetMatchConfig rules;
 		rules.players = {{1, 0, false, "Host"}, {0, 1, true, "CPU opponent"}};
 		rules.teamRules[1].technologyIntent = "Coalition.rte";
