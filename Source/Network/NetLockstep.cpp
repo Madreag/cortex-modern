@@ -13258,7 +13258,19 @@ namespace RTE {
 				if (TakePendingPeerDecisions(nowMs)) { m_AdvanceBlock = "decision-pending"; break; }
 				if (ApplyPeerCommittedTail(m_Stats.nextFrame, nowMs)) continue;
 				PreparePeerBridgeInputs(m_Stats.nextFrame, nowMs);
-				if ((m_FrameGroupMembers & (1U << (m_Config.localPeerId - 1))) == 0) { RequestPeerCommittedTail(nowMs); m_AdvanceBlock = "private-peer-tail"; break; }
+				if ((m_FrameGroupMembers & (1U << (m_Config.localPeerId - 1))) == 0) {
+					// No donor plays past the host's named end: a held seat out of committed history ends its round where it stands.
+					if (m_PendingCompleteStop && m_Config.localPeerId != GetHostPeerId()) {
+						DiagnosticLine() << "[net-match] the host ended the round at frame " << m_PendingCompleteStop->frame
+						          << " while this seat was held; the round ends here at applied frame " << m_LastCompletedSimulationTick.value_or(0) << std::endl;
+						m_Stats.timeoutReason = "Complete:" + m_PendingCompleteStop->message;
+						m_PendingCompleteStop.reset();
+						m_State = NetLockstepState::Stopped;
+						m_AdvanceBlock = "agreed-end";
+						break;
+					}
+					RequestPeerCommittedTail(nowMs); m_AdvanceBlock = "private-peer-tail"; break;
+				}
 				(void)ProposePeerBridge(m_Stats.nextFrame, nowMs, true);
 			}
 			if (m_RecoveryDrainThrough) {
