@@ -2348,10 +2348,16 @@ namespace RTE {
 					auto& since = heldByObserver[observer][seat];
 					since = holds ? (since ? since : hub.now) : 0;
 				}
+				// The round's head: an observer that displays frames further back than its own delay and the bound reads the round late, as a
+				// seat held itself does, so the holds it shows are ones the round has already passed.
+				uint64_t head = 0;
+				for (uint8_t observer = 1; observer <= hub.row.seats; ++observer)
+					if (peers[observer - 1]->IsRunning() && !views[observer].contains(observer)) head = std::max(head, worlds[observer - 1].applied);
 				for (uint8_t observer = 1; observer <= hub.row.seats; ++observer) {
 					const auto& peer = *peers[observer - 1];
 					if (!peer.IsRunning()) continue;
 					if (views[observer].contains(observer)) { held[observer] = true; continue; }
+					if (worlds[observer - 1].applied + peer.GetConfig().inputDelayFrames + peer.GetConfig().slowPlayerBoundTicks < head) continue;
 					// A seat cut off or stopped hears no hold or return until it is back: its view waits for it.
 					if (const auto* spell = hub.schedule->Active(observer, hub.now); spell && spell->kind != Spell::Kind::Slow && spell->kind != Spell::Kind::Late) continue;
 					for (const auto& [seat, since]: views[observer]) if (seat >= 1 && seat <= hub.row.seats) held[seat] = true;
