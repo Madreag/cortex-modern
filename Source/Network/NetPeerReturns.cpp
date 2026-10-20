@@ -93,6 +93,10 @@ namespace RTE {
 		auto range = m_PeerTailSendRanges.try_emplace(peer, fromFrame, fromFrame + 1).first;
 		range->second.first = std::min(range->second.first, fromFrame);
 		range->second.second = std::max(range->second.second, fromFrame + 1);
+		// A frame the reader has applied is never sent again, so a range left from before its last read starts past it.
+		if (const auto applied = m_PeerAppliedThrough.find(peer); applied != m_PeerAppliedThrough.end())
+			range->second.first = std::max(range->second.first, applied->second + 1);
+		if (range->second.first >= range->second.second) return;
 		// Resume the earliest pending record when a later request extends the range.
 		const uint64_t firstNeeded = range->second.first;
 		// A future subscription waits until this donor has displayed its first frame.
