@@ -603,10 +603,19 @@ namespace RTE {
 		return pipeline >= NetLockstepCodec::c_MaxFutureFrameSkew ? 0 : NetLockstepCodec::c_MaxFutureFrameSkew - pipeline;
 	}
 
+	uint8_t NetLockstepCoordinator::PeerReturnLeader() const {
+		NET_PLANE_CHECK();
+		// The first playing survivor serves the private return even while the administrative host is held. A seat in its own
+		// return's neutral interval votes on nothing and may already be reading privately again, so it serves no return.
+		for (uint32_t members = m_FrameGroupMembers; members; members &= members - 1) {
+			const uint8_t member = static_cast<uint8_t>(std::countr_zero(members) + 1);
+			if (!IsSeatReclaimGap(member, m_Stats.nextFrame)) return member;
+		}
+		return m_FrameGroupMembers ? static_cast<uint8_t>(std::countr_zero(m_FrameGroupMembers) + 1) : 0;
+	}
+
 	bool NetLockstepCoordinator::ProposePeerReclaim(uint8_t peer, NetPeerId transport, uint32_t incarnation, uint64_t frame, uint64_t trailFrames, std::string* error) {
-		// The first playing survivor serves the private return even while the administrative host is held.
-		const uint8_t returnLeader = m_FrameGroupMembers ? static_cast<uint8_t>(std::countr_zero(m_FrameGroupMembers) + 1) : 0;
-		if (!IsRunning() || m_Config.localPeerId != returnLeader || peer == 0 || peer > m_Config.peerCount ||
+		if (!IsRunning() || m_Config.localPeerId != PeerReturnLeader() || peer == 0 || peer > m_Config.peerCount ||
 		    !m_PeerBridges.contains(peer) || !m_PeerBridges.at(peer).committedHold || transport == c_InvalidNetPeerId || incarnation == 0 || frame <= m_Stats.nextFrame ||
 		    frame - m_Stats.nextFrame > NetLockstepCodec::c_MaxFutureFrameSkew || !PeerGroupHasAuthority(m_FrameGroupMembers)) {
 			if (error) *error = "the private return needs an authoritative group and a future frame";

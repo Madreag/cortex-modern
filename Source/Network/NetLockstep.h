@@ -1202,6 +1202,8 @@ namespace RTE {
 		bool SchedulePeerReclaim(uint8_t peerId, NetPeerId transport, uint32_t incarnation, uint64_t frame, std::string* error = nullptr, uint64_t trailFrames = 0);
 		bool SchedulePeerAdmission(uint8_t peerId, NetPeerId transport, uint32_t incarnation, uint64_t frame, std::string* error = nullptr, uint64_t trailFrames = 0);
 		/// The most frames a private return at the frame may trail by and still fit its neutral interval inside the future-frame skew.
+		/// The member that serves a private return: the first playing survivor, never a seat still in its own return's neutral interval.
+		uint8_t PeerReturnLeader() const;
 		uint64_t PeerReturnTrailRoom(uint8_t peerId, NetPeerId transport, uint64_t frame) const;
 		bool ProposeWorldAdmission(NetPeerId transport, uint32_t incarnation, const NetGameWorldTransition& transition, std::string* error = nullptr);
 		bool HasAgreedSeatReclaim(uint8_t peer, uint64_t frame) const { NET_PLANE_CHECK(); const auto it = m_ReclaimTransactions.find(peer); return it != m_ReclaimTransactions.end() && it->second.activationFrame == frame; }

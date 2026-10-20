@@ -1661,8 +1661,8 @@ namespace RTE {
 			}
 			uint8_t ImageReturnProposer(uint8_t donor) const {
 				// FLAGGED fixture departure: the image source can be any donor; only the first playing survivor proposes reclaim.
-				const uint32_t members = s_FrameMembers(*peers[donor - 1], peers[donor - 1]->GetStats().nextFrame);
-				return members ? static_cast<uint8_t>(std::countr_zero(members) + 1) : donor;
+				const uint8_t leader = peers[donor - 1]->PeerReturnLeader();
+				return leader ? leader : donor;
 			}
 			std::pair<INetTransport*, NetPeerId> ImageReturnRoute(uint8_t sender, uint8_t receiver) const {
 				if (peers[sender - 1]->GetConfig().peerFrameGroups) return s_ReturnRoute(*peers[sender - 1], receiver);
