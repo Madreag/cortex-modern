@@ -501,6 +501,15 @@ namespace RTE {
 					range->second.second = std::max(range->second.second, message.completeFrom);
 				}
 				SendPeerCommittedTail(message.senderPeerId, message.frame);
+				if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) {
+					const auto queued = m_PeerTailOutgoing.find(message.senderPeerId);
+					DiagnosticLine() << "[net-peer-tail-serve] donor=" << static_cast<int>(m_Config.localPeerId) << " reader=" << static_cast<int>(message.senderPeerId)
+					    << " from=" << message.frame << " until=" << message.completeFrom << " displayed=" << m_LastCompletedSimulationTick.value_or(0)
+					    << " reader_applied=" << (m_PeerAppliedThrough.contains(message.senderPeerId) ? m_PeerAppliedThrough.at(message.senderPeerId) : 0)
+					    << " kept_from=" << m_MigrationHistory.contains(message.frame) << " kept_first=" << (m_MigrationHistory.empty() ? 0 : m_MigrationHistory.begin()->first)
+					    << " queued=" << (queued == m_PeerTailOutgoing.end() ? 0 : queued->second.size()) << " sent=" << sent.contains(message.frame)
+					    << " repeat=" << repeats.contains(message.frame) << " deferred=" << m_PeerTailDeferredSends << " now_ms=" << nowMs << std::endl;
+				}
 			}
 			return true;
 		}
