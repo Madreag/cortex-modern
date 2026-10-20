@@ -919,6 +919,7 @@ namespace RTE::MenuAutomation {
 	}
 
 	void AfterDrawnFrame() {
+		NotePanelFramePresented();
 		++Hand::s_DrawnFrames;
 		Hand::Advance();
 	}
@@ -2888,6 +2889,20 @@ namespace RTE::MenuAutomation {
 				EndPanelDrawPass(previous);
 			}
 			check("draw_record_forgets_a_destroyed_managers_panels", PanelDrawAgeMs(&child) < 0, "child_age_ms=" + std::to_string(PanelDrawAgeMs(&child)));
+			// Once frames are counted, a frame slower than the window keeps what it drew on the screen, and a manager that missed it is off.
+			int slowManager = 0, staleManager = 0, slow = 0, stale = 0;
+			NotePanelFramePresented();
+			previous = BeginPanelDrawPass(&staleManager);
+			RecordPanelDraw(&stale);
+			EndPanelDrawPass(previous);
+			NotePanelFramePresented();
+			previous = BeginPanelDrawPass(&slowManager);
+			RecordPanelDraw(&slow);
+			EndPanelDrawPass(previous);
+			std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int>(c_DrawWindowSeconds * 1000) + 50));
+			NotePanelFramePresented();
+			check("draw_record_slow_frame_stays_on_screen", PanelDrawnInLatestPass(&slow, c_DrawWindowSeconds) && !PanelDrawnInLatestPass(&stale, c_DrawWindowSeconds),
+			      "slow_age_ms=" + std::to_string(PanelDrawAgeMs(&slow)));
 			ClearPanelDrawRecord();
 		}
 		{

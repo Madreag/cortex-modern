@@ -17,6 +17,7 @@ namespace RTE {
 		struct DrawPass {
 			uint64_t serial = 0;
 			DrawClock::time_point at;
+			uint64_t frame = 0; //!< The frames on the screen when the pass began.
 		};
 		struct PanelDraw {
 			const void* manager = nullptr;
@@ -30,6 +31,7 @@ namespace RTE {
 		std::unordered_map<const void*, PanelDraw> s_PanelDraws;
 		thread_local const void* s_DrawingManager = nullptr;
 		std::atomic<bool> s_Recording = false;
+		std::atomic<uint64_t> s_PresentedFrames = 0;
 
 		double SecondsSince(DrawClock::time_point at) { return std::chrono::duration<double>(DrawClock::now() - at).count(); }
 	} // namespace
@@ -41,6 +43,7 @@ namespace RTE {
 			DrawPass& pass = s_DrawPasses[manager];
 			++pass.serial;
 			pass.at = DrawClock::now();
+			pass.frame = s_PresentedFrames.load(std::memory_order_relaxed);
 		}
 		const void* previous = s_DrawingManager;
 		s_DrawingManager = manager;
@@ -70,7 +73,11 @@ namespace RTE {
 		}
 		// The GUI layer is cleared every frame, so a panel its manager skipped last pass is off the screen.
 		const auto pass = s_DrawPasses.find(drawn->second.manager);
-		return pass != s_DrawPasses.end() && pass->second.serial == drawn->second.serial && SecondsSince(pass->second.at) <= seconds;
+		if (pass == s_DrawPasses.end() || pass->second.serial != drawn->second.serial) return false;
+		// Where frames are counted, the pass is on the screen while it belongs to the frame shown or the one being drawn, however long
+		// either took; a manager that missed a frame is off it.
+		if (const uint64_t presented = s_PresentedFrames.load(std::memory_order_relaxed); presented > 0) return pass->second.frame + 1 >= presented;
+		return SecondsSince(pass->second.at) <= seconds;
 	}
 
 	double PanelDrawAgeMs(const void* panel) {
@@ -83,6 +90,11 @@ namespace RTE {
 		std::lock_guard lock(s_RecordMutex);
 		s_PanelDraws.clear();
 		s_DrawPasses.clear();
+		s_PresentedFrames.store(0, std::memory_order_relaxed);
+	}
+
+	void NotePanelFramePresented() {
+		if (s_Recording.load(std::memory_order_relaxed)) s_PresentedFrames.fetch_add(1, std::memory_order_relaxed);
 	}
 
 	void ForgetPanelDraws(const void* manager) {
