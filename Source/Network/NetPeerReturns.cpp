@@ -429,6 +429,27 @@ namespace RTE {
 		return false;
 	}
 
+	bool NetLockstepCoordinator::PrivateTailUnusable(uint64_t frame, uint64_t nowMs, const char* reason) {
+		// A private reader that holds records of its next frame it cannot take - none confirmed, or each playing a seat it holds - has
+		// read another continuation: past the referee's tie deadline it returns through a private image instead of asking again.
+		if (m_PeerTailUnconfirmed.first != frame) {
+			m_PeerTailUnconfirmed = {frame, nowMs};
+			return false;
+		}
+		const auto own = m_PeerBridges.find(m_Config.localPeerId);
+		if (nowMs < m_PeerTailUnconfirmed.second + c_NetFrameTieDeadlineMs || own == m_PeerBridges.end() || !own->second.committedHold) return false;
+		m_PeerCommittedTail.erase(frame); m_PeerTailPrefixes.erase(frame); m_PeerPreparedPrefixes.erase(frame);
+		m_PeerTailVotes.erase(frame); m_PeerTailDecisions.erase(frame);
+		m_Stats.nextFrame = GetResumeFrame();
+		m_ReadyFrames.clear();
+		m_LocalSeatHeld = true; m_LocalHoldFrame = std::min(m_Stats.nextFrame, own->second.fromFrame);
+		m_State = NetLockstepState::Stopped;
+		m_Stats.timeoutReason = reason;
+		DiagnosticLine() << "[net-peer-tail-continuation] local=" << static_cast<int>(m_Config.localPeerId) << " frame=" << frame
+		                 << " hold_frame=" << m_LocalHoldFrame << " now_ms=" << nowMs << " action=image_return reason=unusable" << std::endl;
+		return true;
+	}
+
 	bool NetLockstepCoordinator::ApplyPeerCommittedTail(uint64_t frame, uint64_t nowMs) {
 		const auto kept = m_PeerCommittedTail.find(frame);
 		if (kept == m_PeerCommittedTail.end()) return false;
@@ -459,6 +480,7 @@ namespace RTE {
 		// it is set aside unapplied and the frame asked of another donor.
 		for (const auto& [peer, count]: ready.remoteFrameCounts) {
 			if (peer == m_Config.localPeerId || !IsSeatUnderAI(peer, frame)) continue;
+			if (PrivateTailUnusable(frame, nowMs, "PeerHeld:no record of this frame plays the seats this seat holds; returning through a private image")) return false;
 			if (const auto votes = m_PeerTailVotes.find(frame); votes != m_PeerTailVotes.end())
 				for (const auto& [donor, vote]: votes->second) if (vote.bytes == kept->second) { m_PeerTailRequestedOf[frame] = donor; m_PeerTailRequestedUntil[frame] = 0; break; }
 			m_PeerCommittedTail.erase(kept); m_PeerTailPrefixes.erase(frame); m_PeerPreparedPrefixes.erase(frame);

@@ -1768,6 +1768,7 @@ namespace RTE {
 		void RepairPeerReceiptGaps(uint64_t nowMs);
 		void RemovePeerFrameSeat(uint8_t peer, uint64_t frame);
 		bool ApplyPeerCommittedTail(uint64_t frame, uint64_t nowMs);
+		bool PrivateTailUnusable(uint64_t frame, uint64_t nowMs, const char* reason);
 		/// Commit a donor's frame once its group confirms it, with the witnesses this peer received itself as well as those carried in it.
 		bool ConfirmPeerTail(uint64_t frame, uint64_t nowMs);
 		void SendPeerCommittedTail(uint8_t peer, uint64_t fromFrame);
@@ -1830,6 +1831,7 @@ namespace RTE {
 			uint64_t through = 0;
 		};
 		std::map<uint64_t, std::map<uint8_t, PeerTailVote>> m_PeerTailVotes;
+		std::pair<uint64_t, uint64_t> m_PeerTailUnconfirmed{}; //!< The frame this private reader holds unconfirmed records of, and since when.
 		uint64_t m_TailArrivalNamed = 0; //!< The private reader's next frame whose first tail arrival the details lever named.
 		std::map<uint64_t, std::vector<NetHostMigrationMessage>> m_PeerTailDecisions;
 		struct PeerFrameIncoming {
