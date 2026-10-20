@@ -2317,11 +2317,16 @@ namespace {
 		if (button->GetText() != before + shown + after) button->SetText(before + shown + after);
 	}
 
-	/// The seconds an autosave choice's words name ("5 minutes (default)", "90 seconds"); 0 for anything else.
-	uint32_t HostOptAutosaveSecondsOf(const std::string& name) {
+	/// The seconds an autosave choice's words name ("5 minutes (default)", "90 seconds"), whatever the range; 0 for anything else.
+	uint32_t HostOptAutosaveSecondsNamed(const std::string& name) {
 		char* unit = nullptr;
 		const long count = std::strtol(name.c_str(), &unit, 10);
-		const uint32_t seconds = count <= 0 ? 0 : std::string_view(unit).starts_with(" second") ? static_cast<uint32_t>(count) : static_cast<uint32_t>(count) * 60;
+		return count <= 0 ? 0 : std::string_view(unit).starts_with(" second") ? static_cast<uint32_t>(count) : static_cast<uint32_t>(count) * 60;
+	}
+
+	/// The seconds an autosave choice names when a host may pick it; 0 for anything else.
+	uint32_t HostOptAutosaveSecondsOf(const std::string& name) {
+		const uint32_t seconds = HostOptAutosaveSecondsNamed(name);
 		return seconds >= NetMatchService::c_MinAutosaveIntervalSeconds && seconds <= NetMatchService::c_MaxAutosaveIntervalSeconds ? seconds : 0;
 	}
 
@@ -2337,7 +2342,7 @@ namespace {
 		std::vector<std::pair<uint32_t, std::string>> offered;
 		for (int i = 0; i < combo->GetCount(); ++i) {
 			const GUIListPanel::Item* item = combo->GetItem(i);
-			const uint32_t listed = item ? HostOptAutosaveSecondsOf(item->m_Name.Value()) : 0;
+			const uint32_t listed = item ? HostOptAutosaveSecondsNamed(item->m_Name.Value()) : 0;
 			if (listed == seconds) {
 				if (combo->GetSelectedIndex() != i) combo->SetSelectedIndex(i);
 				return;
