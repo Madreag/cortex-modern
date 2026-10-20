@@ -319,8 +319,10 @@ namespace RTE {
 					break;
 				}
 			}
-			// A request that comes after the seat was first seen, or outlives the one chosen, is chosen in its place: the host acts on a named player.
-			if (index == seat.applicants.size() && !seat.applicants.empty()) {
+			// The first request to a seat nobody was chosen on is chosen; one that replaces a chosen player is the host's to pick, never retargeted.
+			if (seat.applicants.empty()) {
+				m_Chosen[seat.stableSeat] = identity;
+			} else if (index == seat.applicants.size() && chosen->second.applicant == c_InvalidNetPeerId) {
 				m_Chosen[seat.stableSeat] = NetSelectModerationSeat(seat, seat.applicants.front().connection);
 				index = 0;
 			}
