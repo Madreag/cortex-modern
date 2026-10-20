@@ -10212,6 +10212,18 @@ namespace RTE {
 		HandleTransportEvents(nowMs);
 		AdjudicatePeerRoundEnds(nowMs);
 		if (UsesPeerFrameGroups() && IsStopped()) return;
+		// A returner's start that arrived before its return's certificate is taken once the certified terms are here.
+		if (UsesPeerFrameGroups() && !m_AwaitingReplayedSeatState && !IsLocalPrivateReaderAt(GetResumeFrame()))
+			for (auto pending = m_PrivateStarts.begin(); pending != m_PrivateStarts.end() && !IsFailed() && !IsStopped();) {
+				const auto bridge = m_PeerBridges.find(pending->first);
+				if (bridge != m_PeerBridges.end() && bridge->second.committedHold && !bridge->second.returnFrame) { ++pending; continue; }
+				const auto taken = pending->second;
+				pending = m_PrivateStarts.erase(pending);
+				const uint8_t previous = m_AuthenticatedPeerMessage;
+				m_AuthenticatedPeerMessage = taken.authenticatedPeer;
+				HandleStart(taken.start, std::max(nowMs, taken.receivedMs), taken.transport);
+				m_AuthenticatedPeerMessage = previous;
+			}
 		CheckHostSilence(nowMs);
 		if (IsMigrating()) {
 			TickHostMigration(nowMs);
@@ -12458,8 +12470,11 @@ namespace RTE {
 				const auto admission = m_PeerAdmissions.find(start.localPeerId);
 				known.startFrame = admission == m_PeerAdmissions.end() ? m_Config.startFrame : admission->second.frame;
 				known.inputDelayFrames = admission == m_PeerAdmissions.end() ? MemberStartDelay(known) : admission->second.delay;
-				// A private reader cannot validate a future member's terms until replay supplies its admission.
-				if (UsesPeerFrameGroups() && (m_AwaitingReplayedSeatState || IsLocalPrivateReaderAt(GetResumeFrame())) &&
+				// A private reader cannot validate a future member's terms until replay supplies its admission, nor a survivor the terms of a
+				// seat it holds before the return's certificate reaches it: a returner that heard the certificate first may start first.
+				const auto held = m_PeerBridges.find(start.localPeerId);
+				const bool returnUnheard = held != m_PeerBridges.end() && held->second.committedHold && !held->second.returnFrame;
+				if (UsesPeerFrameGroups() && (m_AwaitingReplayedSeatState || IsLocalPrivateReaderAt(GetResumeFrame()) || returnUnheard) &&
 				    start.startFrame > known.startFrame && StartMatchesConfig(known)) {
 					const auto pending = m_PrivateStarts.find(start.localPeerId);
 					if (pending == m_PrivateStarts.end() || pending->second.start.startFrame <= start.startFrame)
