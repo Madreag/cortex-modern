@@ -295,7 +295,9 @@ namespace RTE {
 			DiagnosticLine() << "[net-peer-recovery] peer=" << static_cast<int>(m_Config.localPeerId)
 			    << " now_ms=" << nowMs << " applied=" << m_LastCompletedSimulationTick.value_or(0) << " prepared=" << m_Stats.nextFrame
 			    << " donor_applied=" << m_PeerTailThrough.value_or(0) << " certified_ahead=" << m_PeerCommittedTail.size()
-			    << " requests=" << m_PeerTailRequests << std::endl;
+			    << " requests=" << m_PeerTailRequests << " next_committed=" << m_PeerCommittedTail.contains(m_Stats.nextFrame)
+			    << " next_records=" << (m_PeerTailVotes.contains(m_Stats.nextFrame) ? m_PeerTailVotes.at(m_Stats.nextFrame).size() : 0)
+			    << " block=" << m_AdvanceBlock << std::endl;
 		}
 	}
 

@@ -1830,6 +1830,7 @@ namespace RTE {
 			uint64_t through = 0;
 		};
 		std::map<uint64_t, std::map<uint8_t, PeerTailVote>> m_PeerTailVotes;
+		uint64_t m_TailArrivalNamed = 0; //!< The private reader's next frame whose first tail arrival the details lever named.
 		std::map<uint64_t, std::vector<NetHostMigrationMessage>> m_PeerTailDecisions;
 		struct PeerFrameIncoming {
 			uint32_t totalBytes = 0;
