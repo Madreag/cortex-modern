@@ -312,6 +312,15 @@ namespace RTE {
 		}
 		if (voters == 0 || voting == voters) { unasked(voters == 0 ? "no voters" : "the group votes alone"); return; }
 		request.queryOnly = (voting & SeatBit(m_Config.localPeerId)) == 0;
+		// The directory decides at the first group to check in, so a group asks only once its split has settled - the bound and its
+		// longest round trip after its first hold - with the seats it still plays with: a seat cut from everyone holds them a frame or two
+		// apart and would otherwise ask, as a larger half, for seats already gone from it. Until then it queries; nobody waits on it.
+		if (!request.queryOnly && m_Config.frameTieReferee) {
+			uint64_t roundTripMs = 0;
+			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) if (peer != m_Config.localPeerId) roundTripMs = std::max<uint64_t>(roundTripMs, m_Stats.peers[peer].pingMs);
+			const uint64_t settleAt = m_PeerTieSettles.try_emplace(split, nowMs + static_cast<uint64_t>(std::ceil(m_Config.slowPlayerBoundTicks * m_Config.simTickMs)) + roundTripMs, frame).first->second.first;
+			if (nowMs < settleAt) request.queryOnly = true;
+		}
 		// A group smaller than half of the seats that played together before the split asks the referee to rule for it only after the
 		// referee's tie deadline: the larger half's question rules first, so the seat with the problem never decides for the others.
 		// Meanwhile it queries and plays on; it asks for itself only if no larger half did.
@@ -335,7 +344,9 @@ namespace RTE {
 		if (request.members.empty() || request.members.size() >= request.owners.size()) { unasked("no other owner"); return; }
 		// A seat that heard the other half play on keeps asking what was decided: the referee holds one request per seat, and
 		// checking in again would replace the question and lose its answer.
-		if (m_Config.frameTieReferee && m_PeerFrameTie && m_PeerFrameTie->queryOnly && !minorityAsks) {
+		const auto settled = m_PeerTieSettles.find(split);
+		const bool settledAsks = settled != m_PeerTieSettles.end() && settled->second.first == 0 && !request.queryOnly;
+		if (m_Config.frameTieReferee && m_PeerFrameTie && m_PeerFrameTie->queryOnly && !minorityAsks && !settledAsks) {
 			auto asked = *m_PeerFrameTie;
 			asked.members = request.members; asked.queryOnly = request.queryOnly;
 			if (asked == request) request = *m_PeerFrameTie;
@@ -360,6 +371,18 @@ namespace RTE {
 	}
 
 	void NetLockstepCoordinator::PollPeerFrameTies(uint64_t nowMs) {
+		// A split whose group has settled asks for the seats it plays with now.
+		for (auto settle = m_PeerTieSettles.begin(); settle != m_PeerTieSettles.end();) {
+			const uint64_t split = settle->first;
+			if (m_PeerFrameTieWinners.contains(split) || !m_PeerSplitArbitrations.contains(split)) { settle = m_PeerTieSettles.erase(settle); continue; }
+			if (settle->second.first == 0 || nowMs < settle->second.first || !IsRunning() || IsLocalPrivateReaderAt(m_Stats.nextFrame)) { ++settle; continue; }
+			settle->second.first = 0;
+			// The owners are the split's, on the frame before its hold, where the seats it held still voted; the members are the seats
+			// still played with now.
+			const uint64_t asked = settle->second.second;
+			AskPeerFrameTie(split, asked > m_Config.startFrame ? asked - 1 : asked, PeerFrameMembersAt(m_Stats.nextFrame), nowMs);
+			return;
+		}
 		// A smaller group whose grace has passed with its split still open asks for itself.
 		for (auto ask = m_PeerMinorityTieAsks.begin(); ask != m_PeerMinorityTieAsks.end();) {
 			const auto arbitration = m_PeerSplitArbitrations.find(ask->first);

@@ -1904,6 +1904,7 @@ namespace RTE {
 		};
 		std::map<uint64_t, PeerSplitArbitration> m_PeerSplitArbitrations;
 		std::map<uint64_t, std::pair<uint64_t, uint32_t>> m_PeerMinorityTieAsks; //!< A smaller group's own question: when it may ask, and its seats.
+		std::map<uint64_t, std::pair<uint64_t, uint64_t>> m_PeerTieSettles; //!< When each split's first question may decide - once the group it asks for has settled - and the frame it asks at; 0 once asked.
 		uint64_t m_TestBlackoutFrame = UINT64_MAX, m_TestBlackoutDurationMs = 0;
 		std::optional<uint64_t> m_TestBlackoutAtMs;
 		bool m_TestBlackoutEnded = false;
