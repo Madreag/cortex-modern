@@ -477,6 +477,21 @@ namespace RTE {
 				if (directory.Count("remove") != 3 || sent.value("token", std::string()) != "successor-token" || sent.value("host_generation", 0) != 1 || sent.value("participant", std::string()) != Hex(banned)) {
 					*error = "a ban queued across the host's leave never reached the directory under its successor"; return false;
 				}
+				// The host lifts the ban: the directory takes back its removal record.
+				host.Readmit(banned, "Banned player");
+				pump(5);
+				sent = directory.Last("remove");
+				if (directory.Count("remove") != 4 || sent.value("action", std::string()) != "lifted" || sent.value("participant", std::string()) != Hex(banned)) {
+					*error = "a lifted ban never reached the directory: removals=" + std::to_string(directory.Count("remove")) + " action=" + sent.value("action", std::string()); return false;
+				}
+				// A removal the directory never recorded is withdrawn, not answered.
+				NetParticipantId waiting{}; waiting.fill(0x7c);
+				host.SetDirectory(directory.sessionId);
+				host.Remove(waiting, "Waiting player", true);
+				host.Readmit(waiting, "Waiting player");
+				host.SetDirectory(directory.sessionId, "successor-token", 1);
+				pump(5);
+				if (directory.Count("remove") != 4) { *error = "a removal lifted before it reached the directory was still sent"; return false; }
 				std::cout << "[net-directory-selftest] PASS removal_with_no_host_token_waits_for_one" << std::endl;
 				return true;
 			}
