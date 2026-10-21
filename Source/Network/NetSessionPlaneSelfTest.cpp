@@ -2902,7 +2902,8 @@ namespace RTE {
 					    << " applied=" << report.applied << " horizon=" << fixture.worlds[donor - 1].applied
 					    << " capacity_ratio=" << join.FindSession(12)->headroom.Ratio() << std::endl;
 				}
-				if (activation && !proposed) {
+				// The donor's service runs on its main loop: hung or stopped, it proposes nothing until it resumes.
+				if (activation && !proposed && fixture.ImageDonorCanAnswer(donor) && !(fixture.hub.schedule && fixture.hub.schedule->Is(donor, fixture.hub.now, Spell::Kind::Stopped))) {
 					// Flagged fixture correction: the service carries the measured private-reader trail into the
 					// temporary activation gap. Dropping it asks for input before that reader can produce it.
 					const auto* session = join.FindSession(12);
