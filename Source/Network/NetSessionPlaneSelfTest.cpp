@@ -1556,8 +1556,10 @@ namespace RTE {
 			}
 			std::string UnreconvergedSeparations() const {
 				// A seat still replaying its image at the end - one whose machine cannot catch up stays there - has not yet replaced its history.
+				// A seat whose player left or was removed has no machine left to reconverge: its player comes back, if ever, through a new return.
+				const auto gone = [&](uint8_t seat) { return hub.schedule && hub.schedule->Left(seat, hub.now); };
 				for (uint8_t a = 1; a <= hub.row.seats; ++a) for (uint8_t b = a + 1; b <= hub.row.seats; ++b)
-					if (pairSeparatedFrom[a][b] && !imageReading[a - 1] && !imageNeeded[a - 1] && !imageReading[b - 1] && !imageNeeded[b - 1])
+					if (pairSeparatedFrom[a][b] && !imageReading[a - 1] && !imageNeeded[a - 1] && !imageReading[b - 1] && !imageNeeded[b - 1] && !gone(a) && !gone(b))
 					return "histories differ from displayed frame " + std::to_string(pairSeparatedFrom[a][b]) + ": peers " + std::to_string(a) + " and " + std::to_string(b) +
 					       " parted under a proven split and were never reconverged by an image return";
 				return {};
