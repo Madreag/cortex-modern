@@ -11233,7 +11233,11 @@ static std::string ResyncSaveName() {
 
 	NetKickBanResult NetMatchService::ApplyUnbanLocked(const NetAuthBytes32& identity) {
 		std::string error;
+		const auto bans = m_BanStore.List();
+		const bool banned = std::any_of(bans.begin(), bans.end(), [&](const NetHostBanRecord& ban) { return ban.identity == identity; });
 		m_LastKickBanResult = m_BanStore.Unban(identity, &error) ? NetKickBanResult::Ok : NetKickBanResult::PersistenceFailed;
+		// A lifted ban lets its player ask for a seat in the running match too, the same tick; a kick stays.
+		if (m_LastKickBanResult == NetKickBanResult::Ok && banned && m_ReconnectHost.LiftParticipantBan(identity)) PublishModerationView();
 		return m_LastKickBanResult;
 	}
 

@@ -345,6 +345,19 @@ namespace RTE {
 		m_Operations[key] = std::move(operation);
 	}
 
+	void NetConnectionAuthority::Readmit(const NetParticipantId& player, const std::string& name) {
+		std::lock_guard lock(m_Mutex);
+		const std::string key = "remove:" + Hex(player);
+		const bool known = m_Removals.erase(key) != 0;
+		// A removal the directory has not recorded yet is simply never sent.
+		if (const auto queued = m_Operations.find(key); queued != m_Operations.end() && !queued->second.request) { m_Operations.erase(queued); return; }
+		if (!known || m_SessionId.empty()) return;
+		Operation operation; operation.removal = true;
+		operation.body = json{{"connection_protocol", NetSeatLease::c_Version}, {"operation", "remove"}, {"token", m_HostToken}, {"host_generation", m_HostGeneration},
+			{"participant", Hex(player)}, {"name", name}, {"action", "lifted"}}.dump();
+		m_Operations[key] = std::move(operation);
+	}
+
 	std::unique_ptr<NetHttpClient> NetConnectionAuthority::StartRequest(const std::string& method, const std::string& body, int timeoutMs) {
 		if (m_BaseUrl.empty() || m_SessionId.empty()) return nullptr;
 		auto request = std::make_unique<NetHttpClient>();

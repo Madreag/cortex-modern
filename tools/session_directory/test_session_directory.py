@@ -3915,6 +3915,17 @@ class ConnectionAuthorityTests(unittest.TestCase):
         with self.assertRaises(ConnectionErrorReply):
             self.store.connection_request(self.sid, self.issue, self.now, INSTALL_KEY)
 
+    def test_a_lifted_ban_lets_the_player_take_a_seat_again(self) -> None:
+        self.check()
+        removal = dict(connection_protocol=session_directory.CONNECTION_PROTOCOL, operation="remove", token=self.row["token"], host_generation=0,
+                       participant=self.issue["participant"], name="Original player", action="banned")
+        self.store.connection_request(self.sid, removal, self.now, INSTALL_KEY)
+        with self.assertRaises(ConnectionErrorReply):
+            self.store.connection_request(self.sid, self.issue, self.now, INSTALL_KEY)
+        self.store.connection_request(self.sid, dict(removal, action="lifted"), self.now, INSTALL_KEY)
+        self.store.connection_request(self.sid, self.issue, self.now, INSTALL_KEY)
+        self.assertEqual(self.check()["seat"], 1)
+
     def test_a_clock_refusal_names_the_directory_time(self) -> None:
         self.assertEqual(self.check()["directory_time"], int(self.wall))
         self.assertEqual(self.store.connection_bootstrap(self.sid, self.now)["directory_time"], int(self.wall))

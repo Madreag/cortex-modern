@@ -1847,6 +1847,27 @@ namespace RTE {
 		}), m_PendingReclaims.end());
 	}
 
+	bool NetReconnectHost::LiftParticipantBan(const NetAuthBytes32& participantId) {
+		const bool removed = m_RemovedParticipants.erase(participantId) != 0;
+		std::string name;
+		if (const auto named = m_RemovedNames.find(participantId); named != m_RemovedNames.end()) { name = named->second; m_RemovedNames.erase(named); }
+		NetRosterEvent event;
+		event.kind = NetRosterEventKind::BanLifted;
+		event.owner = NetRosterOwnerIdOf(participantId);
+		event.nowMs = m_NowMs;
+		const NetRosterResult result = RTE::ApplyRosterEvent(m_Roster, event);
+		if (result.changed) {
+			DiagnosticLine() << "[roster] rev=" << result.roster.revision << ' ' << NetRosterEventName(event.kind) << ": " << result.reason << std::endl;
+			m_Roster = result.roster;
+			SendRoster();
+		}
+		if (!removed && !result.changed) return false;
+		// The directory refuses a removed player's seat on its own record, so the lift reaches it too.
+		if (m_ConnectionAuthority) m_ConnectionAuthority->Readmit(participantId, name);
+		++m_StateRevision;
+		return true;
+	}
+
 	NetKickBanResult NetReconnectHost::RemoveParticipant(const NetModerationSelection& selection, NetParticipantRemovalAction action, uint64_t nowMs, uint64_t unixNowMs, uint64_t sessionId, uint32_t round, uint64_t boundaryFrame, NetParticipantRemovalIssue& issued) {
 		issued = {};
 		m_NowMs = std::max(m_NowMs, nowMs);

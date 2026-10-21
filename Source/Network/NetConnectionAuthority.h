@@ -123,6 +123,8 @@ namespace RTE {
 		/// ticket. The directory signs exactly that match, seat, holder and key.
 		Result Issue(NetSeatLease requested, const std::string& name, NetSeatLease& issued, std::string& error);
 		void Remove(const NetParticipantId& player, const std::string& name, bool ban);
+		/// Takes back a removal whose ban the host lifted, so the directory issues the player a seat again.
+		void Readmit(const NetParticipantId& player, const std::string& name);
 		bool AdoptLocalLease(const NetSeatLease& lease);
 		/// Restores a disk record for proof at the authority; it is not admission.
 		bool RestoreLease(const NetSeatLease& lease);

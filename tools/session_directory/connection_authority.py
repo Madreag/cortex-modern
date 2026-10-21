@@ -339,11 +339,15 @@ class ConnectionAuthority:
         participant = bounded_hex(data, "participant", 32).hex()
         name = player_name(data.get("name"))
         action = data.get("action")
-        if action not in ("removed", "banned"):
+        if action not in ("removed", "banned", "lifted"):
             raise ConnectionErrorReply(400, "connection_request", "Choose Remove or Ban for this player.")
         with self._lock:
             record = self._match(sid, now)
-            record["removed"][participant] = dict(name=name, action=action)
+            # A ban the host lifted lets the player take a seat again.
+            if action == "lifted":
+                record["removed"].pop(participant, None)
+            else:
+                record["removed"][participant] = dict(name=name, action=action)
             record["route_revision"] += 1
             self._save(sid, record)
             return {"ok": True, "connection_protocol": CONNECTION_PROTOCOL}

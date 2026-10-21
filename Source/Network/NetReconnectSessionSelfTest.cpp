@@ -3739,6 +3739,81 @@ namespace RTE {
 
 		// D54.6: a seat the round holds with its player's link open is the roster's held seat: a newcomer may apply for it and the host
 		// sees the application, exactly as for a seat whose link dropped; its player's return in place gives it back.
+		// A player the host banned and then let back asks for a seat in the running match: the lifted ban releases the
+		// application path the same tick, the roster's ban list included; nothing gives the seat back by itself.
+		int TestALiftedBanLetsThePlayerApplyAgain() {
+			ScriptedAuthCrypto crypto;
+			ScopedTestCrypto scope(&crypto);
+			std::string error;
+			if (!ResetLaneDirectory(&error)) {
+				return Fail(error);
+			}
+			const auto lane = std::filesystem::temp_directory_path() / "cccp-lifted-ban";
+			std::error_code code;
+			std::filesystem::remove_all(lane, code);
+			std::filesystem::create_directories(lane, code);
+			NetHostBanStore store;
+			store.SetPath((lane / "NetworkBans").string());
+			if (!store.Load(&error)) {
+				return Fail("the empty ban store did not load: " + error);
+			}
+			uint64_t unixNow = 1'700'000'000'000ULL;
+			Wire wire;
+			ConfigureWire(wire);
+			wire.host.SetBanStore(&store);
+			Endpoint holder;
+			holder.connection = 191;
+			ConfigureEndpoint(holder, "lifted-holder", &unixNow);
+			wire.Add(&holder);
+			const NetAuthBytes32 holderId = Ramp<32>(0x61);
+			wire.host.BindParticipantId(holder.connection, holderId);
+			NetH4TicketRecord record;
+			if (SeatAndDrop(wire, holder, record, unixNow, &error) != 0) {
+				return Fail("could not drop a seat: " + error);
+			}
+			NetModerationSelection selected{};
+			for (const auto& view: wire.host.GetModerationView())
+				if (view.stableSeat == record.stableSeat) selected = NetSelectModerationSeat(view);
+			const uint64_t sessionId = 0x6161;
+			NetParticipantRemovalIssue issued;
+			if (wire.host.RemoveParticipant(selected, NetParticipantRemovalAction::BanSession, wire.nowMs, unixNow, sessionId, 1, 90, issued) != NetKickBanResult::Ok ||
+			    store.List().size() != 1 || store.List().front().identity != holderId || wire.host.GetRoster().banned.size() != 1) {
+				return Fail("the held player was not banned: roster bans=" + std::to_string(wire.host.GetRoster().banned.size()));
+			}
+			const auto apply = [&](NetPeerId connection, const char* name, Endpoint& applicant) {
+				applicant.connection = connection;
+				ConfigureEndpoint(applicant, name, &unixNow);
+				wire.Add(&applicant);
+				wire.host.BindParticipantId(applicant.connection, holderId);
+				wire.nowMs += NetReconnectAdmission::c_AttemptIntervalMs;
+				return applicant.client.BeginApplication(record.stableSeat, wire.nowMs, &error) && wire.Pump(&error);
+			};
+			Endpoint banned;
+			if (!apply(192, "lifted-banned", banned) || banned.client.GetState() == NetH4ClientState::Joined || wire.host.GetApplicantCount() != 0) {
+				return Fail("a banned player's application was taken: " + std::string(NetReconnectClientStateName(banned.client.GetState())) + " " + error);
+			}
+			// The host's Remove ban: the store and the running match let the player back together.
+			if (!store.Unban(holderId) || !wire.host.LiftParticipantBan(holderId) || !wire.host.GetRoster().banned.empty()) {
+				return Fail("the lifted ban stayed in the running match: roster bans=" + std::to_string(wire.host.GetRoster().banned.size()));
+			}
+			const uint8_t seatId = static_cast<uint8_t>(record.stableSeat + 1);
+			if (wire.host.GetRoster().Find(seatId)->owner != 0) {
+				return Fail("a lifted ban gave the seat back without an application");
+			}
+			Endpoint back;
+			if (!apply(193, "lifted-back", back)) {
+				return Fail("the lifted player's application did not settle: " + error);
+			}
+			if (wire.host.SubstituteApplicant(record.stableSeat, back.connection, wire.nowMs) != NetH4ModerationResult::Ok || !wire.Pump(&error) ||
+			    back.client.GetState() != NetH4ClientState::Joined || wire.host.GetRoster().Find(seatId)->owner != NetRosterOwnerIdOf(holderId)) {
+				return Fail(std::string("the lifted player could not take the open seat it applied for: client=") + NetReconnectClientStateName(back.client.GetState()) +
+				            " applicants=" + std::to_string(wire.host.GetApplicantCount()) + " owner=" + std::to_string(wire.host.GetRoster().Find(seatId)->owner) + " " + error);
+			}
+			std::filesystem::remove_all(lane, code);
+			std::cout << "[net-reconnect-session-selftest] PASS a_lifted_ban_lets_the_player_apply_again" << std::endl;
+			return 0;
+		}
+
 		int TestANewcomerAppliesForASeatHeldInPlace() {
 			ScriptedAuthCrypto crypto;
 			ScopedTestCrypto scope(&crypto);
@@ -9813,6 +9888,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestANewcomerAppliesForASeatHeldInPlace(); result != 0) {
+			return result;
+		}
+		if (const int result = TestALiftedBanLetsThePlayerApplyAgain(); result != 0) {
 			return result;
 		}
 		if (const int result = TestCleanLeaverKeepsTheSeat(); result != 0) {
