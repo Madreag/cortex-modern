@@ -712,7 +712,15 @@ namespace RTE {
 			DiagnosticLine() << "[roster] refused " << NetRosterEventName(kind) << " seat=" << static_cast<int>(event.seat) << ": " << result.reason << std::endl;
 			return;
 		}
-		if (!result.changed) return;
+		if (!result.changed) {
+			// An event the roster keeps says why once, so a hold that never lands is in the log.
+			static std::map<std::pair<int, int>, std::string> s_Kept;
+			if (std::string& last = s_Kept[{static_cast<int>(kind), static_cast<int>(event.seat)}]; last != result.reason) {
+				last = result.reason;
+				DiagnosticLine() << "[roster] kept " << NetRosterEventName(kind) << " seat=" << static_cast<int>(event.seat) << ": " << result.reason << std::endl;
+			}
+			return;
+		}
 		const NetRosterSeat* before = held;
 		const NetRosterSeat* after = result.roster.Find(event.seat);
 		DiagnosticLine() << "[roster] rev=" << result.roster.revision << " seat=" << static_cast<int>(event.seat) << ' ' << NetRosterEventName(kind) << ' '
@@ -827,7 +835,8 @@ namespace RTE {
 
 	namespace {
 		bool IsInPlaceCause(NetSeatHoldCause cause) {
-			return cause == NetSeatHoldCause::Capacity || cause == NetSeatHoldCause::LateStream || cause == NetSeatHoldCause::Quiet || cause == NetSeatHoldCause::TimingAck || cause == NetSeatHoldCause::OwnSeat;
+			return cause == NetSeatHoldCause::Capacity || cause == NetSeatHoldCause::LateStream || cause == NetSeatHoldCause::Quiet || cause == NetSeatHoldCause::TimingAck || cause == NetSeatHoldCause::OwnSeat ||
+			       cause == NetSeatHoldCause::Leave;
 		}
 	}
 
@@ -2304,9 +2313,12 @@ namespace RTE {
 			entry.committed = IsSeated(seat);
 			entry.dropped = IsSeated(seat) && !seat.seat.local && !seat.seat.cpu && IsHolderAway(seat);
 			entry.held = IsSeated(seat) && !seat.seat.local && !seat.seat.cpu && RosterHoldsSeat(seat);
+			bool returning = false;
 			if (const NetRosterSeat* row = RosterSeatOf(seat)) {
 				entry.holdCause = row->holdCause;
 				entry.slowMachine = row->owner != 0 && row->phase == NetSeatPhase::Held && row->holdCause == NetSeatHoldCause::Capacity;
+				returning = row->owner != 0 && (row->phase == NetSeatPhase::RejoinImage || row->phase == NetSeatPhase::RejoinCatchUp);
+				entry.joining = row->owner != 0 && row->joining && row->phase == NetSeatPhase::Held;
 			}
 			entry.closed = IsHostOpened(seat);
 			entry.heldForReclaim = IsSeated(seat) && !IsHostOpened(seat);
@@ -2325,7 +2337,8 @@ namespace RTE {
 			entry.holdUntilMs = 0;
 			entry.substituteName = seat.substituteName;
 			entry.displayName = seat.holderName;
-			entry.reclaiming = std::any_of(m_PendingReclaims.begin(), m_PendingReclaims.end(), [&seat](const PendingReclaim& pending) {
+			// The roster brings the player back until it plays again, after its reclaim is answered too.
+			entry.reclaiming = returning || std::any_of(m_PendingReclaims.begin(), m_PendingReclaims.end(), [&seat](const PendingReclaim& pending) {
 				return !pending.superseded && !pending.proofFinished && pending.stableSeat == seat.seat.stableSeat;
 			});
 			const uint64_t awaySince = HolderAwaySinceMs(seat);

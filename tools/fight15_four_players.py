@@ -37,7 +37,7 @@ def host_menu():
     count = len(PLAYERS)
     lines = ["wait_ms 1800", "activate ButtonMainToMultiplayer", "wait_ms 600", "assert_substate Landing",
              "settext TextMultiplayerName Captain", "activate ButtonMultiplayerHostGame", "wait_ms 500", "assert_substate HostSetup",
-             "combo_select ComboHostActivity Skirmish Defense", "combo_select ComboHostScene Grasslands",
+             "combo_select ComboHostActivity Skirmish Defense", "wait_combo ComboHostScene Grasslands", "combo_select ComboHostScene Grasslands",
              # Players versus AI seats every human on one team and adds the CPU team the fight is against.
              "combo_select ComboHostMode Players versus AI", "setup_host_port {PORT}", f"combo_select ComboHostPlayers {count}",
              "activate ButtonHostOptions", "wait_ms 500", "assert_substate HostOptions", "activate TabHostPageConnection",

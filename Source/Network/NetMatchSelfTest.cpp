@@ -67,6 +67,7 @@
 #include <array>
 #include <cmath>
 #include <atomic>
+#include <cctype>
 #include <chrono>
 #include <cstdlib>
 #include <future>
@@ -18561,6 +18562,15 @@ namespace RTE {
 		check(!NetPlayerPresentation::OwnSeatHeld(connected, held, false), "an opened authoritative seat retains a cached hold");
 		check(NetPlayerPresentation::OwnSeatHeld(connected, std::nullopt, false) && !NetPlayerPresentation::OwnSeatHeld(connected, std::nullopt, true),
 		      "local cached holds ignore an authoritative release when no roster view exists");
+		// The session's own error text never reaches the player; a sentence already in the player's words passes through.
+		for (const std::string internal: {"timed out waiting for lockstep start", "session 4096: refused by peer", "rematch roster: not enough players for a rematch"}) {
+			const std::string words = NetPlayerPresentation::StatusWords(internal);
+			check(words != internal && !words.empty() && std::isupper(static_cast<unsigned char>(words.front())), "the player reads the session's error text: " + words);
+		}
+		check(NetPlayerPresentation::StatusWords("The other players left the match") == "The other players left the match", "a player sentence was rewritten");
+		NetReconnectUx offered;
+		offered.OfferStoredTicket(NetH4TicketLoadResult::Loaded, "192.0.2.1:49410", "Captain's match");
+		check(offered.GetOfferText().find("until the host gives it away") != std::string::npos, "the rejoin offer makes no promise about the seat: " + offered.GetOfferText());
 		struct AlertCase { bool known; bool initialized; bool local; bool notifyEnabled; bool soundEnabled; bool notify; bool sound; };
 		for (const AlertCase arrival : {AlertCase{false, true, false, true, true, true, true},
 		    {false, true, false, true, false, true, false}, {false, true, false, false, true, false, true},
@@ -18588,6 +18598,10 @@ namespace RTE {
 			NetH4ModerationSeat seat; seat.held = true; seat.holdCause = cause;
 			check(!NetModerationUx::HoldCause(seat).empty(), "a connected held seat lost cause " + std::string(NetSeatHoldCauseName(cause)));
 		}
+		NetH4ModerationSeat back; back.held = back.leftByChoice = back.reclaiming = true; back.holdCause = NetSeatHoldCause::Leave;
+		check(NetModerationUx::HoldCause(back) == "Rejoining", "a player on its way back read its old reason: " + NetModerationUx::HoldCause(back));
+		NetH4ModerationSeat arriving; arriving.held = arriving.dropped = arriving.joining = true; arriving.holdCause = NetSeatHoldCause::LinkDrop;
+		check(NetModerationUx::HoldCause(arriving) == "Joining", "a newcomer on its way to the seat read as lost: " + NetModerationUx::HoldCause(arriving));
 		NetMatchConfig rules;
 		rules.players = {{1, 0, false, "Host"}, {0, 1, true, "CPU opponent"}};
 		rules.teamRules[1].technologyIntent = "Coalition.rte";

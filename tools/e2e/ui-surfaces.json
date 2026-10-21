@@ -181,8 +181,8 @@
       "what": "Autosave enables its interval field, clamps a typed 30 to the sixty-second minimum, then disables it when unchecked.",
       "assert": "menu assertions in the marked interval",
       "events": [
-        "assert_enabled TextHostRecAutosaveInterval expected=1 actual=1 PASS",
-        "assert_enabled TextHostRecAutosaveInterval expected=0 actual=0 PASS"
+        "assert_enabled ComboHostRecAutosaveInterval expected=1 actual=1 PASS",
+        "assert_enabled ComboHostRecAutosaveInterval expected=0 actual=0 PASS"
       ],
       "run": [
         "640x360",
@@ -247,12 +247,12 @@
       "peer": "host",
       "mark": "ui-seat-dialog-other",
       "screen": "MultiplayerScreen",
-      "what": "Before the first round, the empty seat names its absent holder, disables Kick and Ban, and Close dismisses the dialog.",
+      "what": "In the lobby the connected player's seat offers Kick and Ban once admission seats the player, and Close dismisses the dialog.",
       "assert": "menu assertions in the marked interval",
       "events": [
-        "assert_label LabelHostSeatDlgActionHint .*No player holds this seat[.].*PASS",
-        "assert_enabled ButtonHostSeatDlgKick expected=0 actual=0 PASS",
-        "assert_enabled ButtonHostSeatDlgBan expected=0 actual=0 PASS"
+        "assert_label LabelHostSeatDlgActionHint .*Seat actions apply to this player[.].*PASS",
+        "assert_enabled ButtonHostSeatDlgKick expected=1 actual=1 PASS",
+        "assert_enabled ButtonHostSeatDlgBan expected=1 actual=1 PASS"
       ],
       "run": [
         "640x360",

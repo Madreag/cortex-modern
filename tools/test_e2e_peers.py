@@ -628,6 +628,19 @@ class WindowsJoinersTest(unittest.TestCase):
                 peers.check_windows_paths(boxes, run, "run0", Path("."), longest)
         self.assertEqual(peers.longest_data_path(Path(peers.__file__).resolve().parents[1]), longest)
 
+    def test_a_newcomer_scene_picks_relay_only_by_hand_before_multiplayer(self):
+        document = peers.scene("fight15-s23")
+        self.assertNotIn("NetworkConnectionMode", document["peers"][0]["settings"])
+        peers.check_scene(document)
+        for change in ("drop", "late"):
+            changed = copy.deepcopy(document)
+            menu = changed["scripts"]["host.menu"].replace("combo_select ComboNetworkConnection Relay only\n", "")
+            if change == "late":
+                menu += "combo_select ComboNetworkConnection Relay only\n"
+            changed["scripts"]["host.menu"] = menu
+            with self.subTest(change=change), self.assertRaisesRegex(ValueError, "must select RelayOnly"):
+                peers.check_scene(changed)
+
     def test_a_scene_names_one_host_and_lowercase_players(self):
         document = peers.scene("fight15-s11")
         for names in (("host", "host", "joiner1"), ("host",), ("host", "Joiner1"), ("host", "joiner1", "joiner1")):
@@ -640,7 +653,7 @@ class WindowsJoinersTest(unittest.TestCase):
 class LobbyIdentityTest(unittest.TestCase):
     """A joiner joins the lobby its own run's host opened, and a run never starts on a port another lobby lists."""
 
-    SCENES = [f"fight15-s{number:02d}" for number in range(1, 14)]
+    SCENES = sorted(path.stem for path in (Path(peers.__file__).parent / "e2e").glob("fight15-s[0-9][0-9].json"))
     LOBBY = "{PROBE_DIR_host}/lobby.json"
 
     def test_every_two_box_joiner_joins_its_own_hosts_lobby(self):

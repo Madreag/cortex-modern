@@ -74,8 +74,14 @@ namespace RTE {
 		return text.str();
 	}
 
+	std::string NetMatchSummary::PlayerText() const {
+		const std::string& shown = shownResult.empty() ? result : shownResult;
+		return playerReason.empty() ? shown : shown + " - " + playerReason;
+	}
+
 	std::string NetMatchSummary::LineText() const {
-		std::string text = "Last match: " + (winnerTeam < 0 ? (result == "Match complete" || result == "Match over: draw" ? std::string("draw") : std::string("No result - ") + result) : "Team " + std::to_string(winnerTeam + 1) + " wins");
+		const std::string& shown = shownResult.empty() ? result : shownResult;
+		std::string text = "Last match: " + (winnerTeam < 0 ? (shown == "Match complete" || shown == "Match over: draw" ? std::string("draw") : std::string("No result - ") + shown) : "Team " + std::to_string(winnerTeam + 1) + " wins");
 		text += " | " + DurationText() + " | ";
 		for (size_t i = 0; i < peers.size(); ++i) text += (i ? ", " : "") + peers[i].name;
 		std::replace_if(text.begin(), text.end(), [](unsigned char c) { return c < 32 || c == 127; }, ' ');
@@ -230,6 +236,11 @@ namespace RTE {
 		UpdateSummarySeatsLocked();
 		m_CurrentMatchSummary.result = result.empty() ? "Match complete" : result;
 		const auto* activity = dynamic_cast<const GameActivity*>(g_ActivityMan.GetActivity());
+		// The activity's own end reason names a script line and ticks: it stays in the result for the details and the log.
+		const std::string internal = activity && !activity->GetMatchEndReason().empty() ? " - " + activity->GetMatchEndReason() : std::string();
+		const std::string& full = m_CurrentMatchSummary.result;
+		m_CurrentMatchSummary.shownResult = !internal.empty() && full.ends_with(internal) ? full.substr(0, full.size() - internal.size()) : full;
+		m_CurrentMatchSummary.playerReason = activity ? activity->GetMatchEndPlayerReason() : std::string();
 		m_CurrentMatchSummary.winnerTeam = m_ReceivedEndWinner ? *m_ReceivedEndWinner : activity ? activity->GetWinnerTeam() : Activity::NoTeam;
 		m_CurrentMatchSummary.runningTicks = m_ReceivedEndWinner ? m_CompletedRoundFinalFrame : ScenarioRunner::GetLockstepAppliedFrame();
 		m_CurrentMatchSummary.paceJson = ::BuildLoopPaceJson();
@@ -2720,7 +2731,7 @@ static std::string ResyncSaveName() {
 			const std::string ended = m_HostEndReason.empty() ? result : std::exchange(m_HostEndReason, std::string());
 			displayResult = ended;
 			CaptureMatchSummaryLocked(ended);
-			if (m_LastMatchSummary) displayResult = m_LastMatchSummary->result;
+			if (m_LastMatchSummary) displayResult = m_LastMatchSummary->PlayerText();
 			m_HeldRejoinDriving = false;
 			heldSeatNeedsAnswer = m_IsHost && m_Coordinator && m_Coordinator->AnyHeldAISeat();
 			if (m_IsHost) m_ReconnectHost.SetMatchEnded();
@@ -2806,7 +2817,7 @@ static std::string ResyncSaveName() {
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			CaptureMatchSummaryLocked(result);
 			RememberTicketRoutesLocked(true, handover);
-			if (m_LastMatchSummary) displayResult = m_LastMatchSummary->result;
+			if (m_LastMatchSummary) displayResult = m_LastMatchSummary->PlayerText();
 			if (m_IsHost && !handover) {
 				m_ReconnectHost.SetMatchEnded();
 				if (m_MatchWasRunning) NoteHostEndedTheMatchLocked();
@@ -5536,10 +5547,22 @@ static std::string ResyncSaveName() {
 		for (const uint8_t peer: m_ReconnectHost.ReturningPeers())
 			if (m_Coordinator->SeatPlaysAtFrame(peer, next - 1)) m_ReconnectHost.NoteReturnCaughtUp(peer);
 		// The round's own hold of a playing seat whose link stays open is the roster's too, and so is that seat's return in place.
-		for (const uint8_t peer: m_ReconnectHost.PlayingPeers())
-			if (m_Coordinator->HasHeldAISeat(peer) && m_Coordinator->IsSeatUnderAI(peer, next - 1) && m_Coordinator->IsSeatHoldVisible(peer))
+		for (const uint8_t peer: m_ReconnectHost.PlayingPeers()) {
+			const bool held = m_Coordinator->HasHeldAISeat(peer), underAI = m_Coordinator->IsSeatUnderAI(peer, next - 1), visible = m_Coordinator->IsSeatHoldVisible(peer);
+			const bool fed = held && underAI && visible;
+			if (fed)
 				m_ReconnectHost.NoteSeatHeldInPlace(peer, peer == m_Coordinator->GetHostPeerId() ? NetSeatHoldCause::OwnSeat :
-					    m_Coordinator->IsHeldAsSlowMachine(peer) ? NetSeatHoldCause::Capacity : NetSeatHoldCause::LateStream);
+					    m_Coordinator->IsHeldAsSlowMachine(peer) ? NetSeatHoldCause::Capacity :
+					    m_Coordinator->HasDeclaredLeave(peer) ? NetSeatHoldCause::Leave : NetSeatHoldCause::LateStream);
+			// A seat the round bridges while the roster still says it plays says why, once per change.
+			static std::map<uint8_t, int> s_Waiting;
+			const bool bridged = m_Coordinator->SeatBridgeTimes().contains(peer), declared = m_Coordinator->HasDeclaredLeave(peer);
+			const int state = (bridged || held || declared) ? 1 | (bridged << 1) | (held << 2) | (underAI << 3) | (visible << 4) | (declared << 5) | (fed << 6) : 0;
+			if (std::exchange(s_Waiting[peer], state) != state && state != 0)
+				System::PrintDiagnosticLine("[roster] round holds peer=" + std::to_string(peer) + " frame=" + std::to_string(next - 1) + " roster playing: bridged=" +
+				                            std::to_string(bridged) + " ai_held=" + std::to_string(held) + " under_ai=" + std::to_string(underAI) + " visible=" +
+				                            std::to_string(visible) + " declared_leave=" + std::to_string(declared) + " fed=" + std::to_string(fed));
+		}
 		for (const uint8_t peer: m_ReconnectHost.HeldInPlacePeers())
 			if (m_Coordinator->SeatPlaysAtFrame(peer, next - 1)) m_ReconnectHost.NoteSeatPlaysAgain(peer);
 	}

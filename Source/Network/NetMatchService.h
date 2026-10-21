@@ -340,6 +340,8 @@ namespace RTE {
 			uint64_t longestWaitMs = 0;
 		};
 		std::string result;
+		std::string shownResult; //!< The result as players read it: the activity's internal reason left to the details.
+		std::string playerReason; //!< Why the match ended, in a player's words; empty when nothing more than the result is known.
 		int winnerTeam = -1;
 		uint64_t runningTicks = 0;
 		std::vector<Peer> peers;
@@ -353,6 +355,8 @@ namespace RTE {
 		std::string DurationText() const;
 		/// Formats the single lobby line and the complete dialog body.
 		std::string LineText() const;
+		/// The result followed by its reason, both in the words a player reads.
+		std::string PlayerText() const;
 		std::string DetailsText() const;
 		/// Formats the identity, reading and caching the executable hash on first use.
 		std::string IdentityText() const;

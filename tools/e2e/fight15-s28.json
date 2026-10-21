@@ -1,0 +1,95 @@
+{
+  "schema": 1,
+  "name": "fight15-s28",
+  "title": "Hosting defaults and this computer's in-match options on their own pages; the router row says what it opens",
+  "port_base": 49466,
+  "size": "960x540",
+  "timeout_s": 300,
+  "public_directory": true,
+  "peers": [
+    {
+      "name": "host",
+      "menu_script": "host.menu",
+      "probe": "host.probe",
+      "env": {
+        "CCCP_TEST_READBACK_TIMING": "1"
+      },
+      "settings": {
+        "SessionDirectoryUrl": "directory.broserver.com",
+        "NetworkHostRelayMode": "Directory",
+        "NetworkConnectionMode": "RelayOnly",
+        "NetworkIceEnable": 1,
+        "NetworkPortMapEnable": 0,
+        "NetworkMatchStatusMode": "Always",
+        "NetworkDisplayName": "Captain"
+      }
+    },
+    {
+      "name": "joiner",
+      "menu_script": "joiner.menu",
+      "probe": "joiner.probe",
+      "env": {
+        "CCCP_TEST_READBACK_TIMING": "1"
+      },
+      "settings": {
+        "SessionDirectoryUrl": "directory.broserver.com",
+        "NetworkHostRelayMode": "Directory",
+        "NetworkConnectionMode": "RelayOnly",
+        "NetworkIceEnable": 1,
+        "NetworkPortMapEnable": 0,
+        "NetworkMatchStatusMode": "Always",
+        "NetworkDisplayName": "Joiner"
+      }
+    }
+  ],
+  "scripts": {
+    "host.menu": "wait_ms 1800\nactivate ButtonMainToOptions\nwait_ms 600\nselect_settings_page Network\nwait_ms 450\nselect_settings_page Network:Basics\nwait 3\nactivate ButtonNetworkAdvanced\nwait 4\nselect_settings_page Network:Player\nwait 4\nvideo_mark hosting-page-host\nassert_visible CheckboxNetworkToasts 0\nassert_visible CheckboxNetworkPrediction 0\nassert_visible CheckboxNetworkDiagnostics 0\nfocus RadioNetworkDelayAuto\nwait_ms 300\nassert_label LabelNetworkHostingHint Automatic sizes each player's delay from their ping; Fixed uses the frames below\nassert_text_fits LabelNetworkHostingHint\nfocus TextNetworkIdleWait\nwait_ms 300\nassert_label LabelNetworkHostingHint Minutes an open lobby waits with nobody joining before it closes\nassert_text_fits LabelNetworkHostingHint\nfocus TextNetworkPathHorizon\nwait_ms 300\nassert_label LabelNetworkHostingHint Ticks AI route searches may take; longer avoids pauses on slow machines, AI orders start later\nassert_text_fits LabelNetworkHostingHint\nfocus CheckboxNetworkAutoRepair\nwait_ms 300\nassert_label LabelNetworkHostingHint A match that falls out of step reloads the host's copy on every machine\nassert_text_fits LabelNetworkHostingHint\nselect_settings_page Network:Chat\nwait 4\nvideo_mark in-match-page-host\nassert_label TabNetPageChat In match\nassert_visible CheckboxNetworkToasts 1\nassert_visible CheckboxNetworkPrediction 1\nassert_visible CheckboxNetworkDiagnostics 1\nassert_label LabelNetworkPredictionHint Your own units answer at once; the match confirms each move a moment later\nassert_text_fits LabelNetworkPredictionHint\npost_command ButtonBackToMainMenu\nwait_ms 900\nassert_screen MainScreen\nactivate ButtonMainToMultiplayer\nwait_ms 600\nassert_substate Landing\nsettext TextMultiplayerName Captain\nactivate ButtonMultiplayerHostGame\nwait_ms 500\nassert_substate HostSetup\ncombo_select ComboHostActivity Skirmish Defense\nwait_combo ComboHostScene Grasslands\ncombo_select ComboHostScene Grasslands\nsetup_host_port {PORT}\ncombo_select ComboHostPlayers 2\nactivate ButtonHostOptions\nwait_ms 500\nassert_substate HostOptions\nactivate TabHostPageConnection\nassert_label CheckHostPortMap Ask my router to open the game port - players connect directly\nassert_text_fits CheckHostPortMap\ncombo_select ComboHostNetVisibility Public (default)\ncombo_select ComboHostNetRelay Game service (default)\nassert_label ComboHostNetVisibility Public (default)\nassert_label ComboHostNetRelay Game service (default)\nactivate ButtonHostOptBack\nwait_ms 500\nactivate ButtonMultiplayerCreate\nwait_substate Lobby 90\nwrite_lobby {PROBE_DIR}/lobby.json 90\nvideo_mark fight15-host-listening\nwait_connected 2 90\nwait_ms 1200\ntouch_file {PROBE_DIR}/scene-end.json\nwait_file {PROBE_DIR_joiner}/scene-end.json 120\nwait_file {PROBE_DIR}/done.json 360\nwait_ms 1400\nexit\n",
+    "joiner.menu": "wait_ms 1800\nactivate ButtonMainToOptions\nwait_ms 600\nselect_settings_page Network\nwait_ms 450\nselect_settings_page Network:Basics\nwait 3\nactivate ButtonNetworkAdvanced\nwait 4\nselect_settings_page Network:Player\nwait 4\nvideo_mark hosting-page-joiner\nassert_visible CheckboxNetworkToasts 0\nassert_visible CheckboxNetworkPrediction 0\nassert_visible CheckboxNetworkDiagnostics 0\nfocus RadioNetworkDelayAuto\nwait_ms 300\nassert_label LabelNetworkHostingHint Automatic sizes each player's delay from their ping; Fixed uses the frames below\nassert_text_fits LabelNetworkHostingHint\nfocus TextNetworkIdleWait\nwait_ms 300\nassert_label LabelNetworkHostingHint Minutes an open lobby waits with nobody joining before it closes\nassert_text_fits LabelNetworkHostingHint\nfocus TextNetworkPathHorizon\nwait_ms 300\nassert_label LabelNetworkHostingHint Ticks AI route searches may take; longer avoids pauses on slow machines, AI orders start later\nassert_text_fits LabelNetworkHostingHint\nfocus CheckboxNetworkAutoRepair\nwait_ms 300\nassert_label LabelNetworkHostingHint A match that falls out of step reloads the host's copy on every machine\nassert_text_fits LabelNetworkHostingHint\nselect_settings_page Network:Chat\nwait 4\nvideo_mark in-match-page-joiner\nassert_label TabNetPageChat In match\nassert_visible CheckboxNetworkToasts 1\nassert_visible CheckboxNetworkPrediction 1\nassert_visible CheckboxNetworkDiagnostics 1\nassert_label LabelNetworkPredictionHint Your own units answer at once; the match confirms each move a moment later\nassert_text_fits LabelNetworkPredictionHint\npost_command ButtonBackToMainMenu\nwait_ms 900\nassert_screen MainScreen\nactivate ButtonMainToMultiplayer\nwait_ms 600\nassert_substate Landing\nsettext TextMultiplayerName Joiner\nactivate ButtonMultiplayerJoinGame\nwait_ms 600\nassert_substate JoinSetup\nwait_file {PROBE_DIR_host}/lobby.json 90\nwait_row PublicGameRowLobby:{PROBE_DIR_host}/lobby.json 90\nclick_row PublicGameRowLobby:{PROBE_DIR_host}/lobby.json\nassert_label LabelJoinSelected internet\nassert_enabled ButtonMultiplayerConnect 1\nactivate ButtonMultiplayerConnect\nwait_connected 2 90\nwait_substate Lobby 90\nwait_ms 1200\ntouch_file {PROBE_DIR}/scene-end.json\nwait_file {PROBE_DIR_host}/scene-end.json 300\nwait_file {PROBE_DIR}/done.json 360\nwait_ms 1400\nexit\n",
+    "host.probe": "{\n  \"schema\": 1,\n  \"timeout_ms\": 320000,\n  \"step_timeout_ms\": 60000,\n  \"label_dump\": {\n    \"every_ms\": 5000\n  },\n  \"steps\": [\n    {\n      \"op\": \"wait_file\",\n      \"path\": \"{PROBE_DIR}/scene-end.json\",\n      \"scope\": \"menu\",\n      \"within_ms\": 300000\n    },\n    {\n      \"op\": \"signal\",\n      \"name\": \"done\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"finish\"\n    }\n  ]\n}\n",
+    "joiner.probe": "{\n  \"schema\": 1,\n  \"timeout_ms\": 320000,\n  \"step_timeout_ms\": 60000,\n  \"label_dump\": {\n    \"every_ms\": 5000\n  },\n  \"steps\": [\n    {\n      \"op\": \"wait_file\",\n      \"path\": \"{PROBE_DIR}/scene-end.json\",\n      \"scope\": \"menu\",\n      \"within_ms\": 300000\n    },\n    {\n      \"op\": \"signal\",\n      \"name\": \"done\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"finish\"\n    }\n  ]\n}\n"
+  },
+  "checklist": [
+    {
+      "id": "hosting-page-host",
+      "peer": "host",
+      "mark": "hosting-page-host",
+      "screen": "SettingsScreen",
+      "what": "The Hosting page holds only hosting defaults, each with what it costs.",
+      "events": [
+        "^assert_visible CheckboxNetworkPrediction 0.*PASS",
+        "^assert_label LabelNetworkHostingHint .*PASS"
+      ]
+    },
+    {
+      "id": "hosting-page-joiner",
+      "peer": "joiner",
+      "mark": "hosting-page-joiner",
+      "screen": "SettingsScreen",
+      "what": "The Hosting page holds only hosting defaults, each with what it costs.",
+      "events": [
+        "^assert_visible CheckboxNetworkPrediction 0.*PASS",
+        "^assert_label LabelNetworkHostingHint .*PASS"
+      ]
+    },
+    {
+      "id": "in-match-page-host",
+      "peer": "host",
+      "mark": "in-match-page-host",
+      "screen": "SettingsScreen",
+      "what": "This computer's in-match options have their own page.",
+      "events": [
+        "^assert_label TabNetPageChat \"In match\".*PASS"
+      ]
+    },
+    {
+      "id": "in-match-page-joiner",
+      "peer": "joiner",
+      "mark": "in-match-page-joiner",
+      "screen": "SettingsScreen",
+      "what": "This computer's in-match options have their own page.",
+      "events": [
+        "^assert_label TabNetPageChat \"In match\".*PASS"
+      ]
+    }
+  ]
+}

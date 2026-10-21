@@ -79,33 +79,7 @@ static std::string VersionLine() {
 }
 
 static std::string PlayerFacingStatus(const std::string& text) {
-	const bool wireReason = text.find("ParticipantBanned") != std::string::npos || text.find("participant_identity: admitted vs banned") != std::string::npos;
-	const std::string refusalPrefix = "A player could not join: ";
-	const bool refusal = text.starts_with("A player could not join:");
-	// The host's notice names the refused player ahead of the sentence it quotes: "<name> is banned from this session".
-	const auto refusedName = [&](const std::string& sentence) {
-		const size_t at = text.find(sentence);
-		return at != std::string::npos && at > refusalPrefix.size() && text.starts_with(refusalPrefix) ? text.substr(refusalPrefix.size(), at - refusalPrefix.size()) : std::string();
-	};
-	if (text.find("removed from this session") != std::string::npos) {
-		// The host's notice never speaks to the player it removed, and the player reads a whole sentence.
-		if (refusal) {
-			const std::string name = refusedName(" was removed from this session");
-			return name.empty() ? "A removed player was refused." : name + " was refused: removed from this session.";
-		}
-		return "The host removed you from this session";
-	}
-	if (wireReason || text.find("banned") != std::string::npos) {
-		// The host's notice wraps the refused player's own sentence, which is written to that player.
-		if (refusal) {
-			const std::string name = refusedName(" is banned from this session");
-			return name.empty() ? "A banned player was refused." : name + " was refused: banned from this session.";
-		}
-		if (wireReason) return "You are banned from this session";
-		return text.find("banned from this session") != std::string::npos ? "The host banned you from this session" : text;
-	}
-	if (text.find("transport stopped") != std::string::npos || text == "Connection dropped") return "The host's connection was lost.";
-	return text;
+	return NetPlayerPresentation::StatusWords(text);
 }
 
 // Why a listed game cannot be joined, in the player's words.
@@ -1112,6 +1086,18 @@ void MainMenuGUI::HandleBackNavigation(bool backButtonPressed) {
 	}
 }
 
+namespace {
+	/// Whether a notification is a control's commit. Every control type numbers its notifications from zero, so the message is read
+	/// against the type that sent it: a button's Pushed, Clicked and UnPushed must not pass as a slider's, a tab's or a combo's commit.
+	bool CommitsOnNotification(GUIEvent& event) {
+		GUIControl* control = event.GetControl();
+		const int message = event.GetMsg();
+		return (dynamic_cast<GUITab*>(control) && message == GUITab::UnPushed) || (dynamic_cast<GUIComboBox*>(control) && message == GUIComboBox::Closed) ||
+		       (dynamic_cast<GUICheckbox*>(control) && message == GUICheckbox::Changed) || (dynamic_cast<GUISlider*>(control) && message == GUISlider::Changed) ||
+		       (dynamic_cast<GUITextBox*>(control) && (message == GUITextBox::Changed || message == GUITextBox::Enter));
+	}
+} // namespace
+
 bool MainMenuGUI::HandleInputEvents() {
 	if (m_ActiveMenuScreen == MenuScreen::MainScreen) {
 		int mouseX = 0;
@@ -1189,19 +1175,14 @@ bool MainMenuGUI::HandleInputEvents() {
 		           (guiEvent.GetMsg() == GUITextBox::Changed || guiEvent.GetMsg() == GUITextBox::Enter) &&
 		           m_MultiplayerSubScreen == MultiplayerSubScreen::HostOptions &&
 		           (guiEvent.GetControl() == m_HostNetSlowBoundBox || guiEvent.GetControl() == m_HostNetMinDelayBox ||
-		            guiEvent.GetControl() == m_HostRecAutosaveIntervalBox ||
 		            std::find(m_HostNetPeerDelayBoxes.begin(), m_HostNetPeerDelayBoxes.end(), guiEvent.GetControl()) != m_HostNetPeerDelayBoxes.end())) {
 			// The refresh rewrites every box the player is not holding, so a typed row commits as it is
-			// typed; waiting for Apply loses it the moment the click moves the focus. The Recovery
-			// caption reads the same draft, so it follows the interval as it is typed too.
+			// typed; waiting for Apply loses it the moment the click moves the focus.
 			DraftHostOptionsFromControls();
 		} else if (guiEvent.GetType() == GUIEvent::Notification && m_ActiveMenuScreen == MenuScreen::MultiplayerScreen &&
-		           m_MultiplayerSubScreen == MultiplayerSubScreen::HostOptions &&
-		           (guiEvent.GetMsg() == GUITab::UnPushed || guiEvent.GetMsg() == GUIComboBox::Closed ||
-		            guiEvent.GetMsg() == GUICheckbox::Changed || guiEvent.GetMsg() == GUISlider::Changed ||
-		            guiEvent.GetMsg() == GUITextBox::Enter)) {
-			// Tabs, combos, checks and sliders on the options pages notify rather than Command; only
-			// the commit-flavoured ones reach the handler (a hover must never switch the page).
+		           m_MultiplayerSubScreen == MultiplayerSubScreen::HostOptions && CommitsOnNotification(guiEvent)) {
+			// Tabs, combos, checks, sliders and boxes on the options pages notify rather than Command; only the
+			// commit-flavoured ones reach the handler (a hover must never switch the page; a box commits as it is typed).
 			HandleMultiplayerScreenInputEvents(guiEvent.GetControl());
 		}
 	}
@@ -1405,6 +1386,8 @@ void MainMenuGUI::HandleMultiplayerScreenInputEvents(const GUIControl* guiEventC
 		// The setup is ordinary: the host edits it here, everyone else reads the agreed one.
 		const NetLobbySnapshot snapshot = g_NetMatchService.GetLobbySnapshot();
 		OpenHostOptions(false);
+		// The host's Edit setup is what to play and with whom; the network's tuning stays behind Advanced.
+		m_HostOptionsSetupOnly = snapshot.isHost;
 		ShowHostOptionsPage(c_HostOptionsRulesPage);
 		if (snapshot.isHost && snapshot.startCountdownRunning && !snapshot.startCommitted) {
 			m_HostOptionsStatusLabel->SetText("The start countdown stopped while you change the setup.");
@@ -1796,8 +1779,13 @@ void MainMenuGUI::CreateHostOptionsControls() {
 		m_HostNetPeerDelayBoxes[peer] = dynamic_cast<GUITextBox*>(get(("TextHostNetPeerDelay" + n).c_str()));
 	}
 	m_HostNetPingLabel = dynamic_cast<GUILabel*>(get("LabelHostNetPing"));
-	m_HostNetRecalcButton = dynamic_cast<GUIButton*>(get("ButtonHostNetRecalc"));
 	m_HostNetModeLabel = dynamic_cast<GUILabel*>(get("LabelHostNetMode"));
+	if ((m_HostNetOptionHintLabel = dynamic_cast<GUILabel*>(get("LabelHostNetOptionHint")))) {
+		m_HostNetOptionHintLabel->SetFont(m_SubMenuScreenGUIControlManager->GetSkin()->GetFont("FontSmall.png"));
+		m_HostNetOptionHintLabel->SetText(NetTimingRowHint(0));
+	}
+	m_HostNetHintRowControls = {get("LabelHostNetPolicy"), m_HostNetPolicyCombo, get("LabelHostNetMinDelay"), m_HostNetMinDelayBox,
+	                            get("LabelHostNetSlowBound"), m_HostNetSlowBoundBox, get("LabelHostNetRedundancy"), m_HostNetRedundancyCombo};
 	m_HostNetVisibilityCombo = dynamic_cast<GUIComboBox*>(get("ComboHostNetVisibility"));
 	m_HostNetIceCombo = dynamic_cast<GUIComboBox*>(get("ComboHostNetIce"));
 	m_HostNetIceHintLabel = dynamic_cast<GUILabel*>(get("LabelHostNetIceHint"));
@@ -1834,7 +1822,7 @@ void MainMenuGUI::CreateHostOptionsControls() {
 	m_HostRecRepairHintLabel = dynamic_cast<GUILabel*>(get("LabelHostRecRepairHint"));
 	m_HostRecRepairCheck = dynamic_cast<GUICheckbox*>(get("CheckHostRecRepair"));
 	m_HostRecAutosaveCheck = dynamic_cast<GUICheckbox*>(get("CheckHostRecAutosave"));
-	m_HostRecAutosaveIntervalBox = dynamic_cast<GUITextBox*>(get("TextHostRecAutosaveInterval"));
+	m_HostRecAutosaveIntervalCombo = dynamic_cast<GUIComboBox*>(get("ComboHostRecAutosaveInterval"));
 	m_HostRecLastSaveLabel = dynamic_cast<GUILabel*>(get("LabelHostRecLastSave"));
 	m_HostRecReturnWindowCombo = dynamic_cast<GUIComboBox*>(get("ComboHostRecReturnWindow"));
 	m_HostRecJoinHistoryCombo = dynamic_cast<GUIComboBox*>(get("ComboHostRecJoinHistory"));
@@ -1869,6 +1857,7 @@ void MainMenuGUI::CreateHostOptionsControls() {
 	m_HostSeatDlgKick = dynamic_cast<GUIButton*>(get("ButtonHostSeatDlgKick"));
 	m_HostSeatDlgBan = dynamic_cast<GUIButton*>(get("ButtonHostSeatDlgBan"));
 	m_HostSeatDlgActionHint = dynamic_cast<GUILabel*>(get("LabelHostSeatDlgActionHint"));
+	m_HostSessEndHint = dynamic_cast<GUILabel*>(get("LabelHostSessEndHint"));
 	m_HostSeatDlgStatus = dynamic_cast<GUILabel*>(get("LabelHostSeatDlgStatus"));
 	m_HostBannedDialog = dynamic_cast<GUICollectionBox*>(get("HostBannedDialog"));
 	m_HostBannedPick = dynamic_cast<GUIComboBox*>(get("ComboHostBannedPick"));
@@ -1991,11 +1980,12 @@ void MainMenuGUI::CreateHostOptionsControls() {
 		box->SetMaxNumericValue(NetMatchConfigUtil::c_MaxInputDelayFrames);
 		box->SetMaxTextLength(2);
 	}
-	if (m_HostRecAutosaveIntervalBox) {
-		m_HostRecAutosaveIntervalBox->SetNumericOnly(true);
-		m_HostRecAutosaveIntervalBox->SetMaxNumericValue(NetMatchService::c_MaxAutosaveIntervalSeconds);
-		m_HostRecAutosaveIntervalBox->SetMinNumericValue(NetMatchService::c_MinAutosaveIntervalSeconds);
-		m_HostRecAutosaveIntervalBox->SetMaxTextLength(4);
+	if (m_HostRecAutosaveIntervalCombo) {
+		m_HostRecAutosaveIntervalCombo->ClearList();
+		for (const uint32_t minutes : {1, 2, 5, 10, 15, 20, 30, 45, 60}) {
+			const bool standard = minutes * 60 == NetMatchConfigUtil::c_DefaultAutosaveIntervalSeconds;
+			m_HostRecAutosaveIntervalCombo->AddItem(NetAutosaveIntervalText(minutes * 60) + (standard ? " (default)" : ""));
+		}
 	}
 }
 
@@ -2200,6 +2190,8 @@ std::string MainMenuGUI::HostSummaryText() const {
 void MainMenuGUI::OpenHostOptions(bool setupDraft) {
 	m_HostOptionsSetupDraft = setupDraft;
 	m_HostOptionsReadOnly = false;
+	m_HostOptionsSetupOnly = false;
+	m_HostSessEndArmed = false;
 	m_HostOptionsSeatRow = -1;
 	m_HostSeatDlgModerationRow = -1;
 	m_HostSeatDlgRemovalSeat.reset();
@@ -2313,6 +2305,57 @@ namespace {
 		return minutes >= NetMatchConfigUtil::c_MinReturnWindowMinutes && minutes <= NetMatchConfigUtil::c_MaxReturnWindowMinutes ? static_cast<uint8_t>(minutes) : 0;
 	}
 
+	/// A decision button's caption with its player's name fitted into the button's own width.
+	void HostOptCaption(GUIFont* font, GUIButton* button, const std::string& before, const std::string& name, const std::string& after) {
+		if (!button || !font) return;
+		std::string kept = name, shown = name;
+		const int room = button->GetWidth() - 12;
+		while (!kept.empty() && font->CalculateWidth(before + shown + after) > room) {
+			kept.pop_back();
+			shown = kept + "...";
+		}
+		if (button->GetText() != before + shown + after) button->SetText(before + shown + after);
+	}
+
+	/// The seconds an autosave choice's words name ("5 minutes (default)", "90 seconds"), whatever the range; 0 for anything else.
+	uint32_t HostOptAutosaveSecondsNamed(const std::string& name) {
+		char* unit = nullptr;
+		const long count = std::strtol(name.c_str(), &unit, 10);
+		return count <= 0 ? 0 : std::string_view(unit).starts_with(" second") ? static_cast<uint32_t>(count) : static_cast<uint32_t>(count) * 60;
+	}
+
+	/// The seconds an autosave choice names when a host may pick it; 0 for anything else.
+	uint32_t HostOptAutosaveSecondsOf(const std::string& name) {
+		const uint32_t seconds = HostOptAutosaveSecondsNamed(name);
+		return seconds >= NetMatchService::c_MinAutosaveIntervalSeconds && seconds <= NetMatchService::c_MaxAutosaveIntervalSeconds ? seconds : 0;
+	}
+
+	/// The seconds the picked autosave choice names; 0 when nothing is picked.
+	uint32_t HostOptAutosaveIntervalOf(GUIComboBox* combo) {
+		const GUIListPanel::Item* item = combo && combo->GetSelectedIndex() >= 0 ? combo->GetItem(combo->GetSelectedIndex()) : nullptr;
+		return item ? HostOptAutosaveSecondsOf(item->m_Name.Value()) : 0;
+	}
+
+	/// Shows an autosave cadence, offering a saved value the list lacks in its place among the others.
+	void HostOptSelectAutosaveInterval(GUIComboBox* combo, uint32_t seconds) {
+		if (!combo || combo->IsDropped() || seconds == 0) return;
+		std::vector<std::pair<uint32_t, std::string>> offered;
+		for (int i = 0; i < combo->GetCount(); ++i) {
+			const GUIListPanel::Item* item = combo->GetItem(i);
+			const uint32_t listed = item ? HostOptAutosaveSecondsNamed(item->m_Name.Value()) : 0;
+			if (listed == seconds) {
+				if (combo->GetSelectedIndex() != i) combo->SetSelectedIndex(i);
+				return;
+			}
+			offered.emplace_back(listed, item ? item->m_Name.Value() : std::string());
+		}
+		const auto at = std::upper_bound(offered.begin(), offered.end(), seconds, [](uint32_t value, const auto& item) { return value < item.first; });
+		const auto inserted = offered.insert(at, {seconds, NetAutosaveIntervalText(seconds)});
+		combo->ClearList();
+		for (const auto& [listed, name] : offered) combo->AddItem(name);
+		combo->SetSelectedIndex(static_cast<int>(inserted - offered.begin()));
+	}
+
 	/// Shows a return window, offering a saved value the list lacks in its place among the others.
 	void HostOptSelectReturnWindow(GUIComboBox* combo, uint8_t minutes) {
 		if (!combo || combo->IsDropped()) return;
@@ -2413,7 +2456,12 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 		}
 	}
 	// The title names the panel and the selector names the page; the client's read-only view is the match's details.
-	m_HostOptionsTitle->SetText(m_HostOptionsReadOnly ? "M A T C H   D E T A I L S" : "A D V A N C E D");
+	m_HostOptionsTitle->SetText(m_HostOptionsReadOnly ? "M A T C H   D E T A I L S" : m_HostOptionsSetupOnly ? "E D I T   S E T U P" : "A D V A N C E D");
+	for (int page = 0; page < c_HostOptionsPageCount; ++page) {
+		if (m_HostOptionsTabs[page]) m_HostOptionsTabs[page]->SetVisible(!m_HostOptionsSetupOnly || page <= c_HostOptionsRulesPage);
+	}
+	if (m_HostOptionsSetupOnly && m_HostOptionsPage > c_HostOptionsRulesPage) ShowHostOptionsPage(c_HostOptionsRulesPage);
+	m_MainMenuButtons[MenuButton::HostOptionsDefaultsButton]->SetVisible(!m_HostOptionsSetupOnly);
 	const bool editable = !m_HostOptionsReadOnly;
 
 	// Seats page.
@@ -2623,7 +2671,6 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 	HostOptSetEditable(m_HostNetMinDelayBox, editable);
 	// Recalculate means "re-sample the link for the automatic policy"; under Fixed the host's own
 	// figures are the answer, so the button stays off there.
-	HostOptSetEditable(m_HostNetRecalcButton, editable && !fixedPolicy && !m_HostOptionsSetupDraft);
 	if (m_HostNetPingLabel) {
 		std::string ping;
 		for (const NetLobbyMember& m : snapshot.members) {
@@ -2716,10 +2763,9 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 	// Recovery page.
 	if (m_HostRecRepairCheck) m_HostRecRepairCheck->SetCheck(m_HostOptionsDraft.automaticRepair ? GUICheckbox::Checked : GUICheckbox::Unchecked);
 	if (m_HostRecAutosaveCheck) m_HostRecAutosaveCheck->SetCheck(m_HostOptionsDraft.autosaveEnabled ? GUICheckbox::Checked : GUICheckbox::Unchecked);
-	if (m_HostRecAutosaveIntervalBox && !HostOptBoxFocused(m_HostRecAutosaveIntervalBox)) {
-		m_HostRecAutosaveIntervalBox->SetText(std::to_string(m_HostOptionsDraft.autosaveIntervalSeconds));
-	}
-	HostOptSetEditable(m_HostRecAutosaveIntervalBox, editable && m_HostOptionsDraft.autosaveEnabled);
+	HostOptSelectAutosaveInterval(m_HostRecAutosaveIntervalCombo, m_HostOptionsDraft.autosaveEnabled ? m_HostOptionsDraft.autosaveIntervalSeconds
+	                                                                                              : NetMatchConfigUtil::c_DefaultAutosaveIntervalSeconds);
+	HostOptSetEditable(m_HostRecAutosaveIntervalCombo, editable && m_HostOptionsDraft.autosaveEnabled);
 	HostOptSelectReturnWindow(m_HostRecReturnWindowCombo, m_HostOptionsDraft.returnWindowMinutes);
 	HostOptSetEditable(m_HostRecReturnWindowCombo, editable);
 	HostOptSetEditable(m_HostRecRepairCheck, editable);
@@ -2740,6 +2786,17 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 		}
 		const char* hint = m_HostRecHintRow == 1 ? NetJoinHistoryHint() : m_HostRecHintRow == 2 ? NetJoinLagHint() : NetReturnWindowHint();
 		if (m_HostRecOptionHintLabel->GetText() != hint) m_HostRecOptionHintLabel->SetText(hint);
+	}
+	// The Timing page's hint names what the row under the hand or with the focus costs; the last one stays.
+	if (m_HostNetOptionHintLabel && m_HostOptionsPages[c_HostOptionsTimingPage] && m_HostOptionsPages[c_HostOptionsTimingPage]->GetVisible()) {
+		int mouseX = 0, mouseY = 0;
+		m_SubMenuScreenGUIControlManager->GetManager()->GetInputController()->GetMousePosition(&mouseX, &mouseY);
+		for (size_t index = 0; index < m_HostNetHintRowControls.size(); ++index) {
+			GUIPanel* panel = m_HostNetHintRowControls[index] ? m_HostNetHintRowControls[index]->GetPanel() : nullptr;
+			if (panel && (panel->PointInside(mouseX, mouseY) || panel->HasFocus())) m_HostNetHintRow = static_cast<int>(index / 2);
+		}
+		const char* hint = NetTimingRowHint(m_HostNetHintRow);
+		if (m_HostNetOptionHintLabel->GetText() != hint) m_HostNetOptionHintLabel->SetText(hint);
 	}
 	if (m_HostRecLastSaveLabel) {
 		// H28: the service exposes no last-autosave tick getter, so the observation is the local
@@ -2773,7 +2830,7 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 		}
 		m_HostRecLastSaveLabel->SetText(m_HostLastSaveText.empty()
 		                                  ? (m_HostOptionsDraft.autosaveEnabled && m_HostOptionsDraft.autosaveIntervalSeconds > 0
-		                                         ? "Checkpoint every " + std::to_string(m_HostOptionsDraft.autosaveIntervalSeconds) + " sim seconds - none saved yet"
+		                                         ? "Checkpoint every " + NetAutosaveIntervalText(m_HostOptionsDraft.autosaveIntervalSeconds) + " - none saved yet"
 		                                         : "No autosaves while this is off")
 		                                  : m_HostLastSaveText);
 	}
@@ -2860,6 +2917,9 @@ void MainMenuGUI::RefreshHostOptionsControls(const NetLobbySnapshot& snapshot) {
 	}
 	HostOptSetEditable(m_MainMenuButtons[MenuButton::HostSessionBannedButton], true);
 	HostOptSetEditable(m_MainMenuButtons[MenuButton::HostSessionEndButton], editable && !m_HostOptionsSetupDraft);
+	if (!editable || m_HostOptionsSetupDraft) m_HostSessEndArmed = false;
+	m_MainMenuButtons[MenuButton::HostSessionEndButton]->SetText(m_HostSessEndArmed ? "Confirm end" : "End session");
+	if (m_HostSessEndHint) m_HostSessEndHint->SetText(m_HostSessEndArmed ? "Press Confirm end to close the game for every player" : "Closes the game for every player");
 
 	if (GUILabel* rejoin = m_HostRecRejoinLabel) {
 		// A build without its cryptography cannot prove who a returning player is: the line says so rather than claim it.
@@ -3051,28 +3111,15 @@ void MainMenuGUI::DraftHostOptionsFromControls() {
 	if (m_HostRecRepairCheck) m_HostOptionsDraft.automaticRepair = m_HostRecRepairCheck->GetCheck() == GUICheckbox::Checked;
 	const bool autosaveWasEnabled = m_HostOptionsDraft.autosaveEnabled;
 	if (m_HostRecAutosaveCheck) m_HostOptionsDraft.autosaveEnabled = m_HostRecAutosaveCheck->GetCheck() == GUICheckbox::Checked;
-	if (m_HostRecAutosaveIntervalBox) {
-		const std::string typed = m_HostRecAutosaveIntervalBox->GetText();
-		char* parsedEnd = nullptr;
-		const long parsed = std::strtol(typed.c_str(), &parsedEnd, 10);
-		// An emptied box is mid-edit and keeps the draft's interval; zero is off, and a nonzero
-		// interval clamps into the announced minute-to-hour range.
-		if (parsedEnd != typed.c_str()) {
-			m_HostOptionsDraft.autosaveIntervalSeconds = parsed <= 0 ? 0 : static_cast<uint32_t>(std::clamp<long>(parsed, NetMatchService::c_MinAutosaveIntervalSeconds, NetMatchService::c_MaxAutosaveIntervalSeconds));
-		}
+	if (m_HostOptionsDraft.autosaveEnabled) {
+		// The drop-down holds the cadence; switching autosave on starts at the default instead of reading the off zero back.
+		const uint32_t picked = autosaveWasEnabled ? HostOptAutosaveIntervalOf(m_HostRecAutosaveIntervalCombo) : 0;
+		m_HostOptionsDraft.autosaveIntervalSeconds = picked != 0 ? picked
+		                                           : m_HostOptionsDraft.autosaveIntervalSeconds != 0 ? m_HostOptionsDraft.autosaveIntervalSeconds
+		                                           : NetMatchConfigUtil::c_DefaultAutosaveIntervalSeconds;
+	} else {
+		m_HostOptionsDraft.autosaveIntervalSeconds = 0;
 	}
-	if (m_HostOptionsDraft.autosaveEnabled && m_HostOptionsDraft.autosaveIntervalSeconds == 0) {
-		if (autosaveWasEnabled) {
-			// A typed 0 is off, so the checkbox, the caption and the published config agree.
-			m_HostOptionsDraft.autosaveEnabled = false;
-			if (m_HostRecAutosaveCheck) m_HostRecAutosaveCheck->SetCheck(GUICheckbox::Unchecked);
-		} else {
-			// Switching autosave on starts at the shortest cadence instead of reading the off zero back.
-			m_HostOptionsDraft.autosaveIntervalSeconds = NetMatchService::c_MinAutosaveIntervalSeconds;
-			if (m_HostRecAutosaveIntervalBox) m_HostRecAutosaveIntervalBox->SetText(std::to_string(m_HostOptionsDraft.autosaveIntervalSeconds));
-		}
-	}
-	if (!m_HostOptionsDraft.autosaveEnabled) m_HostOptionsDraft.autosaveIntervalSeconds = 0;
 	if (const uint8_t minutes = HostOptReturnWindowOf(m_HostRecReturnWindowCombo); minutes != 0) m_HostOptionsDraft.returnWindowMinutes = minutes;
 
 	// This computer's typed choices: the port and the relay's address and login.
@@ -3504,6 +3551,7 @@ void MainMenuGUI::ShowHostSeatDetails(int row) {
 	if (row < 0 || row >= static_cast<int>(m_HostOptionsDraft.players.size())) return;
 	m_HostOptionsSeatRow = row;
 	m_HostSeatDlgModerationRow = -1;
+	m_HostSeatDlgArmed = SeatDialogArm::None;
 	m_HostSeatDlgActionHint->SetText("");
 	RefreshHostSeatDialog();
 	OpenMultiplayerDialog(m_HostSeatDialog, m_HostOptionsPanel);
@@ -3517,6 +3565,9 @@ void MainMenuGUI::RefreshHostSeatDialog() {
 	}
 	const NetMatchPlayerSlot& slot = m_HostOptionsDraft.players[m_HostOptionsSeatRow];
 	m_HostSeatDlgName->SetText("Name: " + slot.displayName);
+	GUIFont* buttonFont = m_SubMenuScreenGUIControlManager->GetSkin()->GetFont("FontLarge.png");
+	HostOptCaption(buttonFont, m_HostSeatDlgWait, "Keep for ", slot.displayName.empty() ? std::string("its player") : slot.displayName, "");
+	m_HostSeatDlgCancel->SetText("Cancel this approval");
 	m_HostSeatDlgSeat->SetText("Seat " + std::to_string(m_HostOptionsSeatRow + 1));
 	m_HostSeatDlgTeam->SetText("Team: Team " + std::to_string(slot.team + 1));
 	m_HostSeatDlgState->SetText(slot.cpu ? "Kind: CPU player" : "Kind: human seat");
@@ -3579,11 +3630,17 @@ void MainMenuGUI::RefreshHostSeatDialog() {
 			if (m_HostSeatDlgApplicantList->GetSelectedIndex() != chosen) m_HostSeatDlgApplicantList->SetSelectedIndex(chosen);
 			m_HostSeatDlgApplicantList->SetEnabled(host && !asking.empty());
 		}
+		std::string chosenName;
+		for (const NetH4ApplicantView& applicant : mrow->view.applicants) {
+			if (applicant.connection == mrow->applicant) chosenName = applicant.displayName;
+		}
+		HostOptCaption(buttonFont, m_HostSeatDlgApprove, "Let ", chosenName.empty() ? std::string("someone") : chosenName, " join");
 		HostOptSetEditable(m_HostSeatDlgWait, host && NetModerationUx::Available(*mrow, NetModerationAction::Wait));
 		HostOptSetEditable(m_HostSeatDlgApprove, host && NetModerationUx::Available(*mrow, NetModerationAction::Substitute));
 		HostOptSetEditable(m_HostSeatDlgCancel, host && NetModerationUx::Available(*mrow, NetModerationAction::Cancel));
 	} else {
 		m_HostSeatDlgApplicants->SetText("Nobody is asking for this seat");
+		HostOptCaption(buttonFont, m_HostSeatDlgApprove, "Let ", "someone", " join");
 		if (m_HostSeatDlgApplicantList) {
 			m_HostSeatDlgApplicantList->ClearList();
 			m_HostSeatDlgApplicantList->SetEnabled(false);
@@ -3595,14 +3652,19 @@ void MainMenuGUI::RefreshHostSeatDialog() {
 	// H09/H10: Kick and Ban act on a human seat another peer holds - the host's own seat is never
 	// kickable (the store answers ForbiddenTarget, but the button stays off first).
 	const uint8_t localPeerId = g_NetMatchService.GetLobbySnapshot().localPeerId;
-	const bool owned = mrow && (mrow->view.committed || mrow->view.dropped || mrow->view.held || mrow->view.heldForReclaim || mrow->view.reclaiming);
+	// A connected player has no moderation row, only its admission seat: that seat is what removal acts on.
+	const bool owned = m_HostSeatDlgRemovalSeat && !m_HostSeatDlgRemovalSeat->closed;
 	const bool humanSeat = host && owned && !slot.cpu && slot.peerId != 0 && slot.peerId != localPeerId;
 	m_HostSeatDlgKick->SetEnabled(humanSeat);
 	m_HostSeatDlgBan->SetEnabled(humanSeat);
+	if (!humanSeat) m_HostSeatDlgArmed = SeatDialogArm::None;
+	m_HostSeatDlgKick->SetText(m_HostSeatDlgArmed == SeatDialogArm::Kick ? "Confirm kick" : "Kick player");
+	m_HostSeatDlgBan->SetText(m_HostSeatDlgArmed == SeatDialogArm::Ban ? "Confirm ban" : "Ban this session");
 	if (m_HostSeatDlgActionHint->GetText().empty() || !humanSeat) {
 		m_HostSeatDlgActionHint->SetText(humanSeat ? "Seat actions apply to this player."
 		                                         : (slot.cpu ? "CPU seats are the host's to retype, not to moderate."
 		                                            : host && slot.peerId != 0 && slot.peerId == localPeerId ? "The host's own seat is never kicked or banned."
+		                                            : host && !owned && slot.peerId != 0 ? "Still joining - Kick and Ban open once seated."
 		                                            : host && !owned ? "No player holds this seat."
 		                                            : "Only the host can change who plays here."));
 	}
@@ -3611,6 +3673,10 @@ void MainMenuGUI::RefreshHostSeatDialog() {
 void MainMenuGUI::RefreshHostBannedDialog() {
 	if (m_ActiveDialogBox != m_HostBannedDialog || !m_HostBannedPick) {
 		return;
+	}
+	if (m_HostUnbanWatch && g_NetMatchService.GetLastKickBanResult() != NetKickBanResult::Queued) {
+		m_HostUnbanWatch = false;
+		m_HostBannedStatusLabel->SetText(NetUnbanStatus(g_NetMatchService.GetLastKickBanResult()));
 	}
 	const std::vector<NetHostBanRecord> records = g_NetMatchService.GetBanRecords();
 	const uint64_t nowUnixMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -3662,12 +3728,14 @@ void MainMenuGUI::ShowHostBannedDialog() {
 	m_HostBannedRecords.clear();
 	if (m_HostBannedPick) m_HostBannedPick->ClearList();
 	m_HostBannedStatusLabel->SetText("");
+	m_HostUnbanWatch = false;
 	OpenMultiplayerDialog(m_HostBannedDialog, m_HostOptionsPanel);
 	RefreshHostBannedDialog();
 	m_MainMenuButtons[MenuButton::HostBannedCloseButton]->SetFocus();
 }
 
 void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl) {
+	if (guiEventControl != m_MainMenuButtons[MenuButton::HostSessionEndButton]) m_HostSessEndArmed = false;
 	// The other half of the refresh's model: a control the refresh rewrites from the draft must reach the draft from here, in the
 	// frame its change arrives, or the next frame puts the old value back under the player's hand. A list still open holds an
 	// uncommitted pick, and the team row's controls still show the team it left.
@@ -3738,6 +3806,7 @@ void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl
 		return;
 	}
 	if (guiEventControl == m_HostSeatDlgWait || guiEventControl == m_HostSeatDlgApprove || guiEventControl == m_HostSeatDlgCancel) {
+		m_HostSeatDlgArmed = SeatDialogArm::None;
 		if (m_HostSeatDlgModerationRow >= 0) {
 			const NetModerationAction action = guiEventControl == m_HostSeatDlgWait    ? NetModerationAction::Wait
 			                                   : guiEventControl == m_HostSeatDlgApprove ? NetModerationAction::Substitute
@@ -3755,9 +3824,22 @@ void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl
 		                           ? m_HostOptionsDraft.players[m_HostOptionsSeatRow].peerId : 0;
 		const std::string refusal = NetHostSeatRemovalRefusal(g_NetMatchService.GetState(), m_HostSeatDlgRemovalSeat.has_value(), peerId, verb);
 		if (!refusal.empty()) {
+			m_HostSeatDlgArmed = SeatDialogArm::None;
 			m_HostSeatDlgActionHint->SetText(refusal);
 			return;
 		}
+		// The first press names what the second does, as the Players panel's own removals do.
+		const SeatDialogArm arm = action == NetParticipantRemovalAction::Kick ? SeatDialogArm::Kick : SeatDialogArm::Ban;
+		if (m_HostSeatDlgArmed != arm) {
+			m_HostSeatDlgArmed = arm;
+			const std::string& name = m_HostOptionsDraft.players[m_HostOptionsSeatRow].displayName;
+			m_HostSeatDlgActionHint->SetText(arm == SeatDialogArm::Kick ? "Press Confirm kick to remove " + name + " from this session"
+			                                                           : "Press Confirm ban to ban " + name + " from this session");
+			RefreshHostSeatDialog();
+			g_GUISound.ItemChangeSound()->Play();
+			return;
+		}
+		m_HostSeatDlgArmed = SeatDialogArm::None;
 		const NetKickBanResult result =
 			g_NetMatchService.RemoveParticipant(NetSelectModerationSeat(*m_HostSeatDlgRemovalSeat), action);
 		if (result == NetKickBanResult::Ok || result == NetKickBanResult::Queued) {
@@ -3794,7 +3876,8 @@ void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl
 		// UnbanParticipant answers Queued while the setup worker owns admission; the applied result
 		// replaces it at the next drain, and this dialog's rows re-read the store when it lands.
 		const NetKickBanResult result = g_NetMatchService.UnbanParticipant(m_HostBannedRecords[pick].identity);
-		m_HostBannedStatusLabel->SetText(std::string("Remove ban: ") + NetKickBanResultText(result));
+		m_HostUnbanWatch = result == NetKickBanResult::Queued;
+		m_HostBannedStatusLabel->SetText(NetUnbanStatus(result));
 		RefreshHostBannedDialog();
 		return;
 	}
@@ -3821,6 +3904,7 @@ void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl
 		return;
 	}
 	if (guiEventControl == m_MainMenuButtons[MenuButton::HostSeatDialogCloseButton]) {
+		m_HostSeatDlgArmed = SeatDialogArm::None;
 		m_HostOptionsSeatRow = -1;
 		m_HostSeatDlgModerationRow = -1;
 		m_HostSeatDlgRemovalSeat.reset();
@@ -3846,6 +3930,12 @@ void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl
 		return;
 	}
 	if (guiEventControl == m_MainMenuButtons[MenuButton::HostSessionEndButton]) {
+		if (!m_HostSessEndArmed) {
+			m_HostSessEndArmed = true;
+			g_GUISound.ItemChangeSound()->Play();
+			return;
+		}
+		m_HostSessEndArmed = false;
 		// Same end the lobby's Leave runs; the panel closes with it.
 		g_NetMatchService.Destroy();
 		m_MultiplayerSubScreen = MultiplayerSubScreen::Landing;
@@ -3893,6 +3983,10 @@ void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl
 		m_HostOptionsDraft.frameRedundancyTicks = static_cast<uint8_t>(m_HostNetRedundancyCombo->GetSelectedIndex() + 1);
 		return;
 	}
+	if (guiEventControl == m_HostRecAutosaveIntervalCombo) {
+		DraftHostOptionsFromControls();
+		return;
+	}
 	if (guiEventControl == m_HostRecReturnWindowCombo) {
 		if (const uint8_t minutes = HostOptReturnWindowOf(m_HostRecReturnWindowCombo); minutes != 0) m_HostOptionsDraft.returnWindowMinutes = minutes;
 		LogHostHistoryPolicy();
@@ -3900,13 +3994,6 @@ void MainMenuGUI::HandleHostOptionsInputEvents(const GUIControl* guiEventControl
 	}
 	if (guiEventControl == m_HostNetSlowPolicyCombo) {
 		m_HostOptionsDraft.slowPlayerPolicy = NetSlowPlayerPolicy::Substitute;
-		return;
-	}
-	if (guiEventControl == m_HostNetRecalcButton) {
-		// The auto policy already re-derives each sender's figure from the live link; the button is
-		// the host's "look again now" - the readouts re-fill from the service snapshot this frame.
-		m_HostOptionsStatusLabel->SetText("The delay and ping figures were measured again.");
-		g_GUISound.ItemChangeSound()->Play();
 		return;
 	}
 	if (guiEventControl == m_HostRulesBrainlessCombo || guiEventControl == m_HostRecAutosaveCheck || guiEventControl == m_HostSessIdleCombo) {
@@ -4421,11 +4508,8 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	const bool lobby = m_MultiplayerSubScreen == MultiplayerSubScreen::Lobby;
 	const auto summary = g_NetMatchService.GetLastMatchSummary();
 	std::string summaryText = summary ? summary->LineText() : "";
-	if (summary && summary->winnerTeam >= 0) {
-		// The compact result names the winner; keep the reason for that result visible too.
-		const size_t reason = summary->result.find(" - ");
-		if (reason != std::string::npos) summaryText += "\n" + summary->result.substr(reason + 3);
-	}
+	// The compact result names the winner; the reason for it follows in the players' words.
+	if (summary && !summary->playerReason.empty()) summaryText += "\n" + summary->playerReason;
 	m_LastMatchSummaryLabel->SetText(summaryText);
 	m_LastMatchSummaryLabel->SetVisible(lobby && summary.has_value());
 	m_MainMenuButtons[MenuButton::LastMatchDetailsButton]->SetVisible(lobby && summary.has_value());
@@ -4944,6 +5028,15 @@ void MainMenuGUI::RefreshModerationControls(const NetLobbySnapshot& snapshot) {
 		const NetModerationUx::Row& seat = m_ModerationUx.GetRow(row);
 		m_ModerationSeatLabels[row]->SetText(seat.text);
 		m_ModerationApplicantButtons[row]->SetText(seat.applicantText);
+		// The host's decision in the Players panel's words.
+		std::string chosenName;
+		for (const NetH4ApplicantView& applicant : seat.view.applicants) {
+			if (applicant.connection == seat.applicant) chosenName = applicant.displayName;
+		}
+		GUIFont* buttonFont = m_SubMenuScreenGUIControlManager->GetSkin()->GetFont("FontLarge.png");
+		HostOptCaption(buttonFont, m_ModerationWaitButtons[row], "Keep for ", seat.view.displayName.empty() ? std::string("its player") : seat.view.displayName, "");
+		HostOptCaption(buttonFont, m_ModerationSubstituteButtons[row], "Let ", chosenName.empty() ? std::string("someone") : chosenName, " join");
+		m_ModerationCancelButtons[row]->SetText("Cancel this approval");
 		m_ModerationApplicantButtons[row]->SetEnabled(seat.view.actionsAvailable && (seat.applicants > 1 || (seat.applicants && seat.applicant == c_InvalidNetPeerId)));
 		m_ModerationWaitButtons[row]->SetEnabled(NetModerationUx::Available(seat, NetModerationAction::Wait));
 		m_ModerationSubstituteButtons[row]->SetEnabled(NetModerationUx::Available(seat, NetModerationAction::Substitute));

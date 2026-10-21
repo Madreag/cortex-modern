@@ -171,6 +171,8 @@ namespace RTE {
 		/// Records an assigned brain's destruction before its actor is released.
 		void NoteMatchBrainLoss(const Actor& brain, const char* cause);
 		const std::string& GetMatchEndReason() const { return m_MatchEndReason; }
+		/// The match end in a player's words, such as whose brain was destroyed; empty when the script gave no player-facing reason.
+		const std::string& GetMatchEndPlayerReason() const { return m_MatchEndPlayerReason; }
 
 		/// Test-only seam: puts a placement command on the wire exactly as issued, so a command every peer
 		/// has to refuse - an unknown preset, a seat this peer does not hold - can be exercised end to end.
@@ -904,7 +906,9 @@ namespace RTE {
 		std::mutex m_MatchBrainLossMutex;
 		std::set<long> m_MatchLostBrainIDs;
 		std::vector<std::string> m_MatchBrainLosses;
+		std::vector<std::string> m_MatchBrainLossOwners;
 		std::string m_MatchEndReason;
+		std::string m_MatchEndPlayerReason;
 
 		bool LoadNetLocalGameState(std::string_view text);
 		bool CreateNetLocalUI();

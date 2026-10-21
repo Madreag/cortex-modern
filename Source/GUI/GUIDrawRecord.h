@@ -18,9 +18,13 @@ namespace RTE {
 	/// Records that the renderer drew this panel in the open pass.
 	void RecordPanelDraw(const void* panel);
 
-	/// Whether this panel is in the frame on screen: drawn in its manager's latest pass, and that pass is no older than the given seconds.
-	/// A panel drawn outside any pass counts if it drew within the given seconds.
+	/// Whether this panel is in the frame on screen: drawn in its manager's latest pass, and that pass belongs to the frame shown or the
+	/// one being drawn. Until frames are counted, the pass must be no older than the given seconds instead. A panel drawn outside any
+	/// pass counts if it drew within the given seconds.
 	bool PanelDrawnInLatestPass(const void* panel, double seconds);
+
+	/// Counts a frame put on the screen; from the first one, a pass is judged by the frame it drew in rather than by its age.
+	void NotePanelFramePresented();
 
 	/// Milliseconds since the renderer last drew this panel, or -1 if it never did.
 	double PanelDrawAgeMs(const void* panel);

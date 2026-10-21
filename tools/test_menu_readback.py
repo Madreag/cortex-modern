@@ -82,12 +82,13 @@ NETWORK_PAGE_BOX = NETWORK_BOXES[0]
 # The first view: the name, the Connection summary and its Change, the chat switches, the status display, then Advanced settings.
 BASICS_ROWS = ("LabelNetworkDisplayName", "TextNetworkDisplayName", "LabelNetworkConnectionSummary", "LabelNetworkConnectionValue",
                "ButtonNetworkConnectionChange", "CheckboxNetworkChatVisible", "CheckboxNetworkChatNotify", "LabelMatchStatusWidget",
-               "ComboMatchStatusWidget", "ButtonNetworkAdvanced", "LabelNetworkAdvancedHint")
+               "ComboMatchStatusWidget", "LabelMatchStatusWidgetHint", "ButtonNetworkAdvanced", "LabelNetworkAdvancedHint")
 NETWORK_ROWS = ("LabelNetworkDelayPolicy",
                 "RadioNetworkDelayAuto", "RadioNetworkDelayFixed", "LabelNetworkIdleWait",
                 "TextNetworkIdleWait", "LabelNetworkIdleWaitHint", "LabelNetworkPathHorizon",
-                "TextNetworkPathHorizon", "LabelNetworkPathHorizonHint", "CheckboxNetworkAutoRepair",
-                "CheckboxNetworkToasts", "CheckboxNetworkPrediction", "CheckboxNetworkDiagnostics")
+                "TextNetworkPathHorizon", "LabelNetworkPathHorizonHint", "CheckboxNetworkAutoRepair", "LabelNetworkHostingHint")
+# This computer's in-match options, on the match page beside chat.
+IN_MATCH_ROWS = ("CheckboxNetworkToasts", "CheckboxNetworkPrediction", "LabelNetworkPredictionHint", "CheckboxNetworkDiagnostics")
 NETWORK_FIXED_ROWS = ("LabelNetworkFixedDelay", "TextNetworkFixedDelay", "LabelNetworkFixedDelayHint")
 MAX_INPUT_DELAY_FRAMES = 60  # NetMatchConfigUtil::c_MaxInputDelayFrames, which the hint states.
 LOBBY_PORT_MAP_ROW = 14  # MainMenuGUI's port-map row: the host alone maps its router port, so only its lobby carries it.
@@ -747,7 +748,7 @@ def host_relay_readback(port):
         text += checks("ComboHostNetRelay", "CollectionBoxHostPageConnection")
         text += checks("LabelHostRelayHint", "CollectionBoxHostPageConnection")
         if state == RELAY_STATES[1]:
-            text += "assert_label LabelHostRelayHint login renews itself while the session runs\n"
+            text += "assert_label LabelHostRelayHint the game service's login renews while the session runs\n"
         if state == RELAY_STATES[2]:
             for suffix, value in (("Address", "relay.example:3478"), ("User", "fixed-user"), ("Pass", "fixed-password")):
                 text += f"set_text TextHostRelay{suffix} {value}\nwait 3\n"
@@ -765,8 +766,8 @@ def connection_readback():
     text += "assert_label LabelNetworkConnection Connection\nassert_label ComboNetworkConnection Automatic\n"
     text += "assert_label LabelNetworkStunServers STUN server list\n"
     text += f"assert_label TextNetworkStunServers {STUN_DEFAULT}\n"
-    # The player's relay hint makes the host options hint's claim: UDP only, a self-renewing directory login.
-    text += "assert_label LabelNetworkRelayHint UDP TURN only; no TCP/TLS relays. A host's directory login renews while the session runs.\n"
+    # The player's relay hint makes the host options hint's claim: UDP, TCP and TLS relays, a self-renewing directory login.
+    text += "assert_label LabelNetworkRelayHint Relays support UDP, TCP and TLS. A host's directory login renews while the session runs.\n"
     for control in CONNECTION_ROWS:
         text += f"assert_visible {control} 1\nassert_rect_inside {control} CollectionBoxNetPageConnection\nassert_rect_inside {control} viewport\n"
         if control != "TextNetworkStunServers":
@@ -934,7 +935,7 @@ def sweep_options(readonly=False, live=False):
     for tab, page in OPTION_PAGES:
         # The team picker chooses whose technology and AI skill the rows under it show; picking one changes no setting.
         quiet = " quiet=ComboHostRulesTeam" if page.endswith("Rules") and not readonly else ""
-        # A page whose buttons act in place (Recalculate, Repair match now, Save diagnostics) is come back to by its own tab;
+        # A page whose buttons act in place (Repair match now, Save diagnostics) is come back to by its own tab;
         # Escape is the way back from the dialogs the Seats and Session pages open, and would leave Advanced from the others.
         in_place = page.endswith(("Timing", "Recovery", "Files"))
         back = f"back_{tab}" if in_place else "back_options"
@@ -987,7 +988,8 @@ def sweep_case(case, port, root):
                 "activate ButtonLobbyOptions\nwait_ms 400\nassert_substate HostOptions\n" + sweep_options(live=True) +
                 # Back returns to the lobby; Advanced again, and the session's own end button.
                 "activate ButtonHostOptBack\nwait 6\nassert_substate Lobby\nactivate ButtonLobbyOptions\nwait_ms 400\nassert_substate HostOptions\n"
-                "activate TabHostPageSession\nwait 4\nactivate ButtonHostSessEnd\nwait 8\nassert_substate Landing\nexit\n")
+                "activate TabHostPageSession\nwait 4\nactivate ButtonHostSessEnd\nwait 4\nassert_label ButtonHostSessEnd Confirm end\n"
+                "activate ButtonHostSessEnd\nwait 8\nassert_substate Landing\nexit\n")
     elif case == "sweep-advanced-client":
         done = probe_root(root, "host") / "client-swept.mark"
         host = (host_screen + "activate ButtonMultiplayerCreate\nwait 15\nassert_substate Lobby\nwait_connected 2 60\n" + f"wait_file {done} 300\nexit\n")
@@ -1019,7 +1021,7 @@ def sweep_case(case, port, root):
 # A match field rides the lobby's config to every peer; a computer field is this machine's own. Order matters only where one
 # field opens another: the mode and the activity before the seats and the rules they seed, the count before the seat it
 # opens, Fixed before a seat's delay,
-# autosave on before its interval.
+# autosave's interval before autosave is turned off (it starts on, every five minutes).
 def draft_fields(port):
     match = (
         ("mode", "Rules", hand_pick("ComboHostRulesMode", "Players and AI opponents"), "assert_label ComboHostRulesMode Players and AI opponents\n"),
@@ -1045,8 +1047,8 @@ def draft_fields(port):
         ("input_delay", "Timing", "settext TextHostNetMinDelay 5\nwait 4\n", "assert_label TextHostNetMinDelay 5\n"),
         ("seat_delay", "Timing", "settext TextHostNetPeerDelay2 6\nwait 4\n", "assert_label TextHostNetPeerDelay2 6\n"),
         ("repair", "Recovery", "setcheck CheckHostRecRepair 0\nwait 4\n", "assert_checked CheckHostRecRepair 0\n"),
-        ("autosave", "Recovery", "setcheck CheckHostRecAutosave 1\nwait 4\n", "assert_checked CheckHostRecAutosave 1\n"),
-        ("autosave_interval", "Recovery", "settext TextHostRecAutosaveInterval 120\nwait 4\n", "assert_label TextHostRecAutosaveInterval 120\n"),
+        ("autosave_interval", "Recovery", hand_pick("ComboHostRecAutosaveInterval", "2 minutes"), "assert_label ComboHostRecAutosaveInterval 2 minutes\n"),
+        ("autosave", "Recovery", "setcheck CheckHostRecAutosave 0\nwait 4\n", "assert_checked CheckHostRecAutosave 0\n"),
         ("return_window", "Recovery", hand_pick("ComboHostRecReturnWindow", "10 minutes"), "assert_label ComboHostRecReturnWindow 10 minutes\n"),
         ("idle_wait", "Session", hand_pick("ComboHostSessIdle", "20 minutes"), "assert_label ComboHostSessIdle 20 minutes\n"),
     )
@@ -1076,6 +1078,8 @@ def third_pass_case(case, port, root, size):
     setup = LANDING + "activate ButtonMultiplayerHostGame\nwait_ms 400\nassert_substate HostSetup\n" + f"setup_host_port {port}\n"
     match, computer = draft_fields(port)
     if case == "host-draft-roundtrip":
+        # Autosave turned off closes its interval, so the round trip keeps it on and follows the interval; host-draft-apply turns it off.
+        match = tuple(field for field in match if field[0] != "autosave")
         # Set by hand, Apply, Back, reopened: the controls show every value; Create Lobby carries every match value into the lobby
         # (the host's own live view reads the adopted config) and the joined player's read-only view shows each one.
         host = setup + advanced + "".join(page(tab) + change for _, tab, change, _ in match + computer)
@@ -1152,9 +1156,9 @@ def third_pass_case(case, port, root, size):
                              + f"wait_file {marks['done']} 120\nexit\n")
         return scripts_, {}
     if case == "host-words":
-        # Words a player reads: Recalculate offers nothing before a lobby exists; the Internet page points at a page that
+        # Words a player reads: no control on the Timing page does nothing; the Internet page points at a page that
         # exists; the Timing page names seats, not peers; the authentication line says what this build does.
-        host = (setup + advanced + page("Timing") + "assert_enabled ButtonHostNetRecalc 0\n" + hand_pick("ComboHostNetPolicy", "Fixed")
+        host = (setup + advanced + page("Timing") + "assert_no_caption CollectionBoxHostPageTiming Recalculate\n" + hand_pick("ComboHostNetPolicy", "Fixed")
                 + "assert_label_absent LabelHostNetPeer1 Peer\nassert_label LabelHostNetPeer1 Seat 1\n"
                 + page("Recovery") + "assert_label LabelHostRecRejoin Authenticated rejoin: On\n"
                 + "activate ButtonHostOptBack\nwait 6\nactivate ButtonHostBack\nwait 6\nassert_substate Landing\n"
@@ -1394,7 +1398,7 @@ def scripts(case, port, root, size="960x540"):
                  "assert_label ComboHostNetSlowPolicy Give the seat to the AI (host too) until they catch up\n"
                  # V1 offers the default policy only; the hint says the others come back.
                  "assert_combo_items ComboHostNetSlowPolicy Give the seat to the AI (host too) until they catch up\n"
-                 "assert_label LabelHostNetSlowPolicyHint A player late past 3 ticks (50 ms), host too, is held to the AI while others play on. Other policies return in a later version.\n"
+                 "assert_label LabelHostNetSlowPolicyHint A player late past 3 ticks (50 ms), host too, is held to the AI while others play on.\n"
                  "assert_text_fits LabelHostNetSlowPolicyHint\n"
                  # Nothing drafted yet: Apply has nothing to commit.
                  "assert_enabled ButtonHostOptApply 0\n"
@@ -1405,7 +1409,7 @@ def scripts(case, port, root, size="960x540"):
                  "activate ButtonHostOptBack\nwait 3\nactivate ButtonMultiplayerCreate\nwait 15\n"
                  "activate ButtonLobbyOptions\nwait 3\nactivate TabHostPageConnection\nwait 3\nactivate TabHostPageTiming\nwait 3\n"
                  "assert_label ComboHostNetRedundancy 7 ticks\nassert_label TextHostNetSlowBound 7\n"
-                 "assert_label LabelHostNetSlowPolicyHint A player late past 7 ticks (117 ms), host too, is held to the AI while others play on. Other policies return in a later version.\n"
+                 "assert_label LabelHostNetSlowPolicyHint A player late past 7 ticks (117 ms), host too, is held to the AI while others play on.\n"
                  "assert_combo_items ComboHostNetSlowPolicy Give the seat to the AI (host too) until they catch up\n"
                  "assert_enabled TextHostNetSlowBound 1\nassert_text_fits LabelHostNetSlowPolicyHint\n"
                  "dump_host_options\nexit\n")
@@ -1504,8 +1508,9 @@ def scripts(case, port, root, size="960x540"):
                  "set_text TextNetworkFixedDelay " + NETWORK_SAVED["NetworkInputDelayFrames"] + "\n"
                  "set_text TextNetworkIdleWait " + NETWORK_SAVED["NetworkHostIdleWaitMinutes"] + "\n"
                  "set_text TextNetworkPathHorizon " + NETWORK_SAVED["NetworkPathHorizonTicks"] + "\n"
-                 "post_command CheckboxNetworkAutoRepair\npost_command CheckboxNetworkToasts\n"
-                 "post_command CheckboxNetworkPrediction\npost_command CheckboxNetworkDiagnostics\nwait 3\ndump_player_options\n"
+                 "post_command CheckboxNetworkAutoRepair\nwait 3\ndump_player_options\n"
+                 "select_settings_page Network:Chat\nwait 3\n"
+                 "post_command CheckboxNetworkToasts\npost_command CheckboxNetworkPrediction\npost_command CheckboxNetworkDiagnostics\nwait 3\n"
                  "post_command ButtonBackToMainMenu\nwait 5\nassert_screen MainScreen\n")
         text += LANDING + "assert_label TextMultiplayerName " + NETWORK_SAVED["NetworkDisplayName"] + "\n"
         text += checks("LabelMultiplayerNamePrompt", "MultiplayerLandingPanel")
@@ -1527,8 +1532,9 @@ def scripts(case, port, root, size="960x540"):
         text += net_page("Chat")
         for control in ("CheckboxNetworkChatSound", "LabelNetworkChatScope", "ComboNetworkChatScope", "LabelNetworkChatTextSize",
                         "ComboNetworkChatTextSize", "LabelNetworkChatKey", "TextNetworkChatKey",
-                        "ButtonNetMutedPlayers", "LabelNetMutedReason"):
+                        "ButtonNetMutedPlayers", "LabelNetMutedReason", *IN_MATCH_ROWS):
             text += checks(control, "CollectionBoxNetPageChat")
+        text += "assert_label TabNetPageChat In match\nassert_no_overlap_within CollectionBoxNetPageChat\n"
         text += ("assert_enabled ButtonNetMutedPlayers 0\n"
                  "assert_label LabelNetMutedReason managed in the match\n"
                  "assert_label ComboNetworkChatScope " + CHAT_SEED["NetworkChatDefaultScope"] + "\n"
@@ -1564,10 +1570,10 @@ def scripts(case, port, root, size="960x540"):
                         "LabelNetDiagDirTitle", "TextNetworkDiagDir", "ButtonNetOpenDiagnostics",
                         "ButtonNetCopyDiagPath", "ButtonNetSaveDiagnostics", "CheckboxNetworkRecordReplays"):
             text += checks(control, "CollectionBoxNetPageFiles")
-        # The seeded 45 is under the minute a hosted match clamps to; the page shows that 60 s.
-        text += ("assert_label LabelNetAutosave Enabled\n"
-                 "assert_label LabelNetAutosaveInterval 60 s\n"
-                 "assert_label LabelNetAutosaveHost Both set by the host\n"
+        # The seeded 45 is under the minute a hosted match clamps to; outside a match the page shows that minute as this computer's own.
+        text += ("assert_label LabelNetAutosave On\n"
+                 "assert_label LabelNetAutosaveInterval Every 1 minute\n"
+                 "assert_label LabelNetAutosaveHost Your hosting default\n"
                  "assert_label LabelNetAutosavesKeptTitle Autosaves kept:\n"
                  "assert_label LabelNetAutosavesKeptHint " + AUTOSAVES_KEPT_HINT + "\n"
                  "assert_label TextNetworkAutosavesKept " + FILES_SEED["NetworkAutosavesKept"] + "\n"
@@ -1623,10 +1629,12 @@ def scripts(case, port, root, size="960x540"):
                  "assert_visible LabelHostInputDelayPolicy 0\nassert_visible TextHostInputDelay 0\nassert_visible TextHostPort 0\n"
                  "dump_host_options\n"
                  # The seeded policy is automatic and Advanced's Timing page says so; autosave is on every five minutes by default,
-                 # and turned off its interval box is the disabled frame the dump below is read for.
+                 # and turned off by hand its cadence is the disabled frame the dump below is read for.
                  "activate ButtonHostOptions\nwait 5\nactivate TabHostPageTiming\nwait 3\nassert_label ComboHostNetPolicy Automatic\ndump_host_options\n"
-                 "activate TabHostPageRecovery\nwait 3\nassert_enabled TextHostRecAutosaveInterval 1\nassert_label TextHostRecAutosaveInterval 300\n"
-                 "setcheck CheckHostRecAutosave 0\nwait_ms 500\nassert_checked CheckHostRecAutosave 0\nassert_enabled TextHostRecAutosaveInterval 0\ndump_host_options\n"
+                 "activate TabHostPageRecovery\nwait 3\nassert_checked CheckHostRecAutosave 1\n"
+                 "assert_enabled ComboHostRecAutosaveInterval 1\nassert_label ComboHostRecAutosaveInterval 5 minutes\n"
+                 "setcheck CheckHostRecAutosave 0\nwait 4\nassert_checked CheckHostRecAutosave 0\n"
+                 "assert_enabled ComboHostRecAutosaveInterval 0\nassert_enabled ComboHostRecReturnWindow 1\ndump_host_options\n"
                  "activate ButtonHostOptBack\nwait 4\nassert_substate HostSetup\n"
                  f"setup_host_port {port}\ncombo_select ComboHostPlayers 2\n"
                  "activate ButtonMultiplayerCreate\nwait 15\nassert_substate Lobby\n"
@@ -1786,6 +1794,7 @@ def scripts(case, port, root, size="960x540"):
                 "activate TabHostPageSeats\nwait 3\nassert_visible CollectionBoxHostPageSeats 1\n"
                 "activate ButtonHostSeatDetails1\nwait 3\nassert_visible HostSeatDialog 1\n"
                 "assert_enabled ButtonHostSeatDlgKick 1\nassert_enabled ButtonHostSeatDlgBan 1\n"
+                "activate ButtonHostSeatDlgKick\nwait 4\nassert_label ButtonHostSeatDlgKick Confirm kick\n"
                 "activate ButtonHostSeatDlgKick\nwait 10\n"
                 "assert_visible HostSeatDialog 0\n"
                 "assert_label LabelHostOptStatus Kick: Done.\n"
@@ -1813,6 +1822,7 @@ def scripts(case, port, root, size="960x540"):
                 "activate ButtonHostSeatDetails1\nwait 3\nassert_visible HostSeatDialog 1\n"
                 "assert_label LabelHostSeatDlgName Joiner\n"
                 "assert_enabled ButtonHostSeatDlgBan 1\n"
+                "activate ButtonHostSeatDlgBan\nwait 4\nassert_label ButtonHostSeatDlgBan Confirm ban\n"
                 "activate ButtonHostSeatDlgBan\nwait 10\n"
                 "assert_visible HostSeatDialog 0\n"
                 "assert_label LabelHostOptStatus Ban: Done.\n"
@@ -2029,10 +2039,11 @@ def scripts(case, port, root, size="960x540"):
             text += checks(control, "CollectionBoxHostPageTiming")
         text += "assert_label TextHostNetSlowBound 3\n"
         text += "assert_label ComboHostNetSlowPolicy Give the seat to the AI (host too) until they catch up\n"
-        text += "assert_label LabelHostNetSlowPolicyHint A player late past 3 ticks (50 ms), host too, is held to the AI while others play on. Other policies return in a later version.\n"
+        text += "assert_label LabelHostNetSlowPolicyHint A player late past 3 ticks (50 ms), host too, is held to the AI while others play on.\n"
         text += "assert_label LabelHostNetEffective Effective delay: ping plus a 3-tick margin, raised live if inputs arrive late, at least\n"
         text += checks("LabelHostNetEffective", "CollectionBoxHostPageTiming")
-        text += checks("ButtonHostNetRecalc", "CollectionBoxHostPageTiming")
+        text += checks("LabelHostNetPing", "CollectionBoxHostPageTiming")
+        text += checks("LabelHostNetOptionHint", "CollectionBoxHostPageTiming")
         # The host row names mode/capacity/seated humans off the adopted config.
         text += checks("LabelHostNetMode", "CollectionBoxHostPageTiming")
         text += "assert_label LabelHostNetMode Host mode: Player host - capacity 2 - humans seated 1\n"
@@ -2094,30 +2105,22 @@ def scripts(case, port, root, size="960x540"):
                  "assert_label ComboHostRecJoinHistory 10 minutes\n"
                  "combo_select ComboHostRecJoinLag 1 minute\nwait_ms 500\n"
                  "assert_label ComboHostRecJoinLag 1 minute\n")
-        # A new host saves every five minutes by default.
-        text += ("assert_checked CheckHostRecAutosave 1\nassert_enabled TextHostRecAutosaveInterval 1\n"
-                 "assert_label TextHostRecAutosaveInterval 300\n"
-                 "assert_label LabelHostRecLastSave Checkpoint every 300 sim seconds - none saved yet\n"
+        text += ("assert_checked CheckHostRecAutosave 1\n"
+                 "assert_enabled ComboHostRecAutosaveInterval 1\n"
+                 # A hosted match checkpoints every five minutes unless its host says otherwise.
+                 "assert_label ComboHostRecAutosaveInterval 5 minutes\n"
+                 "assert_label LabelHostRecLastSave Checkpoint every 5 minutes - none saved yet\n"
+                 # The caption follows the picked cadence before any Apply: every minute through every hour.
+                 + hand_pick("ComboHostRecAutosaveInterval", "60 minutes") +
+                 "assert_label LabelHostRecLastSave Checkpoint every 60 minutes - none saved yet\n"
+                 + hand_pick("ComboHostRecAutosaveInterval", "1 minute") +
+                 "assert_label LabelHostRecLastSave Checkpoint every 1 minute - none saved yet\n"
+                 # Off is the checkbox, and the cadence goes with it.
                  "setcheck CheckHostRecAutosave 0\nwait_ms 500\nassert_checked CheckHostRecAutosave 0\n"
-                 "assert_label LabelHostRecLastSave No autosaves while this is off\n"
-                 "setcheck CheckHostRecAutosave 1\nwait_ms 500\nassert_checked CheckHostRecAutosave 1\n"
-                 "assert_enabled TextHostRecAutosaveInterval 1\n"
-                 # Switching autosave on from off starts at the shortest cadence, not the off zero.
-                 "assert_label TextHostRecAutosaveInterval 60\n"
-                 "assert_label LabelHostRecLastSave Checkpoint every 60 sim seconds - none saved yet\n"
-                 # The caption follows the typed interval on the Changed notification,
-                 # before any Apply or focus loss commits it. The product bounds the interval to
-                 # every minute through every hour: 5 commits as 60, 3600 keeps, 0 stays off.
-                 "set_text TextHostRecAutosaveInterval 5\nwait_ms 500\n"
-                 "assert_label TextHostRecAutosaveInterval 60\n"
-                 "assert_label LabelHostRecLastSave Checkpoint every 60 sim seconds - none saved yet\n"
-                 "set_text TextHostRecAutosaveInterval 3600\nwait_ms 500\n"
-                 "assert_label TextHostRecAutosaveInterval 3600\n"
-                 "assert_label LabelHostRecLastSave Checkpoint every 3600 sim seconds - none saved yet\n"
-                 "set_text TextHostRecAutosaveInterval 0\nwait_ms 500\n"
+                 "assert_enabled ComboHostRecAutosaveInterval 0\n"
                  "assert_label LabelHostRecLastSave No autosaves while this is off\n"
                  "assert_label LabelHostRecAutosaveHint Every 60 s to 60 min; 5 min by default\n"
-                 # A typed 0 is off at Apply too: the service accepts off instead of refusing an enabled zero.
+                 # Off is off at Apply too: the service accepts off instead of refusing an enabled zero.
                  # Apply publishes an open-seat lobby too; read the committed revision's
                  # confirmation rather than accepting a pending draft or stale edit hint.
                  "activate ButtonHostOptApply\nwait_ms 500\n"
@@ -2130,9 +2133,10 @@ def scripts(case, port, root, size="960x540"):
                  # The host's own picks stand through the Apply that republishes the lobby.
                  "assert_label ComboHostRecJoinHistory 10 minutes\n"
                  "assert_label ComboHostRecJoinLag 1 minute\n"
-                 "setcheck CheckHostRecAutosave 0\nwait_ms 500\nassert_checked CheckHostRecAutosave 0\n"
-                 "assert_enabled TextHostRecAutosaveInterval 0\n")
-        text += checks("TextHostRecAutosaveInterval", "CollectionBoxHostPageRecovery")
+                 # Switching it back on starts at the default cadence, not the off zero.
+                 "setcheck CheckHostRecAutosave 1\nwait_ms 500\nassert_checked CheckHostRecAutosave 1\n"
+                 "assert_enabled ComboHostRecAutosaveInterval 1\nassert_label ComboHostRecAutosaveInterval 5 minutes\n")
+        text += checks("ComboHostRecAutosaveInterval", "CollectionBoxHostPageRecovery")
         # H25: a lobby is not a live match, so the button is off and the hint says why.
         text += checks("ButtonHostRecRepairNow", "CollectionBoxHostPageRecovery")
         text += checks("LabelHostRecRepairHint", "CollectionBoxHostPageRecovery")
@@ -3072,7 +3076,7 @@ def run_case(options, case, root, failing=None):
             assert base[1] * 2 + base[3] == res_y, (base, res_y)
             # The player page shares the other pages' value column.
             column = rows["CollectionBoxNetPagePlayer"]["rect"][0] + NETWORK_VALUE_COLUMN
-            assert rows["CheckboxNetworkPrediction"]["rect"][0] == column, rows["CheckboxNetworkPrediction"]["rect"]
+            assert rows["RadioNetworkDelayAuto"]["rect"][0] == column, rows["RadioNetworkDelayAuto"]["rect"]
             assert not set(NETWORK_FIXED_ROWS) & rows.keys(), sorted(rows)
             assert all(rows[name]["text_fits"] for name in NETWORK_ROWS if rows[name]["text"]), rows
             after = {control["name"]: control for control in page[1]["controls"]}
@@ -3091,13 +3095,16 @@ def run_case(options, case, root, failing=None):
             # The page sits on the Misc page's grid: its first row at the top row, a 20px row pitch, and under the
             # automatic policy the hidden fixed row leaves no gap behind it.
             pitch = ("LabelNetworkDelayPolicy", "LabelNetworkFixedDelay", "LabelNetworkIdleWait", "LabelNetworkPathHorizon",
-                     "CheckboxNetworkAutoRepair", "CheckboxNetworkToasts", "CheckboxNetworkDiagnostics")
+                     "CheckboxNetworkAutoRepair")
             assert after[pitch[0]]["rect"][1] - after["CollectionBoxNetPagePlayer"]["rect"][1] == 12, (after[pitch[0]], after["CollectionBoxNetPagePlayer"])
             deltas = [after[b]["rect"][1] - after[a]["rect"][1] for a, b in zip(pitch, pitch[1:])]
-            assert deltas == [20] * 6, deltas
+            assert deltas == [20] * 4, deltas
             without_fixed = pitch[:1] + pitch[2:]
             closed = [rows[b]["rect"][1] - rows[a]["rect"][1] for a, b in zip(without_fixed, without_fixed[1:])]
-            assert closed == [20] * 5, closed
+            assert closed == [20] * 3, closed
+            # The hosting hint sits under the last row and moves with it.
+            assert after["LabelNetworkHostingHint"]["rect"][1] - after["CheckboxNetworkAutoRepair"]["rect"][1] == 28, after["LabelNetworkHostingHint"]
+            assert rows["LabelNetworkHostingHint"]["rect"][1] - rows["CheckboxNetworkAutoRepair"]["rect"][1] == 28, rows["LabelNetworkHostingHint"]
             # The landing's name row shares the Host/Join block's centre line; doubled centres avoid halves.
             landing = {c["name"]: c for c in images[-1]["controls"]}
             prompt, box = landing["LabelMultiplayerNamePrompt"]["rect"], landing["TextMultiplayerName"]["rect"]
@@ -3184,9 +3191,9 @@ def run_case(options, case, root, failing=None):
                     assert all(rect[0] == column for rect in opens) and all(rect[0] == action_column for rect in copies), (opens, copies)
                     assert opens[0][2:] == opens[1][2:] and copies[0][2:] == copies[1][2:], (opens, copies)
                     assert opens[1][1] - opens[0][1] == copies[1][1] - copies[0][1] == 40, (opens, copies)
-                    # One note covers both host-set rows: it spans them, so the page never says it twice.
+                    # One note covers both autosave rows: it spans them, so the page never says it twice.
                     note, first, second = (rows[name] for name in ("LabelNetAutosaveHost", "LabelNetAutosave", "LabelNetAutosaveInterval"))
-                    assert note["text"] == "Both set by the host" and note["enabled"] is False, note
+                    assert note["text"] == "Your hosting default" and note["enabled"] is False, note
                     assert note["rect"][1] == first["rect"][1] and note["rect"][1] + note["rect"][3] == second["rect"][1] + second["rect"][3], (note, first, second)
                     assert "LabelNetAutosaveIntervalHost" not in rows, rows.get("LabelNetAutosaveIntervalHost")
                     widths = {rows[name]["rect"][2] for name in FILES_BUTTONS}
@@ -3211,8 +3218,8 @@ def run_case(options, case, root, failing=None):
                 result["saved"] = read_settings(runs["host"].cwd / "Userdata/Settings.ini", set(RECOVERY_SAVED))
                 assert result["saved"] == RECOVERY_SAVED, result["saved"]
             if case == "net-files":
-                assert rows["LabelNetAutosave"]["text"] == "Enabled", rows["LabelNetAutosave"]
-                assert rows["LabelNetAutosaveInterval"]["text"] == "60 s", rows["LabelNetAutosaveInterval"]
+                assert rows["LabelNetAutosave"]["text"] == "On", rows["LabelNetAutosave"]
+                assert rows["LabelNetAutosaveInterval"]["text"] == "Every 1 minute", rows["LabelNetAutosaveInterval"]
                 assert rows["TextNetworkDiagDir"]["text"] == FILES_SAVED["NetworkDiagnosticsDirectory"], rows["TextNetworkDiagDir"]
                 result["saved"] = read_settings(runs["host"].cwd / "Userdata/Settings.ini", set(FILES_SAVED))
                 assert result["saved"] == FILES_SAVED, result["saved"]
@@ -3282,11 +3289,10 @@ def run_case(options, case, root, failing=None):
             # The four setup rows share one value column.
             columns = {host_setup[name]["rect"][0] for name in ("ComboHostActivity", "ComboHostScene", "ComboHostMode", "ComboHostPlayers")}
             assert len(columns) == 1, columns
-            # A disabled text box's frame is DimRect at 55% of an enabled TextBox frame.
-            timing = {c["name"]: c for c in images[2]["controls"]}
+            # A disabled control's frame is DimRect at 55% of the same kind of control enabled: two drop-downs of one page.
             recovery = {c["name"]: c for c in images[3]["controls"]}
-            delay_luma = frame_luma(images[3]["png"], recovery["TextHostRecAutosaveInterval"]["rect"])
-            port_luma = frame_luma(images[2]["png"], timing["TextHostNetSlowBound"]["rect"])
+            delay_luma = frame_luma(images[3]["png"], recovery["ComboHostRecAutosaveInterval"]["rect"])
+            port_luma = frame_luma(images[3]["png"], recovery["ComboHostRecReturnWindow"]["rect"])
             result["delay_frame_luma"] = delay_luma
             result["port_frame_luma"] = port_luma
             assert port_luma > 0, (delay_luma, port_luma)

@@ -15,6 +15,8 @@ namespace RTE {
 		bool Visible(GUIControl* control);
 		bool Enabled(GUIControl* control);
 		bool Text(GUIControl* control, std::string& text);
+		/// Whether the drop-down is on the screen as last drawn and lists the item; the observation names what it shows.
+		bool ComboShowsItem(GUIControlManager* manager, const std::string& comboName, const std::string& item, std::string& observation);
 		/// Name of the settings page the manager currently shows, empty when it shows no settings page.
 		std::string SettingsPage(GUIControlManager* manager);
 		bool Handles(const std::string& command);

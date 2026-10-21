@@ -20,6 +20,18 @@
    "name": "ButtonNetMutedPlayers",
    "enabled": false,
    "reason": "Nobody is muted."
+  },
+  {
+   "name": "CheckboxNetworkToasts",
+   "enabled": true
+  },
+  {
+   "name": "CheckboxNetworkPrediction",
+   "enabled": true
+  },
+  {
+   "name": "CheckboxNetworkDiagnostics",
+   "enabled": true
   }
  ]
 }

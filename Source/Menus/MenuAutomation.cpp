@@ -190,6 +190,21 @@ namespace RTE::MenuAutomation {
 		for (auto* node = control->GetPanel(); node; node = node->GetParentPanel()) if (!node->_GetEnabled()) return false;
 		return true;
 	}
+	bool ComboShowsItem(GUIControlManager* manager, const std::string& comboName, const std::string& item, std::string& observation) {
+		auto* combo = manager ? dynamic_cast<GUIComboBox*>(manager->GetControl(comboName)) : nullptr;
+		if (!combo) {
+			observation = comboName + " is not a drop-down";
+			return false;
+		}
+		bool listed = false;
+		for (int i = 0; i < combo->GetCount(); ++i) {
+			if (const GUIListPanel::Item* entry = combo->GetItem(i)) listed = listed || entry->m_Name == item;
+		}
+		const bool shown = Enabled(combo) && PanelDrawnInLatestPass(combo->GetPanel(), c_DrawWindowSeconds);
+		observation = comboName + (shown ? " is on the screen" : " is not on the screen") + " with " + std::to_string(combo->GetCount()) + " items" +
+		              (listed ? "" : ", none of them \"" + item + "\"");
+		return shown && listed;
+	}
 	// Both settings skins name a page's tab and box after the page, so scripts address pages by name.
 	constexpr std::array<std::string_view, 6> c_SettingsPages{"Video", "Audio", "Input", "Gameplay", "Misc", "Network"};
 	// The network page's own selector names its sub-pages the same way; a script addresses
@@ -384,6 +399,18 @@ namespace RTE::MenuAutomation {
 				}
 			}
 			return std::nullopt;
+		}
+
+		/// Whether the screen shows a control it has not drawn since its last pass ended: a slow frame or a screen that just opened.
+		bool Unseen(GUIControl* control) { return control && control->GetPanel() && Enabled(control) && !PanelDrawnInLatestPass(control->GetPanel(), c_DrawWindowSeconds); }
+
+		/// A hand looks before it reaches: it waits, a drawn frame at a time, until the screen shows the control.
+		void AppendSight(std::vector<Phase>& phases, GUIControlManager* manager, std::string name) {
+			phases.push_back([manager, name](std::string& note) {
+				if (!Unseen(manager->GetControl(name))) return Beat::Next;
+				note = name + " is not on the screen";
+				return Beat::Again;
+			});
 		}
 
 		void Start(std::string name, std::vector<Phase> phases) {
@@ -892,6 +919,7 @@ namespace RTE::MenuAutomation {
 	}
 
 	void AfterDrawnFrame() {
+		NotePanelFramePresented();
 		++Hand::s_DrawnFrames;
 		Hand::Advance();
 	}
@@ -901,11 +929,13 @@ namespace RTE::MenuAutomation {
 
 	bool HandClick(GUIControlManager* manager, const std::string& name, GUIControl* modal, std::string& observation, int presses) {
 		std::string why;
-		if (!manager || !Hand::Target(manager, manager->GetControl(name), modal, why)) {
+		const bool unseen = manager && Hand::Unseen(manager->GetControl(name));
+		if (!manager || (!unseen && !Hand::Target(manager, manager->GetControl(name), modal, why))) {
 			observation = name + " " + why;
 			return false;
 		}
 		std::vector<Hand::Phase> phases;
+		if (unseen) Hand::AppendSight(phases, manager, name);
 		Hand::AppendClick(phases, manager, name, modal, presses);
 		Hand::Start((presses > 1 ? "double-click " : "click ") + name, std::move(phases));
 		NoteReached(name);
@@ -963,20 +993,26 @@ namespace RTE::MenuAutomation {
 
 	bool HandPoint(GUIControlManager* manager, const std::string& name, std::string& observation) {
 		std::string why;
-		const auto target = manager ? Hand::Target(manager, manager->GetControl(name), nullptr, why) : std::nullopt;
-		if (!target) {
+		const bool unseen = manager && Hand::Unseen(manager->GetControl(name));
+		if (!manager || (!unseen && !Hand::Target(manager, manager->GetControl(name), nullptr, why))) {
 			observation = name + " " + why;
 			return false;
 		}
 		auto* box = dynamic_cast<GUITextBox*>(manager->GetControl(name));
 		std::vector<Hand::Phase> phases;
+		if (unseen) Hand::AppendSight(phases, manager, name);
 		if (box) {
 			// A hand gives a box the keyboard by clicking into it.
 			Hand::AppendClick(phases, manager, name, nullptr);
 		} else {
-			const std::pair<int, int> point = *target;
-			phases.push_back([point](std::string&) {
-				Hand::Move(point.first, point.second);
+			phases.push_back([manager, name](std::string& note) {
+				std::string why;
+				const auto point = Hand::Target(manager, manager->GetControl(name), nullptr, why);
+				if (!point) {
+					note = name + " " + why;
+					return Hand::Beat::Fail;
+				}
+				Hand::Move(point->first, point->second);
 				return Hand::Beat::Next;
 			});
 			phases.push_back([](std::string&) { return Hand::Beat::Next; });
@@ -990,11 +1026,13 @@ namespace RTE::MenuAutomation {
 	bool HandType(GUIControlManager* manager, const std::string& name, const std::string& text, bool enter, std::string& observation, const std::string& enterWith) {
 		auto* box = manager ? dynamic_cast<GUITextBox*>(manager->GetControl(name)) : nullptr;
 		std::string why;
-		if (!box || !Hand::Target(manager, box, nullptr, why)) {
+		const bool unseen = Hand::Unseen(box);
+		if (!box || (!unseen && !Hand::Target(manager, box, nullptr, why))) {
 			observation = name + (box ? " " + why : " is not a text box");
 			return false;
 		}
 		std::vector<Hand::Phase> phases;
+		if (unseen) Hand::AppendSight(phases, manager, name);
 		Hand::AppendClick(phases, manager, name, nullptr);
 		const bool credential = Credential(box) || CredentialName(name);
 		phases.push_back([manager, box](std::string& note) {
@@ -1067,11 +1105,13 @@ namespace RTE::MenuAutomation {
 			return false;
 		}
 		std::string why;
-		if (!combo->IsDropped() && !Hand::Target(manager, combo, nullptr, why)) {
+		const bool unseen = !combo->IsDropped() && Hand::Unseen(combo);
+		if (!combo->IsDropped() && !unseen && !Hand::Target(manager, combo, nullptr, why)) {
 			observation = name + " " + why;
 			return false;
 		}
 		std::vector<Hand::Phase> phases;
+		if (unseen) Hand::AppendSight(phases, manager, name);
 		if (!combo->IsDropped()) Hand::AppendClick(phases, manager, name, nullptr);
 		phases.push_back([combo](std::string& note) {
 			if (combo->IsDropped()) return Hand::Beat::Next;
@@ -1121,7 +1161,8 @@ namespace RTE::MenuAutomation {
 		GUIControl* control = manager ? manager->GetControl(listName) : nullptr;
 		auto* list = dynamic_cast<GUIListPanel*>(control);
 		std::string why;
-		if (!list || !Hand::Target(manager, control, modal, why)) {
+		const bool unseen = list && Hand::Unseen(control);
+		if (!list || (!unseen && !Hand::Target(manager, control, modal, why))) {
 			observation = listName + (list ? " " + why : " is not a list");
 			return false;
 		}
@@ -1131,6 +1172,7 @@ namespace RTE::MenuAutomation {
 		}
 		auto point = std::make_shared<std::pair<int, int>>();
 		std::vector<Hand::Phase> phases;
+		if (unseen) Hand::AppendSight(phases, manager, listName);
 		phases.push_back([manager, list, index, point](std::string& note) { return Hand::ReachRow(manager, list, index, *point, note); });
 		phases.push_back([point](std::string&) {
 			Hand::Move(point->first, point->second);
@@ -1159,7 +1201,8 @@ namespace RTE::MenuAutomation {
 	bool HandDrag(GUIControlManager* manager, const std::string& name, int value, std::string& observation) {
 		auto* slider = manager ? dynamic_cast<GUISlider*>(manager->GetControl(name)) : nullptr;
 		std::string why;
-		if (!slider || !Hand::Target(manager, slider, nullptr, why)) {
+		const bool unseen = Hand::Unseen(slider);
+		if (!slider || (!unseen && !Hand::Target(manager, slider, nullptr, why))) {
 			observation = name + (slider ? " " + why : " is not a slider");
 			return false;
 		}
@@ -1176,6 +1219,7 @@ namespace RTE::MenuAutomation {
 		auto tries = std::make_shared<int>(0);
 		auto stage = std::make_shared<int>(0);
 		std::vector<Hand::Phase> phases;
+		if (unseen) Hand::AppendSight(phases, manager, name);
 		phases.push_back([manager, slider, value, horizontal, r, length, offset, tries, stage](std::string& note) {
 			const int x = horizontal ? r[0] + *offset : r[0] + r[2] / 2, y = horizontal ? r[1] + r[3] / 2 : r[1] + *offset;
 			switch ((*stage)++) {
@@ -1314,14 +1358,16 @@ namespace RTE::MenuAutomation {
 		if (!s_Watches.empty()) s_DrawnText.emplace_back(source, text);
 	}
 
-	double s_FrameSpanMs = c_DrawWindowSeconds * 1000;
 	RTE::SteadyClock::time_point s_LastEvaluated;
+	RTE::SteadyClock::time_point s_PreviousEvaluated;
 
-	/// Drawn during the frame being judged: since the previous frame's evaluation.
+	/// Drawn during the frame being judged: since the previous frame's evaluation began, whenever in this one it is asked.
 	bool Shown(GUIControl* control) {
 		if (!Visible(control)) return false;
 		const double age = PanelDrawAgeMs(control->GetPanel());
-		return age >= 0 && age <= s_FrameSpanMs;
+		const double sinceCheck = s_PreviousEvaluated.time_since_epoch().count() == 0 ? c_DrawWindowSeconds * 1000 :
+		                          std::chrono::duration<double, std::milli>(RTE::SteadyClock::now() - s_PreviousEvaluated).count();
+		return age >= 0 && age <= sinceCheck + 1.0;
 	}
 
 	std::vector<std::pair<std::string, GUIControlManager*>> WatchedManagersFor(GUIControlManager* menu, GUIControlManager* network, GUIControlManager* overlay) {
@@ -1628,8 +1674,8 @@ namespace RTE::MenuAutomation {
 			ReportWatches("kill");
 		}
 		const auto now = RTE::SteadyClock::now();
-		const double span = s_LastEvaluated.time_since_epoch().count() == 0 ? c_DrawWindowSeconds * 1000 : std::chrono::duration<double, std::milli>(now - s_LastEvaluated).count();
-		s_FrameSpanMs = std::clamp(span + 1.0, 1.0, c_DrawWindowSeconds * 1000);
+		// Shown means drawn since the last check began, which ran after the frame before: a slow frame is still one frame.
+		s_PreviousEvaluated = s_LastEvaluated.time_since_epoch().count() == 0 ? now - std::chrono::milliseconds(static_cast<int>(c_DrawWindowSeconds * 1000)) : s_LastEvaluated;
 		s_LastEvaluated = now;
 		std::vector<ShownLine> lines;
 		bool linesRead = false;
@@ -1748,7 +1794,7 @@ namespace RTE::MenuAutomation {
 			command == "slider_set" || command == "wheel_control" || command == "model_mark" || command == "assert_model_changed" || command == "screen_mark" || command == "assert_screen_changed" ||
 			command == "assert_box_text" || command == "type_text" || command == "assert_value" || command == "assert_selected" || command == "click_row" ||
 			command == "select_settings_page" || command == "assert_settings_page" || command == "video_mark" ||
-			command == "assert_label" || command == "assert_checked" || command == "assert_vertical_scroll" ||
+			command == "assert_label" || command == "assert_label_absent" || command == "assert_no_caption" || command == "assert_checked" || command == "assert_vertical_scroll" ||
 			command == "assert_opaque_panel" || command == "dump_network_layout" || command == "dump_match_identity" ||
 			command == "assert_not_drawn" || command == "assert_toast_band" || command == "assert_word_wrap" || command == "assert_roster_fits" || command == "assert_roster_text" || command == "status_line" || command == "ghost_watch" || command == "text_watch" || command == "assert_list_rows" ||
 			command == "assert_net_label" || command == "assert_net_label_absent" || command == "push_toast" || command == "dump_seat_state" || command == "dump_world_ownership" || command == "fire_assert" || command == "fire_abort" || command == "fire_worker_throw" ||
@@ -2373,6 +2419,45 @@ namespace RTE::MenuAutomation {
 				}
 				return found && text.find(expected) != std::string::npos;
 			}
+			if (command == "assert_label_absent") {
+				std::string name, unexpected, text;
+				args >> name;
+				std::getline(args >> std::ws, unexpected);
+				bool found = DisplayText(manager->GetControl(name), text);
+				MainMenuGUI* main = g_MenuMan.GetMainMenu();
+				if (!found && main && manager == main->AutomationManager()) found = main->AutomationLabelText(name, text);
+				const bool credential = CredentialName(name) || Credential(manager->GetControl(name));
+				observation = name + " \"" + Captured(credential, unexpected) + "\" text=\"" + Captured(credential, text) + "\"";
+				if (GUIControl* control = manager->GetControl(name); control && !Visible(control)) {
+					observation += " (not on the screen)";
+					return false;
+				}
+				return found && !unexpected.empty() && text.find(unexpected) == std::string::npos;
+			}
+			if (command == "assert_no_caption") {
+				// No shown control inside the panel carries the words: a control that was taken away stays away.
+				std::string name, words;
+				args >> name;
+				std::getline(args >> std::ws, words);
+				GUIControl* panel = manager->GetControl(name);
+				observation = name + " \"" + words + "\"";
+				if (!panel || !Visible(panel) || words.empty()) {
+					observation += " (the panel is not on the screen)";
+					return false;
+				}
+				std::vector<GUIControl*> open{panel};
+				while (!open.empty()) {
+					GUIControl* control = open.back();
+					open.pop_back();
+					std::string text;
+					if (control != panel && Visible(control) && DisplayText(control, text) && text.find(words) != std::string::npos) {
+						observation += " shown by " + control->GetName();
+						return false;
+					}
+					if (auto* children = control->GetChildren()) for (GUIControl* child: *children) open.push_back(child);
+				}
+				return true;
+			}
 			if (command == "key_down" || command == "key_up") {
 				std::string key;
 				args >> std::quoted(key);
@@ -2804,6 +2889,20 @@ namespace RTE::MenuAutomation {
 				EndPanelDrawPass(previous);
 			}
 			check("draw_record_forgets_a_destroyed_managers_panels", PanelDrawAgeMs(&child) < 0, "child_age_ms=" + std::to_string(PanelDrawAgeMs(&child)));
+			// Once frames are counted, a frame slower than the window keeps what it drew on the screen, and a manager that missed it is off.
+			int slowManager = 0, staleManager = 0, slow = 0, stale = 0;
+			NotePanelFramePresented();
+			previous = BeginPanelDrawPass(&staleManager);
+			RecordPanelDraw(&stale);
+			EndPanelDrawPass(previous);
+			NotePanelFramePresented();
+			previous = BeginPanelDrawPass(&slowManager);
+			RecordPanelDraw(&slow);
+			EndPanelDrawPass(previous);
+			std::this_thread::sleep_for(std::chrono::milliseconds(static_cast<int>(c_DrawWindowSeconds * 1000) + 50));
+			NotePanelFramePresented();
+			check("draw_record_slow_frame_stays_on_screen", PanelDrawnInLatestPass(&slow, c_DrawWindowSeconds) && !PanelDrawnInLatestPass(&stale, c_DrawWindowSeconds),
+			      "slow_age_ms=" + std::to_string(PanelDrawAgeMs(&slow)));
 			ClearPanelDrawRecord();
 		}
 		{
@@ -2815,9 +2914,9 @@ namespace RTE::MenuAutomation {
 			same("hint_policy_substitute", NetSlowPlayerPolicyText(NetSlowPlayerPolicy::Substitute), "Give the seat to the AI (host too) until they catch up");
 			same("hint_policy_pause", NetSlowPlayerPolicyText(NetSlowPlayerPolicy::Pause), "Pause for them (up to 20 s)");
 			same("hint_bound_substitute", NetSlowPlayerHint(NetSlowPlayerPolicy::Substitute, 3, tickMs),
-			     "A player late past 3 ticks (50 ms), host too, is held to the AI while others play on. Other policies return in a later version.");
+			     "A player late past 3 ticks (50 ms), host too, is held to the AI while others play on.");
 			same("hint_bound_one_tick", NetSlowPlayerHint(NetSlowPlayerPolicy::Substitute, 1, tickMs),
-			     "A player late past 1 tick (17 ms), host too, is held to the AI while others play on. Other policies return in a later version.");
+			     "A player late past 1 tick (17 ms), host too, is held to the AI while others play on.");
 			same("hint_bound_pause", NetSlowPlayerHint(NetSlowPlayerPolicy::Pause, 3, tickMs), "Everyone waits for a late player, host included, for up to 20 s.");
 			same("hint_auto_delay", NetAutoDelayText(3), "ping plus a 3-tick margin, raised live if inputs arrive late");
 			same("hint_autosave_range", NetAutosaveRangeHint(), "Every 60 s to 60 min; 5 min by default");

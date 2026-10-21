@@ -21,7 +21,7 @@
    "enabled": true
   },
   {
-   "name": "TextHostRecAutosaveInterval",
+   "name": "ComboHostRecAutosaveInterval",
    "enabled": true
   },
   {

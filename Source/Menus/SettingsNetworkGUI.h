@@ -43,6 +43,9 @@ namespace RTE {
 		/// Handles the player interaction with the SettingsNetworkGUI GUI elements.
 		/// @param guiEvent The GUIEvent containing information about the player interaction with an element.
 		void HandleInputEvents(GUIEvent& guiEvent);
+
+		/// Names, under the Hosting rows, what the row the hand points at or has focused costs.
+		void UpdateHoverHints();
 #pragma endregion
 
 	private:
@@ -79,10 +82,15 @@ namespace RTE {
 		GUICheckbox* m_PredictionCheckbox;
 		GUICheckbox* m_DiagnosticsCheckbox;
 		GUIComboBox* m_StatusModeCombo;
+		GUILabel* m_StatusModeHint;
 		GUIComboBox* m_ConnectionIndicatorCombo;
 		GUILabel* m_ConnectionIndicatorHint;
+		GUILabel* m_HostingHint; //!< What the Hosting row under the hand or with the focus costs.
+		std::array<std::pair<GUIControl*, int>, 10> m_HostingHintRows; //!< Each Hosting row's controls and the hint row they name.
+		int m_HostingHintRow = 0;
+		GUILabel* m_PredictionHint;
 		/// Every row drawn under the fixed-delay row, with the y it sits at while that row is drawn.
-		std::array<std::pair<GUIControl*, int>, 10> m_RowsUnderFixedDelay;
+		std::array<std::pair<GUIControl*, int>, 8> m_RowsUnderFixedDelay;
 
 		// Chat page.
 		GUICheckbox* m_ChatVisibleCheckbox;
@@ -105,6 +113,7 @@ namespace RTE {
 		// Files page.
 		GUILabel* m_AutosaveLabel;
 		GUILabel* m_AutosaveIntervalLabel;
+		GUILabel* m_AutosaveHostLabel;
 		GUILabel* m_AutosaveInfoLabel;
 		GUILabel* m_AutosavesKeptLabel;
 		GUILabel* m_AutosavesKeptHintLabel;
