@@ -1557,6 +1557,7 @@ namespace RTE {
 			// when either side's image return reconverges them.
 			struct LateSplit { uint8_t a = 0, b = 0, owner = 0; uint64_t frame = 0, observedAt = 0, resolvedAt = 0; };
 			std::vector<LateSplit> lateSplits;
+			std::vector<LateSplit> earlierLateSplits; //!< The late splits of rounds a rematch ended, kept for the return property.
 			const LateSplit* OpenLateSplit(uint8_t a, uint8_t b) const {
 				for (const auto& late: lateSplits) if (!late.resolvedAt && ((late.a == a && late.b == b) || (late.a == b && late.b == a))) return &late;
 				return nullptr;
@@ -1615,7 +1616,7 @@ namespace RTE {
 			std::vector<Wait> waits;
 			std::vector<std::vector<std::pair<uint64_t, uint64_t>>> heldSpans;
 			// Each image return a seat began: when, the round's lead on the image once it arrives, and the image's trip.
-			struct ImageStart { uint64_t atMs = 0, gapMs = 0, transitMs = 0; };
+			struct ImageStart { uint64_t atMs = 0, gapMs = 0, transitMs = 0; uint8_t donor = 0; };
 			std::vector<std::vector<ImageStart>> imageStarts;
 			std::vector<uint64_t> heldSince;
 			std::array<std::array<uint64_t, NetMatchConfigUtil::c_MaxPeerCount + 1>, NetMatchConfigUtil::c_MaxPeerCount + 1> heldByObserver{}; //!< When each seat's own engine began holding each seat, its spells included.
@@ -2141,7 +2142,7 @@ namespace RTE {
 					}
 					hashedThrough = 0; sharedDigests.clear(); roundStartMs = hub.now;
 					if (const auto unresolved = UnresolvedLateSplits(); !unresolved.empty()) { error = unresolved + " before the round ended"; return false; }
-					compared = {}; splitFrom = {}; inputSplits = {}; inputSplitCauses.clear(); partitionOwners = {}; lateSplits.clear(); unexplained = {}; sawSplit = splitHistories = false;
+					compared = {}; splitFrom = {}; inputSplits = {}; inputSplitCauses.clear(); partitionOwners = {}; earlierLateSplits.insert(earlierLateSplits.end(), lateSplits.begin(), lateSplits.end()); lateSplits.clear(); unexplained = {}; sawSplit = splitHistories = false;
 					imageTasks.clear(); imageTasks.resize(hub.row.seats);
 					// As the service's tail log, the committed record starts again with the round: frame numbers restart.
 					committed.assign(hub.row.seats, {}); for (auto& donors: abandonedDonors) donors.clear(); returnActivations = {}; carriedCommands.assign(hub.row.seats, {});
@@ -2436,6 +2437,8 @@ namespace RTE {
 				// A seat whose image return activates at a frame the round's head has not reached is still held there, whatever view
 				// already installed the return.
 				for (uint8_t seat = 1; seat <= hub.row.seats; ++seat) if (returnActivations[seat] > head && heldSince[seat] != UINT64_MAX) held[seat] = true;
+				// A seat still in its image return has not returned, though every view that holds it stands.
+				for (uint8_t seat = 1; seat <= hub.row.seats; ++seat) if ((imageReading[seat - 1] || imageNeeded[seat - 1]) && heldSince[seat] != UINT64_MAX) held[seat] = true;
 				for (uint8_t seat = 1; seat <= hub.row.seats; ++seat) {
 					if (held[seat] && heldSince[seat] == UINT64_MAX && std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) {
 						std::string by;
@@ -2610,7 +2613,7 @@ namespace RTE {
 			DiagnosticLine() << "[session-plane-image] seed=0 seats=" << static_cast<unsigned>(seats) << " rtt_ms=" << rttMs
 			                 << " capture=" << base << " playing_committed_through=" << common << " returner=" << unsigned(seat) << " donor=" << unsigned(donor)
 			                 << " donor_members=" << members << " now_ms=" << fixture.hub.now << std::endl;
-			fixture.imageStarts[seat].push_back({fixture.hub.now, static_cast<uint64_t>(std::ceil((common - base) * c_TestTickMs)) + rttMs / 2, rttMs / 2});
+			fixture.imageStarts[seat].push_back({fixture.hub.now, static_cast<uint64_t>(std::ceil((common - base) * c_TestTickMs)) + rttMs / 2, rttMs / 2, donor});
 			auto config = fixture.peers[seat - 1]->GetConfig();
 			// The image's seat state and the committed tail go through the same replay coordinator as a real private return.
 			auto replayConfig = config;
@@ -3977,7 +3980,8 @@ namespace RTE {
 					}
 					// Section 11.1: the seat whose input arrived late past one side's bound is held there, and the side the round's arbitration
 					// sets aside is held until its image return; both holds are that late input's, from it to the reconverging return.
-					for (const auto& late: fixture.lateSplits) {
+					auto lateSplits = fixture.earlierLateSplits; lateSplits.insert(lateSplits.end(), fixture.lateSplits.begin(), fixture.lateSplits.end());
+					for (const auto& late: lateSplits) {
 						const uint64_t settled = late.resolvedAt ? late.resolvedAt : end;
 						if ((late.a != seat && late.b != seat && late.owner != seat) || since + 3000 < late.observedAt || since > settled) continue;
 						caused = true; troubleEnd = std::max(troubleEnd, settled);
@@ -4002,8 +4006,25 @@ namespace RTE {
 						bool directoryDark = false;
 						for (const auto& spell: schedule.spells) directoryDark |= spell.seat == seat && spell.directoryDark && spell.atMs <= troubleEnd && spell.EndMs() + 3000 >= since;
 						const uint64_t ruledAt = std::max(troubleEnd, std::min(image->atMs, troubleEnd + c_NetFrameTieDeadlineMs + (directoryDark ? c_TestTieTimeoutCapMs : 0)));
-						if (imageCatchUp != UINT64_MAX && ruledAt + image->transitMs + imageCatchUp + c_NetSeatCatchUpAllowanceMs > deadline) {
-							deadline = ruledAt + image->transitMs + imageCatchUp + c_NetSeatCatchUpAllowanceMs;
+						// The round stands while the return's donor stands and no other seat plays to serve it - each one held, standing or
+						// gone: the return cannot run ahead of its round.
+						uint64_t standingMs = 0;
+						for (const auto& stand: schedule.spells) {
+							if (stand.seat != image->donor || (stand.kind != Spell::Kind::Stopped && stand.kind != Spell::Kind::Hung)) continue;
+							const uint64_t from = std::max(stand.atMs, image->atMs), to = std::min(stand.EndMs(), lookTo);
+							if (from >= to) continue;
+							bool alone = true;
+							for (uint8_t other = 1; other <= schedule.seats; ++other) {
+								if (other == seat || other == image->donor || schedule.Left(other, from)) continue;
+								bool held = false;
+								for (const auto& [heldFrom, heldUntil]: fixture.heldSpans[other]) held |= heldFrom <= from && (heldUntil == UINT64_MAX || heldUntil >= to);
+								const Spell* own = schedule.Active(other, from);
+								alone &= held || (own && (own->kind == Spell::Kind::Stopped || own->kind == Spell::Kind::Hung) && own->EndMs() >= to);
+							}
+							if (alone) standingMs += to - from;
+						}
+						if (imageCatchUp != UINT64_MAX && ruledAt + image->transitMs + imageCatchUp + standingMs + c_NetSeatCatchUpAllowanceMs > deadline) {
+							deadline = ruledAt + image->transitMs + imageCatchUp + standingMs + c_NetSeatCatchUpAllowanceMs;
 							backlog = imageBacklog;
 						} else image = nullptr;
 					}
