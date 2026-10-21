@@ -2670,7 +2670,7 @@ namespace RTE {
 			uint64_t tailRecorded = base;
 			std::map<uint64_t, NetLockstepFrame> receivedTail;
 			std::vector<uint8_t> partialTail;
-			uint64_t activation = 0, reported = replay.applied, reportAt = fixture.hub.now, work = 0, workUs = 0, reportedWork = 0;
+			uint64_t activation = 0, reported = replay.applied, reportAt = fixture.hub.now, work = 0, workUs = 0, reportedWork = 0, replayTracedAt = 0;
 			struct ReplayReport { uint64_t arrival, applied, ticks, elapsed, work, workUs; };
 			std::deque<ReplayReport> reports;
 			unsigned reportsRead = 0;
@@ -2862,6 +2862,12 @@ namespace RTE {
 					credit -= 1; ++work;
 					// FLAGGED fixture departure: a private replay reports the same work cost as its supplied machine capacity.
 					workUs += static_cast<uint64_t>(std::ceil(c_TestTickMs * 1000 / capacity));
+				}
+				if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS") && fixture.hub.now >= replayTracedAt + 250) {
+					replayTracedAt = fixture.hub.now;
+					DiagnosticLine() << "[session-plane-image-replay] returner=" << unsigned(seat) << " applied=" << replay.applied << " received=" << receivedTail.size()
+					    << " lowest=" << (receivedTail.empty() ? 0 : receivedTail.begin()->first) << " highest=" << (receivedTail.empty() ? 0 : receivedTail.rbegin()->first)
+					    << " horizon=" << fixture.worlds[donor - 1].applied << " credit=" << credit << " now_ms=" << fixture.hub.now << std::endl;
 				}
 				// As the service's pump does, the replay reports once a frame whenever its state moved, and every 250 ms when it stands.
 				if (fixture.hub.now >= reportAt + (work != reportedWork ? static_cast<uint64_t>(std::ceil(c_TestTickMs)) : 250)) {
