@@ -1287,6 +1287,8 @@ namespace RTE {
 		}
 		/// A seat the AI holds for its returner. A released seat stays under the AI but no longer waits for anyone.
 		bool HasHeldAISeat(uint8_t peerId) const { NET_PLANE_CHECK(); return m_AiHeldSeats.contains(peerId) && !m_ReleasedAiSeats.contains(peerId); }
+		/// Whether this peer has heard the seat's player announce its leave of the round.
+		bool HasHeardLeave(uint8_t peerId) const { NET_PLANE_CHECK(); return m_AnnouncedLeavers.contains(peerId); }
 		/// Lines this peer has said about a silent host, all told: one for each second of a silence.
 		uint32_t GetHostSilentReports() const { return m_HostSilentReports; }
 		bool AnyHeldAISeat() const { NET_PLANE_CHECK(); return std::any_of(m_AiHeldSeats.begin(), m_AiHeldSeats.end(), [&](const auto& seat) { return !m_ReleasedAiSeats.contains(seat.first); }); }
@@ -2254,6 +2256,7 @@ namespace RTE {
 		std::set<uint8_t> m_ReleasedAiSeats; //!< AI-held seats no returner may reclaim; the AI keeps their units.
 		std::map<uint8_t, std::map<uint64_t, NetGameSeatRelease>> m_SeatReleases; //!< The agreed frames the host's releases land on, every peer the same.
 		std::set<uint8_t> m_AnnouncedLeavers; //!< Host: clean leavers being held, whose closing links are not sent their hold.
+		std::set<uint64_t> m_PeerSplitsStanding; //!< Splits ruled for a continuation whose every player has left, which this one outlives.
 		std::set<uint8_t> m_SlowMachineHolds; //!< Host: seats whose latest hold was for a machine that cannot keep up.
 		std::map<uint8_t, std::pair<NetLockstepStop, NetPeerId>> m_PendingMemberEnds; //!< Host: members' own ends this round has not played past yet.
 		/// Host: takes each member's end this round has played past, and goes on, as that member's leave.

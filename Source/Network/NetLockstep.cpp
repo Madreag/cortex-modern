@@ -5382,6 +5382,7 @@ namespace RTE {
 		m_ReleasedAiSeats.clear();
 		m_SeatReleases.clear();
 		m_AnnouncedLeavers.clear();
+		m_PeerSplitsStanding.clear();
 		m_SlowMachineHolds.clear();
 		m_PendingMemberEnds.clear();
 		m_EvictAfterReclaim.clear();

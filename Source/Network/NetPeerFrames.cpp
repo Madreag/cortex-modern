@@ -409,6 +409,15 @@ namespace RTE {
 			if ((winner & local) != 0 && (atHold & local) != 0 && (winner & ~atHold) == 0 && (winner & elsewhere) == 0) continue;
 			const bool askerElsewhere = (winner & other) != 0 && (winner & playing) != 0 && arbitration.asked != winner;
 			if (((winner & local) == 0 || askerElsewhere) && (playing & local) != 0 && ((playing & winner) == 0 || askerElsewhere)) {
+				// A ruling for a continuation every player of which has since left names no machine to return to: this one plays on.
+				uint32_t left = 0;
+				for (uint8_t peer: m_AnnouncedLeavers) left |= SeatBit(peer);
+				if ((winner & ~playing) != 0 && (winner & ~playing & ~left) == 0) {
+					if (m_PeerSplitsStanding.insert(split).second)
+						DiagnosticLine() << "[net-split-arbitration] local=" << static_cast<int>(m_Config.localPeerId) << " split=" << split << " frame=" << m_Stats.nextFrame
+						    << " winners=" << winner << " left=" << left << " now_ms=" << nowMs << " action=stand" << std::endl;
+					continue;
+				}
 				// Preparation may lead the displayed world by several ticks. Finish any granted tick, then discard that
 				// unplayed preparation: the private image replaces this branch at its actual completed boundary.
 				if (m_GrantedSimulationTick) continue;
