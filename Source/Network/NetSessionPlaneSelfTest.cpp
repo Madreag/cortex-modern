@@ -1736,11 +1736,13 @@ namespace RTE {
 						if (donor == seat || !(ruling & (1U << (donor - 1))) || !ImageDonorCanAnswer(donor) ||
 						    !peers[donor - 1]->HasHeldAISeat(seat) || !(s_FrameMembers(*peers[donor - 1], worlds[donor - 1].applied + 1) & (1U << (donor - 1)))) continue;
 						if (!ImageDonorCanAnswer(ImageReturnProposer(donor))) continue;
-						// FLAGGED fixture departure: a member still in its own image return keeps its world in that return's replay until the
-						// return ends, so the capture every playing seat committed waits for it.
+						// FLAGGED fixture departure: a member whose own image return the round has already activated keeps its world in that
+						// return's replay until the return ends, so the capture every playing seat committed waits for it.
 						const uint32_t group = s_FrameMembers(*peers[donor - 1], worlds[donor - 1].applied + 1);
 						bool adopted = true;
-						for (uint8_t member = 1; member <= hub.row.seats; ++member) adopted &= member == seat || !(group & (1U << (member - 1))) || !imageReading[member - 1];
+						for (uint8_t member = 1; member <= hub.row.seats; ++member)
+							adopted &= member == seat || !(group & (1U << (member - 1))) || !imageReading[member - 1] || !returnActivations[member] ||
+							    returnActivations[member] > worlds[donor - 1].applied + 1;
 						if (!adopted) continue;
 						imageTasks[seat - 1] = ReadImageReturn(*this, seat, donor, error);
 						if (!imageTasks[seat - 1].Resume()) return false;
