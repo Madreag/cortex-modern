@@ -885,6 +885,12 @@ namespace RTE {
 		const bool coSignedHold = (voters & required) == required && PeerGroupHasAuthority(voters, certificate.frame);
 		if (agreed.preparedFrame == 3 ? !PeerAdminCertificateValid(agreed, voters) :
 		    agreed.preparedFrame == 0 ? !PeerGroupMayHold(agreed.connectedMask, certificate.frame) && !coSignedHold : !PeerGroupHasAuthority(voters, certificate.frame)) {
+			// A hold another group cannot show the authority of here, while this seat plays its own group at that frame, is that group's
+			// local hold: it never stops this group's frame.
+			if (agreed.preparedFrame == 0 && (agreed.connectedMask & SeatBit(m_Config.localPeerId)) == 0 &&
+			    (PeerFrameMembersAt(agreed.frame) & SeatBit(m_Config.localPeerId)) != 0 && !IsLocalPrivateReaderAt(agreed.frame)) {
+				refused("foreign continuation"); return;
+			}
 			m_AuthorityWaitSinceMs.try_emplace(decision, nowMs);
 			refused("certificate");
 			keep(); return;
