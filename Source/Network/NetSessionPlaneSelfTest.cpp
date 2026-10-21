@@ -5622,14 +5622,17 @@ namespace RTE {
 				*error = "the return snapshot did not carry its committed activation"; return false;
 			}
 			config.initialSeatReclaims[2] = rounds[0]->m_ReclaimTransactions.at(2);
-			// A private catch-up reaches the agreed frame a moment after the return is agreed.
-			if (two) for (const uint64_t live = hub.now + 300; hub.now < live;) if (!hostStep(false)) return false;
+			// The returner's private catch-up of the round's committed history reaches the agreed frame as the round does: no return
+			// starts ahead of the round's head.
+			for (const uint64_t until = hub.now + 2000; hub.now < until && applied[0] + 1 < activation;) if (!hostStep(false)) return false;
 			config.peerIncarnations[2] = config.initialSeatReclaims.at(2).seatIncarnation;
 			if (config.initialSeatReclaims.at(2).activationFrame != activation || config.peerIncarnations.at(2) != 2) {
 				*error = "the return snapshot changed its activation or player incarnation"; return false;
 			}
 			rounds[1] = std::make_unique<NetLockstepCoordinator>();
 			if (!rounds[1]->Start(returningWire, config, error)) return false;
+			// As the runner does, the live start takes the replayed history it caught up through.
+			rounds[1]->AdoptReplayedSeatTransitions(*rounds[0], activation - 1);
 			rounds[1]->DeferStopsToTickBoundary();
 			sessions[1] = &returningSession;
 			rounds[1]->SetSessionEventSink([&](const NetTransportEvent& event) { returningSession.InjectEvent(event, hub.now); });
