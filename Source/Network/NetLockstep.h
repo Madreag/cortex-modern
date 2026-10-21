@@ -1735,6 +1735,8 @@ namespace RTE {
 		void DerivePeerCommonSplit(uint8_t sender, uint64_t remoteSplit, uint64_t remoteBoundary, uint64_t nowMs);
 		void PollPeerFrameTies(uint64_t nowMs);
 		bool ProposePeerBridge(uint64_t frame, uint64_t nowMs, bool returningOnly = false);
+		/// Takes back this seat's own yield when no voter certified it in the time an answer takes, and fills the targets it deferred.
+		bool WithdrawOwnYield(uint64_t nowMs);
 		bool ValidatePeerBridge(const NetHostMigrationMessage& proposal) const;
 		/// Whether this peer already voted a return of one of the proposal's seats at another frame that is still undecided: a held seat
 		/// returns once, so a member backs one return of it until that one is certified or played past.
@@ -2231,6 +2233,7 @@ namespace RTE {
 		static constexpr uint64_t c_MarginWindowMs = 1000; //!< The arrivals a rise is judged over: short, so it lands before a spike finds the seat.
 		std::map<uint8_t, std::deque<NetLockstepTiming>> m_TimingOutgoing;
 		std::map<int64_t, ControllerFrame> m_DeferredControllerFrames;
+		uint64_t m_OwnYieldDeferredThrough = 0; //!< The last own target deferred behind this seat's uncertified yield.
 		uint64_t m_NextTimingRevision = 1;
 		uint64_t m_LastTimingSampleMs = UINT64_MAX;
 		uint64_t m_LastTimingStatusMs = UINT64_MAX;

@@ -5425,6 +5425,7 @@ namespace RTE {
 		m_StartSkewSized.clear();
 		m_TimingOutgoing.clear();
 		m_DeferredControllerFrames.clear();
+		m_OwnYieldDeferredThrough = 0;
 		m_NextTimingRevision = 1;
 		m_LastTimingSampleMs = UINT64_MAX;
 		m_LastTimingStatusMs = UINT64_MAX;
@@ -6471,6 +6472,7 @@ namespace RTE {
 			    NetPeerFrameDetail::OwnHoldAwaitingCertificate(m_PeerBridgeVotes, m_PeerBridgeCertificates, fence->first, m_Config.localPeerId)) { promisedHold = true; break; }
 		}
 		if (!promisedHold && (!m_DelayChanges.contains(m_Config.localPeerId) || m_LastQueuedTargetFrame == UINT64_MAX || target > m_LastQueuedTargetFrame)) return false;
+		if (promisedHold) m_OwnYieldDeferredThrough = std::max(m_OwnYieldDeferredThrough, target);
 		const uint64_t edgeMask = DelayedControllerEdges();
 		for (const ControllerFrame& frame: frames) {
 			auto& pending = m_DeferredControllerFrames[frame.actorUniqueID];
@@ -6483,6 +6485,55 @@ namespace RTE {
 		}
 		++m_Stats.delayDeferredSamples;
 		return true;
+	}
+
+	bool NetLockstepCoordinator::WithdrawOwnYield(uint64_t nowMs) {
+		const uint64_t frame = m_Stats.nextFrame;
+		const uint8_t local = m_Config.localPeerId;
+		if (!NetPeerFrameDetail::OwnHoldAwaitingCertificate(m_PeerBridgeVotes, m_PeerBridgeCertificates, frame, local) || !m_ConsumerWaitingFrame ||
+		    *m_ConsumerWaitingFrame != frame || nowMs < m_ConsumerWaitStartMs) return false;
+		// A voter answers a yield within its round trip and a resend; past that and the bound, no certificate is coming.
+		uint64_t answerMs = c_NetPeerVoteResendMs + static_cast<uint64_t>(std::ceil(m_Config.slowPlayerBoundTicks * m_Config.simTickMs));
+		std::vector<PeerDecisionKey> yields;
+		for (auto votes = m_PeerBridgeVotes.lower_bound({frame, 0x10}); votes != m_PeerBridgeVotes.end(); ++votes) {
+			if (!NetPeerFrameDetail::IsHoldDecision(votes->first.second) || (votes->first.second & NetPeerFrameDetail::SeatBit(local)) == 0 || m_PeerBridgeCertificates.contains(votes->first)) continue;
+			const auto own = votes->second.find(local);
+			if (own == votes->second.end() || own->second.voterMask != NetPeerFrameDetail::SeatBit(local)) continue;
+			yields.push_back(votes->first);
+			for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) if ((own->second.connectedMask & NetPeerFrameDetail::SeatBit(peer)) != 0 && peer != local) {
+				uint64_t rtt = m_Stats.peers[peer].pingMs;
+				const auto [wire, route] = PeerFrameRoute(peer);
+				if (wire && wire->IsPeerPingMeasured(route)) rtt = std::max<uint64_t>(rtt, wire->GetPeerPingMs(route));
+				answerMs = std::max(answerMs, rtt + c_NetPeerVoteResendMs + static_cast<uint64_t>(std::ceil(m_Config.slowPlayerBoundTicks * m_Config.simTickMs)));
+			}
+		}
+		if (yields.empty() || nowMs - m_ConsumerWaitStartMs < answerMs) return false;
+		for (const auto& key: yields) {
+			m_PeerBridgeVotes[key].erase(local);
+			if (const auto fence = m_PeerRejectedInputs.find(key.first); fence != m_PeerRejectedInputs.end()) fence->second &= ~NetPeerFrameDetail::SeatBit(local);
+		}
+		// The samples deferred behind the yield are spent: their targets carry the last queued input without its one-shot edges.
+		NetLockstepFrame previous;
+		const bool carried = m_LastQueuedTargetFrame != UINT64_MAX && FindLocalInput(m_LastQueuedTargetFrame, previous);
+		for (auto& controller: previous.frames) {
+			controller.stateMask &= ~DelayedControllerEdges();
+			controller.mouseDeltaX = controller.mouseDeltaY = 0;
+			controller.SetAimIntent(false);
+			controller.SetFlipIntent(false);
+			controller.hatchCommand = static_cast<uint8_t>(ControllerFrame::HatchCommand::None);
+		}
+		const uint64_t firstPad = std::max({m_LastQueuedTargetFrame == UINT64_MAX ? frame : m_LastQueuedTargetFrame + 1, frame, EffectiveStartOf(local)});
+		std::string error;
+		uint64_t padded = 0;
+		for (uint64_t pad = firstPad; pad <= m_OwnYieldDeferredThrough; ++pad) {
+			if (IsSeatReclaimGap(local, pad)) continue;
+			if (!QueueInputAtTarget(pad, carried ? previous.frames : std::vector<ControllerFrame>{}, {}, &error, {})) break;
+			++padded;
+		}
+		DiagnosticLine() << "[net-peer-yield-withdrawn] local=" << static_cast<int>(local) << " frame=" << frame << " waited_ms=" << nowMs - m_ConsumerWaitStartMs
+		    << " answer_ms=" << answerMs << " padded=" << padded << " through=" << m_OwnYieldDeferredThrough << (error.empty() ? "" : " error=" + error) << std::endl;
+		m_OwnYieldDeferredThrough = 0;
+		return m_LocalFrames.contains(frame);
 	}
 
 	bool NetLockstepCoordinator::TimingDecisionPendingAt(uint64_t frame) const {
@@ -13618,6 +13669,8 @@ namespace RTE {
 						if (DeclareOverdueInputs(m_Stats.nextFrame, nowMs, m_FirstMissingMs, missing)) continue;
 					}
 				}
+				// A yield no voter certified in time is taken back, so this seat plays on and the round decides its seat as for any other.
+				if (UsesPeerFrameGroups() && WithdrawOwnYield(nowMs)) continue;
 				m_AdvanceBlock = "own-input";
 				break;
 			}
