@@ -71,6 +71,7 @@ namespace RTE {
 		std::function<uint32_t(const NetLockstepCoordinator&, uint64_t)> s_FrameMembers, s_HeldSeats;
 		std::function<uint8_t(const NetLockstepCoordinator&, const NetLockstepReadyFrame&)> s_FrameAuthor;
 		std::function<const HoldBoundaries&(const NetLockstepCoordinator&)> s_HoldBoundaries;
+		std::function<bool(const NetLockstepCoordinator&, uint64_t)> s_OwnHoldPending; //!< Whether a hold of the peer's own seat from this frame on waits to be taken.
 		std::function<std::string(const NetLockstepCoordinator&)> s_WaitState;
 		std::function<NetPeerId(const NetLockstepCoordinator&, uint8_t)> s_ReturnTransport;
 		std::function<std::pair<INetTransport*, NetPeerId>(const NetLockstepCoordinator&, uint8_t)> s_ReturnRoute;
@@ -2257,8 +2258,10 @@ namespace RTE {
 					}
 					if (!peer.IsRunning() || peer.AwaitingAlignedStart() || imageReading[id - 1]) continue;
 					const uint64_t boundNext = world.applied + 1;
+					// As the engine reads it, a consumer catching up with a hold of its own seat already pending is the seat its round holds: its
+					// playing portion ends there, as a private reader's does.
 					ObserveBoundRole(id - 1, !peer.WaitsForPlacement() && !peer.IsLocalPrivateReaderAt(boundNext) && !peer.IsSeatUnderAI(id, boundNext) &&
-					    (s_FrameMembers(peer, boundNext) & (1U << (id - 1))));
+					    (s_FrameMembers(peer, boundNext) & (1U << (id - 1))) && !(CatchingUp(peer) && s_OwnHoldPending && s_OwnHoldPending(peer, boundNext)));
 					if (splitParticipant[id - 1] && observedSplit[id - 1] && !imageNeeded[id - 1] &&
 					    (!(s_FrameMembers(peer, world.applied + 1) & (1U << (id - 1))) || peer.IsLocalPrivateReaderAt(world.applied + 1))) {
 						error = "authority ruling: playing split peer " + std::to_string(id) + " became a private reader before a losing decision; a pending referee never suspends its half"; return false;
@@ -4769,6 +4772,11 @@ namespace RTE {
 			};
 			s_HeldSeats = [](const NetLockstepCoordinator& peer, uint64_t frame) { return peer.PeerHeldSeatsAt(frame); };
 			s_HoldBoundaries = [](const NetLockstepCoordinator& peer) -> const HoldBoundaries& { return peer.m_PeerFrameHolds; };
+			s_OwnHoldPending = [](const NetLockstepCoordinator& peer, uint64_t frame) {
+				for (const auto& [key, kept]: peer.m_PendingPeerDecisions)
+					if (NetPeerFrameDetail::IsHoldDecision(key.second) && key.first >= frame && std::find(kept.first.members.begin(), kept.first.members.end(), peer.GetConfig().localPeerId) != kept.first.members.end()) return true;
+				return false;
+			};
 			s_ReturnRoute = [](const NetLockstepCoordinator& peer, uint8_t seat) { return peer.PeerFrameRoute(seat); };
 			s_ReturnTransport = [](const NetLockstepCoordinator& peer, uint8_t seat) {
 				// FLAGGED fixture departure: a surviving mesh proposer can own a listener/dial route outside the old host star.
@@ -4847,6 +4855,11 @@ namespace RTE {
 			};
 			s_HeldSeats = [](const NetLockstepCoordinator& peer, uint64_t frame) { return peer.PeerHeldSeatsAt(frame); };
 			s_HoldBoundaries = [](const NetLockstepCoordinator& peer) -> const HoldBoundaries& { return peer.m_PeerFrameHolds; };
+			s_OwnHoldPending = [](const NetLockstepCoordinator& peer, uint64_t frame) {
+				for (const auto& [key, kept]: peer.m_PendingPeerDecisions)
+					if (NetPeerFrameDetail::IsHoldDecision(key.second) && key.first >= frame && std::find(kept.first.members.begin(), kept.first.members.end(), peer.GetConfig().localPeerId) != kept.first.members.end()) return true;
+				return false;
+			};
 			s_ReturnRoute = [](const NetLockstepCoordinator& peer, uint8_t seat) { return peer.PeerFrameRoute(seat); };
 			s_ReturnTransport = [](const NetLockstepCoordinator& peer, uint8_t seat) {
 				// FLAGGED fixture departure: a surviving mesh proposer can own a listener/dial route outside the old host star.
@@ -4933,6 +4946,11 @@ namespace RTE {
 			};
 			s_HeldSeats = [](const NetLockstepCoordinator& peer, uint64_t frame) { return peer.PeerHeldSeatsAt(frame); };
 			s_HoldBoundaries = [](const NetLockstepCoordinator& peer) -> const HoldBoundaries& { return peer.m_PeerFrameHolds; };
+			s_OwnHoldPending = [](const NetLockstepCoordinator& peer, uint64_t frame) {
+				for (const auto& [key, kept]: peer.m_PendingPeerDecisions)
+					if (NetPeerFrameDetail::IsHoldDecision(key.second) && key.first >= frame && std::find(kept.first.members.begin(), kept.first.members.end(), peer.GetConfig().localPeerId) != kept.first.members.end()) return true;
+				return false;
+			};
 			s_ReturnRoute = [](const NetLockstepCoordinator& peer, uint8_t seat) { return peer.PeerFrameRoute(seat); };
 			s_ReturnTransport = [](const NetLockstepCoordinator& peer, uint8_t seat) {
 				// FLAGGED fixture departure: a surviving mesh proposer can own a listener/dial route outside the old host star.
@@ -5709,6 +5727,11 @@ namespace RTE {
 			};
 			s_HeldSeats = [](const NetLockstepCoordinator& peer, uint64_t frame) { return peer.PeerHeldSeatsAt(frame); };
 			s_HoldBoundaries = [](const NetLockstepCoordinator& peer) -> const HoldBoundaries& { return peer.m_PeerFrameHolds; };
+			s_OwnHoldPending = [](const NetLockstepCoordinator& peer, uint64_t frame) {
+				for (const auto& [key, kept]: peer.m_PendingPeerDecisions)
+					if (NetPeerFrameDetail::IsHoldDecision(key.second) && key.first >= frame && std::find(kept.first.members.begin(), kept.first.members.end(), peer.GetConfig().localPeerId) != kept.first.members.end()) return true;
+				return false;
+			};
 			s_ReturnRoute = [](const NetLockstepCoordinator& peer, uint8_t seat) { return peer.PeerFrameRoute(seat); };
 			s_ReturnTransport = [](const NetLockstepCoordinator& peer, uint8_t seat) {
 				// FLAGGED fixture departure: a surviving mesh proposer can own a listener/dial route outside the old host star.
