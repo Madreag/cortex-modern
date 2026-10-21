@@ -3910,16 +3910,22 @@ namespace RTE {
 						return Finding{"return", fixture.InStartup(since) ? "held_at_the_round_start" : again ? "returned_seat_held_again" : "held_without_its_own_trouble", "seat " + std::to_string(seat) + " was held at " + std::to_string(since) +
 						               " ms with no trouble of its own since " + std::to_string(lookFrom) + " ms" + (again ? " after it had returned" : "")};
 					}
+					// Sections 11.2 and 11.3(b): the image return starts at the split's ruling, which comes at the heal or from the directory within
+					// its tie deadline; from there the image's trip and its replay. A machine with no spare work returns trailing at the round's pace.
 					// The image never shortens the return its trouble alone allows.
-					uint64_t transitMs = 0;
 					const uint64_t troubleCatchUp = CatchUpMs(backlog, schedule.recoverPercent[seat]);
-					const uint64_t imageCatchUp = image ? CatchUpMs(backlogAfterImage + image->gapMs, schedule.recoverPercent[seat]) : UINT64_MAX;
-					if (troubleCatchUp != UINT64_MAX && imageCatchUp != UINT64_MAX && imageCatchUp + image->transitMs > troubleCatchUp) {
-						backlog = backlogAfterImage + image->gapMs; transitMs = image->transitMs;
-					} else image = nullptr;
-					const uint64_t catchUp = CatchUpMs(backlog, schedule.recoverPercent[seat]);
-					if (catchUp == UINT64_MAX) continue;
-					const uint64_t deadline = troubleEnd + transitMs + catchUp + c_NetSeatCatchUpAllowanceMs;
+					if (troubleCatchUp == UINT64_MAX) continue;
+					uint64_t deadline = troubleEnd + troubleCatchUp + c_NetSeatCatchUpAllowanceMs;
+					if (image) {
+						const uint32_t recover = schedule.recoverPercent[seat];
+						const uint64_t imageBacklog = backlogAfterImage + (recover > 100 ? image->gapMs : 0);
+						const uint64_t imageCatchUp = CatchUpMs(imageBacklog, recover);
+						const uint64_t ruledAt = std::max(troubleEnd, std::min(image->atMs, troubleEnd + c_NetFrameTieDeadlineMs));
+						if (imageCatchUp != UINT64_MAX && ruledAt + image->transitMs + imageCatchUp + c_NetSeatCatchUpAllowanceMs > deadline) {
+							deadline = ruledAt + image->transitMs + imageCatchUp + c_NetSeatCatchUpAllowanceMs;
+							backlog = imageBacklog;
+						} else image = nullptr;
+					}
 					if (deadline >= end || (until != UINT64_MAX && until <= deadline)) continue;
 					return Finding{"return", until == UINT64_MAX ? "held_seat_never_returns" : "held_seat_returns_late", "seat " + std::to_string(seat) + " held at " + std::to_string(since) +
 					               " ms, its trouble over at " + std::to_string(troubleEnd) + " ms and its " + std::to_string(backlog) + " ms backlog" +
