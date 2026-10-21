@@ -66,6 +66,8 @@ namespace RTE {
 		constexpr double c_TestTickMs = 1000.0 / 60;
 		constexpr uint64_t c_TestReturnAllowanceMs = 2000;
 		constexpr uint32_t c_TestBoundTicks = 3, c_TestCatchUpRate = 3;
+		/// The longest a tie exchange waits for its answer, as NetConnectionAuthority's c_TieTimeoutCapMs.
+		constexpr uint64_t c_TestTieTimeoutCapMs = 2000;
 		using HoldBoundaries = std::map<uint8_t, std::map<uint64_t, bool>>;
 		// Installed state, read by the self-test's friend accessors. The fixture never supplies a voting group to a peer.
 		std::function<uint32_t(const NetLockstepCoordinator&, uint64_t)> s_FrameMembers, s_HeldSeats;
@@ -461,7 +463,7 @@ namespace RTE {
 					auto& question = questions[*selected];
 					const bool finalQuery = question.boundStartMs && nowMs >= *question.boundStartMs + c_NetFrameTieDeadlineMs;
 					auto sent = question.request; sent.queryOnly = sent.queryOnly || question.checkedIn || finalQuery;
-					const uint64_t timeoutMs = std::clamp<uint64_t>(2 * exchangeEstimateMs, c_NetFrameTieHttpTimeoutMs, 2000);
+					const uint64_t timeoutMs = std::clamp<uint64_t>(2 * exchangeEstimateMs, c_NetFrameTieHttpTimeoutMs, c_TestTieTimeoutCapMs);
 					const bool answered = reachable && exchangeMs <= timeoutMs;
 					tie = Exchange{sent, nowMs + exchangeMs / 2, nowMs + (answered ? exchangeMs : timeoutMs), false, answered, {}};
 					activeTie = selected;
@@ -3959,7 +3961,11 @@ namespace RTE {
 						const uint32_t recover = schedule.recoverPercent[seat];
 						const uint64_t imageBacklog = backlogAfterImage + (recover > 100 ? image->gapMs : 0);
 						const uint64_t imageCatchUp = CatchUpMs(imageBacklog, recover);
-						const uint64_t ruledAt = std::max(troubleEnd, std::min(image->atMs, troubleEnd + c_NetFrameTieDeadlineMs));
+						// A seat whose own directory link was dark learns the ruling once the question it sent into that outage times out (the
+						// client's timeout cap, as the directory client sizes it) and is asked again.
+						bool directoryDark = false;
+						for (const auto& spell: schedule.spells) directoryDark |= spell.seat == seat && spell.directoryDark && spell.atMs <= troubleEnd && spell.EndMs() + 3000 >= since;
+						const uint64_t ruledAt = std::max(troubleEnd, std::min(image->atMs, troubleEnd + c_NetFrameTieDeadlineMs + (directoryDark ? c_TestTieTimeoutCapMs : 0)));
 						if (imageCatchUp != UINT64_MAX && ruledAt + image->transitMs + imageCatchUp + c_NetSeatCatchUpAllowanceMs > deadline) {
 							deadline = ruledAt + image->transitMs + imageCatchUp + c_NetSeatCatchUpAllowanceMs;
 							backlog = imageBacklog;
