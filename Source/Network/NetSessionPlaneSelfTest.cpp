@@ -1493,8 +1493,10 @@ namespace RTE {
 			else return host ? floor : static_cast<uint16_t>(std::min<uint32_t>(NetMatchConfigUtil::c_MaxInputDelayFrames, estimator.RequiredFrames(c_TestTickMs, floor) + c_TestBoundTicks));
 		}
 		bool IsLosingContinuationDecision(bool wasSplit, uint8_t seat, const NetFrameTieRequest& request, const NetFrameTieReply& reply) {
-			// FLAGGED fixture departure: a private reader queries a ruling without offering another continuation to discard.
-			return wasSplit && !request.queryOnly && std::find(reply.members.begin(), reply.members.end(), seat) == reply.members.end();
+			// As the engine does, a ruling sets aside a seat that played a branch of its own since the split, whether its question was a
+			// query - a smaller or still settling half queries while it plays - or not; a private reader played none.
+			(void)request;
+			return wasSplit && std::find(reply.members.begin(), reply.members.end(), seat) == reply.members.end();
 		}
 		// A row on a pool worker runs beside others: no plane ticks its coordinators, so it takes no plane lock and none waits on it.
 		thread_local bool t_PoolWorker = false;
@@ -3077,7 +3079,7 @@ namespace RTE {
 						    " image_returns=" + std::to_string(fixture.imageReturns[index]); return false;
 					}
 				} else {
-					if (!won[index]) { error = "authority ruling: a healed split never received its arbitration answer"; return false; }
+					if (!won[index]) { error = "authority ruling: a healed split never received its arbitration answer: seat " + std::to_string(seat); return false; }
 					if (fixture.imageReturns[index] || stoppedAtFrame[index]) { error = "authority ruling: the ruling half stopped or replaced its world"; return false; }
 					if (const auto saved = winningHistory.find(seat); saved != winningHistory.end())
 						for (const auto& [frame, hash]: saved->second) if (fixture.worlds[index].hashes.at(frame) != hash) {
@@ -3268,7 +3270,9 @@ namespace RTE {
 						error = "a proven input-loss continuation did not select a discarded-branch image at its decision frame"; return false;
 					}
 					request.queryOnly = true;
-					if (fixture.IsLosingDecision(1, request, reply)) { error = "a private query discarded live history"; return false; }
+					if (!fixture.IsLosingDecision(1, request, reply) || fixture.IsLosingDecision(3, request, reply)) {
+						error = "a playing half's query kept its set-aside history, or a reader's query discarded live history"; return false;
+					}
 					if (!fixture.InputSplitCausedHold(1, 150, 180, 2, 40, 60) || !fixture.InputSplitCausedHold(2, 150, 180, 1, 40, 60) ||
 					    fixture.InputSplitCausedHold(1, 150, 180, 3, 40, 60) || fixture.InputSplitCausedHold(3, 150, 180, 2, 40, 60) ||
 					    fixture.InputSplitCausedHold(1, 151, 180, 2, 40, 60) || fixture.InputSplitCausedHold(1, 150, 149, 2, 40, 60) ||
@@ -3516,7 +3520,7 @@ namespace RTE {
 			if (!fixture.CheckBound(why)) { error = "fixture rejected a wait exactly at the agreed bound"; return false; }
 			NetFrameTieRequest request; request.queryOnly = true;
 			NetFrameTieReply reply; reply.state = NetFrameTieReply::State::Decided; reply.members = {1};
-			const bool readerIsNotLoser = !IsLosingContinuationDecision(true, 2, request, reply);
+			const bool readerIsNotLoser = !IsLosingContinuationDecision(false, 2, request, reply) && IsLosingContinuationDecision(true, 2, request, reply);
 			request.queryOnly = false;
 			const bool liveLoser = IsLosingContinuationDecision(true, 2, request, reply);
 			const bool nonSplit = !IsLosingContinuationDecision(false, 2, request, reply);
