@@ -1578,7 +1578,7 @@ namespace RTE {
 				return {};
 			}
 			std::vector<bool> waitPlaying, imageReading, imageNeeded, imageWithoutHeadroom;
-			std::array<std::set<uint8_t>, 4> abandonedDonors; //!< The donors each seat's image return gave up when their own continuation was set aside.
+			std::array<std::set<uint8_t>, 4> abandonedDonors; //!< The donors whose return sessions each seat closed: given up when their own continuation was set aside, or finished.
 			std::array<uint64_t, 5> returnActivations{}; //!< Each returner's announced activation, which the round's one join host keeps distinct.
 			std::vector<ImageReturnTask> imageTasks;
 			std::vector<bool> splitParticipant, hungLastStep;
@@ -2991,6 +2991,8 @@ namespace RTE {
 			fixture.installedBoundaries[seat - 1] = fixture.installedBoundaries[donor - 1];
 			fixture.ForgetComparisons(seat);
 			fixture.imageReading[seat - 1] = fixture.imageNeeded[seat - 1] = false; ++fixture.imageReturns[seat - 1];
+			// The finished session's donor keeps datagrams in flight; a later return of this seat reads only its own session.
+			fixture.abandonedDonors[seat - 1].insert(donor);
 			fixture.waitPlaying[seat - 1] = false;
 			if (!fixture.hub.schedule && fixture.hub.row.frozen) fixture.hub.faultEnd = fixture.hub.now;
 			fixture.peers[donor - 1]->NoteReturnerCaughtUp(seat, fixture.hub.now);
@@ -3007,7 +3009,14 @@ namespace RTE {
 				if (fixture.peers[donor - 1]->IsSeatReclaimGap(peer, activation)) playingAtActivation &= ~(1U << (peer - 1));
 			// FLAGGED fixture correction: an observer in a fault of its own (cut off, silent, hung, stopped, slow, late or lossy) holds a seat
 			// it cannot hear at its own bound, as section 11.1 has it; that view, and the hold it installed then, are its own fault's.
-			for (const uint64_t until = observationAt + 1000; fixture.hub.now <= until && !fixture.OwnTrouble(seat);) {
+			// Section 11.1: a late input that parts the round after the activation, with this seat on one side, holds it as that input's,
+			// as the return property has it; the observation ends there.
+			const auto lateSplitSince = [&] {
+				return std::any_of(fixture.lateSplits.begin(), fixture.lateSplits.end(), [&](const Fixture::LateSplit& late) {
+					return late.frame >= activation && (late.a == seat || late.b == seat || late.owner == seat);
+				});
+			};
+			for (const uint64_t until = observationAt + 1000; fixture.hub.now <= until && !fixture.OwnTrouble(seat) && !lateSplitSince();) {
 				for (uint8_t peer: survivors)
 					if ((playingAtActivation & (1U << (peer - 1))) != 0 && fixture.worlds[peer - 1].applied >= activation && fixture.peers[peer - 1]->IsRunning() &&
 					    !fixture.HoldFromOwnFault(peer, seat) &&
