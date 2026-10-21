@@ -5492,7 +5492,7 @@ namespace RTE {
 		m_PeerTailRequests = m_PeerTailFramesSent = m_PeerTailBytesSent = m_PeerTailLogAtMs = m_PeerPathLogAtMs = 0;
 		m_PeerRoundEnds.clear();
 		m_PeerRemovalNotices.clear();
-		m_PeerTailPrefixes.clear(); m_PeerTailVotes.clear(); m_PeerTailDecisions.clear(); m_PeerTailUnconfirmed = {};
+		m_PeerTailPrefixes.clear(); m_PeerTailVotes.clear(); m_PeerTailDecisions.clear(); m_PeerTailUnconfirmed = {}; m_PeerTailForeignFrame = 0;
 		m_PeerPaceStartMs.reset(); m_PeerConsumerAtMs.reset(); m_PeerPaceStartFrame = 0; m_PeerPaceReference = GetHostPeerId(); m_PeerHadHitch = false;
 		if (!m_Config.peerSessionLinks) { PeerListenerBindings().clear(); PeerPrimaryBindings().clear(); }
 		m_FrameGroupChanges.clear(); m_PeerFrameHolds.clear(); m_PeerOwnershipChanges.clear(); m_PeerSplitRenewals.clear(); m_PeerDelayBelowSinceMs.clear();
@@ -13640,7 +13640,7 @@ namespace RTE {
 					RequestPeerCommittedTail(nowMs);
 					if (TakeLoneSeat(nowMs)) continue;
 					// Records of this frame that no group confirms, as donors on either side of a split carry, never become history here.
-					if (m_PeerTailVotes.contains(m_Stats.nextFrame) && PrivateTailUnusable(m_Stats.nextFrame, nowMs,
+					if ((m_PeerTailVotes.contains(m_Stats.nextFrame) || m_PeerTailForeignFrame == m_Stats.nextFrame) && PrivateTailUnusable(m_Stats.nextFrame, nowMs,
 					    "PeerHeld:the committed tail is not confirmed; returning through a private image")) {
 						m_AdvanceBlock = "private-peer-tail";
 						break;

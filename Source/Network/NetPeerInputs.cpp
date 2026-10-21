@@ -673,7 +673,11 @@ namespace RTE {
 			}
 			if (at != body.size()) return readFailed("malformed-9");
 			heard();
-			if (!PeerGroupHasAuthority(message.voterMask, message.frame, PeerVotingScope::History)) return readFailed("group-authority");
+			if (!PeerGroupHasAuthority(message.voterMask, message.frame, PeerVotingScope::History)) {
+				// A group this history cannot certify at its next frame plays another continuation: a record this reader cannot take.
+				if (message.frame == m_Stats.nextFrame) m_PeerTailForeignFrame = message.frame;
+				return readFailed("group-authority");
+			}
 			// Retain complete validated evidence so this reader can certify the same history when it relays it.
 			for (auto& witness: witnesses) m_PeerFrameWitnesses[message.frame].try_emplace(witness.senderPeerId, std::move(witness));
 			uint32_t agreeing = witnessed;

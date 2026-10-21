@@ -1838,6 +1838,7 @@ namespace RTE {
 		};
 		std::map<uint64_t, std::map<uint8_t, PeerTailVote>> m_PeerTailVotes;
 		std::pair<uint64_t, uint64_t> m_PeerTailUnconfirmed{}; //!< The frame this private reader holds unconfirmed records of, and since when.
+		uint64_t m_PeerTailForeignFrame = 0; //!< The next frame this private reader was served by a group with no authority in its history.
 		uint64_t m_TailArrivalNamed = 0; //!< The private reader's next frame whose first tail arrival the details lever named.
 		uint64_t m_TieUnaskedNamed = UINT64_MAX; //!< The split whose unasked question the details lever last named.
 		uint64_t m_ExitedHoldFrame = UINT64_MAX; //!< The frame whose unproposed hold the details lever last named.
