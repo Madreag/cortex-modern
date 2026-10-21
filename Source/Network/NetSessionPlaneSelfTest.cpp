@@ -2045,7 +2045,7 @@ namespace RTE {
 			bool IsLosingDecision(uint8_t seat, const NetFrameTieRequest& request, const NetFrameTieReply& reply) const {
 				if (seat == 0 || seat > worlds.size()) return false;
 				return IsLosingContinuationDecision(HasSplitHistoryAt(seat, worlds[seat - 1].applied), seat, request, reply,
-				    !peers[seat - 1] || peers[seat - 1]->IsLocalPrivateReaderAt(worlds[seat - 1].applied + 1));
+				    seat > peers.size() || !peers[seat - 1] || peers[seat - 1]->IsLocalPrivateReaderAt(worlds[seat - 1].applied + 1));
 			}
 			bool IsAffected(uint8_t peer) const {
 				const bool second = (hub.row.secondSubject && peer == hub.row.secondSubject) || (hub.row.silentVoter && peer == hub.row.silentVoter);
