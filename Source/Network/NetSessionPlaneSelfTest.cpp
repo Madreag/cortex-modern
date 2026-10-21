@@ -6293,7 +6293,8 @@ namespace RTE {
 					const auto stepRound = [&] {
 						if (!fixture.Step(error)) return false;
 						if (arm == 3) for (const auto& peer: fixture.peers) if (HoldVisible(*peer, 1, fixture.hub.now)) {
-							error = "flowing keepalives showed a held host seat"; return false;
+							error = "flowing keepalives showed a held host seat: observer=" + std::to_string(peer->GetConfig().localPeerId) + " slow=" +
+							        std::to_string(peer->IsHeldAsSlowMachine(1)) + " at " + std::to_string(fixture.hub.now) + " ms"; return false;
 						}
 						return true;
 					};
