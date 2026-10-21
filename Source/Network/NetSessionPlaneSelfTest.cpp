@@ -2206,7 +2206,16 @@ namespace RTE {
 						for (auto& read = decisionsRead[id - 1]; read < decisions.size(); ++read) {
 							const auto& decision = decisions[read];
 							const auto key = std::make_tuple(decision.request.generation, decision.request.roundId, decision.request.configHash, decision.request.frame);
-							if (IsLosingDecision(id, decision.request, decision.reply) &&
+							// A ruling for a continuation whose every player this seat has heard leave names no machine to return to: it plays on.
+							const uint32_t playing = s_FrameMembers(peer, world.applied);
+							bool winnersElsewhere = false, winnersLeft = true;
+							for (const uint16_t winner: decision.reply.members) {
+								if (winner == 0 || winner > hub.row.seats || (playing & (1U << (winner - 1))) != 0) continue;
+								winnersElsewhere = true;
+								winnersLeft &= hub.schedule && hub.schedule->Left(static_cast<uint8_t>(winner), hub.now) && peer.HasHeardLeave(static_cast<uint8_t>(winner));
+							}
+							winnersLeft &= winnersElsewhere;
+							if (IsLosingDecision(id, decision.request, decision.reply) && !winnersLeft &&
 							    splitDecisions[id - 1].insert(key).second) {
 								if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) DiagnosticLine() << "[session-plane-decision-class] seat=" << unsigned(id)
 								    << " query_only=" << decision.request.queryOnly << " question=" << decision.request.frame << " now_ms=" << hub.now
