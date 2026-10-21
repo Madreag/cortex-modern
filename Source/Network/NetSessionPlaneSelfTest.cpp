@@ -2736,6 +2736,11 @@ namespace RTE {
 					if (!join.Tail().Append(record, &error)) co_return fail(error);
 					tailRecorded = next->first;
 				}
+				// A seat the host removes while it reads its image never returns: the AI keeps it.
+				if (fixture.hub.schedule && fixture.hub.schedule->Removed(seat, fixture.hub.now)) {
+					fixture.imageReading[seat - 1] = fixture.imageNeeded[seat - 1] = false;
+					co_return true;
+				}
 				const auto [tailWire, tailRoute] = fixture.ImageReturnRoute(donor, seat);
 				if (!tailWire || tailRoute == c_InvalidNetPeerId) co_return fail("the image donor lost its authenticated return route");
 				for (unsigned datagram = 0; datagram < 32; ++datagram) {
@@ -3874,10 +3879,13 @@ namespace RTE {
 						troubleEnd = std::max(troubleEnd, spell.EndMs()); backlog += BacklogMs(spell); backlogAfterImage += BacklogMsFrom(spell, rewoundAt);
 					}
 					// FLAGGED fixture departure: only the proven opposing input continuation shares this link-fault cause.
-					for (const auto& burst: schedule.bursts) if ((linkShared(burst.seat, seat) ||
-					    fixture.InputSplitCausedHold(seat, since, until, burst.seat, burst.atMs, burst.atMs + burst.ms)) &&
-					    burst.atMs <= since && burst.atMs + burst.ms + 3000 >= lookFrom) {
-						caused = true; troubleEnd = std::max(troubleEnd, burst.atMs + burst.ms);
+					for (const auto& burst: schedule.bursts) {
+						if (burst.atMs + burst.ms + 3000 < lookFrom) continue;
+						if (burst.atMs <= since && (linkShared(burst.seat, seat) || fixture.InputSplitCausedHold(seat, since, until, burst.seat, burst.atMs, burst.atMs + burst.ms))) {
+							caused = true; troubleEnd = std::max(troubleEnd, burst.atMs + burst.ms);
+						}
+						// Loss on its own link while it is held slows its return as any trouble of its own does.
+						else if (burst.atMs > since && burst.atMs <= lookTo && linkShared(burst.seat, seat)) troubleEnd = std::max(troubleEnd, burst.atMs + burst.ms);
 					}
 					// A live link split makes each half hold the other. A hung process is not a split and cannot justify holding a survivor.
 					for (const auto& spell: schedule.spells) {
