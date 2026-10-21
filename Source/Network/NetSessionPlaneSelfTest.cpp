@@ -2437,8 +2437,9 @@ namespace RTE {
 				// A seat whose image return activates at a frame the round's head has not reached is still held there, whatever view
 				// already installed the return.
 				for (uint8_t seat = 1; seat <= hub.row.seats; ++seat) if (returnActivations[seat] > head && heldSince[seat] != UINT64_MAX) held[seat] = true;
-				// A seat still in its image return has not returned, though every view that holds it stands.
-				for (uint8_t seat = 1; seat <= hub.row.seats; ++seat) if ((imageReading[seat - 1] || imageNeeded[seat - 1]) && heldSince[seat] != UINT64_MAX) held[seat] = true;
+				// A seat still in its image return has not returned before the round reaches its activation, though every view that holds it stands.
+				for (uint8_t seat = 1; seat <= hub.row.seats; ++seat)
+					if ((imageReading[seat - 1] || imageNeeded[seat - 1]) && heldSince[seat] != UINT64_MAX && !(returnActivations[seat] && returnActivations[seat] <= head)) held[seat] = true;
 				for (uint8_t seat = 1; seat <= hub.row.seats; ++seat) {
 					if (held[seat] && heldSince[seat] == UINT64_MAX && std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) {
 						std::string by;
@@ -4027,8 +4028,9 @@ namespace RTE {
 						for (const auto& spell: schedule.spells) directoryDark |= spell.seat == seat && spell.directoryDark && spell.atMs <= troubleEnd && spell.EndMs() + 3000 >= since;
 						const uint64_t ruledAt = std::max(troubleEnd, std::min(image->atMs, troubleEnd + c_NetFrameTieDeadlineMs + (directoryDark ? c_TestTieTimeoutCapMs : 0)));
 						const uint64_t standingMs = roundStood(seat, image->donor, image->atMs, lookTo);
-						if (imageCatchUp != UINT64_MAX && ruledAt + image->transitMs + imageCatchUp + standingMs + c_NetSeatCatchUpAllowanceMs > deadline) {
-							deadline = ruledAt + image->transitMs + imageCatchUp + standingMs + c_NetSeatCatchUpAllowanceMs;
+						// The donor's service activates the return on the returner's progress reports: the image's trip there and the reports' back.
+						if (imageCatchUp != UINT64_MAX && ruledAt + 2 * image->transitMs + imageCatchUp + standingMs + c_NetSeatCatchUpAllowanceMs > deadline) {
+							deadline = ruledAt + 2 * image->transitMs + imageCatchUp + standingMs + c_NetSeatCatchUpAllowanceMs;
 							backlog = imageBacklog;
 						} else image = nullptr;
 					}
