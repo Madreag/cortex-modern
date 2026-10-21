@@ -1574,7 +1574,7 @@ namespace RTE {
 			std::array<std::set<uint8_t>, 4> abandonedDonors; //!< The donors each seat's image return gave up when their own continuation was set aside.
 			std::array<uint64_t, 5> returnActivations{}; //!< Each returner's announced activation, which the round's one join host keeps distinct.
 			std::vector<ImageReturnTask> imageTasks;
-			std::vector<bool> splitParticipant;
+			std::vector<bool> splitParticipant, hungLastStep;
 			std::vector<uint32_t> observedSplit;
 			std::vector<uint64_t> playingMaxWait, lostAt, lostFrame, imageReturns;
 			std::vector<size_t> decisionsRead;
@@ -1945,7 +1945,7 @@ namespace RTE {
 				waitPlaying.resize(row.seats); playingMaxWait.resize(row.seats); imageReading.resize(row.seats); imageNeeded.resize(row.seats);
 				imageWithoutHeadroom.resize(row.seats); splitDecisions.resize(row.seats);
 				imageTasks.clear(); imageTasks.resize(row.seats);
-				splitParticipant.resize(row.seats); observedSplit.resize(row.seats);
+				splitParticipant.resize(row.seats); hungLastStep.assign(row.seats, false); observedSplit.resize(row.seats);
 				lostAt.resize(row.seats); lostFrame.resize(row.seats); imageReturns.resize(row.seats); decisionsRead.resize(row.seats);
 				firstDisplayedAt.resize(row.seats); startupFinishAt.resize(row.seats); preFaultPaceLeadMs.resize(row.seats);
 				settledHostWaits.resize(row.seats); paceBegin.resize(row.seats); paceEnd.resize(row.seats);
@@ -2135,10 +2135,12 @@ namespace RTE {
 					for (uint8_t other = 1; other <= hub.row.seats; ++other) if (hub.LiveSplit(seat, other)) cut |= 1U << (other - 1);
 					if (cut != observedSplit[seat - 1]) {
 						observedSplit[seat - 1] = cut;
+						// A seat whose cut appears as its own hung process resumes was away when the split began: it never played a half of it.
 						splitParticipant[seat - 1] = cut && peers[seat - 1]->IsRunning() && !CatchingUp(*peers[seat - 1]) &&
-						    (s_FrameMembers(*peers[seat - 1], worlds[seat - 1].applied + 1) & (1U << (seat - 1)));
+						    (s_FrameMembers(*peers[seat - 1], worlds[seat - 1].applied + 1) & (1U << (seat - 1))) && !hungLastStep[seat - 1];
 					}
 					if (OwnMachineTrouble(seat)) splitParticipant[seat - 1] = false;
+					hungLastStep[seat - 1] = hub.ProcessHung(seat);
 				}
 				// Direct arbitration is defined only at the heal. The oracle ranks the actually committed groups, never transport silence.
 				if (!hub.row.internet && !scheduled && sawSplit && !hub.DuringFault() && !directRuling) directRuling = RankDirectHistories();
