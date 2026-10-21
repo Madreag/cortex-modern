@@ -929,10 +929,14 @@ namespace RTE {
 			    delay > NetLockstepCodec::c_MaxPeerInputDelayFrames || neutral < delay || neutral > NetLockstepCodec::c_MaxFutureFrameSkew || agreed.frame > UINT64_MAX - neutral) { refused("runway"); return; }
 			returnDelays[peer] = {static_cast<uint16_t>(delay), agreed.frame + neutral, incarnation};
 		}
-		if (agreed.preparedFrame == 0 && PeerFrameMembersAt(agreed.frame) !=
-		    (agreed.connectedMask & PeerRetainedSeatsAt(agreed.frame) & ~PeerHeldSeatsAt(agreed.frame)) &&
+		const uint32_t heldGroup = agreed.connectedMask & PeerRetainedSeatsAt(agreed.frame) & ~PeerHeldSeatsAt(agreed.frame);
+		// A seat in its own return's neutral interval takes its group's hold although it did not sign it, but only a hold of the group it
+		// plays in: one that differs by more than this seat is another continuation's.
+		const bool neutralSameGroup = IsSeatReclaimGap(m_Config.localPeerId, agreed.frame) &&
+		    (PeerFrameMembersAt(agreed.frame) & ~SeatBit(m_Config.localPeerId)) == (heldGroup & ~SeatBit(m_Config.localPeerId));
+		if (agreed.preparedFrame == 0 && PeerFrameMembersAt(agreed.frame) != heldGroup &&
 		    (voters & SeatBit(m_Config.localPeerId)) == 0 && (PeerFrameMembersAt(agreed.frame) & SeatBit(m_Config.localPeerId)) != 0 &&
-		    !IsSeatReclaimGap(m_Config.localPeerId, agreed.frame) &&
+		    !neutralSameGroup &&
 		    (GetResumeFrame() > agreed.frame || (m_LastDeliveredFrame && *m_LastDeliveredFrame >= agreed.frame) ||
 		     (m_GrantedSimulationTick && *m_GrantedSimulationTick >= agreed.frame))) {
 			// Every hold is local, including a directory match's. A played or delivered continuation cannot adopt another
