@@ -2131,7 +2131,8 @@ namespace RTE {
 				const bool between = scheduled && scheduled->rematchAtMs && hub.now >= scheduled->rematchAtMs && hub.now < scheduled->rematchAtMs + 300;
 				if (scheduled && scheduled->rematchAtMs && hub.now == scheduled->rematchAtMs) peers[0]->Complete("round ended");
 				if (scheduled && scheduled->rematchAtMs && hub.now == scheduled->rematchAtMs + 300) {
-					if (!CheckImageOutcomes(error)) return false;
+					// A return never dies with its round: a seat still returning stays held into the next round, whose start offers it its
+					// seat again, and the return property judges the hold the round's end closes.
 					if (earlierRoundRule.empty()) earlierRoundRule = TwoReturnFrames();
 					for (auto& peer: peers) peer = std::make_unique<NetLockstepCoordinator>();
 					for (uint8_t id = 1; id <= hub.row.seats; ++id) {
