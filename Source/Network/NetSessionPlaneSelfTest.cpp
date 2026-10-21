@@ -3038,6 +3038,8 @@ namespace RTE {
 			// A hold the returner's own fault caused is judged with every other hold, by its cause and its return in time.
 			const bool ownTrouble = fixture.OwnTrouble(seat);
 			for (uint8_t peer: survivors) {
+				// A seat that left the round has stopped and plays no part in it.
+				if (fixture.hub.schedule && fixture.hub.schedule->Left(peer, fixture.hub.now)) continue;
 				const bool playing = (playingAtActivation & (1U << (peer - 1))) != 0;
 				if (playing && !fixture.HoldFromOwnFault(peer, seat) && (!fixture.peers[peer - 1]->IsRunning() || (!ownTrouble &&
 				    (fixture.peers[peer - 1]->HasHeldAISeat(seat) || Bridges(*fixture.peers[peer - 1]).contains(seat)))))
