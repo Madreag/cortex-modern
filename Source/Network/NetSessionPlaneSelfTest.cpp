@@ -1719,6 +1719,18 @@ namespace RTE {
 						ruling = 0;
 						for (const auto& answer: hub.directoryClients.at(seat).consumed)
 							if (answer.atMs == lostAt[seat - 1]) for (uint16_t member: answer.reply.members) ruling |= 1U << (member - 1);
+						// FLAGGED fixture departure: a ruling half that lost a ruling of its own since rejoins another continuation through its
+						// image; this seat asks again from that half, wherever it now plays.
+						for (uint32_t asked = 0; asked != ruling;) {
+							asked = ruling;
+							for (uint8_t winner = 1; winner <= hub.row.seats; ++winner) {
+								const auto client = hub.directoryClients.find(winner);
+								if (!(asked & (1U << (winner - 1))) || !lostAt[winner - 1] || !(imageNeeded[winner - 1] || imageReading[winner - 1]) ||
+								    client == hub.directoryClients.end()) continue;
+								for (const auto& answer: client->second.consumed)
+									if (answer.atMs == lostAt[winner - 1]) for (uint16_t member: answer.reply.members) ruling |= 1U << (member - 1);
+							}
+						}
 					} else if (!hub.row.internet && sawSplit && directRuling) ruling = directRuling;
 					for (uint8_t donor: ImageReturnDonors()) {
 						if (donor == seat || !(ruling & (1U << (donor - 1))) || !ImageDonorCanAnswer(donor) ||
