@@ -1605,6 +1605,9 @@ namespace RTE {
 			struct Wait { uint8_t seat = 0; uint64_t startMs = 0, endMs = 0, frame = 0; bool playing = false; };
 			std::vector<Wait> waits;
 			std::vector<std::vector<std::pair<uint64_t, uint64_t>>> heldSpans;
+			// Each image return a seat began: when, the round's lead on the image once it arrives, and the image's trip.
+			struct ImageStart { uint64_t atMs = 0, gapMs = 0, transitMs = 0; };
+			std::vector<std::vector<ImageStart>> imageStarts;
 			std::vector<uint64_t> heldSince;
 			std::array<std::array<uint64_t, NetMatchConfigUtil::c_MaxPeerCount + 1>, NetMatchConfigUtil::c_MaxPeerCount + 1> heldByObserver{}; //!< When each seat's own engine began holding each seat, its spells included.
 			uint64_t hashedThrough = 0;
@@ -1945,7 +1948,7 @@ namespace RTE {
 				firstDisplayedAt.resize(row.seats); startupFinishAt.resize(row.seats); preFaultPaceLeadMs.resize(row.seats);
 				settledHostWaits.resize(row.seats); paceBegin.resize(row.seats); paceEnd.resize(row.seats);
 				firstAdminChangeMs.assign(row.seats, UINT64_MAX);
-				heldSpans.assign(row.seats + 1, {}); heldSince.assign(row.seats + 1, UINT64_MAX); heldByObserver = {};
+				heldSpans.assign(row.seats + 1, {}); imageStarts.assign(row.seats + 1, {}); heldSince.assign(row.seats + 1, UINT64_MAX); heldByObserver = {};
 				for (uint8_t peer = 1; peer <= row.seats; ++peer) { wires.push_back(std::make_unique<Wire>(hub, peer)); peers.push_back(std::make_unique<NetLockstepCoordinator>()); }
 				if (!wires[0]->StartHost(47901, &error)) return false;
 				for (uint8_t peer = 2; peer <= row.seats; ++peer) if (!wires[peer - 1]->Connect("fixture", 47901, &error)) return false;
@@ -2556,6 +2559,7 @@ namespace RTE {
 			DiagnosticLine() << "[session-plane-image] seed=0 seats=" << static_cast<unsigned>(seats) << " rtt_ms=" << rttMs
 			                 << " capture=" << base << " playing_committed_through=" << common << " returner=" << unsigned(seat) << " donor=" << unsigned(donor)
 			                 << " donor_members=" << members << " now_ms=" << fixture.hub.now << std::endl;
+			fixture.imageStarts[seat].push_back({fixture.hub.now, static_cast<uint64_t>(std::ceil((common - base) * c_TestTickMs)) + rttMs / 2, rttMs / 2});
 			auto config = fixture.peers[seat - 1]->GetConfig();
 			// The image's seat state and the committed tail go through the same replay coordinator as a real private return.
 			auto replayConfig = config;
@@ -3558,6 +3562,13 @@ namespace RTE {
 			if (spell.kind == Spell::Kind::Stall) return 0;
 			return spell.kind == Spell::Kind::Slow ? spell.ms * (100 - std::min<uint32_t>(spell.percent, 100)) / 100 : spell.ms;
 		}
+		// What a spell leaves a seat behind by from `fromMs` on: the part of it after a rewind to an image.
+		uint64_t BacklogMsFrom(const Spell& spell, uint64_t fromMs) {
+			if (fromMs <= spell.atMs) return BacklogMs(spell);
+			if (fromMs >= spell.EndMs()) return 0;
+			Spell rest = spell; rest.atMs = fromMs; rest.ms = spell.EndMs() - fromMs;
+			return BacklogMs(rest);
+		}
 		// How long a seat takes to close a backlog at its catch-up rate; never, at the round's own rate.
 		uint64_t CatchUpMs(uint64_t backlogMs, uint32_t capacity) { return backlogMs == 0 ? 0 : capacity <= 100 ? UINT64_MAX : backlogMs * 100 / (capacity - 100); }
 		// Long enough to see every held seat back and playing: past the last trouble, each seat's catch-up and its allowance, and six
@@ -3835,6 +3846,12 @@ namespace RTE {
 					const auto [since, until] = fixture.heldSpans[seat][index];
 					uint64_t troubleEnd = 0, backlog = 0; bool caused = false;
 					const uint64_t lookFrom = since > 3000 ? since - 3000 : 0, lookTo = until == UINT64_MAX ? end : until;
+					// Section 11: a seat whose own continuation is set aside, or that finds the record, returns through the image return. Its
+					// play since the image is discarded, so it closes the image's lead on the round plus what its trouble costs it after the rewind.
+					const Fixture::ImageStart* image = nullptr;
+					for (const auto& start: fixture.imageStarts[seat]) if (start.atMs >= since && start.atMs <= lookTo) image = &start;
+					const uint64_t rewoundAt = image ? image->atMs : 0;
+					uint64_t backlogAfterImage = 0;
 					for (const auto& spell: schedule.spells) {
 						const bool linkCause = spell.kind == Spell::Kind::Late && (linkShared(spell.seat, seat) ||
 						    fixture.InputSplitCausedHold(seat, since, until, spell.seat, spell.atMs, spell.EndMs()));
@@ -3843,7 +3860,7 @@ namespace RTE {
 						const uint64_t windowEnd = spell.EndMs() + (catchUp == UINT64_MAX ? end : catchUp) + c_NetSeatCatchUpAllowanceMs;
 						if (windowEnd < lookFrom) continue;
 						caused |= spell.atMs <= since;
-						troubleEnd = std::max(troubleEnd, spell.EndMs()); backlog += BacklogMs(spell);
+						troubleEnd = std::max(troubleEnd, spell.EndMs()); backlog += BacklogMs(spell); backlogAfterImage += BacklogMsFrom(spell, rewoundAt);
 					}
 					// FLAGGED fixture departure: only the proven opposing input continuation shares this link-fault cause.
 					for (const auto& burst: schedule.bursts) if ((linkShared(burst.seat, seat) ||
@@ -3855,10 +3872,12 @@ namespace RTE {
 					for (const auto& spell: schedule.spells) {
 						if (spell.seat == seat || spell.kind != Spell::Kind::Silent || spell.atMs > lookTo || spell.EndMs() + 3000 < lookFrom) continue;
 						caused |= spell.atMs <= since; troubleEnd = std::max(troubleEnd, spell.EndMs()); backlog += spell.ms;
+						backlogAfterImage += spell.EndMs() > rewoundAt ? spell.EndMs() - std::max(spell.atMs, rewoundAt) : 0;
 					}
 					for (const auto& cut: schedule.cuts) {
 						if (cut.atMs > lookTo || cut.atMs + cut.ms + 3000 < lookFrom) continue;
 						caused |= cut.atMs <= since; troubleEnd = std::max(troubleEnd, cut.atMs + cut.ms); backlog += cut.ms;
+						backlogAfterImage += cut.atMs + cut.ms > rewoundAt ? cut.atMs + cut.ms - std::max(cut.atMs, rewoundAt) : 0;
 					}
 					// Section 11.1: the seat whose input arrived late past one side's bound is held there, and the side the round's arbitration
 					// sets aside is held until its image return; both holds are that late input's, from it to the reconverging return.
@@ -3872,13 +3891,21 @@ namespace RTE {
 						return Finding{"return", fixture.InStartup(since) ? "held_at_the_round_start" : again ? "returned_seat_held_again" : "held_without_its_own_trouble", "seat " + std::to_string(seat) + " was held at " + std::to_string(since) +
 						               " ms with no trouble of its own since " + std::to_string(lookFrom) + " ms" + (again ? " after it had returned" : "")};
 					}
+					// The image never shortens the return its trouble alone allows.
+					uint64_t transitMs = 0;
+					const uint64_t troubleCatchUp = CatchUpMs(backlog, schedule.recoverPercent[seat]);
+					const uint64_t imageCatchUp = image ? CatchUpMs(backlogAfterImage + image->gapMs, schedule.recoverPercent[seat]) : UINT64_MAX;
+					if (troubleCatchUp != UINT64_MAX && imageCatchUp != UINT64_MAX && imageCatchUp + image->transitMs > troubleCatchUp) {
+						backlog = backlogAfterImage + image->gapMs; transitMs = image->transitMs;
+					} else image = nullptr;
 					const uint64_t catchUp = CatchUpMs(backlog, schedule.recoverPercent[seat]);
 					if (catchUp == UINT64_MAX) continue;
-					const uint64_t deadline = troubleEnd + catchUp + c_NetSeatCatchUpAllowanceMs;
+					const uint64_t deadline = troubleEnd + transitMs + catchUp + c_NetSeatCatchUpAllowanceMs;
 					if (deadline >= end || (until != UINT64_MAX && until <= deadline)) continue;
 					return Finding{"return", until == UINT64_MAX ? "held_seat_never_returns" : "held_seat_returns_late", "seat " + std::to_string(seat) + " held at " + std::to_string(since) +
-					               " ms, its trouble over at " + std::to_string(troubleEnd) + " ms and its " + std::to_string(backlog) + " ms backlog closed by " +
-					               std::to_string(troubleEnd + catchUp) + " ms, " + (until == UINT64_MAX ? "still held at " + std::to_string(end) : "returned at " + std::to_string(until)) +
+					               " ms, its trouble over at " + std::to_string(troubleEnd) + " ms and its " + std::to_string(backlog) + " ms backlog" +
+					               (image ? " (an image return from " + std::to_string(image->atMs) + " ms)" : "") + " closed by " +
+					               std::to_string(deadline - c_NetSeatCatchUpAllowanceMs) + " ms, " + (until == UINT64_MAX ? "still held at " + std::to_string(end) : "returned at " + std::to_string(until)) +
 					               " ms against " + std::to_string(deadline) + " ms"};
 				}
 			}
