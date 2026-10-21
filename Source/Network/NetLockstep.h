@@ -1840,6 +1840,7 @@ namespace RTE {
 		std::pair<uint64_t, uint64_t> m_PeerTailUnconfirmed{}; //!< The frame this private reader holds unconfirmed records of, and since when.
 		uint64_t m_TailArrivalNamed = 0; //!< The private reader's next frame whose first tail arrival the details lever named.
 		uint64_t m_TieUnaskedNamed = UINT64_MAX; //!< The split whose unasked question the details lever last named.
+		uint64_t m_ExitedHoldFrame = UINT64_MAX; //!< The frame whose unproposed hold the details lever last named.
 		std::map<uint64_t, std::vector<NetHostMigrationMessage>> m_PeerTailDecisions;
 		struct PeerFrameIncoming {
 			uint32_t totalBytes = 0;

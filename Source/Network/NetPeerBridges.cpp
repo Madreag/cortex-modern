@@ -327,13 +327,22 @@ namespace RTE {
 
 	bool NetLockstepCoordinator::ProposePeerBridge(uint64_t frame, uint64_t nowMs, bool returningOnly) {
 		if (!UsesPeerFrameGroups() || WaitsForPlacement() || frame != m_Stats.nextFrame) return false;
+		// Under the details lever, a consumer past its bound whose hold this function never reaches says why, once per frame.
+		const auto exited = [&](const char* why) {
+			if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS") && m_ConsumerWaitingFrame == frame && nowMs >= m_ConsumerWaitStartMs &&
+			    nowMs - m_ConsumerWaitStartMs >= static_cast<uint64_t>(std::ceil(m_Config.slowPlayerBoundTicks * m_Config.simTickMs)) && m_ExitedHoldFrame != frame) {
+				m_ExitedHoldFrame = frame;
+				DiagnosticLine() << "[net-peer-hold-exit] local=" << static_cast<int>(m_Config.localPeerId) << " frame=" << frame << " why=" << why << " now_ms=" << nowMs << std::endl;
+			}
+			return false;
+		};
 		// A lagging reader can receive its own hold before the last few preceding inputs. Fetch that committed tail;
 		// it must not turn its stale display clock into a new hold of the survivor whose record it is catching up to.
 		if (PeerFrameCatchUpActive()) for (const auto& [key, kept]: m_PendingPeerDecisions) {
 			const auto& hold = kept.first;
 			if (IsHoldDecision(key.second) && key.first > frame && std::find(hold.members.begin(), hold.members.end(), m_Config.localPeerId) != hold.members.end()) {
 				RequestPeerCommittedTail(nowMs);
-				return false;
+				return exited("own hold pending");
 			}
 		}
 		const bool neutralParticipant = !IsLocalPrivateReaderAt(frame) && IsSeatReclaimGap(m_Config.localPeerId, frame);
@@ -341,9 +350,9 @@ namespace RTE {
 		// Activation restores participation before the certified neutral input interval ends. That participant still holds a
 		// missing sender at its displayed bound; requiring its own human sample makes the correctly empty interval a deadlock.
 		if (sources == m_PeerSourceInputs.end()) {
-			if (!neutralParticipant) return false;
+			if (!neutralParticipant) return exited("no sources");
 			sources = m_PeerSourceInputs.try_emplace(frame).first;
-		} else if (!sources->second.contains(m_Config.localPeerId) && !neutralParticipant) return false;
+		} else if (!sources->second.contains(m_Config.localPeerId) && !neutralParticipant) return exited("no own input");
 		auto proposal = PeerFrameMessage(NetHostMigrationMessageType::PeerBridge);
 		std::map<uint8_t, uint64_t> returnCatchUpTicks;
 		const auto returnLinkDelay = [&](uint8_t peer, uint64_t at) {
@@ -406,11 +415,11 @@ namespace RTE {
 				break;
 			}
 		}
-		if (returningOnly && !proposal.members.empty() && !ownYield) return false;
+		if (returningOnly && !proposal.members.empty() && !ownYield) return exited("returning only");
 		if (proposal.members.empty()) {
 			// A return follows a capture already agreed ahead, so the new voter reads that capture from the committed tail.
-			for (const auto& [key, votes]: m_PeerBridgeVotes) if (key.second == 4 && key.first >= frame && votes.contains(m_Config.localPeerId)) return false;
-			if (m_FrameGroupMembers == 0 || std::countr_zero(m_FrameGroupMembers) + 1 != m_Config.localPeerId) return false;
+			for (const auto& [key, votes]: m_PeerBridgeVotes) if (key.second == 4 && key.first >= frame && votes.contains(m_Config.localPeerId)) return exited("own return vote pending");
+			if (m_FrameGroupMembers == 0 || std::countr_zero(m_FrameGroupMembers) + 1 != m_Config.localPeerId) return exited("not the lowest member");
 			for (const auto& [peer, bridge]: m_PeerBridges) {
 				if (!bridge.committedHold || bridge.returnFrame || peer == m_Config.localPeerId) continue;
 				const uint32_t delay = returnLinkDelay(peer, frame);
@@ -474,9 +483,9 @@ namespace RTE {
 				}
 				proposal.members.push_back(peer); proposal.connectedMask |= SeatBit(peer);
 			}
-			if (proposal.members.empty()) return false;
+			if (proposal.members.empty()) return exited("no members");
 			proposal.preparedFrame = 1;
-			if (VotedOtherPeerReturn(proposal) || frame > UINT64_MAX - m_Config.slowPlayerBoundTicks) return false;
+			if (VotedOtherPeerReturn(proposal) || frame > UINT64_MAX - m_Config.slowPlayerBoundTicks) return exited("voted another return");
 			proposal.frame = frame + m_Config.slowPlayerBoundTicks;
 			// The activation can follow another return already agreed ahead of this prepared frame. Keep that seat in the
 			// later group, and include its displayed prefix and vote lead, even while it is still in its neutral interval now.
@@ -494,7 +503,7 @@ namespace RTE {
 				for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
 					if (peer == m_Config.localPeerId || (members & ~returning & SeatBit(peer)) == 0) continue;
 					const auto applied = m_PeerAppliedThrough.find(peer);
-					if (applied == m_PeerAppliedThrough.end() || applied->second < m_Config.startFrame) return false;
+					if (applied == m_PeerAppliedThrough.end() || applied->second < m_Config.startFrame) return exited("applied unknown");
 					proposal.boundary = std::min(proposal.boundary, applied->second);
 					nextPrepared = std::max(nextPrepared, m_Stats.peers[peer].reportedNextFrame);
 					uint64_t rtt = m_Stats.peers[peer].pingMs;
@@ -503,12 +512,12 @@ namespace RTE {
 					else if (const auto path = m_PeerReceiptDelaySamples.find(peer); path != m_PeerReceiptDelaySamples.end()) rtt = std::max<uint64_t>(rtt, path->second.P95Ms());
 					nextLead = std::max<uint64_t>(nextLead, static_cast<uint64_t>(std::ceil((rtt + c_NetPeerVoteResendMs) / m_Config.simTickMs)) + m_Config.slowPlayerBoundTicks);
 				}
-				if (nextPrepared > UINT64_MAX - nextLead) return false;
+				if (nextPrepared > UINT64_MAX - nextLead) return exited("lead overflow");
 				const uint64_t activation = std::max(proposal.frame, nextPrepared + nextLead);
 				if (members == proposal.connectedMask && activation == proposal.frame) { settled = true; break; }
 				proposal.connectedMask = members; proposal.frame = activation;
 			}
-			if (!settled) return false;
+			if (!settled) return exited("not settled");
 		}
 		// Another continuation's members are held at this frame: no deadline or cutoff ahead applies to a history this group left.
 		const bool otherContinuation = !proposal.members.empty() && std::all_of(proposal.members.begin(), proposal.members.end(), [&](uint8_t peer) {
@@ -543,11 +552,11 @@ namespace RTE {
 		// Newer arrivals cannot extend the consumer's deadline for an older missing input.
 		const bool heldAhead = ((otherVoter || cooperativeAhead) && feeding && (ownYield || !localDeadline) && !otherContinuation) || agreedContinuation;
 		if (heldAhead) {
-			if ((!slowMachine && !agreedContinuation) || (!ownYield && std::countr_zero(proposal.connectedMask) + 1 != m_Config.localPeerId)) return false;
+			if ((!slowMachine && !agreedContinuation) || (!ownYield && std::countr_zero(proposal.connectedMask) + 1 != m_Config.localPeerId)) return exited("not a slow-machine or agreed continuation proposer");
 			for (const auto& [key, votes]: m_PeerBridgeVotes) {
 				if (!IsHoldDecision(key.second) || key.first <= frame || m_PeerBridgeCertificates.contains(key)) continue;
 				if (const auto own = votes.find(m_Config.localPeerId); own != votes.end())
-					for (uint8_t peer: own->second.members) if (std::find(proposal.members.begin(), proposal.members.end(), peer) != proposal.members.end()) return false;
+					for (uint8_t peer: own->second.members) if (std::find(proposal.members.begin(), proposal.members.end(), peer) != proposal.members.end()) return exited("own vote names a member");
 			}
 			uint64_t inFlight = frame;
 			uint32_t rttMs = 0;
@@ -567,7 +576,7 @@ namespace RTE {
 				if (peer == m_Config.localPeerId || ((proposal.connectedMask & SeatBit(peer)) == 0 &&
 				    !(needsOwnCoSign && std::find(proposal.members.begin(), proposal.members.end(), peer) != proposal.members.end()))) continue;
 				const auto applied = m_PeerAppliedThrough.find(peer);
-				if (applied == m_PeerAppliedThrough.end() || applied->second < m_Config.startFrame) return false;
+				if (applied == m_PeerAppliedThrough.end() || applied->second < m_Config.startFrame) return exited("applied unknown at boundary");
 				proposal.boundary = std::min(proposal.boundary, applied->second);
 			}
 			if (ownYield) {
@@ -585,7 +594,7 @@ namespace RTE {
 			// Its first missing inputs get the full bound from the actual wait.
 			const uint64_t displayed = m_LastCompletedSimulationTick.value_or(m_Config.startFrame - 1);
 			if (displayed < m_Stats.effectiveStartFrame + m_Config.slowPlayerBoundTicks &&
-			    (m_ConsumerWaitingFrame != frame || nowMs < m_ConsumerWaitStartMs || nowMs - m_ConsumerWaitStartMs < boundMs)) return false;
+			    (m_ConsumerWaitingFrame != frame || nowMs < m_ConsumerWaitStartMs || nowMs - m_ConsumerWaitStartMs < boundMs)) return exited("startup wait");
 			// A local hold needs no advance reservation.
 			uint64_t agreementMs = 0;
 			// The consumer's bound is already on the deadline below. Charge this co-sign its round trip and a poll, not the bound
@@ -598,7 +607,7 @@ namespace RTE {
 			}
 			// Proposal, reciprocal-input loss and local certification spend the same displayed deadline.
 			const auto deadline = PeerInputDeadlineMs(frame);
-			if (!deadline || nowMs + agreementMs < *deadline) return false;
+			if (!deadline || nowMs + agreementMs < *deadline) return exited("before the deadline");
 		}
 		// Past the bound, a hold this seat does not propose names why under the details lever, once per frame.
 		const auto refused = [&](const char* why) {
