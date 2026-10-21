@@ -6246,7 +6246,13 @@ namespace RTE {
 		NetLockstepPlane::Check(&replay, "AdoptReplayedFramePrefixes (the replay)");
 		if (!UsesPeerFrameGroups() || !m_Config.joinsRunningRound || m_Playback || !replay.m_Playback ||
 		    m_Config.sessionId != replay.m_Config.sessionId || m_RoundId != replay.m_RoundId || m_RoundConfigHash != replay.m_RoundConfigHash ||
-		    m_Config.localPeerId != replay.m_Config.localPeerId || !replay.m_LastCompletedSimulationTick || m_Config.startFrame == 0) return false;
+		    m_Config.localPeerId != replay.m_Config.localPeerId || !replay.m_LastCompletedSimulationTick || m_Config.startFrame == 0) {
+			if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) DiagnosticLine() << "[net-replay-adoption] local=" << static_cast<int>(m_Config.localPeerId)
+			    << " refused: groups=" << UsesPeerFrameGroups() << " joins=" << m_Config.joinsRunningRound << " playback=" << m_Playback << "/" << replay.m_Playback
+			    << " round=" << (m_RoundId == replay.m_RoundId) << " config=" << (m_RoundConfigHash == replay.m_RoundConfigHash)
+			    << " replayed=" << replay.m_LastCompletedSimulationTick.value_or(0) << " start=" << m_Config.startFrame << std::endl;
+			return false;
+		}
 		const uint64_t through = std::min({throughFrame, *replay.m_LastCompletedSimulationTick, m_Config.startFrame - 1});
 		for (const auto& [frame, prefix]: replay.m_PeerReplayAppliedPrefixes) {
 			if (frame > through) break;
