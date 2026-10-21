@@ -2732,6 +2732,13 @@ namespace RTE {
 				config.relayToOtherPeers = config.localPeerId == config.authorityPeerId;
 				for (uint8_t peer = 1; peer <= seats; ++peer) config.peerInputDelayFrames[peer] = config.matchConfig.peerInputDelayFrames[peer - 1];
 				config.peerIncarnations[seat] = incarnation; config.seatStateThroughFrame = replay.applied;
+				if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) {
+					std::string held, reclaimed;
+					for (const auto& [peer, hold]: config.initialSeatHolds) held += " " + std::to_string(peer) + "@" + std::to_string(hold.cutoffFrame);
+					for (const auto& [peer, back]: config.initialSeatReclaims) reclaimed += " " + std::to_string(peer) + "@" + std::to_string(back.activationFrame);
+					DiagnosticLine() << "[session-plane-image-live] returner=" << unsigned(seat) << " activation=" << activation << " holds=" << (held.empty() ? " none" : held)
+					    << " reclaims=" << (reclaimed.empty() ? " none" : reclaimed) << " replay_applied=" << replay.applied << " now_ms=" << fixture.hub.now << std::endl;
+				}
 				fixture.peers[seat - 1] = std::make_unique<NetLockstepCoordinator>();
 				if (!fixture.peers[seat - 1]->Start(*fixture.wires[seat - 1], config, &error)) return false;
 				// FLAGGED fixture departure: import completed replay seat state during the live handshake, as the runner does.
@@ -2950,6 +2957,9 @@ namespace RTE {
 			if (!fixture.peers[seat - 1]->IsRunning()) co_return fail("the returning seat did not finish its live handshake before activation: state=" +
 			    std::to_string(static_cast<int>(fixture.peers[seat - 1]->GetState())) + " starts_received=" + std::to_string(fixture.peers[seat - 1]->GetStats().startPacketsReceived) + s_WaitState(*fixture.peers[seat - 1]));
 			fixture.peers[seat - 1]->AdoptReplayedSeatTransitions(replayCoordinator, activation - 1);
+			if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) DiagnosticLine() << "[session-plane-image-adopted] returner=" << unsigned(seat) << " activation=" << activation
+			    << " replay_applied=" << replay.applied << " live_running=" << fixture.peers[seat - 1]->IsRunning()
+			    << s_WaitState(*fixture.peers[seat - 1]) << " now_ms=" << fixture.hub.now << std::endl;
 			fixture.discardedHistories[seat - 1].push_back(fixture.worlds[seat - 1].hashes);
 			fixture.worlds[seat - 1] = std::move(replay); fixture.queued[seat - 1] = activation - 1; fixture.credits[seat - 1].Reset(); fixture.waitAt[seat - 1] = fixture.releasedAt[seat - 1] = 0;
 			fixture.frameMembers[seat - 1].assign(fixture.frameMembers[donor - 1].begin(), fixture.frameMembers[donor - 1].begin() + activation);
@@ -2983,7 +2993,10 @@ namespace RTE {
 						co_return fail("the image return was held again during its healthy observation: observer=" + std::to_string(peer) +
 						    " playing_at_activation=" + std::to_string((s_FrameMembers(*fixture.peers[donor - 1], activation) & (1U << (peer - 1))) != 0) +
 						    " observer_members=" + std::to_string(s_FrameMembers(*fixture.peers[peer - 1], fixture.worlds[peer - 1].applied + 1)) +
-						    " observer_applied=" + std::to_string(fixture.worlds[peer - 1].applied) + " activation=" + std::to_string(activation) + " now_ms=" + std::to_string(fixture.hub.now));
+						    " observer_applied=" + std::to_string(fixture.worlds[peer - 1].applied) + " activation=" + std::to_string(activation) + " now_ms=" + std::to_string(fixture.hub.now) +
+						    " returner_running=" + std::to_string(fixture.peers[seat - 1]->IsRunning()) + " returner_aligned_wait=" + std::to_string(fixture.peers[seat - 1]->AwaitingAlignedStart()) +
+						    " returner_starts=" + std::to_string(fixture.peers[seat - 1]->HasReceivedAllRemoteStarts()) + " returner_applied=" + std::to_string(fixture.worlds[seat - 1].applied) +
+						    s_WaitState(*fixture.peers[seat - 1]));
 				co_await std::suspend_always{};
 				if (!fixture.CheckBound(error)) co_return false;
 			}
