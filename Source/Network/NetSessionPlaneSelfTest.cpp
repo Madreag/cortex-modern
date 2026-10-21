@@ -2340,8 +2340,9 @@ namespace RTE {
 				if (scheduled) return StepSchedule(error);
 
 				// A seat is held only for its own lateness: one that keeps the round's rate on its own link is never held for another's.
+				// The seat in the fault holds what it cannot hear at its own bound (section 11.1): that view is its own fault's.
 				if (!hub.row.tie && !hub.row.partition && !sawSplit && wronglyHeld.empty())
-					for (uint8_t id = 1; id <= hub.row.seats; ++id)
+					for (uint8_t id = 1; id <= hub.row.seats; ++id) if (!IsAffected(id))
 						for (uint8_t seat = 1; seat <= hub.row.seats; ++seat) {
 							if (IsAffected(seat) || seat == hub.ReturningSeat() || !(Bridges(*peers[id - 1]).contains(seat) || peers[id - 1]->HasHeldAISeat(seat))) continue;
 							wronglyHeld = "peer " + std::to_string(id) + " held seat " + std::to_string(seat) + " at " + std::to_string(hub.now) + " ms (fault at " +
