@@ -303,7 +303,13 @@ namespace RTE {
 		// Name every retained owner, but only the seats actually playing in this group. Held owners are not invented voters
 		// to make the groups equal: the directory arbitrates a split of any size.
 		uint32_t voting = members;
-		const uint32_t voters = PeerVotingOwners(voting, frame);
+		uint32_t voters = PeerVotingOwners(voting, frame);
+		// A seat in its own return's neutral interval owes no input there yet plays on: its half asks as a History-scope owner, or
+		// the other half's ruling never reaches it.
+		if (voters == 0 && IsSeatReclaimGap(m_Config.localPeerId, frame) && (members & SeatBit(m_Config.localPeerId)) != 0) {
+			voting = members;
+			voters = PeerVotingOwners(voting, frame, PeerVotingScope::History);
+		}
 		if (voters == 0 || voting == voters) { unasked(voters == 0 ? "no voters" : "the group votes alone"); return; }
 		request.queryOnly = (voting & SeatBit(m_Config.localPeerId)) == 0;
 		// A group smaller than half of the seats that played together before the split asks the referee to rule for it only after the
