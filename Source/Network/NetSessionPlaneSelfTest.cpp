@@ -4016,6 +4016,9 @@ namespace RTE {
 			static const std::vector<ScheduleRow> rows = {
 				// Four internet seats at 220-290 ms and no fault: the host's clock must not start a link trip ahead of its seats'.
 				{"four_internet_seats_220_to_290ms_fault_free_round_holds_nobody", "seed=0 seats=4 internet=1 exchange=100 end=8000 rtt=247,217,237,292,270,285 jitter=20,20,10,10,20,10 recover=300,300,300,300 phase=4468,3027,2118,4525"},
+				// Both seats of a two-player round held at once: the slow host volunteers its own hold while the silent joiner holds it.
+				{"two_direct_seats_host_yields_while_the_silent_joiner_holds_it", "seed=0 seats=2 internet=0 exchange=100 rtt=200 jitter=10 recover=300,300 phase=1700,3400 spell=1:slow:6000:3000:40 spell=2:silent:6200:1500"},
+				{"two_internet_seats_host_yields_while_the_silent_joiner_holds_it", "seed=0 seats=2 internet=1 exchange=100 rtt=200 jitter=10 recover=300,300 phase=1700,3400 spell=1:slow:6000:3000:40 spell=2:silent:6200:1500"},
 				// Current-client groups: the minimized counterexample, plus its original seat/referee shape when shrinking changes it.
 				{"four_direct_seats_120ms_jitter_40ms_host_late_100ms_more_928ms_seat3_silent_200ms_back_at_105pc_loss_10pc_host_engine_failed_seed_42", "seed=42 seats=4 internet=0 exchange=100 end=16840 rtt=90,87,106,107,97,120 jitter=5,0,20,0,10,40 recover=300,300,105,120 phase=3851,2957,1974,3572 spell=1:late:5377:928:100 spell=3:silent:4640:200 burst=1:7122:1100:10"},
 				{"three_internet_seats_56ms_jitter_20ms_host_silent_200ms_back_at_100pc_host_hung_900ms_back_at_100pc_loss_90pc_seat3_loss_90pc_host_histories_differ_seed_127", "seed=127 seats=3 internet=1 exchange=100 end=17412 rtt=44,56,46 jitter=5,0,20 recover=100,300,100 phase=1745,1966,3496 spell=1:silent:5978:200 spell=1:hung:8062:900 burst=3:4947:1923:90 burst=1:7800:323:90"},
