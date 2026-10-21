@@ -1856,9 +1856,9 @@ namespace RTE {
 								break;
 							}
 						}
-						// A pair already apart under that cause stays apart on frames where their member sets agree again, until an image return
-						// replaces one history; the round's end requires that return.
-						if (separated && frame >= separated && (l & first) && (r & second) && (l != r || pairSeparatedFrom[a][b])) {
+						// A pair apart under that cause from an earlier frame stays apart on frames where their member sets agree again, until an
+						// image return replaces one history; the round's end requires that return.
+						if (separated && frame >= separated && (l & first) && (r & second) && (l != r || (pairSeparatedFrom[a][b] && frame > pairSeparatedFrom[a][b]))) {
 							// FLAGGED fixture departure: each half holds the seat it cannot hear, so an owner first held on one side after the split has its own proven divergence.
 							if (authorA == a && authorB == b && frame > 0 && left.shownAt.contains(frame) && right.shownAt.contains(frame)) {
 								const uint32_t before = frameMembers[a - 1].at(frame - 1) ^ frameMembers[b - 1].at(frame - 1);
