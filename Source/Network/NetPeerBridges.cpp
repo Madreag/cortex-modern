@@ -929,6 +929,11 @@ namespace RTE {
 			    delay > NetLockstepCodec::c_MaxPeerInputDelayFrames || neutral < delay || neutral > NetLockstepCodec::c_MaxFutureFrameSkew || agreed.frame > UINT64_MAX - neutral) { refused("runway"); return; }
 			returnDelays[peer] = {static_cast<uint16_t>(delay), agreed.frame + neutral, incarnation};
 		}
+		if (agreed.preparedFrame == 0 && certificate.frame < m_Stats.nextFrame && std::getenv("CC_TEST_RETURN_INPUT_DETAILS"))
+			DiagnosticLine() << "[net-peer-hold-past] local=" << static_cast<int>(m_Config.localPeerId) << " frame=" << certificate.frame << " next=" << m_Stats.nextFrame
+			    << " members_here=" << PeerFrameMembersAt(agreed.frame) << " connected=" << agreed.connectedMask << " voters=" << voters
+			    << " held_here=" << PeerHeldSeatsAt(agreed.frame) << " retained=" << PeerRetainedSeatsAt(agreed.frame) << " resume=" << GetResumeFrame()
+			    << " gap=" << IsSeatReclaimGap(m_Config.localPeerId, agreed.frame) << " now_ms=" << nowMs << std::endl;
 		const uint32_t heldGroup = agreed.connectedMask & PeerRetainedSeatsAt(agreed.frame) & ~PeerHeldSeatsAt(agreed.frame);
 		// A seat in its own return's neutral interval takes its group's hold although it did not sign it, but only a hold of the group it
 		// plays in: one that differs by more than this seat is another continuation's.
