@@ -3623,6 +3623,18 @@ class ConnectionAuthorityTests(unittest.TestCase):
         self.assertEqual(self.frame_check_in(0, [0], frame=89)["members"], [0])
         self.assertEqual(self.frame_check_in(2, [1, 2, 3], frame=89)["members"], [0])
 
+    def test_frame_tie_drops_a_seat_the_host_removed(self):
+        self.referee_fixture()
+        self.assertEqual(self.frame_check_in(2, [2, 3])["members"], [2, 3])
+        removal = dict(connection_protocol=session_directory.CONNECTION_PROTOCOL, operation="remove", token=self.row["token"], host_generation=0,
+                       participant=self.referee_players[3][0].public_key().public_bytes_raw().hex(), name="Seat 3", action="removed")
+        self.store.connection_request(self.sid, removal, self.now, INSTALL_KEY)
+        # A half cut off from the host still names the removed seat: its question is answered, never refused.
+        self.assertEqual(self.frame_check_in(0, [0, 1], query_only=True)["members"], [2])
+        later = self.frame_check_in(2, [2, 3], frame=90)
+        self.assertEqual((later["status"], later["members"]), ("decided", [2]))
+        self.assertEqual(self.frame_check_in(0, [0, 1], frame=90)["members"], [2])
+
     def test_frame_tie_decision_survives_later_ties_and_reload(self):
         self.referee_fixture()
         self.assertEqual(self.frame_check_in(0, [0, 1])["members"], [0, 1])

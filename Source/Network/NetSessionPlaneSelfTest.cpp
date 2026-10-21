@@ -270,20 +270,24 @@ namespace RTE {
 				    !holds(request.owners, seat) || (!request.queryOnly && !holds(request.members, seat))) return refuse(400, "frame_tie_request");
 				if (refusing) return refuse(409, "frame_tie_owners");
 				if (tieStatus != 200) return {tieStatus, false, {}, retryAfterSeconds};
+				// As the directory does, a seat the host removed is dropped from every check-in and every decision it discloses.
+				const auto kept = [&](std::vector<uint16_t> seats) { std::erase_if(seats, [&](uint16_t seat) { return removed.contains(seat); }); return seats; };
+				const auto owners = kept(request.owners), members = kept(request.members);
 				const auto key = std::make_tuple(request.generation, request.roundId, request.configHash, request.frame);
 				if (const auto prior = ties.find(key); prior != ties.end() && !prior->second.winner.empty()) {
-					if (prior->second.owners != request.owners || prior->second.host != request.host) return refuse(409, "frame_tie_mismatch");
-					return {200, true, prior->second.winner};
+					if (kept(prior->second.owners) != owners || prior->second.host != request.host) return refuse(409, "frame_tie_mismatch");
+					return {200, true, kept(prior->second.winner)};
 				}
+				if (owners.size() < 2 || members.size() >= owners.size() || (!request.queryOnly && members.empty())) return refuse(400, "frame_tie_request");
 				if (request.generation != generation || request.host != host || request.configHash != configHash) return refuse(409, "frame_tie_round");
 				if (leases.empty()) leases.insert(retained.begin(), retained.end());
-				for (uint16_t owner: request.owners) if (!leases.contains(owner) || removed.contains(owner)) return refuse(403, "frame_tie_seats");
-				if (request.owners != retained) return refuse(409, "frame_tie_owners");
+				for (uint16_t owner: owners) if (!leases.contains(owner)) return refuse(403, "frame_tie_seats");
+				if (owners != retained) return refuse(409, "frame_tie_owners");
 				if (request.queryOnly && !ties.contains(key)) return {200, false, {}};
-				auto& tie = ties.try_emplace(key, Tie{request.owners, request.host, {}}).first->second;
-				if (tie.owners != request.owners || tie.host != request.host) return refuse(409, "frame_tie_mismatch");
-				if (tie.winner.empty() && !request.queryOnly) tie.winner = request.members;
-				return {200, !tie.winner.empty(), tie.winner};
+				auto& tie = ties.try_emplace(key, Tie{owners, request.host, {}}).first->second;
+				if (kept(tie.owners) != owners || tie.host != request.host) return refuse(409, "frame_tie_mismatch");
+				if (tie.winner.empty() && !request.queryOnly) tie.winner = members;
+				return {200, !tie.winner.empty(), kept(tie.winner)};
 			}
 		};
 		// Each requester follows NetConnectionAuthority's asynchronous tie and routine check-in policies.
@@ -578,11 +582,11 @@ namespace RTE {
 				if (directory.FrameTie(1, request).status != 409) return fail("a check-in omitted retained owners");
 				directory.retained = {1, 2};
 				if (!directory.FrameTie(1, request).decided) return fail("the valid split was not recorded");
-				directory.removed.insert(2);
+				directory.removed.insert(2); std::erase(directory.retained, 2);
 				if (!directory.FrameTie(1, request).decided || directory.FrameTie(2, request).status != 403)
 					return fail("old decisions bypassed the requester's current seat authentication");
 				++request.frame;
-				if (directory.FrameTie(1, request).status != 403) return fail("a removed owner supplied frame authority");
+				if (directory.FrameTie(1, request).status == 200) return fail("a removed owner supplied frame authority");
 				return true;
 			}
 			DirectoryClient client; client.nextCheckInMs = 60000;

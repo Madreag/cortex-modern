@@ -451,22 +451,30 @@ class ConnectionAuthority:
         key = f"{generation}:{round_id}:{config_hash}:{frame}"
         with self._lock:
             record = self._match(sid, now)
+            # A seat the host removed is dropped from every check-in: a half cut off from the host could not know of the
+            # removal, and the decision it asks for never names it.
+            removed_seats = {int(seat) for seat, lease in record["seats"].items() if lease["participant"] in record["removed"]}
+            owners = [seat for seat in owners if seat not in removed_seats]
+            members = [seat for seat in members if seat not in removed_seats]
             ties = record.setdefault("frame_ties", {})
             prior = ties.get(key)
             if prior is not None and "winner" in prior:
-                if prior["owners"] != owners or prior["host"] != host:
+                if [seat for seat in prior["owners"] if seat not in removed_seats] != owners or prior["host"] != host:
                     raise ConnectionErrorReply(409, "frame_tie_mismatch", "The groups disagree about the retained seats. Reconnecting will retry.")
                 # A newer admin generation or roster cannot rewrite an already
                 # displayed decision. The caller's current seat authentication
                 # above still has to succeed before this history is disclosed.
                 return dict(connection_protocol=CONNECTION_PROTOCOL, generation=generation, round_id=round_id,
-                            frame=frame, config_hash=config_hash, status="decided", members=prior["winner"])
+                            frame=frame, config_hash=config_hash, status="decided",
+                            members=[seat for seat in prior["winner"] if seat not in removed_seats])
+            if len(owners) < 2 or len(members) >= len(owners) or (not query_only and not members):
+                raise ConnectionErrorReply(400, "frame_tie_request", "The tied groups did not name retained seats. Reconnecting will retry.")
             session = record.get("session") or {}
             if (generation != session.get("migration_gen", 0) or host != record.get("host_seat")
                     or config_hash != session.get("fields", {}).get("match_config_hash")):
                 raise ConnectionErrorReply(409, "frame_tie_round", "The check-in names another host generation or match. Reconnecting will retry.")
-            if any(str(seat) not in record["seats"] or record["seats"][str(seat)]["participant"] in record["removed"] for seat in owners):
-                raise ConnectionErrorReply(403, "frame_tie_seats", "A seat in this check-in was removed by the host.")
+            if any(str(seat) not in record["seats"] for seat in owners):
+                raise ConnectionErrorReply(403, "frame_tie_seats", "A seat in this check-in is not in the match.")
             retained = sorted(int(seat) for seat, lease in record["seats"].items() if int(seat) < 4 and lease["participant"] not in record["removed"])
             if owners != retained:
                 raise ConnectionErrorReply(409, "frame_tie_owners", "The check-in did not name every retained seat. Reconnecting will retry.")
@@ -476,7 +484,7 @@ class ConnectionAuthority:
             if key not in ties:
                 ties[key] = {"owners": owners, "host": host, "until": now, "groups": []}
             tie = ties[key]
-            if tie["owners"] != owners or tie["host"] != host:
+            if [seat for seat in tie["owners"] if seat not in removed_seats] != owners or tie["host"] != host:
                 raise ConnectionErrorReply(409, "frame_tie_mismatch", "The groups disagree about the retained seats. Reconnecting will retry.")
             # A record kept from the collecting rule ends its window as that rule did.
             if "winner" not in tie and now >= tie["until"] and tie["groups"]:
@@ -492,7 +500,7 @@ class ConnectionAuthority:
             result = {"connection_protocol": CONNECTION_PROTOCOL, "generation": generation, "round_id": round_id,
                       "frame": frame, "config_hash": config_hash, "status": "decided" if "winner" in tie else "waiting"}
             if "winner" in tie:
-                result["members"] = tie["winner"]
+                result["members"] = [seat for seat in tie["winner"] if seat not in removed_seats]
             self._save(sid, record)
             return result
 
