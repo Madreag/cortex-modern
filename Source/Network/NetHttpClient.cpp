@@ -41,6 +41,17 @@ namespace RTE {
 			Finish(Response{0, "", "the network is unreachable"});
 			return;
 		}
+		if (s_ResponderSet.load(std::memory_order_acquire)) {
+			std::shared_ptr<const ResponderForTest> responder;
+			{
+				std::lock_guard<std::mutex> lock(s_ResponderMutex);
+				responder = s_ResponderForTest;
+			}
+			if (responder) {
+				Finish((*responder)(method, url, body));
+				return;
+			}
+		}
 		m_TimeoutMs = std::clamp(timeoutMs, 1, c_TotalTimeoutMs);
 #if defined(_WIN32) || defined(__linux__)
 		m_Done = false;
@@ -60,6 +71,12 @@ namespace RTE {
 		(void)method; (void)url; (void)headers; (void)body; (void)certPinSha256;
 		Finish(Response{0, "", "http client not available on this platform"});
 #endif
+	}
+
+	void NetHttpClient::SetResponderForTest(ResponderForTest responder) {
+		std::lock_guard<std::mutex> lock(s_ResponderMutex);
+		s_ResponderForTest = responder ? std::make_shared<const ResponderForTest>(std::move(responder)) : nullptr;
+		s_ResponderSet.store(s_ResponderForTest != nullptr, std::memory_order_release);
 	}
 
 	NetHttpClient::PollResult NetHttpClient::Poll() {

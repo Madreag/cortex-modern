@@ -1,6 +1,8 @@
 #pragma once
 
 #include <atomic>
+#include <functional>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -49,9 +51,15 @@ namespace RTE {
 
 		/// Test lever: while set, every request this process starts fails at once as an unreachable network does.
 		static void SetOfflineForTest(bool offline) { s_OfflineForTest.store(offline, std::memory_order_relaxed); }
+		using ResponderForTest = std::function<Response(const std::string& method, const std::string& url, const std::string& body)>;
+		/// Test lever: while set, every request this process starts is answered at once by it, and nothing leaves the process.
+		static void SetResponderForTest(ResponderForTest responder);
 
 	private:
 		static inline std::atomic<bool> s_OfflineForTest{false};
+		static inline std::atomic<bool> s_ResponderSet{false};
+		static inline std::mutex s_ResponderMutex;
+		static inline std::shared_ptr<const ResponderForTest> s_ResponderForTest;
 		void WorkerMain(std::string method, std::string url, std::vector<std::pair<std::string, std::string>> headers, std::string body, std::string certPinSha256);
 		void WorkerMainImpl(std::string method, std::string url, std::vector<std::pair<std::string, std::string>> headers, std::string body, std::string certPinSha256);
 		void Finish(const Response& response);

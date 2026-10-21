@@ -13,10 +13,13 @@ API or an INI property. One modding habit matters, and it is described below.
 
 A `MovableObject` script can define two per-frame hooks:
 
-- **`ThreadedUpdate`** runs on a worker thread, in parallel with other objects'
-  `ThreadedUpdate`. Use it for work that only reads the world and writes the
-  script's own object — the common case: timers, state machines, self
-  animation, reading nearby objects.
+- **`ThreadedUpdate`** runs every object's hook in one global order by unique ID
+  across every Lua state, the order `SyncedUpdate` uses, so what one object's hook
+  reads of another is the same on every machine. Use it for work that only reads the
+  world and writes the script's own object — the common case: timers, state
+  machines, self animation, reading nearby objects. (`ThreadedUpdateAI` still runs
+  one thread per Lua state: what the AI decides leaves the machine only as its
+  controller input.)
 - **`SyncedUpdate`** runs in a serial, ordered pass. Use it for anything that
   changes *shared* simulation state — spawning objects (`MovableMan:AddMO` and
   friends), modifying other objects, writing global tables.
@@ -39,12 +42,11 @@ the same table, whatever either machine did before the match started.
 
 The rule an object's state follows, in full:
 
-- normally, and for anything spawned from `SyncedUpdate`, it is the object's `UniqueID`
-  modulo the number of states;
-- an object spawned from `ThreadedUpdate` takes the *spawner's* state instead — that hook
+- normally, and for anything spawned from `SyncedUpdate` or `ThreadedUpdate`, it is the
+  object's `UniqueID` modulo the number of states;
+- an object spawned from `ThreadedUpdateAI` takes the *spawner's* state instead — that hook
   runs in parallel, one thread per state, and a new object cannot be handed a state another
-  thread is using. It is the same answer on every peer, but it is not the object's own; one
-  more reason to spawn from `SyncedUpdate`;
+  thread is using;
 - a preset with `ForceIntoMasterLuaState = 1` (the Base.rte automovers) is always on the
   master state;
 - an object restored from a save or received in a join goes back to the state the image
@@ -93,11 +95,10 @@ per state), and startup is flat across that range — the priority thread pool i
 as wide as the machine's cores, so the extra states queue as tasks rather than threads.
 
 **Rule of thumb: if your script changes state that is not its own object, do it
-in `SyncedUpdate`, not `ThreadedUpdate`.** A `ThreadedUpdate` that mutates shared
-state was always a latent data race — two objects' `ThreadedUpdate`s run at the
-same time on different cores. This does not newly break such a mod; it surfaces a
-bug that was already there. Vanilla `Base.rte` already follows this — objects
-that spawn from a threaded hook defer the spawn to `SyncedUpdate`.
+in `SyncedUpdate`, not `ThreadedUpdate`.** Here a `ThreadedUpdate` that touches
+another object runs in the same order on every machine, so such a mod stays in sync,
+but where `ThreadedUpdate` runs on several cores at once (upstream builds) it is a
+data race.
 
 The built-in `Equip*` deferral covers an AI equipping its own actor. A threaded
 script that mutates a *different* actor must use `SyncedUpdate` — concurrent

@@ -1091,3 +1091,94 @@ namespace RTE {
 bool RTE::Entity::IsInFrozenGroup(const std::string& whichGroup) const {
 	return CheckpointContains(CheckpointNativeStorage::Source(this)->m_Groups, whichGroup);
 }
+
+namespace {
+	// A handle's note, its release and the deletion of the object it names take the same lock, so none of them meets a freed record.
+	std::array<std::mutex, 64> s_LuaHandleLocks;
+	std::mutex& LuaHandleLock(const void* slot) { return s_LuaHandleLocks[(reinterpret_cast<uintptr_t>(slot) >> 6) % s_LuaHandleLocks.size()]; }
+	// The records of retained memory, linked through themselves; taken after an object's handle lock.
+	std::mutex s_RetainedLock;
+	RTE::Entity::LuaHandles* s_RetainedHead = nullptr;
+	std::atomic<int> s_RetainedPoolMemory{0}; // Deleted objects' memory blocks that Lua handles keep out of their pools.
+} // namespace
+
+RTE::Entity::LuaHandles* RTE::Entity::NoteLuaHandle(std::atomic<LuaHandles*>& slot) {
+	std::lock_guard<std::mutex> lock(LuaHandleLock(&slot));
+	LuaHandles* handles = slot.load(std::memory_order_relaxed);
+	if (!handles) {
+		handles = new LuaHandles();
+		handles->slot = &slot;
+		slot.store(handles, std::memory_order_relaxed);
+	}
+	++handles->count;
+	return handles;
+}
+
+void RTE::Entity::ReleaseLuaHandle(void* record) {
+	auto* handles = static_cast<LuaHandles*>(record);
+	std::unique_lock<std::mutex> lock(LuaHandleLock(handles->slot));
+	if (--handles->count > 0 || !handles->gone) {
+		return;
+	}
+	// A pointer that outlived the object finds no record, so it never reaches this one once it is freed.
+	handles->slot->store(nullptr, std::memory_order_relaxed);
+	{
+		std::lock_guard<std::mutex> retained(s_RetainedLock);
+		if (CheckpointHeldMemory::Recording()) CheckpointHeldMemory::Note(&s_RetainedHead, handles->memory, handles->pool->CheckpointInstanceBytes(), true);
+		(handles->retainedPrevious ? handles->retainedPrevious->retainedNext : s_RetainedHead) = handles->retainedNext;
+		if (handles->retainedNext) handles->retainedNext->retainedPrevious = handles->retainedPrevious;
+	}
+	ClassInfo* pool = handles->pool;
+	void* memory = handles->memory;
+	delete handles;
+	lock.unlock();
+	s_RetainedPoolMemory.fetch_sub(1, std::memory_order_relaxed);
+	pool->ReturnPoolMemory(memory);
+}
+
+int RTE::Entity::GetRetainedPoolMemoryCount() { return s_RetainedPoolMemory.load(std::memory_order_relaxed); }
+
+bool RTE::Entity::RetainedMemoryHolds(const void* address, size_t bytes) {
+	const auto* at = static_cast<const std::byte*>(address);
+	const auto covers = [at, bytes](const void* block, size_t blockBytes) {
+		const auto* first = static_cast<const std::byte*>(block);
+		return at >= first && at + bytes <= first + blockBytes;
+	};
+	// A frozen walk answers as of its fence: memory retained since was not retained then, and memory released since was.
+	const CheckpointHeldMemory* held = CheckpointHeldMemory::Current();
+	std::lock_guard<std::mutex> retained(s_RetainedLock);
+	for (const LuaHandles* record = s_RetainedHead; record; record = record->retainedNext) {
+		if (!covers(record->memory, record->pool->CheckpointInstanceBytes())) continue;
+		if (const auto then = held ? held->HeldThen(&s_RetainedHead, record->memory) : std::nullopt; then && !*then) continue;
+		return true;
+	}
+	bool heldThen = false;
+	if (held) held->ForEachHeldThen(&s_RetainedHead, [&](const void* block, size_t blockBytes) { heldThen = heldThen || covers(block, blockBytes); });
+	return heldThen;
+}
+
+bool RTE::Entity::RetainMemoryForLuaHandles(std::atomic<LuaHandles*>& slot, void* memory, ClassInfo& pool) {
+	std::lock_guard<std::mutex> lock(LuaHandleLock(&slot));
+	// The destructors leave the record pointer as it was, so it is still read here.
+	LuaHandles* handles = slot.load(std::memory_order_relaxed);
+	if (!handles) {
+		return false;
+	}
+	if (handles->count > 0) {
+		handles->gone = true;
+		handles->pool = &pool;
+		handles->memory = memory;
+		{
+			std::lock_guard<std::mutex> retained(s_RetainedLock);
+			if (CheckpointHeldMemory::Recording()) CheckpointHeldMemory::Note(&s_RetainedHead, memory, pool.CheckpointInstanceBytes(), false);
+			handles->retainedNext = s_RetainedHead;
+			if (s_RetainedHead) s_RetainedHead->retainedPrevious = handles;
+			s_RetainedHead = handles;
+		}
+		s_RetainedPoolMemory.fetch_add(1, std::memory_order_relaxed);
+		return true;
+	}
+	slot.store(nullptr, std::memory_order_relaxed);
+	delete handles;
+	return false;
+}

@@ -73,6 +73,11 @@ namespace RTE {
 		/// Notes that a SoundContainer holds sound calls an AI hook made and the drain must visit it.
 		void NotePendingSoundOps(SoundContainer* container);
 		void ClearPendingSoundOps(SoundContainer* container);
+		/// Queues a container nothing holds any longer for deletion on the simulation thread.
+		/// @param container The container no object or Lua handle holds any longer.
+		void DeleteReleasedSoundContainer(SoundContainer* container);
+		/// Deletes the queued containers in checkpoint-identity order; run where the tick's collection has finished.
+		void DeleteReleasedSoundContainers();
 		/// The containers with pending calls, in checkpoint-identity order so the drain is the same everywhere.
 		std::vector<SoundContainer*> TakePendingSoundOpContainers();
 		/// Lands every shared hook's write through a position Lua holds, before the AI passes run.
@@ -94,6 +99,15 @@ namespace RTE {
 
 		/// The voices and audibility records the manager keeps and their counts, for the memory census.
 		std::string Census() const;
+		/// Test lever CC_TEST_SOUND_NAMES: the live sound containers' most common preset names, of all and of the newest, and the sound
+		/// properties whose Lua sets let a container go, for the memory census.
+		std::string LiveSoundNames() const;
+		/// Test lever CC_TEST_SOUND_NAMES: counts a Lua set of a sound property that let a container go, by property and preset.
+		/// @param property The property's setter.
+		/// @param replaced The container the set let go, or nullptr.
+		void NoteReleasedSoundProperty(const char* property, const SoundContainer* replaced);
+		/// The sound containers alive and registered for checkpoints.
+		size_t LiveSoundContainerCount() const;
 		/// This peer's actual audibility of every live shared sound it answers for, sampled at the input boundary; only changed readings ride.
 		std::vector<NetSoundObservation> SampleSoundObservations();
 		/// Forgets that these readings were sent, so the next sample offers them again. The wire drops a
@@ -757,6 +771,8 @@ namespace RTE {
 		std::unordered_set<SoundContainer*> m_ActiveLogicalSounds;
 		mutable std::mutex m_PendingSoundOpsMutex;
 		std::map<uint64_t, SoundContainer*> m_PendingSoundOpContainers;
+		std::mutex m_ReleasedSoundContainersMutex;
+		std::vector<SoundContainer*> m_ReleasedSoundContainers; //!< Containers nothing holds any longer, waiting for the tick's collection to finish.
 		uint64_t m_DeferredSoundOpTick = 0;
 		uint64_t m_DeferredSoundOpOrdinal = 0;
 		struct CommittedAudibility {

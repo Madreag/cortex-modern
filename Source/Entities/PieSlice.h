@@ -72,6 +72,14 @@ namespace RTE {
 		PieSlice();
 		CheckpointSnapshotMethods(PieSlice);
 
+		/// Notes one more Lua handle naming this slice.
+		/// @return The record the handle lets go of when it is collected.
+		LuaHandles* NoteLuaHandle() { return Entity::NoteLuaHandle(m_LuaHandles.record); }
+
+		/// Keeps a deleted slice's memory out of its class pool while a Lua handle names it.
+		/// @return Whether the memory stays out of the pool.
+		static bool RetainPooledMemory(PieSlice* slice, void* memory, Entity::ClassInfo& pool) { return RetainMemoryForLuaHandles(slice->m_LuaHandles.record, memory, pool); }
+
 		/// Makes the PieSlice object ready for use.
 		/// @return An error return value signaling success or any particular failure. Anything below 0 is an error signal.
 		int Create() override;
@@ -247,6 +255,7 @@ namespace RTE {
 		};
 
 		static Entity::ClassInfo m_sClass; //!< ClassInfo for this class.
+		LuaHandleSlot m_LuaHandles; //!< Created when a Lua handle first names this slice; never cleared by Clear().
 
 		PieSliceType m_Type; //!< The slice type, also used to determine the icon.
 		Directions m_Direction; //!< The desired direction/location of this on the PieMenu.

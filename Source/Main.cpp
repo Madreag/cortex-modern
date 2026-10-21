@@ -100,7 +100,9 @@ extern "C" {
 #include "GUIDrawRecord.h"
 #ifdef __APPLE__
 #include "AppleApplication.h"
+#include <cstddef>
 #include <mach/mach.h>
+#include <malloc/malloc.h>
 #elif defined(__linux__)
 #include <unistd.h>
 #if defined(__GLIBC__)
@@ -490,7 +492,18 @@ static std::string ProcessHeapCensus([[maybe_unused]] std::string& costs) {
 	mach_task_basic_info_data_t info{};
 	mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
 	if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO, reinterpret_cast<task_info_t>(&info), &count) != KERN_SUCCESS) return {};
-	return std::format(" resident_mb={}", info.resident_size >> 20);
+	// What the allocator hands out and keeps, and what the graphics driver holds, so a resident climb names its owner.
+	malloc_statistics_t heap{};
+	malloc_zone_statistics(nullptr, &heap);
+	std::string footprint;
+	task_vm_info_data_t vm{};
+	mach_msg_type_number_t vmCount = TASK_VM_INFO_COUNT;
+	if (task_info(mach_task_self(), TASK_VM_INFO, reinterpret_cast<task_info_t>(&vm), &vmCount) == KERN_SUCCESS) {
+		footprint = std::format(" footprint_mb={}", vm.phys_footprint >> 20);
+		if (vmCount * sizeof(natural_t) >= offsetof(task_vm_info_data_t, ledger_tag_graphics_footprint) + sizeof(vm.ledger_tag_graphics_footprint))
+			footprint += std::format(" graphics_mb={}", vm.ledger_tag_graphics_footprint >> 20);
+	}
+	return std::format(" resident_mb={}{} heap_in_use_mb={} heap_allocated_mb={}", info.resident_size >> 20, footprint, heap.size_in_use >> 20, heap.size_allocated >> 20);
 #elif defined(__linux__)
 	unsigned long long pages = 0, resident = 0;
 	std::ifstream statm("/proc/self/statm");
@@ -1660,6 +1673,7 @@ static void NoteTickCostDetails(const char* tag, uint64_t round, uint64_t tick, 
 		std::array<long long, 7> phases{};
 		std::array<long long, 8> nested{};
 		std::array<uint64_t, PerformanceMan::PerfCounterCount> counters{};
+		std::vector<long long> ownUs;
 	};
 	static Window window;
 	if (window.round != round || (window.tag && std::strcmp(window.tag, tag) != 0)) window = {};
@@ -1671,6 +1685,19 @@ static void NoteTickCostDetails(const char* tag, uint64_t round, uint64_t tick, 
 	for (size_t i = 0; i < nested.size(); ++i) window.nested[i] += nested[i];
 	for (int i = 0; i < PerformanceMan::PerfCounterCount; ++i)
 		window.counters[i] += g_PerformanceMan.GetPerformanceCounterSample(static_cast<PerformanceMan::PerformanceCounters>(i));
+	// A tick's own cost leaves out the wait for the round's inputs, which another machine sets.
+	long long tickUs = 0;
+	for (long long phase: phases) tickUs += phase;
+	window.ownUs.push_back(tickUs - nested[3]);
+	// CC_TEST_TICK_COST_FILE=<path>: every tick's phases on a line of its own, for attributing single ticks.
+	static FILE* const tickFile = [] { const char* path = std::getenv("CC_TEST_TICK_COST_FILE"); return path ? std::fopen(path, "w") : nullptr; }();
+	if (tickFile) {
+		std::fprintf(tickFile, "%s %llu", tag, static_cast<unsigned long long>(tick));
+		for (long long phase: phases) std::fprintf(tickFile, " %lld", phase);
+		for (long long part: nested) std::fprintf(tickFile, " %lld", part);
+		std::fputc('\n', tickFile);
+		if (tick % 600 == 0) std::fflush(tickFile);
+	}
 	if (window.ticks < 600) return;
 	static constexpr std::array<const char*, 7> phaseNames{"before_world", "world", "audio", "late", "hash", "collection", "finish"};
 	static constexpr std::array<const char*, PerformanceMan::PerfCounterCount> counterNames{
@@ -1689,6 +1716,20 @@ static void NoteTickCostDetails(const char* tag, uint64_t round, uint64_t tick, 
 	for (size_t i = 0; i < window.nested.size(); ++i) line << ' ' << nestedNames[i] << "_us=" << window.nested[i];
 	// These existing counters describe work within the phases; nested counters are not additive.
 	for (size_t i = 0; i < window.counters.size(); ++i) line << ' ' << counterNames[i] << "_us=" << window.counters[i];
+	std::vector<long long> sorted = window.ownUs;
+	std::sort(sorted.begin(), sorted.end());
+	const auto rank = [&sorted](size_t permille) { return sorted[std::min(sorted.size() - 1, sorted.size() * permille / 1000)]; };
+	line << " own_p50_us=" << rank(500) << " own_p95_us=" << rank(950) << " own_p99_us=" << rank(990) << " own_max_us=" << sorted.back();
+	// Where the scripted objects live: the threaded passes run one task per state, so one full state is a serial pass.
+	size_t threadedObjects = 0, fullestState = 0, statesUsed = 0;
+	for (const LuaStateWrapper& state: g_LuaMan.GetThreadedScriptStates()) {
+		const size_t objects = state.GetRegisteredMOs().size();
+		threadedObjects += objects;
+		fullestState = std::max(fullestState, objects);
+		statesUsed += objects > 0;
+	}
+	line << " lua_objects_master=" << g_LuaMan.GetMasterScriptState().GetRegisteredMOs().size() << " lua_objects_threaded=" << threadedObjects
+	     << " lua_objects_fullest_state=" << fullestState << " lua_states_used=" << statesUsed;
 	line << " actors=" << g_MovableMan.GetActorCount() << " particles=" << g_MovableMan.GetParticleCount();
 	System::PrintDiagnosticLine(line.str());
 	window = {};
@@ -8762,7 +8803,8 @@ void RunGameLoop() {
 				else for (uint8_t peer = 1; peer <= match->peerCount; ++peer)
 					if (ScenarioRunner::IsLockstepPeerGone(peer, simTick) || ScenarioRunner::IsLockstepSeatReclaimGap(peer, simTick)) perturbDue = false;
 			}
-			if ((ScenarioRunner::IsActive() || s_netMatchServiceE2E) && ScenarioRunner::GetArgs().selftestPerturb && perturbDue && !s_perturbFired) {
+			// The live form waits for a running lockstep match, so it also arms in one the menus started.
+			if ((ScenarioRunner::IsActive() || s_netMatchServiceE2E || s_netPerturbWhenLive) && ScenarioRunner::GetArgs().selftestPerturb && perturbDue && !s_perturbFired) {
 				s_perturbFired = true;
 				// Named in both modes: a run's oracle excuses only the desync it can see was injected.
 				System::PrintDiagnosticLine("[net-test] live perturb frame=" + std::to_string(simTick));

@@ -1,5 +1,5 @@
 -- A mod times its actor's strides with a Timer it keeps in self and marks each stride with a particle. On the
--- predicting peer a preview's stride hook runs this code on the preview's copy, whose self shares that Timer.
+-- predicting peer a preview's stride hook runs this code on the preview's copy, whose self holds its own copy of that Timer.
 PreviewMethodHandles = PreviewMethodHandles or {}
 
 -- A preview may not print, so its note waits in the stash the window never rolls back, and the real script prints it.

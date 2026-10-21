@@ -10461,7 +10461,7 @@ namespace RTE {
 		}
 	} // namespace
 
-	// The host saves when it chooses, with autosaves off (the default): both peers capture the tick the ask names, the stream
+	// The host saves when it chooses, with autosaves off: both peers capture the tick the ask names, the stream
 	// carries it marked as the host's save, and the host hears back from both writers. A second ask before that tick is the
 	// same save; an ask after it is a new one.
 	bool TestTheHostSavesTheMatchWhenAsked(std::string* error) {
@@ -18988,11 +18988,13 @@ namespace RTE {
 				~RestoreAdmission() { NetMatchService::SetAdmissionEnabled(enabled); }
 			} restore;
 			NetMatchService::SetAdmissionEnabled(true);
-			for (int phase = 0; phase < 3; ++phase) {
+			for (int phase = 0; phase < 4; ++phase) {
+				std::vector<std::string> addresses = {"192.0.2.10"};
 				LoopbackTransport hostWire, clientWire;
 				NetPeerId hostPeer = 0, clientPeer = 0;
 				if (!StartLoopbackTransports(43193, hostWire, clientWire, hostPeer, clientPeer, error)) return false;
 				NetMatchService host, returning;
+				returning.m_ConnectionAuthority.SetAddressSourceForTest([&addresses] { return addresses; });
 				NetLockstepConfig config;
 				config.sessionId = config.roundId = 778; config.peerCount = 2; config.startFrame = 1;
 				config.matchConfig = MakeConfig(); config.matchConfig.sessionId = config.sessionId;
@@ -19017,27 +19019,38 @@ namespace RTE {
 				const uint64_t steady = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now().time_since_epoch()).count());
 				const uint64_t wall = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count());
 				host.UpdateConnectionAuthority(steady); returning.UpdateConnectionAuthority(steady);
-				if (phase == 1 && !returning.m_Coordinator->BeginHostMigration(50)) {
+				// A handover starts only after the host's loss bound of silence.
+				if (phase == 1 && !returning.m_Coordinator->BeginHostMigration(50 + c_NetHostLossSilenceMs)) {
 					*error = "the route-change fixture did not enter handover"; return false;
 				}
 				if (phase == 2 && !returning.m_Coordinator->BeginSimulationTick(1, error)) return false;
-				// A resumed clock enters the same authority revision path as a changed address.
-				host.m_ConnectionAuthority.Update(steady + 1, wall + 21);
-				returning.m_ConnectionAuthority.Update(steady + 1, wall + 21);
+				const uint32_t generation = returning.m_ConnectionAuthority.Route().generation;
+				if (phase == 3) {
+					// An adapter appearing mid-match, as an IPv6 privacy address or a VPN does.
+					addresses.push_back("2001:db8::10");
+					host.m_ConnectionAuthority.Update(steady + 2001, wall + 1);
+					returning.m_ConnectionAuthority.Update(steady + 2001, wall + 1);
+				} else {
+					// A resumed clock enters the same authority revision path as a changed address.
+					host.m_ConnectionAuthority.Update(steady + 1, wall + 21);
+					returning.m_ConnectionAuthority.Update(steady + 1, wall + 21);
+				}
 				host.PumpSessionEvents(); returning.PumpSessionEvents();
 				if (phase == 2) {
 					if (!returning.m_Coordinator->IsRunning()) { *error = "a route change interrupted a granted simulation tick"; return false; }
 					(void)returning.m_Coordinator->FinishSimulationTick(1);
 					returning.PumpSessionEvents();
 				}
-				if (!host.m_Coordinator->IsRunning() || !returning.m_Coordinator->IsStopped() || returning.m_Coordinator->IsMigrating() ||
-				    returning.m_Coordinator->GetStats().timeoutReason != "PeerHeld:Your network changed - rejoining the same seat" ||
+				// The new route reaches the directory with the next check-in; only the transport says the host is gone.
+				if (!host.m_Coordinator->IsRunning() || returning.m_Coordinator->IsStopped() || !returning.m_Coordinator->GetStats().timeoutReason.empty() ||
 				    returning.m_Coordinator->GetHostPeerId() != 1 || returning.m_LocalPeerId != 2 ||
-				    returning.m_ConnectionNetworkRevision != returning.m_ConnectionAuthority.NetworkRevision()) {
-					*error = "a local route change did not leave the waiting client ready for same-seat recovery while the host kept running"; return false;
+				    returning.m_ConnectionNetworkRevision != returning.m_ConnectionAuthority.NetworkRevision() ||
+				    returning.m_ConnectionAuthority.Route().generation <= generation) {
+					*error = "a local route change stopped the client's round (" + returning.m_Coordinator->GetStats().timeoutReason +
+					         ") instead of re-addressing its seat through the check-in"; return false;
 				}
 			}
-			System::PrintDiagnosticLine("[net-match-selftest] PASS local_route_change_rejoins_during_input_wait_and_handover");
+			System::PrintDiagnosticLine("[net-match-selftest] PASS local_route_change_readdresses_through_the_check_in");
 		}
 		for (const auto& address: {"ice:ip:::1", "ice:str:successor", "192.0.2.4", "2001:db8::4"}) {
 			NetReconnectUx prompt;
@@ -19518,6 +19531,7 @@ namespace RTE {
 		if (!TestReservedSeatDirectoryResolve(&error)) return fail(error);
 		if (!TestRelayOfferRefresh(&error)) return fail(error);
 		if (!TestRefusedRelayMintRetriesWhenAllowed(&error)) return fail(error);
+		if (!TestInternetTicketRecovery(&error)) return fail(error);
 		if (!TestIceConnectionFallback(&error)) return fail(error);
 		if (!TestInternetMenuJoinUsesSession(&error)) return fail(error);
 		if (!TestLobbyRefusesDivergentRosterOrder(&error)) return fail(error);

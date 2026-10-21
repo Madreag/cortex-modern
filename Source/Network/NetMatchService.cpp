@@ -3928,6 +3928,8 @@ static std::string ResyncSaveName() {
 		m_PeriodicWaitSince = 0;
 		m_PeriodicOwnWriterWaited = false;
 		m_OwnLateCaptureTick = 0;
+		m_OwnLatePending = false;
+		m_WriterOnJoinCapture = false;
 		m_OpenCaptureTick = 0;
 		m_CaptureWriters.clear();
 		m_CheckpointHolders.clear();
@@ -4009,9 +4011,15 @@ static std::string ResyncSaveName() {
 					m_OpenCaptureManual = false;
 					m_CaptureWriters = input.writers;
 					if (m_Coordinator) m_Coordinator->ClearPrivateBaseCaptureRequest();
+					if (m_OwnLatePending) m_OwnLateCaptureTick = note.tick;
+					m_OwnLatePending = false;
 				}
-				// The writers report the tick they took, so that is the capture the host waits on.
-				if (m_IsHost && note.tick == m_OpenCaptureTick) { m_OpenCaptureTick = takenAt; m_OpenCaptureApplied = true; }
+				// The writers report the tick they took, so that is the capture the host waits on; a late save named for it moves with it.
+				if (m_IsHost && note.tick == m_OpenCaptureTick) {
+					if (m_OwnLateCaptureTick == note.tick) m_OwnLateCaptureTick = takenAt;
+					m_OpenCaptureTick = takenAt;
+					m_OpenCaptureApplied = true;
+				}
 			} else if ((note.kind == NetGameCheckpoint::Written || note.kind == NetGameCheckpoint::Missed) && m_IsHost && note.tick == m_OpenCaptureTick) {
 				m_CaptureWriters.erase(note.sender);
 				if (m_OpenCaptureManual && note.kind == NetGameCheckpoint::Written) m_ManualSaveReported.insert(note.sender);
@@ -4019,6 +4027,8 @@ static std::string ResyncSaveName() {
 			// Every peer keeps who holds what, so a host that takes the round over names the same rewind points.
 			if (note.kind == NetGameCheckpoint::Written) NoteCheckpointHolder(note.tick, note.sender);
 		}
+		// A late save is the host's own until it is taken, and still while its command has yet to land.
+		if (m_OwnLateCaptureTick != 0 && input.tick > m_OwnLateCaptureTick && !(m_OpenCaptureTick == m_OwnLateCaptureTick && !m_OpenCaptureApplied)) m_OwnLateCaptureTick = 0;
 		// A finished capture frees this peer's writer, and the host schedules on nothing else; a refused one says it holds nothing.
 		for (const uint64_t finished: input.finished) {
 			const bool refused = std::find(input.refused.begin(), input.refused.end(), finished) != input.refused.end();
@@ -4046,10 +4056,15 @@ static std::string ResyncSaveName() {
 			output.manual = true;
 		}
 		if (!m_IsHost) return output;
-		if (output.capture && interval > 0 && m_NextAutosaveSimTime >= 0 && input.now >= m_NextAutosaveSimTime) {
-			m_NextAutosaveSimTime += ((input.now - m_NextAutosaveSimTime) / interval + 1) * interval;
-			m_PeriodicWaitSince = 0;
-			m_PeriodicOwnWriterWaited = false;
+		if (output.capture && interval > 0 && m_NextAutosaveSimTime >= 0) {
+			// Every writer takes a joiner's or returner's base, so it is the match's save and the next periodic one comes an interval
+			// after it, as every peer counts from the last capture it took; a periodic capture keeps the fixed cadence.
+			const bool baseTaken = IsJoinCaptureTick(input.tick);
+			if (baseTaken || input.now >= m_NextAutosaveSimTime) {
+				m_NextAutosaveSimTime = baseTaken ? input.now + interval : m_NextAutosaveSimTime + ((input.now - m_NextAutosaveSimTime) / interval + 1) * interval;
+				m_PeriodicWaitSince = 0;
+				m_PeriodicOwnWriterWaited = false;
+			}
 		}
 		bool ask = input.manualRequested;
 		if (ask && input.hostProvisional) {
@@ -4085,8 +4100,8 @@ static std::string ResyncSaveName() {
 		if (writersBusy) {
 			if (!input.paused && interval > 0 && m_NextAutosaveSimTime >= 0 && input.now + static_cast<int64_t>(input.lead) * tickLength >= m_NextAutosaveSimTime) {
 				if (m_PeriodicWaitSince == 0) m_PeriodicWaitSince = input.tick;
-				// The due capture waits on this machine's own writer, not only on another peer's report.
-				if (input.unwritten != 0 || !input.writerReady) m_PeriodicOwnWriterWaited = true;
+				// The wait's last tick decides: a due capture its own writer held, not another peer's report or another player's base.
+				m_PeriodicOwnWriterWaited = (input.unwritten != 0 || !input.writerReady) && !input.writerJoinWork;
 			}
 			return output;
 		}
@@ -4117,7 +4132,11 @@ static std::string ResyncSaveName() {
 			// Playing voters agree a frame for the held host. Keep the same authorization and one-capture gate as a base
 			// request, and leave a manual ask pending until it can be carried by the host's own input.
 			output.requestPrivateBase = periodicDue || (joinCapture && m_PrivateBaseRequested && m_WorldJoin.IsPrivateMatch());
-			if (output.requestPrivateBase) notePeriodic();
+			if (output.requestPrivateBase) {
+				notePeriodic();
+				// The voters name its tick: the capture their agreed note lands is its own late save.
+				if (output.periodicOwnLate) m_OwnLatePending = true;
+			}
 			return output;
 		}
 		if (!joinCapture && !ask && !periodicDue) return output;
@@ -4125,6 +4144,8 @@ static std::string ResyncSaveName() {
 		m_OpenCaptureApplied = false;
 		m_OpenCaptureForJoin = joinCapture;
 		notePeriodic();
+		m_OwnLatePending = false;
+		if (output.periodicOwnLate) m_OwnLateCaptureTick = m_OpenCaptureTick;
 		// Test lever CC_FAULT_INJECT=join_capture_refused: the writer refuses the host's first base as it starts, where a frozen-inventory refusal comes.
 		if (joinCapture && m_IsHost && m_WorldJoin.IsPrivateMatch() && !m_InjectedJoinRefusal && FaultInjected("join_capture_refused")) {
 			m_InjectedJoinRefusal = true;
@@ -4146,6 +4167,24 @@ static std::string ResyncSaveName() {
 		}
 		output.send.push_back({0, ask ? NetGameCheckpoint::ManualCapture : NetGameCheckpoint::Capture, m_OpenCaptureTick});
 		return output;
+	}
+
+	bool NetMatchService::SaverOverdue(const AutosaveTickInput& input, const AutosaveTickOutput& output) const {
+		// This machine's own save that its busy writer keeps from being named or taken: the next periodic one once its deadline
+		// passed, a periodic one its own writer made late while it is written, or the host player's own manual ask. A writer that
+		// holds only a joiner's or returner's base writes it in the game's idle time, so the host never pays for another player's
+		// join or return, and a capture another peer's writer made late costs this machine nothing.
+		if (!input.writerBusy) return false;
+		const int64_t interval = static_cast<int64_t>(m_MatchAutosaveSeconds) * g_TimerMan.GetTicksPerSecond();
+		const int64_t dueAt = m_IsHost && m_NextAutosaveSimTime >= 0 ? m_NextAutosaveSimTime : m_CaptureAnchorSimTime + interval;
+		const bool periodicDue = interval > 0 && !input.paused && m_CaptureAnchorSimTime >= 0 && input.now >= dueAt && !input.writerJoinWork;
+		const bool asked = m_IsHost && output.manualPending;
+		const bool lateOwnSave = std::any_of(m_AwaitedAutosaves.begin(), m_AwaitedAutosaves.end(), [](const AwaitedAutosave& entry) { return entry.ownLate; });
+		return periodicDue || asked || lateOwnSave;
+	}
+
+	bool NetMatchService::WriterHoldsOnlyJoinCaptures() const {
+		return m_WriterOnJoinCapture && std::none_of(m_AwaitedAutosaves.begin(), m_AwaitedAutosaves.end(), [](const AwaitedAutosave& entry) { return !entry.joinCapture; });
 	}
 
 	void NetMatchService::AppendCommittedJoinFrame(uint64_t tick) {
@@ -4354,6 +4393,8 @@ static std::string ResyncSaveName() {
 		input.finished = finished;
 		input.refused = std::move(refused);
 		input.localPeer = GetLocalPeerId();
+		input.writerBusy = g_ActivityMan.AutosaveWriterBusy();
+		input.writerJoinWork = WriterHoldsOnlyJoinCaptures();
 		if (m_IsHost) {
 			input.writers = CheckpointWriters(tick);
 			input.lead = static_cast<uint16_t>(m_Coordinator->InputDelayAt(GetLocalPeerId(), tick) + 2);
@@ -4368,20 +4409,7 @@ static std::string ResyncSaveName() {
 			input.hostProvisional = m_Coordinator->IsHostProvisional();
 		}
 		AutosaveTickOutput output = StepAutosaveSchedule(input);
-		{
-			// This machine's own save that its busy writer keeps from being named or taken: the next periodic one once its
-			// deadline passed, a periodic one its writer made late while it is written, or the host player's own manual ask. A
-			// joiner's or returner's base waits for the writer in the game's idle time, so the host never pays for another
-			// player's join or return, and a capture another peer's writer made late costs this machine nothing.
-			const int64_t interval = static_cast<int64_t>(m_MatchAutosaveSeconds) * g_TimerMan.GetTicksPerSecond();
-			const int64_t dueAt = m_IsHost && m_NextAutosaveSimTime >= 0 ? m_NextAutosaveSimTime : m_CaptureAnchorSimTime + interval;
-			const bool periodicDue = interval > 0 && !paused && m_CaptureAnchorSimTime >= 0 && input.now >= dueAt;
-			const bool asked = m_IsHost && output.manualPending;
-			if (output.periodicOwnLate && m_OpenCaptureTick > tick) m_OwnLateCaptureTick = m_OpenCaptureTick;
-			if (m_OwnLateCaptureTick != 0 && tick > m_OwnLateCaptureTick) m_OwnLateCaptureTick = 0;
-			const bool lateOwnSave = std::any_of(m_AwaitedAutosaves.begin(), m_AwaitedAutosaves.end(), [](const AwaitedAutosave& entry) { return entry.ownLate; });
-			SetSaverOverdue((periodicDue || asked || lateOwnSave) && g_ActivityMan.AutosaveWriterBusy(), tick);
-		}
+		SetSaverOverdue(SaverOverdue(input, output), tick);
 		if (output.periodicLateTicks >= 0) {
 			System::PrintDiagnosticLine(std::format("[autosave] periodic due named at={} late_ticks={} waited_ticks={} held={} own_writer={}", tick, output.periodicLateTicks,
 			                                        output.periodicWaitedTicks, input.ownSeatHeld ? 1 : 0, output.periodicOwnLate ? 1 : 0));
@@ -4462,6 +4490,7 @@ static std::string ResyncSaveName() {
 				}
 				// The queue is not the verdict: the worker walks the graph off this thread and may still refuse.
 				m_AwaitedAutosaves.push_back(AwaitedAutosave{tick, joinCapture, m_OwnLateCaptureTick != 0 && tick == m_OwnLateCaptureTick});
+				m_WriterOnJoinCapture = joinCapture;
 				// The segment holds this tick's frames from here; it opens when the archive validates and is
 				// dropped with it when the capture is refused.
 				RollWorldReplaySegment(tick);
@@ -9902,13 +9931,12 @@ static std::string ResyncSaveName() {
 		}
 		const uint32_t revision = m_ConnectionAuthority.NetworkRevision();
 		const bool changed = revision != m_ConnectionNetworkRevision;
-		const bool refresh = changed && m_ConnectionNetworkRevision != 0;
-		const bool applied = !refresh || m_State != NetMatchServiceState::Running || !m_Coordinator || m_Coordinator->NoteLocalRouteChanged();
-		if (refresh && applied) {
+		// The seat keeps playing: its next check-in carries the new route, and only a failed link to the host rejoins it.
+		if (changed && m_ConnectionNetworkRevision != 0) {
 			System::PrintDiagnosticLine("[net-connection] network changed; refreshing the same seat's route");
 			if (m_IsHost && s_PortMapRequested) { ReleaseHostPortMap(); RequestHostPortMap(m_BeaconGamePort, nullptr); }
 		}
-		if (applied) m_ConnectionNetworkRevision = revision;
+		m_ConnectionNetworkRevision = revision;
 		if (changed || nowMs >= m_ConnectionRouteAtMs) {
 			m_ConnectionRouteAtMs = nowMs + 1000;
 			NetConnectionRoute route;
@@ -10111,6 +10139,16 @@ static std::string ResyncSaveName() {
 #endif
 	}
 
+	void NetMatchService::ReadRejoinCheckIn(const NetConnectionAuthority& authority, bool allowRelay, bool relayOnly, const std::optional<NetConnectionHost>& host,
+	                                       uint64_t localUnixSeconds, bool& checkedIn, bool& relayReady) {
+		const auto lease = authority.LocalLease();
+		// The seat is judged on the directory's clock, which issued it; the authority keeps its relay login on this one.
+		const uint64_t directoryNow = authority.DirectoryNow(localUnixSeconds);
+		checkedIn = authority.RouteCheckedIn() && lease && lease->Usable(directoryNow);
+		// Automatic dials direct with whatever login it holds and takes a renewal live; only Relay only needs one to dial.
+		relayReady = !allowRelay || !relayOnly || (host && !host->relayEnabled) || authority.RelayRefreshed() || authority.Relay().Usable(localUnixSeconds);
+	}
+
 	bool NetMatchService::SetUpIceTransport(const NetMatchServiceRequest& request, const NetIdentityManifest& manifest, NetMuxTransport& mux, NetSessionConfig& sessionConfig, std::string& joinAddress, NetIceJoinTarget& target, std::string* error) {
 #ifndef CCCP_WITH_GNS
 		(void)request; (void)manifest; (void)mux; (void)sessionConfig; (void)joinAddress; (void)target;
@@ -10190,9 +10228,9 @@ static std::string ResyncSaveName() {
 			m_ConnectionAuthority.Update(nowMs, UnixNowMs(nullptr) / 1000);
 			if (m_ConnectionAuthority.Refused()) { if (error) *error = m_ConnectionAuthority.Error(); return false; }
 			connectionHost = m_ConnectionAuthority.Host();
-			checkedIn = !request.rejoin || (m_ConnectionAuthority.RouteCheckedIn() && m_ConnectionAuthority.LocalLease() &&
-				m_ConnectionAuthority.LocalLease()->Usable(UnixNowMs(nullptr) / 1000));
-			relayReady = !request.rejoin || !allowRelay || (connectionHost && !connectionHost->relayEnabled) || m_ConnectionAuthority.RelayRefreshed();
+			if (request.rejoin)
+				ReadRejoinCheckIn(m_ConnectionAuthority, allowRelay, g_SettingsMan.GetNetworkConnectionMode() == SettingsMan::NetworkConnectionMode::RelayOnly,
+				    connectionHost, UnixNowMs(nullptr) / 1000, checkedIn, relayReady);
 			if (connectionHost && checkedIn && relayReady && nowMs >= connectionHost->directoryReadyMs) break;
 			{
 				std::lock_guard<std::mutex> lock(m_Mutex);
@@ -10277,6 +10315,8 @@ static std::string ResyncSaveName() {
 		spec.remoteVirtualPort = joinVirtualPort;
 		NetRelayConfig relay = request.rejoin ? m_ConnectionAuthority.Relay() : NetRelayConfig{};
 		if (allowRelay && !request.rejoin) {
+			const uint64_t local = UnixNowMs(nullptr) / 1000;
+			browse.SetDirectoryClockOffset(static_cast<int64_t>(m_ConnectionAuthority.DirectoryNow(local)) - static_cast<int64_t>(local));
 			browse.FetchIceServers(request.sessionId);
 			const uint64_t relayDeadline = SteadyNowMs() + c_IceConnectBudgetMs;
 			const bool needsRelay = g_SettingsMan.GetNetworkConnectionMode() == SettingsMan::NetworkConnectionMode::RelayOnly || target.address.empty();
@@ -11562,7 +11602,8 @@ static std::string ResyncSaveName() {
 		NetMatchServiceRequest request = BuildTicketRejoinRequest(record, playerName, liveWorldTarget);
 		if (!liveRoute.host && (!liveRoute.address.empty() || !liveRoute.sessionId.empty())) {
 			request.address = liveRoute.address;
-			request.sessionId = liveRoute.sessionId;
+			// An ICE route signals through the directory, so it keeps the seat's session unless it names its own; a direct route needs none.
+			if (!liveRoute.sessionId.empty() || !liveRoute.address.starts_with("ice:")) request.sessionId = liveRoute.sessionId;
 			request.port = liveRoute.port;
 		}
 		return request;

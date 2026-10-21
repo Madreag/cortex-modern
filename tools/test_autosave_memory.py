@@ -6,6 +6,8 @@ working set are read from its process every --sample-seconds, beside the engine'
 --settle-minutes warm-up, each peer's private bytes may rise by at most --slope-mb-per-minute on a least-squares line
 through the samples and may not end more than --rise-mb above their lowest settled sample. Every named capture must be
 taken, every save written, and both peers must exit.
+--engine-memory-gb gives each engine the runner's commit limit of that size (a 16 GB Windows box runs its engines under
+4 GB): every sample of each peer's private bytes then stays under the limit, and the runner's record names it.
 """
 import argparse
 import ctypes
@@ -72,6 +74,7 @@ def main():
                    help='each engine on its own half of the logical CPUs, so one peer cannot take the other\'s time')
     p.add_argument('--fixed-delay', type=int, default=None,
                    help='a fixed input delay in ticks instead of the host default, the automatic delay')
+    p.add_argument('--engine-memory-gb', type=float, default=None, help="each engine's commit limit, the runner's job limit")
     p.add_argument('--port', type=int, default=49488)
     a = p.parse_args()
     repo = a.repo.resolve()
@@ -107,6 +110,8 @@ def main():
         role_env = dict(env)
         if role in masks:
             role_env['CC_RUNNER_AFFINITY_MASK'] = f'0x{masks[role]:x}'
+        if a.engine_memory_gb is not None:
+            role_env['CC_RUNNER_JOB_MEMORY_GB'] = str(a.engine_memory_gb)
         runs[role] = make_run(repo, args, out / role, seconds + 1800, env=role_env)
         seed_settings(runs[role], settings)
         fixture = Path(runs[role].cwd) / 'Userdata/UserScenes.rte'
@@ -121,6 +126,7 @@ def main():
             '\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n')
     config = {'topology': 'single-box', 'proof': False, 'box': platform.node(), 'minutes': a.minutes, 'autosave_seconds': a.autosave_seconds,
               'settle_minutes': a.settle_minutes, 'slope_mb_per_minute': a.slope_mb_per_minute, 'rise_mb': a.rise_mb,
+              'engine_memory_gb': a.engine_memory_gb,
               'settings': settings, 'environment': env, 'affinity_masks': {role: f'0x{mask:x}' for role, mask in masks.items()},
               'source_head': subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip(),
               'exe_sha256': file_sha256(engine_executable(repo)),
@@ -177,6 +183,8 @@ def main():
                         'lowest_mb': round(min(values), 1) if values else None, 'last_mb': round(values[-1], 1) if values else None,
                         'rise_mb': round(values[-1] - min(values), 1) if values else None,
                         'highest_mb': round(max(values), 1) if values else None}
+        every = [row[role]['private_mb'] for row in samples if row.get(role) and 'private_mb' in row[role]]
+        bounds[role]['peak_mb'] = round(max(every), 1) if every else None
     captures = [int(t) for t in re.findall(r'^\[autosave\] named tick=(\d+) at=\d+ writers=\d+', log('host'), re.M)]
     refused = {role: re.findall(r'^\[autosave\] (?:named tick=\d+ not taken: .*|failed .*)$', log(role), re.M) for role in started}
     expected = int(a.minutes * 60 / a.autosave_seconds) - 2
@@ -187,6 +195,10 @@ def main():
               'sampled_every_minute': all(bounds[role]['samples'] >= int(a.minutes - a.settle_minutes) for role in bounds),
               'private_slope_bounded': all(bounds[role]['slope_mb_per_minute'] <= a.slope_mb_per_minute for role in bounds),
               'private_rise_bounded': all(bounds[role]['rise_mb'] is not None and bounds[role]['rise_mb'] <= a.rise_mb for role in bounds)}
+    if a.engine_memory_gb is not None:
+        limit = int(a.engine_memory_gb * 1024 ** 3)
+        checks['engine_memory_limit_applied'] = len(records) == 2 and all(r.get('engine_memory_limit_bytes') == limit for r in records.values())
+        checks['under_engine_memory_limit'] = all(bounds[role]['peak_mb'] is not None and bounds[role]['peak_mb'] < limit / 2**20 for role in bounds)
     result = {**config, 'pass': all(checks.values()), 'checks': checks, 'failure': failure, 'bounds': bounds, 'captures': len(captures),
               'expected_captures': expected, 'refused': refused, 'exits': {role: r.get('exit_code') for role, r in records.items()},
               'wall_minutes': round((time.monotonic() - began) / 60, 1)}

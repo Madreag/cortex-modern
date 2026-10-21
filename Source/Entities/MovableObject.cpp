@@ -369,94 +369,6 @@ MovableObject::HookCallScope::~HookCallScope() {
 	}
 }
 
-namespace {
-	// A handle's note, its release and the deletion of the object it names take the same lock, so none of them meets a freed record.
-	std::array<std::mutex, 64> s_LuaHandleLocks;
-	std::mutex& LuaHandleLock(const void* object) { return s_LuaHandleLocks[(reinterpret_cast<uintptr_t>(object) >> 6) % s_LuaHandleLocks.size()]; }
-	// The records of retained memory, linked through themselves; taken after an object's handle lock.
-	std::mutex s_RetainedLock;
-	MovableObject::LuaHandles* s_RetainedHead = nullptr;
-}
-
-MovableObject::LuaHandles* MovableObject::NoteLuaHandle() {
-	std::lock_guard<std::mutex> lock(LuaHandleLock(this));
-	LuaHandles* handles = m_LuaHandles.load(std::memory_order_relaxed);
-	if (!handles) {
-		handles = new LuaHandles();
-		handles->object = this;
-		m_LuaHandles.store(handles, std::memory_order_relaxed);
-	}
-	++handles->count;
-	return handles;
-}
-
-void MovableObject::ReleaseLuaHandle(void* record) {
-	auto* handles = static_cast<LuaHandles*>(record);
-	std::unique_lock<std::mutex> lock(LuaHandleLock(handles->object));
-	if (--handles->count > 0 || !handles->gone) {
-		return;
-	}
-	// A pointer that outlived the object finds no record, so it never reaches this one once it is freed.
-	handles->object->m_LuaHandles.store(nullptr, std::memory_order_relaxed);
-	{
-		std::lock_guard<std::mutex> retained(s_RetainedLock);
-		if (CheckpointHeldMemory::Recording()) CheckpointHeldMemory::Note(&s_RetainedHead, handles->memory, handles->pool->CheckpointInstanceBytes(), true);
-		(handles->retainedPrevious ? handles->retainedPrevious->retainedNext : s_RetainedHead) = handles->retainedNext;
-		if (handles->retainedNext) handles->retainedNext->retainedPrevious = handles->retainedPrevious;
-	}
-	Entity::ClassInfo* pool = handles->pool;
-	void* memory = handles->memory;
-	delete handles;
-	lock.unlock();
-	s_RetainedPoolMemory.fetch_sub(1, std::memory_order_relaxed);
-	pool->ReturnPoolMemory(memory);
-}
-
-bool MovableObject::RetainedMemoryHolds(const void* address, size_t bytes) {
-	const auto* at = static_cast<const std::byte*>(address);
-	const auto covers = [at, bytes](const void* block, size_t blockBytes) {
-		const auto* first = static_cast<const std::byte*>(block);
-		return at >= first && at + bytes <= first + blockBytes;
-	};
-	// A frozen walk answers as of its fence: memory retained since was not retained then, and memory released since was.
-	const CheckpointHeldMemory* held = CheckpointHeldMemory::Current();
-	std::lock_guard<std::mutex> retained(s_RetainedLock);
-	for (const LuaHandles* record = s_RetainedHead; record; record = record->retainedNext) {
-		if (!covers(record->memory, record->pool->CheckpointInstanceBytes())) continue;
-		if (const auto then = held ? held->HeldThen(&s_RetainedHead, record->memory) : std::nullopt; then && !*then) continue;
-		return true;
-	}
-	bool heldThen = false;
-	if (held) held->ForEachHeldThen(&s_RetainedHead, [&](const void* block, size_t blockBytes) { heldThen = heldThen || covers(block, blockBytes); });
-	return heldThen;
-}
-
-bool MovableObject::RetainPooledMemory(MovableObject* object, void* memory, Entity::ClassInfo& pool) {
-	std::lock_guard<std::mutex> lock(LuaHandleLock(object));
-	// The destructors leave the record pointer as it was, so it is still read here.
-	LuaHandles* handles = object->m_LuaHandles.load(std::memory_order_relaxed);
-	if (!handles) {
-		return false;
-	}
-	if (handles->count > 0) {
-		handles->gone = true;
-		handles->pool = &pool;
-		handles->memory = memory;
-		{
-			std::lock_guard<std::mutex> retained(s_RetainedLock);
-			if (CheckpointHeldMemory::Recording()) CheckpointHeldMemory::Note(&s_RetainedHead, memory, pool.CheckpointInstanceBytes(), false);
-			handles->retainedNext = s_RetainedHead;
-			if (s_RetainedHead) s_RetainedHead->retainedPrevious = handles;
-			s_RetainedHead = handles;
-		}
-		s_RetainedPoolMemory.fetch_add(1, std::memory_order_relaxed);
-		return true;
-	}
-	object->m_LuaHandles.store(nullptr, std::memory_order_relaxed);
-	delete handles;
-	return false;
-}
-
 MovableObject::~MovableObject() {
 	if (IsFrozenCheckpointNative()) { MovableObjectReference::Expire(this); return; }
 	NetModerationGUIProbe::TraceObjectLifetime(this, "destroy", true);
@@ -728,6 +640,9 @@ int MovableObject::Create(const MovableObject& reference) {
 	// A faithful clone scripts in the original's state, so its self can stand in for the original's slot.
 	if (IsFaithfulClone()) {
 		m_ThreadedLuaState = reference.m_ThreadedLuaState;
+	} else {
+		// A spawn copy's ID names the threaded state its scripts load into, so it is taken before they load.
+		m_UniqueID = MovableObject::GetNextUniqueID();
 	}
 	for (const auto& scriptPath: reference.m_AllLoadedScripts) {
 		LoadScript(scriptPath, reference.m_EnabledScripts.at(scriptPath));
@@ -816,7 +731,6 @@ int MovableObject::Create(const MovableObject& reference) {
 		}
 	} else {
 		m_FaithfulMOToNotHitUID = reference.m_FaithfulMOToNotHitUID;
-		m_UniqueID = MovableObject::GetNextUniqueID();
 		g_MovableMan.RegisterObject(this);
 	}
 
@@ -1800,7 +1714,11 @@ void MovableObject::SetHitWhatTerrMaterial(unsigned char matID) {
 	CheckpointChange changed(*this, [this] { return CheckpointFields(m_LastCollisionSimFrameNumber, m_TerrainMatHit); });
 	m_TerrainMatHit = matID;
 	m_LastCollisionSimFrameNumber = g_MovableMan.GetSimUpdateFrameNumber();
-	RunScriptedFunctionInAppropriateScripts("OnCollideWithTerrain", false, false, {}, {std::to_string(m_TerrainMatHit)});
+	// Every atom that touches terrain lands here; an object with no script functions has no hook to build a call for.
+	if (!m_FunctionsAndScripts.empty()) {
+		static const std::string onCollideWithTerrain = "OnCollideWithTerrain";
+		RunScriptedFunctionInAppropriateScripts(onCollideWithTerrain, false, false, {}, {std::to_string(m_TerrainMatHit)});
+	}
 }
 
 Vector MovableObject::GetTotalForce() {
