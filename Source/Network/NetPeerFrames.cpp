@@ -286,7 +286,17 @@ namespace RTE {
 	}
 
 	void NetLockstepCoordinator::AskPeerFrameTie(uint64_t split, uint64_t frame, uint32_t members, uint64_t nowMs) {
-		if ((m_Config.frameTieReferee && !PeerTieRefereed(frame)) || m_PeerFrameTieWinners.contains(split)) return;
+		// Under the details lever, a split this seat does not ask about says why, once per split.
+		const auto unasked = [&](const char* why) {
+			if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS") && m_TieUnaskedNamed != split) {
+				m_TieUnaskedNamed = split;
+				DiagnosticLine() << "[net-peer-tie-unasked] local=" << unsigned(m_Config.localPeerId) << " frame=" << frame << " split=" << split << " members=" << members
+				    << " why=" << why << " retained=" << PeerRetainedSeatsAt(frame) << " held=" << PeerHeldSeatsAt(frame) << " group=" << PeerFrameMembersAt(frame)
+				    << " next=" << m_Stats.nextFrame << " now_ms=" << nowMs << std::endl;
+			}
+		};
+		if (m_Config.frameTieReferee && !PeerTieRefereed(frame)) return;
+		if (m_PeerFrameTieWinners.contains(split)) { unasked("decided"); return; }
 		NetFrameTieRequest request;
 		request.generation = m_Config.migrationGeneration; request.roundId = m_Config.matchConfig.roundId;
 		request.frame = split; request.configHash = m_RoundConfigHash; request.host = GetHostPeerId();
@@ -294,7 +304,7 @@ namespace RTE {
 		// to make the groups equal: the directory arbitrates a split of any size.
 		uint32_t voting = members;
 		const uint32_t voters = PeerVotingOwners(voting, frame);
-		if (voters == 0 || voting == voters) return;
+		if (voters == 0 || voting == voters) { unasked(voters == 0 ? "no voters" : "the group votes alone"); return; }
 		request.queryOnly = (voting & SeatBit(m_Config.localPeerId)) == 0;
 		// A group smaller than half of the seats that played together before the split asks the referee to rule for it only after the
 		// referee's tie deadline: the larger half's question rules first, so the seat with the problem never decides for the others.
@@ -316,7 +326,7 @@ namespace RTE {
 			request.owners.push_back(peer);
 			if ((voting & SeatBit(peer)) != 0) request.members.push_back(peer);
 		}
-		if (request.members.empty() || request.members.size() >= request.owners.size()) return;
+		if (request.members.empty() || request.members.size() >= request.owners.size()) { unasked("no other owner"); return; }
 		// A seat that heard the other half play on keeps asking what was decided: the referee holds one request per seat, and
 		// checking in again would replace the question and lose its answer.
 		if (m_Config.frameTieReferee && m_PeerFrameTie && m_PeerFrameTie->queryOnly && !minorityAsks) {
