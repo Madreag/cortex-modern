@@ -6292,7 +6292,15 @@ namespace RTE {
 					if (!fixture.Start(row, error)) return false;
 					const auto stepRound = [&] {
 						if (!fixture.Step(error)) return false;
-						if (arm == 3) for (const auto& peer: fixture.peers) if (HoldVisible(*peer, 1, fixture.hub.now)) {
+						// Keepalives flow only to the seats whose own links are up, and reach a seat whose link comes back a heartbeat and a trip
+						// later: until then its view is its own fault's.
+						const auto hearsKeepalives = [&](uint8_t seat) {
+							if (fixture.OwnTrouble(seat)) return false;
+							for (const auto& spell: schedule.spells)
+								if (spell.seat == seat && fixture.hub.now >= spell.EndMs() && fixture.hub.now < spell.EndMs() + c_NetPeerHeartbeatMs + 2 * row.rttMs) return false;
+							return true;
+						};
+						if (arm == 3) for (const auto& peer: fixture.peers) if (hearsKeepalives(peer->GetConfig().localPeerId) && HoldVisible(*peer, 1, fixture.hub.now)) {
 							error = "flowing keepalives showed a held host seat: observer=" + std::to_string(peer->GetConfig().localPeerId) + " slow=" +
 							        std::to_string(peer->IsHeldAsSlowMachine(1)) + " at " + std::to_string(fixture.hub.now) + " ms"; return false;
 						}
