@@ -2295,6 +2295,8 @@ namespace RTE {
 							if (peer.NoteFrameWait(next, hub.now) && !releasedAt[id - 1]) releasedAt[id - 1] = hub.now;
 							break;
 						}
+						// The game shows a frame the engine releases inside the update that waited for it: at that tick, as a wait ends.
+						const uint64_t shownAt = WaitEnd(id - 1);
 						FinishWait(id, next);
 						peer.FinishFrameWait(hub.now);
 						if (!CheckCommittedInputs(ready, id, error) || !world.Apply(ready, error, hub.now)) return false;
@@ -2315,8 +2317,8 @@ namespace RTE {
 						// What the tick cost this machine, as the engine reports it: a light tick, or a slow machine's whole share of its rate.
 						// A scheduled machine reports its own capacity: a fast one a light tick, one with little headroom its share of the tick.
 						peer.NoteLocalTickCost(ready.frame, slowed ? c_TestTickMs * 100.0 / ratePercent : scheduled && capacity < 300 ? c_TestTickMs * 100.0 / capacity : 1.0);
-						if (displayedAt[id - 1] && hub.DuringFault()) blackoutGap[id - 1] = std::max(blackoutGap[id - 1], hub.now - displayedAt[id - 1]);
-						displayedAt[id - 1] = hub.now;
+						if (displayedAt[id - 1] && hub.DuringFault()) blackoutGap[id - 1] = std::max(blackoutGap[id - 1], shownAt - std::min(shownAt, displayedAt[id - 1]));
+						displayedAt[id - 1] = shownAt;
 						if (!firstDisplayedAt[id - 1]) firstDisplayedAt[id - 1] = hub.now;
 						if (peer.IsSeatUnderAI(hub.ReturningSeat(), ready.frame)) seenAI[id - 1] = true;
 						else if (seenAI[id - 1] && !returnedAt[id - 1]) returnedAt[id - 1] = hub.now;
