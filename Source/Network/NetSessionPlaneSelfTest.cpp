@@ -1683,8 +1683,8 @@ namespace RTE {
 			}
 			bool ImageDonorCanAnswer(uint8_t donor) const {
 				// FLAGGED fixture departure: Running describes the coordinator, not whether its process can serve bytes.
-				// A hung process keeps its queued socket traffic but cannot answer an image request until it resumes.
-				return peers[donor - 1]->IsRunning() && !hub.ProcessHung(donor);
+				// A hung process keeps its queued socket traffic but cannot answer an image request until it resumes; a departed seat serves nothing.
+				return peers[donor - 1]->IsRunning() && !hub.ProcessHung(donor) && !(hub.schedule && hub.schedule->Left(donor, hub.now));
 			}
 			uint8_t ImageReturnProposer(uint8_t donor) const {
 				// FLAGGED fixture departure: the image source can be any donor; only the first playing survivor proposes reclaim.
@@ -2782,8 +2782,8 @@ namespace RTE {
 					if (!join.Tail().Append(record, &error)) co_return fail(error);
 					tailRecorded = next->first;
 				}
-				// A seat the host removes while it reads its image never returns: the AI keeps it.
-				if (fixture.hub.schedule && fixture.hub.schedule->Removed(seat, fixture.hub.now)) {
+				// A seat that leaves, or that the host removes, while it reads its image never returns: the AI keeps it.
+				if (fixture.hub.schedule && fixture.hub.schedule->Left(seat, fixture.hub.now)) {
 					fixture.imageReading[seat - 1] = fixture.imageNeeded[seat - 1] = false;
 					co_return true;
 				}
@@ -2805,7 +2805,9 @@ namespace RTE {
 				// return before this return is agreed ends it, and the seat asks again from the ruling half. So does a donor held out of
 				// its own playing group: its committed history then grows only as fast as its own private catch-up.
 				const bool donorHeld = !(s_FrameMembers(*fixture.peers[donor - 1], fixture.worlds[donor - 1].applied + 1) & (1U << (donor - 1)));
-				if (!proposed && (fixture.imageReading[donor - 1] || donorHeld)) {
+				// A donor whose player leaves closes every return it serves.
+				const bool donorLeft = fixture.hub.schedule && fixture.hub.schedule->Left(donor, fixture.hub.now);
+				if (!proposed && (fixture.imageReading[donor - 1] || donorHeld || donorLeft)) {
 					DiagnosticLine() << "[session-plane-image-donor-lost] returner=" << unsigned(seat) << " donor=" << unsigned(donor)
 					                 << " replay_applied=" << replay.applied << " now_ms=" << fixture.hub.now << std::endl;
 					fixture.imageReading[seat - 1] = false;
