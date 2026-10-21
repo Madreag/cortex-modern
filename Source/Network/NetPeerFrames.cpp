@@ -325,10 +325,7 @@ namespace RTE {
 		// referee's tie deadline: the larger half's question rules first, so the seat with the problem never decides for the others.
 		// Meanwhile it queries and plays on; it asks for itself only if no larger half did.
 		bool minorityAsks = false;
-		// An even split goes to the half holding the original host, as the direct heal rules it: the other half waits as a smaller one.
-		const uint32_t whole = PeerFrameMembersAt(split), half = members & whole, originalHost = SeatBit(m_Config.matchConfig.hostPeerId);
-		if (!request.queryOnly && (2 * std::popcount(half) < std::popcount(whole) ||
-		    (2 * std::popcount(half) == std::popcount(whole) && (whole & originalHost) != 0 && (half & originalHost) == 0))) {
+		if (const uint32_t whole = PeerFrameMembersAt(split); !request.queryOnly && 2 * std::popcount(members & whole) < std::popcount(whole)) {
 			const auto& ask = m_PeerMinorityTieAsks.try_emplace(split, nowMs + c_NetMinorityTieGraceMs, voting).first->second;
 			if (nowMs < ask.first) request.queryOnly = true; else minorityAsks = true;
 		}
