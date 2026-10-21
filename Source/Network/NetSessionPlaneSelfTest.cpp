@@ -3927,6 +3927,26 @@ namespace RTE {
 				if (wait.playing) return Finding{"bound", "survivor_waits", "authority ruling: seat " + std::to_string(wait.seat) + " waited " +
 				    std::to_string(wait.endMs - wait.startMs) + "ms at frame " + std::to_string(wait.frame) + "; a directory answer never gates its local hold"};
 			}
+			// The round stands while a seat that could serve a return stands and no other plays to serve it - each one held, standing
+			// or gone: the return cannot run ahead of its round. A donor of zero is any seat.
+			const auto roundStood = [&](uint8_t seat, uint8_t donor, uint64_t after, uint64_t until) {
+				uint64_t stood = 0;
+				for (const auto& stand: schedule.spells) {
+					if (stand.seat == seat || (donor && stand.seat != donor) || (stand.kind != Spell::Kind::Stopped && stand.kind != Spell::Kind::Hung)) continue;
+					const uint64_t from = std::max(stand.atMs, after), to = std::min(stand.EndMs(), until);
+					if (from >= to) continue;
+					bool alone = true;
+					for (uint8_t other = 1; other <= schedule.seats; ++other) {
+						if (other == seat || other == stand.seat || schedule.Left(other, from)) continue;
+						bool held = false;
+						for (const auto& [heldFrom, heldUntil]: fixture.heldSpans[other]) held |= heldFrom <= from && (heldUntil == UINT64_MAX || heldUntil >= to);
+						const Spell* own = schedule.Active(other, from);
+						alone &= held || (own && (own->kind == Spell::Kind::Stopped || own->kind == Spell::Kind::Hung) && own->EndMs() >= to);
+					}
+					if (alone) stood += to - from;
+				}
+				return stood;
+			};
 			// (3) Each hold has its seat's own cause, ends once the seat is back and caught up, and the seat stays back.
 			for (uint8_t seat = 1; seat <= schedule.seats; ++seat) {
 				// A seat that left or was removed is kept by the AI to the end; it never returns.
@@ -3996,7 +4016,7 @@ namespace RTE {
 					// The image never shortens the return its trouble alone allows.
 					const uint64_t troubleCatchUp = CatchUpMs(backlog, schedule.recoverPercent[seat]);
 					if (troubleCatchUp == UINT64_MAX) continue;
-					uint64_t deadline = troubleEnd + troubleCatchUp + c_NetSeatCatchUpAllowanceMs;
+					uint64_t deadline = troubleEnd + troubleCatchUp + roundStood(seat, 0, troubleEnd, lookTo) + c_NetSeatCatchUpAllowanceMs;
 					if (image) {
 						const uint32_t recover = schedule.recoverPercent[seat];
 						const uint64_t imageBacklog = backlogAfterImage + (recover > 100 ? image->gapMs : 0);
@@ -4006,23 +4026,7 @@ namespace RTE {
 						bool directoryDark = false;
 						for (const auto& spell: schedule.spells) directoryDark |= spell.seat == seat && spell.directoryDark && spell.atMs <= troubleEnd && spell.EndMs() + 3000 >= since;
 						const uint64_t ruledAt = std::max(troubleEnd, std::min(image->atMs, troubleEnd + c_NetFrameTieDeadlineMs + (directoryDark ? c_TestTieTimeoutCapMs : 0)));
-						// The round stands while the return's donor stands and no other seat plays to serve it - each one held, standing or
-						// gone: the return cannot run ahead of its round.
-						uint64_t standingMs = 0;
-						for (const auto& stand: schedule.spells) {
-							if (stand.seat != image->donor || (stand.kind != Spell::Kind::Stopped && stand.kind != Spell::Kind::Hung)) continue;
-							const uint64_t from = std::max(stand.atMs, image->atMs), to = std::min(stand.EndMs(), lookTo);
-							if (from >= to) continue;
-							bool alone = true;
-							for (uint8_t other = 1; other <= schedule.seats; ++other) {
-								if (other == seat || other == image->donor || schedule.Left(other, from)) continue;
-								bool held = false;
-								for (const auto& [heldFrom, heldUntil]: fixture.heldSpans[other]) held |= heldFrom <= from && (heldUntil == UINT64_MAX || heldUntil >= to);
-								const Spell* own = schedule.Active(other, from);
-								alone &= held || (own && (own->kind == Spell::Kind::Stopped || own->kind == Spell::Kind::Hung) && own->EndMs() >= to);
-							}
-							if (alone) standingMs += to - from;
-						}
+						const uint64_t standingMs = roundStood(seat, image->donor, image->atMs, lookTo);
 						if (imageCatchUp != UINT64_MAX && ruledAt + image->transitMs + imageCatchUp + standingMs + c_NetSeatCatchUpAllowanceMs > deadline) {
 							deadline = ruledAt + image->transitMs + imageCatchUp + standingMs + c_NetSeatCatchUpAllowanceMs;
 							backlog = imageBacklog;
