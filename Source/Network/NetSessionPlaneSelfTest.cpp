@@ -1724,6 +1724,12 @@ namespace RTE {
 						if (donor == seat || !(ruling & (1U << (donor - 1))) || !ImageDonorCanAnswer(donor) ||
 						    !peers[donor - 1]->HasHeldAISeat(seat) || !(s_FrameMembers(*peers[donor - 1], worlds[donor - 1].applied + 1) & (1U << (donor - 1)))) continue;
 						if (!ImageDonorCanAnswer(ImageReturnProposer(donor))) continue;
+						// FLAGGED fixture departure: a member still in its own image return keeps its world in that return's replay until the
+						// return ends, so the capture every playing seat committed waits for it.
+						const uint32_t group = s_FrameMembers(*peers[donor - 1], worlds[donor - 1].applied + 1);
+						bool adopted = true;
+						for (uint8_t member = 1; member <= hub.row.seats; ++member) adopted &= member == seat || !(group & (1U << (member - 1))) || !imageReading[member - 1];
+						if (!adopted) continue;
 						imageTasks[seat - 1] = ReadImageReturn(*this, seat, donor, error);
 						if (!imageTasks[seat - 1].Resume()) return false;
 						break;
@@ -2584,7 +2590,8 @@ namespace RTE {
 				if (!replay.Apply(ready, error)) co_return false;
 			}
 			if (base) for (uint8_t peer: survivors)
-				if (fixture.worlds[peer - 1].hashes.at(base) != replay.hashes.at(base)) co_return fail("the image capture already has different playing-seat histories");
+				if (fixture.worlds[peer - 1].hashes.at(base) != replay.hashes.at(base)) co_return fail("the image capture already has different playing-seat histories: seat " + std::to_string(peer) + " at frame " + std::to_string(base) +
+					                 " (donor " + std::to_string(donor) + ", returner " + std::to_string(seat) + ", applied " + std::to_string(fixture.worlds[peer - 1].applied) + ")");
 			DiagnosticLine() << "[session-plane-image] seed=0 seats=" << static_cast<unsigned>(seats) << " rtt_ms=" << rttMs
 			                 << " capture=" << base << " playing_committed_through=" << common << " returner=" << unsigned(seat) << " donor=" << unsigned(donor)
 			                 << " donor_members=" << members << " now_ms=" << fixture.hub.now << std::endl;
