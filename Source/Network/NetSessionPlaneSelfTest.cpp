@@ -3886,6 +3886,9 @@ namespace RTE {
 						}
 						// Loss on its own link while it is held slows its return as any trouble of its own does.
 						else if (burst.atMs > since && burst.atMs <= lookTo && linkShared(burst.seat, seat)) troubleEnd = std::max(troubleEnd, burst.atMs + burst.ms);
+						// Its image's tail crosses that link: the loss after the rewind starves the replay it closes on.
+						if (image && linkShared(burst.seat, seat) && burst.atMs + burst.ms > rewoundAt)
+							backlogAfterImage += burst.atMs + burst.ms - std::max(burst.atMs, rewoundAt);
 					}
 					// A live link split makes each half hold the other. A hung process is not a split and cannot justify holding a survivor.
 					for (const auto& spell: schedule.spells) {
