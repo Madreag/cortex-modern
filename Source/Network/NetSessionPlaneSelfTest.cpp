@@ -1585,7 +1585,7 @@ namespace RTE {
 			std::vector<ImageReturnTask> imageTasks;
 			std::vector<bool> splitParticipant, hungLastStep;
 			std::vector<uint32_t> observedSplit;
-			std::vector<uint64_t> playingMaxWait, lostAt, lostFrame, imageReturns;
+			std::vector<uint64_t> playingMaxWait, lostAt, lostFrame, lossServedAt, imageReturns;
 			std::vector<size_t> decisionsRead;
 			std::vector<std::set<std::tuple<uint64_t, uint64_t, NetHash32, uint64_t>>> splitDecisions;
 			bool sawSplit = false, splitHistories = false;
@@ -1717,7 +1717,7 @@ namespace RTE {
 					for (uint8_t other = 1; other <= hub.row.seats; ++other) connected &= !hub.LiveSplit(seat, other);
 					if (!connected) continue;
 					uint32_t ruling = (1U << hub.row.seats) - 1;
-					if (lostAt[seat - 1] && hub.row.internet) {
+					if (lostAt[seat - 1] && lostAt[seat - 1] != lossServedAt[seat - 1] && hub.row.internet) {
 						ruling = 0;
 						for (const auto& answer: hub.directoryClients.at(seat).consumed)
 							if (answer.atMs == lostAt[seat - 1]) for (uint16_t member: answer.reply.members) ruling |= 1U << (member - 1);
@@ -1983,7 +1983,7 @@ namespace RTE {
 				imageWithoutHeadroom.resize(row.seats); splitDecisions.resize(row.seats);
 				imageTasks.clear(); imageTasks.resize(row.seats);
 				splitParticipant.resize(row.seats); hungLastStep.assign(row.seats, false); observedSplit.resize(row.seats);
-				lostAt.resize(row.seats); lostFrame.resize(row.seats); imageReturns.resize(row.seats); decisionsRead.resize(row.seats);
+				lostAt.resize(row.seats); lostFrame.resize(row.seats); lossServedAt.resize(row.seats); imageReturns.resize(row.seats); decisionsRead.resize(row.seats);
 				firstDisplayedAt.resize(row.seats); startupFinishAt.resize(row.seats); preFaultPaceLeadMs.resize(row.seats);
 				settledHostWaits.resize(row.seats); paceBegin.resize(row.seats); paceEnd.resize(row.seats);
 				firstAdminChangeMs.assign(row.seats, UINT64_MAX);
@@ -2156,7 +2156,7 @@ namespace RTE {
 					// As the service's tail log, the committed record starts again with the round: frame numbers restart.
 					committed.assign(hub.row.seats, {}); for (auto& donors: abandonedDonors) donors.clear(); returnActivations = {}; carriedCommands.assign(hub.row.seats, {});
 					directRuling = 0;
-					std::fill(lostAt.begin(), lostAt.end(), 0); std::fill(lostFrame.begin(), lostFrame.end(), 0);
+					std::fill(lostAt.begin(), lostAt.end(), 0); std::fill(lostFrame.begin(), lostFrame.end(), 0); std::fill(lossServedAt.begin(), lossServedAt.end(), 0);
 					std::fill(imageAt.begin(), imageAt.end(), 0); std::fill(imageReturns.begin(), imageReturns.end(), 0);
 					std::fill(imageNeeded.begin(), imageNeeded.end(), false);
 					std::fill(imageReading.begin(), imageReading.end(), false); std::fill(imageWithoutHeadroom.begin(), imageWithoutHeadroom.end(), false);
@@ -2276,7 +2276,7 @@ namespace RTE {
 						}
 						// FLAGGED fixture departure: every genuine held stop enters recovery, including a case's other affected seats.
 						if (imageStop) {
-							if (lostAt[id - 1] && (peer.GetResumeFrame() != lostFrame[id - 1] || world.applied + 1 != lostFrame[id - 1])) {
+							if (lostAt[id - 1] && lostAt[id - 1] != lossServedAt[id - 1] && (peer.GetResumeFrame() != lostFrame[id - 1] || world.applied + 1 != lostFrame[id - 1])) {
 								error = "authority ruling: losing peer " + std::to_string(id) + " stopped away from its engine decision frame " + std::to_string(lostFrame[id - 1]); return false;
 							}
 							FinishWait(id, world.applied + 1);
@@ -3023,6 +3023,8 @@ namespace RTE {
 			fixture.installedBoundaries[seat - 1] = fixture.installedBoundaries[donor - 1];
 			fixture.ForgetComparisons(seat);
 			fixture.imageReading[seat - 1] = fixture.imageNeeded[seat - 1] = false; ++fixture.imageReturns[seat - 1];
+			// A later stop of this seat is a new one: its ruling and frame are no longer this loss's.
+			fixture.lossServedAt[seat - 1] = fixture.lostAt[seat - 1];
 			// The finished session's donor keeps datagrams in flight; a later return of this seat reads only its own session.
 			fixture.abandonedDonors[seat - 1].insert(donor);
 			fixture.waitPlaying[seat - 1] = false;
