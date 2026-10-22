@@ -343,9 +343,10 @@ namespace RTE {
 		}
 		if (request.members.empty() || request.members.size() >= request.owners.size()) { unasked("no other owner"); return; }
 		// A seat that heard the other half play on keeps asking what was decided: the referee holds one request per seat, and
-		// checking in again would replace the question and lose its answer.
+		// checking in again would replace the question and lose its answer. A settled group replaces only its own unsettled query.
 		const auto settled = m_PeerTieSettles.find(split);
-		const bool settledAsks = settled != m_PeerTieSettles.end() && settled->second.first == 0 && !request.queryOnly;
+		const bool settledAsks = settled != m_PeerTieSettles.end() && settled->second.first == 0 && !request.queryOnly && m_PeerFrameTie &&
+		    std::find(m_PeerFrameTie->members.begin(), m_PeerFrameTie->members.end(), m_Config.localPeerId) != m_PeerFrameTie->members.end();
 		if (m_Config.frameTieReferee && m_PeerFrameTie && m_PeerFrameTie->queryOnly && !minorityAsks && !settledAsks) {
 			auto asked = *m_PeerFrameTie;
 			asked.members = request.members; asked.queryOnly = request.queryOnly;
