@@ -473,11 +473,12 @@ namespace RTE {
 	void NetLockstepCoordinator::DerivePeerCommonSplit(uint8_t senderPeer, uint64_t remoteSplit, uint64_t remoteBoundary, uint64_t nowMs) {
 		const uint32_t sender = SeatBit(senderPeer);
 		for (const auto& [split, arbitration]: m_PeerSplitArbitrations) {
-			if (!arbitration.holdFrame || *arbitration.holdFrame <= m_Config.startFrame) continue;
+			if (!arbitration.holdFrame || *arbitration.holdFrame <= m_Config.startFrame || arbitration.derived) continue;
 			const uint64_t hold = *arbitration.holdFrame;
-			// This seat's hold that parted it from the sender, and the sender's own hold, part the same two histories.
+			// This seat's hold that parted it from the sender, and the sender's own hold, part the same two histories - unless the halves
+			// parted earlier, holding a third seat at different frames: its group's own split names that.
 			if ((PeerFrameMembersAt(hold - 1) & sender) == 0 || (PeerFrameMembersAt(hold) & sender) != 0) continue;
-			const uint64_t common = std::min(hold, remoteBoundary) - 1;
+			const uint64_t common = std::min({hold, remoteBoundary, split > m_Config.startFrame ? split : hold}) - 1;
 			if (common < m_Config.startFrame || m_PeerSplitArbitrations.contains(common)) return;
 			uint32_t self = SeatBit(m_Config.localPeerId);
 			const uint32_t owners = PeerVotingOwners(self, common, PeerVotingScope::History);
@@ -494,7 +495,7 @@ namespace RTE {
 				m_PeerSplitArbitrations.try_emplace(common, PeerSplitArbitration{request, owners, {}});
 			}
 			if (const auto derived = m_PeerSplitArbitrations.find(common); derived != m_PeerSplitArbitrations.end()) {
-				derived->second.holdFrame = hold;
+				derived->second.holdFrame = hold; derived->second.derived = true;
 				derived->second.historiesSeen |= sender;
 			}
 			return;

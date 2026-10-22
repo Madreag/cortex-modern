@@ -1903,6 +1903,7 @@ namespace RTE {
 			std::optional<NetHostMigrationMessage> offeredHold; //!< Another continuation's local hold, not authority to suspend this one.
 			std::optional<uint64_t> readerHoldFrame; //!< The bilateral exchange confirmed no local continuation past this hold.
 			uint32_t asked = 0; //!< The seats this seat itself first asked the referee to rule for.
+			bool derived = false; //!< Named from two halves' questions at their common frame, not from a hold of this seat's own.
 		};
 		std::map<uint64_t, PeerSplitArbitration> m_PeerSplitArbitrations;
 		std::map<uint64_t, std::pair<uint64_t, uint32_t>> m_PeerMinorityTieAsks; //!< A smaller group's own question: when it may ask, and its seats.
