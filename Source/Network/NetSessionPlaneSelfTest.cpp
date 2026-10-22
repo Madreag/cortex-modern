@@ -2371,6 +2371,7 @@ namespace RTE {
 					if (hub.now < hub.faultEnd && hub.row.gapMs < 5000 && HoldVisible(peer, hub.row.subject, hub.now)) { error = "a short hiccup showed a held seat"; return false; }
 					if (hub.row.frozen && HoldVisible(peer, hub.row.subject, hub.now)) { error = "flowing keepalives showed a held seat"; return false; }
 					if (hub.now == hub.faultAt - 1) {
+						if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) DiagnosticLine() << "[session-plane-pre-fault] seat=" << unsigned(id) << " applied=" << world.applied << " now_ms=" << hub.now << std::endl;
 						preFaultPaceLeadMs[id - 1] = static_cast<int64_t>(std::llround((world.applied - 1) * c_TestTickMs)) -
 						    static_cast<int64_t>(displayedAt[id - 1] - firstDisplayedAt[id - 1]);
 						settledDelay[id - 1] = peer.InputDelayAt(id, world.applied + 1); settledChanges[id - 1] = SenderResizes(peer, id);
@@ -2403,6 +2404,10 @@ namespace RTE {
 					const bool relayed = peers.front()->GetConfig().matchConfig.dedicated;
 					uint64_t highest = 0;
 					for (uint8_t id = relayed ? 2 : 1; id <= hub.row.seats; ++id) highest = std::max(highest, worlds[id - 1].applied);
+					if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS") && (hub.now - hub.faultEnd) % 1000 == 0) {
+						DiagnosticLine line; line << "[session-plane-caught-up] now_ms=" << hub.now << " highest=" << highest;
+						for (uint8_t id = 1; id <= hub.row.seats; ++id) line << " seat" << unsigned(id) << "=" << worlds[id - 1].applied << (caughtAt[id - 1] ? "+" : "");
+					}
 					for (uint8_t id = 1; id <= hub.row.seats; ++id) if (!caughtAt[id - 1] && worlds[id - 1].applied + 1 >= highest && common > 0 &&
 					    !peers[id - 1]->HasHeldAISeat(hub.ReturningSeat()) && !Bridges(*peers[id - 1]).contains(hub.ReturningSeat()) &&
 					    (!hub.row.secondSubject || (!peers[id - 1]->HasHeldAISeat(hub.row.secondSubject) && !Bridges(*peers[id - 1]).contains(hub.row.secondSubject))) &&
