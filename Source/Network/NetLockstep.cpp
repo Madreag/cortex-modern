@@ -12546,9 +12546,10 @@ namespace RTE {
 						m_PrivateStarts[start.localPeerId] = {start, fromTransport, m_AuthenticatedPeerMessage, nowMs};
 					return;
 				}
-				// A seat this continuation holds, starting at a frame it has already played with no return certified here, came back on
-				// another continuation: the start is that half's handshake, never this round's to fail on.
-				if (UsesPeerFrameGroups() && held != m_PeerBridges.end() && held->second.committedHold && !held->second.returnFrame && start.startFrame < m_Stats.nextFrame) {
+				// A seat this continuation holds and has seen play another continuation, starting at a frame it has already played with no
+				// return certified here, came back on that continuation: the start is that half's handshake, never this round's to fail on.
+				if (UsesPeerFrameGroups() && held != m_PeerBridges.end() && held->second.committedHold && !held->second.returnFrame && start.startFrame < m_Stats.nextFrame &&
+				    m_PeerOtherContinuations.contains(start.localPeerId)) {
 					++m_Stats.staleRoundPackets;
 					DiagnosticLine() << "[lockstep] ignored peer " << static_cast<int>(start.localPeerId) << "'s start at " << start.startFrame
 					          << ": held here since " << held->second.fromFrame << " with no return certified on this continuation" << std::endl;
