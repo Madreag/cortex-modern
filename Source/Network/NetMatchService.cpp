@@ -5488,7 +5488,8 @@ static std::string ResyncSaveName() {
 				}
 			}
 			if (m_Coordinator->IsSeatReleased(session.assignedPeerId)) m_Coordinator->NoteAdmissionLink(session.assignedPeerId, session.connection, NetLockstepNowMs());
-			else m_Coordinator->NoteReturningLink(session.assignedPeerId, session.connection, NetLockstepNowMs());
+			// A finished return is no longer one: the seat plays, and a later hold of it ends what this link said.
+			else if (session.phase != NetWorldJoinPhase::Active) m_Coordinator->NoteReturningLink(session.assignedPeerId, session.connection, NetLockstepNowMs());
 			// Our image to a returner fills its link, and the link's smoothed round trip takes a moment to come back once the image has
 			// landed: a sample taken then times our own queue, never the link the seat will play on.
 			if (session.phase == NetWorldJoinPhase::SnapshotTransfer && session.transferStarted) m_ReturnerLinkSettlesMs[session.connection] = nowMs + c_ReturnerLinkSettleMs;

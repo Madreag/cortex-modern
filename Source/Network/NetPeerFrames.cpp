@@ -442,6 +442,8 @@ namespace RTE {
 				// A ruling for a continuation every player of which has since left names no machine to return to: this one plays on.
 				uint32_t left = 0;
 				for (uint8_t peer: m_AnnouncedLeavers) left |= SeatBit(peer);
+				// A winner already returning into this continuation through its image has left its own.
+				for (const auto& [peer, link]: m_ReturningLinks) left |= SeatBit(peer);
 				if ((winner & ~playing) != 0 && (winner & ~playing & ~left) == 0) {
 					if (m_PeerSplitsStanding.insert(split).second)
 						DiagnosticLine() << "[net-split-arbitration] local=" << static_cast<int>(m_Config.localPeerId) << " split=" << split << " frame=" << m_Stats.nextFrame

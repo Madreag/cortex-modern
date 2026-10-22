@@ -2853,6 +2853,8 @@ namespace RTE {
 				}
 				const auto [tailWire, tailRoute] = fixture.ImageReturnRoute(donor, seat);
 				if (!tailWire || tailRoute == c_InvalidNetPeerId) co_return fail("the image donor lost its authenticated return route");
+				// As the service notes every unfinished return it serves (NetMatchService's world-join pump).
+				fixture.peers[donor - 1]->NoteReturningLink(seat, tailRoute, fixture.hub.now);
 				for (unsigned datagram = 0; datagram < 32; ++datagram) {
 					std::vector<uint8_t> packed, bytes; bool large = false;
 					const bool whole = join.NextTailDatagram(12, fixture.hub.now, packed, &large);

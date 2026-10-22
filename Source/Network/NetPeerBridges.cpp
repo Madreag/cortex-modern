@@ -1121,7 +1121,11 @@ namespace RTE {
 				    << " cause=" << (fact != m_HoldFacts.end() && fact->second.frame == agreed.frame ? fact->second.cause : "certified_peer_decision") << std::endl;
 				m_PeerBridges[peer] = std::move(bridge);
 				m_SeatBridgeSinceMs[peer] = nowMs;
-				if (!alreadyHeld) ++m_Stats.peers[peer].holds;
+				if (!alreadyHeld) {
+					++m_Stats.peers[peer].holds;
+					// A return the seat made before this hold is over: only a later one brings it back.
+					m_ReturningLinks.erase(peer);
+				}
 				if (peer == m_Config.localPeerId) m_LocalFrames.erase(agreed.frame);
 			}
 		}
