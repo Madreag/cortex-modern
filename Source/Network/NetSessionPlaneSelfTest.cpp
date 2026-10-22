@@ -3990,8 +3990,12 @@ namespace RTE {
 						if (burst.atMs <= since && (linkShared(burst.seat, seat) || fixture.InputSplitCausedHold(seat, since, until, burst.seat, burst.atMs, burst.atMs + burst.ms))) {
 							caused = true; troubleEnd = std::max(troubleEnd, burst.atMs + burst.ms);
 						}
-						// Loss on its own link while it is held slows its return as any trouble of its own does.
-						else if (burst.atMs > since && burst.atMs <= lookTo && linkShared(burst.seat, seat)) troubleEnd = std::max(troubleEnd, burst.atMs + burst.ms);
+						// Loss on its own link while it is held slows its return as any trouble of its own does: its catch-up's tail crosses that
+						// link and loses that share of what it reads there.
+						else if (burst.atMs > since && burst.atMs <= lookTo && linkShared(burst.seat, seat)) {
+							troubleEnd = std::max(troubleEnd, burst.atMs + burst.ms);
+							if (burst.seat == seat) backlog += (std::min(burst.atMs + burst.ms, lookTo) - burst.atMs) * burst.percent / 100;
+						}
 						// Its image's tail crosses that link: the loss after the rewind starves the replay it closes on.
 						if (image && linkShared(burst.seat, seat) && burst.atMs + burst.ms > rewoundAt)
 							backlogAfterImage += burst.atMs + burst.ms - std::max(burst.atMs, rewoundAt);
