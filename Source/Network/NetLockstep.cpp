@@ -11213,6 +11213,10 @@ namespace RTE {
 		if (UsesPeerFrameGroups() && IsSeatUnderAI(peerId, frame)) {
 			return false;
 		}
+		// A seat the host removed owns no input from its removal on.
+		if (UsesPeerFrameGroups() && (PeerRetainedSeatsAt(frame) & (1U << (peerId - 1))) == 0) {
+			return false;
+		}
 		const auto waiverIt = m_PeerFrameWaivers.find(peerId);
 		if (waiverIt != m_PeerFrameWaivers.end() && frame >= waiverIt->second) {
 			return false;
