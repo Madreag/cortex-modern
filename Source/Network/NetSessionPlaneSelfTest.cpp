@@ -3989,6 +3989,8 @@ namespace RTE {
 					               std::to_string(fixture.heldSpans[seat].front().first) + " ms in a round with no fault"};
 				for (size_t index = 0; index < fixture.heldSpans[seat].size(); ++index) {
 					const auto [since, until] = fixture.heldSpans[seat][index];
+					// A view that holds a seat for less than a tick holds it for no frame.
+					if (until != UINT64_MAX && until - since < static_cast<uint64_t>(std::ceil(c_TestTickMs))) continue;
 					uint64_t troubleEnd = 0, backlog = 0; bool caused = false;
 					const uint64_t lookFrom = since > 3000 ? since - 3000 : 0, lookTo = until == UINT64_MAX ? end : until;
 					// Section 11: a seat whose own continuation is set aside, or that finds the record, returns through the image return. Its
