@@ -3988,13 +3988,20 @@ namespace RTE {
 					const uint64_t from = std::max(stand.atMs, after), to = std::min(stand.EndMs(), until);
 					if (from >= to) continue;
 					bool alone = true;
+					uint32_t playing = 0;
 					for (uint8_t other = 1; other <= schedule.seats; ++other) {
 						if (other == seat || other == stand.seat || schedule.Left(other, from)) continue;
 						bool held = false;
 						for (const auto& [heldFrom, heldUntil]: fixture.heldSpans[other]) held |= heldFrom <= from && (heldUntil == UINT64_MAX || heldUntil >= to);
 						const Spell* own = schedule.Active(other, from);
-						alone &= held || (own && (own->kind == Spell::Kind::Stopped || own->kind == Spell::Kind::Hung) && own->EndMs() >= to);
+						const bool out = held || (own && (own->kind == Spell::Kind::Stopped || own->kind == Spell::Kind::Hung) && own->EndMs() >= to);
+						alone &= out;
+						if (!out) playing |= 1U << (other - 1);
 					}
+					// Section 11.3(b): in direct play the seats that play through their original host's hang are no half that rules while they
+					// are at most half of the seats owning the round, a tie going to the host's; the fault is classified at the heal, and no
+					// return enters their continuation before it.
+					if (!alone && !schedule.internet && stand.seat == 1) alone = 2 * std::popcount(playing) <= std::popcount(playing | 1U);
 					if (alone) stood += to - from;
 				}
 				return stood;
