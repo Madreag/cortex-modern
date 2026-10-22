@@ -1551,6 +1551,7 @@ namespace RTE {
 			// FLAGGED fixture departure: two histories that diverged under a proven split stay apart until an image return replaces one,
 			// whoever authors their later frames - a reader of one half that returns into it carries that half's separation.
 			std::array<std::array<uint64_t, 5>, 5> pairSeparatedFrom{};
+			std::array<std::array<std::pair<uint8_t, uint8_t>, 5>, 5> inheritedApart{}; //!< The third seat and the far side a pair is apart from by inheritance.
 			std::array<std::array<std::map<uint64_t, uint64_t>, 5>, 5> inputSplits;
 			std::array<std::array<std::map<uint64_t, std::pair<uint64_t, uint64_t>>, 5>, 5> inputSplitTimes; //!< When each proven separation opened and, once the pair agrees again, closed.
 			struct InputSplitCause { uint8_t human, held, sender, receiver; uint64_t faultAt, observedAt; };
@@ -1855,7 +1856,7 @@ namespace RTE {
 						if (left.hashes.at(frame) == right.hashes.at(frame)) {
 							if (l == r && (l & (1U << (a - 1))) && (l & (1U << (b - 1))))
 								for (auto& [from, through]: inputSplits[a][b]) if (!through && frame >= from) { through = frame - 1; inputSplitTimes[a][b][from].second = hub.now; }
-							pairSeparatedFrom[a][b] = 0;
+							pairSeparatedFrom[a][b] = 0; inheritedApart[a][b] = {};
 							continue;
 						}
 						if (const auto* late = OpenLateSplit(a, b); late && frame >= late->frame) { splitHistories = true; continue; }
@@ -1948,6 +1949,23 @@ namespace RTE {
 							}
 						}
 						if (!finalVerdict && hub.now < waiting.second + c_LateEvidenceMs) { compared[a][b] = frame - 1; awaitingEvidence = true; break; }
+						// Section 11.1: once no late traffic explains the frame, a seat that plays in one group with a seat proven apart from this pair's
+						// other side holds what its group holds, and so is apart from that side by the same proven cause.
+						const auto apart = [&](uint8_t x, uint8_t y) {
+							const uint8_t low = std::min(x, y), high = std::max(x, y);
+							return (splitFrom[low][high] && splitFrom[low][high] <= frame) || (pairSeparatedFrom[low][high] && pairSeparatedFrom[low][high] <= frame);
+						};
+						bool inherited = false;
+						if (const auto [third, far] = inheritedApart[a][b]; third && apart(third, far)) inherited = true;
+						if (authors) for (uint8_t third = 1; third <= hub.row.seats && !inherited; ++third) {
+							if (third == authorA || third == authorB) continue;
+							for (const auto& [near, far, members]: {std::tuple{authorA, authorB, l}, std::tuple{authorB, authorA, r}}) {
+								if (!(members & (1U << (near - 1))) || !(members & (1U << (third - 1))) || frameMembers[third - 1].size() <= frame ||
+								    !(frameMembers[third - 1][frame] & (1U << (near - 1))) || !apart(third, far)) continue;
+								inheritedApart[a][b] = {third, far}; inherited = true; break;
+							}
+						}
+						if (inherited) { splitHistories = true; unexplained[a][b] = {}; continue; }
 						error = "histories differ at displayed frame " + std::to_string(frame) + ": peer " + std::to_string(a) + " members=" + std::to_string(l) +
 						    " peer " + std::to_string(b) + " members=" + std::to_string(r) + "; authority ruling requires equal history within a half and after image return" +
 						    "; now_ms=" + std::to_string(hub.now) + " first_seen_ms=" + std::to_string(waiting.second) + " live_split=" + std::to_string(hub.LiveSplit(a, b)) + " separated_frame=" + std::to_string(separated) +
