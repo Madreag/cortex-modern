@@ -1827,9 +1827,11 @@ namespace RTE {
 				}
 			}
 			bool InputSplitCausedHold(uint8_t seat, uint64_t since, uint64_t until, uint8_t troubled, uint64_t from, uint64_t to) const {
+				// Each half holds the seat it cannot hear at its own bound: the other half's hold may come up to a bound after the proof.
+				const uint64_t boundMs = static_cast<uint64_t>(std::ceil((c_TestBoundTicks + 1) * c_TestTickMs));
 				return std::any_of(inputSplitCauses.begin(), inputSplitCauses.end(), [&](const InputSplitCause& cause) {
 					return (seat == cause.human || seat == cause.held) && (troubled == cause.sender || troubled == cause.receiver) &&
-					    cause.faultAt >= from && cause.faultAt < to && cause.faultAt <= since && since <= cause.observedAt && cause.observedAt <= until;
+					    cause.faultAt >= from && cause.faultAt < to && cause.faultAt <= since && since <= cause.observedAt + boundMs && cause.observedAt <= until;
 				});
 			}
 			bool CompareHistories(std::string& error, bool finalVerdict = false) {
