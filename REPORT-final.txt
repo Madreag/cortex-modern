@@ -33,7 +33,7 @@ RED / GREEN (fix commit; RED -> GREEN)
 GATE ON THE FINAL BUILD t283 (unless named)
 - Suite 55/55 (len(SELFTESTS)=55). Inside it: the fixed catalogue 247 PASS / 0 FAIL, and random_hold_schedules PASS (200/200). The same on t281 (cat-t281 and suite-t281).
 - FEEL-1: 320/320 tick hashes equal against the cm-dev 786ba8b5e control (feel1-control-f). The 3,617,129-byte state dump is identical and the final hash (cceb9b6e...) is equal.
-- D1-D3: net-lockstep and the input-acceptance rows, GREEN inside the suite. D4/D5: preview cap 1 and cap 20 PASS 8/8 each. D6: 19/19 driver tests. D7: the branch's added lines hold no machine path; the scan's only hits are 3090 inside hash digits and logged numbers, and 'erol' inside identifiers.
+- D1-D3: net-lockstep and the input-acceptance rows, GREEN inside the suite. D4/D5: preview cap 1 and cap 20 PASS 8/8 each. D6: 19/19 driver tests. D7: the branch's added lines hold no machine path; the scan's only hits are 3090 inside hash digits and logged numbers, and substrings of identifiers such as OrZeroLink.
 - B1, B2, B4 and the duplicate-line watch 12/12 (tools/feel/matched_session_delay.py: 48 single-player controls and 3 pairs at each of 30 and 200 ms, alone on the box; delay peaks 4 ticks at 30 ms and 15 at 200 ms). B3 re-measured: medians 29.8 ms single player, 31.2 ms at 30 ms and 29.0 ms at 200 ms. All 12 responses take 2 frames, as do all 48 single-player controls. 8 of the 12 millisecond aggregates fall inside the frozen single-player bands (7 on t281 and on 10-19's 423bfe57). No band was widened.
 - #45 world join 2/2. #46 Fixed 1 and Fixed 6 PASS, each run alone.
 
