@@ -2433,8 +2433,12 @@ namespace RTE {
 					if (worlds[observer - 1].applied + peer.GetConfig().inputDelayFrames + peer.GetConfig().slowPlayerBoundTicks < head) continue;
 					// A seat cut off or stopped hears no hold or return until it is back: its view waits for it.
 					if (const auto* spell = hub.schedule->Active(observer, hub.now); spell && spell->kind != Spell::Kind::Slow && spell->kind != Spell::Kind::Late) continue;
-					// Section 11.1: a hold an observer installed inside a fault of its own - lossy, late or slow - is that fault's, not the held seat's.
-					const auto ownFault = [&](uint8_t seat) { const uint64_t since = heldByObserver[observer][seat]; return OwnTrouble(observer) || (since && OwnTroubleAt(observer, since)); };
+					// Section 11.1: a hold an observer installed while its own links lose packets is that loss's, not the held seat's. A slow or late
+					// observer still hears the seats it holds.
+					const auto lossAt = [&](uint64_t at) {
+						return std::any_of(hub.schedule->bursts.begin(), hub.schedule->bursts.end(), [&](const Burst& burst) { return burst.seat == observer && at >= burst.atMs && at < burst.atMs + burst.ms; });
+					};
+					const auto ownFault = [&](uint8_t seat) { const uint64_t since = heldByObserver[observer][seat]; return lossAt(hub.now) || (since && lossAt(since)); };
 					for (const auto& [seat, since]: views[observer]) if (seat >= 1 && seat <= hub.row.seats && !ownFault(seat)) held[seat] = true;
 					for (uint8_t seat = 1; seat <= hub.row.seats; ++seat) if (seat != observer && peer.HasHeldAISeat(seat) && !ownFault(seat)) held[seat] = true;
 				}
