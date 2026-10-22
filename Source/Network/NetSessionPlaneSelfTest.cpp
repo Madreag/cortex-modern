@@ -3066,14 +3066,19 @@ namespace RTE {
 				});
 			};
 			const uint64_t closingTrail = join.FindSession(12) ? join.FindSession(12)->activationTrailFrames : 0;
+			// An observer the returner trailed past the trail its activation allowed, at any moment since the activation, may hold it for an
+			// input that trailing made late, though the returner has caught up by the hold.
+			std::array<bool, NetMatchConfigUtil::c_MaxPeerCount> trailedPast{};
 			for (const uint64_t until = observationAt + 1000; fixture.hub.now <= until && !fixture.OwnTrouble(seat) && !lateSplitSince();) {
+				for (uint8_t peer: survivors)
+					if (fixture.worlds[peer - 1].applied > fixture.worlds[seat - 1].applied + closingTrail + c_TestBoundTicks) trailedPast[peer - 1] = true;
 				for (uint8_t peer: survivors)
 					if ((playingAtActivation & (1U << (peer - 1))) != 0 && fixture.worlds[peer - 1].applied >= activation && fixture.peers[peer - 1]->IsRunning() &&
 					    !fixture.HoldFromOwnFault(peer, seat) &&
 					    (fixture.peers[peer - 1]->HasHeldAISeat(seat) || Bridges(*fixture.peers[peer - 1]).contains(seat))) {
 						// The round takes back a return its returner never closed on - still trailing it past the trail its activation allowed: as
 						// the service's catch-up carries on toward the next one, the seat catches up in place and the return property judges its hold.
-						if (fixture.worlds[peer - 1].applied > fixture.worlds[seat - 1].applied + closingTrail + c_TestBoundTicks) co_return fixture.CheckBound(error);
+						if (trailedPast[peer - 1]) co_return fixture.CheckBound(error);
 						co_return fail("the image return was held again during its healthy observation: observer=" + std::to_string(peer) +
 						    " playing_at_activation=" + std::to_string((s_FrameMembers(*fixture.peers[donor - 1], activation) & (1U << (peer - 1))) != 0) +
 						    " observer_members=" + std::to_string(s_FrameMembers(*fixture.peers[peer - 1], fixture.worlds[peer - 1].applied + 1)) +
