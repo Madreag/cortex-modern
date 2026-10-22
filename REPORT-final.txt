@@ -39,4 +39,4 @@ GATE ON THE FINAL BUILD t283 (unless named)
 
 KEEP (A20), in .private/linux-runs: suite-t283, suite-t281, cat-t281, b3-t283, feel1-control-f, feel1-tip-t283, feel1-compare-t283, d45-t283-cap1, d45-t283-cap20, wj45-t283-1, wj45-t283-2, fx46-t283-d1, fx46-t283-d6, fx46-t281-d6, fx46-t281-d6b, fx46-d259-d6, t273-s33, t274-s156, t279-s81, the t280 seed runs, row-net-lockstep-redL, row-net-lockstep-t281, redS1-silent, redS2-outbox, redS4-reconnect, the d46 and d117 runs. In build-pinned: t283, t281, redL, t273, t274, t276, t277, t279, t280, d259, redS1, redS2, redS4, d46, d113, d114, d117; and .private/cmdev-786ba8b5e (the FEEL-1 control build). Everything else may go at the merge.
 
-Records: NOTES.md (every change, both runs of every oracle or fixture change, every withdrawn attempt) and FIX-LEDGER.md (/home/erol/claude-runs/opus-session-plane-linux-20261019-catalogue/FIX-LEDGER.md).
+Records: NOTES.md (every change, both runs of every oracle or fixture change, every withdrawn attempt) and the lane's FIX-LEDGER.md beside its run folder.
