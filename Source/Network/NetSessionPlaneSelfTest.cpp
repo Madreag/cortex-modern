@@ -803,6 +803,8 @@ namespace RTE {
 				for (auto it = receiptEvidence.upper_bound(frame); it != receiptEvidence.end(); ++it) {
 					const auto& observation = it->second;
 					if (observation.receiver != held || observation.packet.senderPeerId != acceptor || observation.packet.successorPeerId != held || observation.at > heldAt) continue;
+					// One delivered in the very millisecond the held side decided at its bound came too late to stop that hold.
+					if (!observation.impaired && observation.at == heldAt) continue;
 					if (!observation.impaired) return nullptr;
 					if (!impaired || observation.at < impaired->at) impaired = &observation;
 				}
