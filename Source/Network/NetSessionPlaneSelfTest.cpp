@@ -4023,8 +4023,8 @@ namespace RTE {
 							const uint64_t from = std::max({burst.atMs, catchingFrom, lookFrom}), to = std::min(burst.atMs + burst.ms, lookTo);
 							if (from < to) backlog += (to - from) * burst.percent / 100;
 						}
-						// Its image's tail crosses that link: the loss after the rewind starves the replay it closes on.
-						if (image && linkShared(burst.seat, seat) && burst.atMs + burst.ms > rewoundAt)
+						// Its image's tail crosses that link, and its donor's: the loss after the rewind starves the replay it closes on.
+						if (image && (linkShared(burst.seat, seat) || burst.seat == image->donor) && burst.atMs + burst.ms > rewoundAt)
 							backlogAfterImage += burst.atMs + burst.ms - std::max(burst.atMs, rewoundAt);
 					}
 					// A live link split makes each half hold the other. A hung process is not a split and cannot justify holding a survivor.
