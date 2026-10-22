@@ -2239,7 +2239,8 @@ namespace RTE {
 					if (peer.IsStopped() && scheduled && peer.GetStats().timeoutReason.starts_with("Complete:")) {
 						bool alone = true;
 						for (uint8_t other = 1; other <= hub.row.seats; ++other) alone &= other == id || gone(other);
-						if (alone) { roundOver = true; continue; }
+						// A round that ended while this seat waited for its image owes it no return.
+						if (alone) { roundOver = true; imageNeeded[id - 1] = imageReading[id - 1] = false; continue; }
 					}
 					for (const auto& [seat, boundaries]: s_HoldBoundaries(peer))
 						for (const auto& [frame, held]: boundaries) installedBoundaries[id - 1][seat][frame] = held;
