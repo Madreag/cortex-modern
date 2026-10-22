@@ -185,7 +185,14 @@ namespace RTE {
 			}
 			if ((group & SeatBit(owner)) == 0 || PeerInputAccepted(frame, owner)) continue;
 			// Possession of this authenticated source is our own receipt even while its cumulative publication catches up.
-			group &= PeerInputVoters(frame, owner) | local;
+			const uint32_t accepted = PeerInputVoters(frame, owner) | local;
+			// An input that reached fewer of the other readers than it missed parts its sender from them: those readers hold the sender
+			// at their bound, and this seat holds it with them rather than leave the larger half for the sender's.
+			if (owner != m_Config.localPeerId && std::popcount(group & ~accepted) > std::popcount(group & accepted & ~SeatBit(owner))) {
+				group &= ~SeatBit(owner);
+				continue;
+			}
+			group &= accepted;
 		}
 		// Neutral returning seats do not owe input receipts before their certified gap ends.
 		return group | (members & ~voting);
