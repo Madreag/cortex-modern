@@ -2398,6 +2398,10 @@ namespace RTE {
 					hub.refaultAt = hub.now + hub.row.refaultAfterMs;
 					hub.refaultEnd = hub.refaultAt + hub.row.refaultMs;
 				}
+				if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS") && hub.now + 1000 >= hub.faultAt && hub.now < hub.faultEnd && hub.now % 250 == 0) {
+					DiagnosticLine line; line << "[session-plane-fault-pace] now_ms=" << hub.now;
+					for (uint8_t id = 1; id <= hub.row.seats; ++id) line << " seat" << unsigned(id) << "=" << worlds[id - 1].applied;
+				}
 				if (hub.now >= hub.faultEnd) {
 					// A dedicated host has no seat and relays every input: its clients trail it by that relay, so a returned seat catches up with
 					// the seats that play through it, not with the host.
