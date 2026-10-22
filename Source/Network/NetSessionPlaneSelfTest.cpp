@@ -1617,7 +1617,7 @@ namespace RTE {
 			std::vector<Wait> waits;
 			std::vector<std::vector<std::pair<uint64_t, uint64_t>>> heldSpans;
 			// Each image return a seat began: when, the round's lead on the image once it arrives, and the image's trip.
-			struct ImageStart { uint64_t atMs = 0, gapMs = 0, transitMs = 0; uint8_t donor = 0; };
+			struct ImageStart { uint64_t atMs = 0, gapMs = 0, transitMs = 0; uint8_t donor = 0; uint64_t spacingMs = 0; };
 			std::vector<std::vector<ImageStart>> imageStarts;
 			std::vector<uint64_t> heldSince;
 			std::array<std::array<uint64_t, NetMatchConfigUtil::c_MaxPeerCount + 1>, NetMatchConfigUtil::c_MaxPeerCount + 1> heldByObserver{}; //!< When each seat's own engine began holding each seat, its spells included.
@@ -2919,6 +2919,8 @@ namespace RTE {
 						                 << " capacity_ratio=" << announcing->headroom.Ratio() << " trail=" << announcing->activationTrailFrames << " now_ms=" << fixture.hub.now << std::endl;
 					}
 					if (announced) activation = fixture.returnActivations[seat] = announced;
+					// Concurrent returns start a notice and the bound apart: the frames another return moved this one count against its deadline.
+					if (announced) fixture.imageStarts[seat].back().spacingMs = static_cast<uint64_t>(std::ceil(join.FindSession(12)->activationSpacing * c_TestTickMs));
 					if (const char* gate = join.FindSession(12)->catchUpGate; gate && gate != lastGate) {
 						DiagnosticLine() << "[session-plane-image-gate] returner=" << unsigned(seat) << " gate=" << gate << " applied=" << report.applied
 						                 << " horizon=" << fixture.worlds[donor - 1].applied << " closing_rate=" << join.FindSession(12)->closingRate
@@ -4058,8 +4060,8 @@ namespace RTE {
 						const uint64_t ruledAt = std::max(troubleEnd, std::min(image->atMs, troubleEnd + c_NetFrameTieDeadlineMs + (directoryDark ? c_TestTieTimeoutCapMs : 0)));
 						const uint64_t standingMs = roundStood(seat, image->donor, image->atMs, lookTo);
 						// The donor's service activates the return on the returner's progress reports: the image's trip there and the reports' back.
-						if (imageCatchUp != UINT64_MAX && ruledAt + 2 * image->transitMs + imageCatchUp + standingMs + c_NetSeatCatchUpAllowanceMs > deadline) {
-							deadline = ruledAt + 2 * image->transitMs + imageCatchUp + standingMs + c_NetSeatCatchUpAllowanceMs;
+						if (imageCatchUp != UINT64_MAX && ruledAt + 2 * image->transitMs + imageCatchUp + standingMs + image->spacingMs + c_NetSeatCatchUpAllowanceMs > deadline) {
+							deadline = ruledAt + 2 * image->transitMs + imageCatchUp + standingMs + image->spacingMs + c_NetSeatCatchUpAllowanceMs;
 							backlog = imageBacklog;
 						} else image = nullptr;
 					}

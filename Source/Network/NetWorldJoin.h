@@ -165,6 +165,7 @@ namespace RTE {
 		bool spectator = false;
 		uint64_t snapshotTick = 0;        //!< B.
 		uint64_t activationTick = 0;      //!< E, announced before it arrives; 0 until scheduled.
+		uint64_t activationSpacing = 0;   //!< Frames another return's activation moved this one past the frame its own progress chose.
 		uint64_t acknowledgedActivation = 0;
 		bool activationProposed = false;
 		bool activationReachable = true; //!< The last report still shows the returner reaching its announced activation in time.

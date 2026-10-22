@@ -2556,6 +2556,7 @@ namespace RTE {
 		}
 		session->activationTrailFrames = fresh.trail;
 		session->activationTick = DistinctActivation(connection, fresh.activation);
+		session->activationSpacing = session->activationTick - fresh.activation;
 		if (outActivationTick) *outActivationTick = session->activationTick;
 		return true;
 	}
