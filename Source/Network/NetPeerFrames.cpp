@@ -439,9 +439,11 @@ namespace RTE {
 			if ((winner & local) != 0 && (atHold & local) != 0 && (winner & ~atHold) == 0 && (winner & elsewhere) == 0) continue;
 			const bool askerElsewhere = (winner & other) != 0 && (winner & playing) != 0 && arbitration.asked != winner;
 			if (((winner & local) == 0 || askerElsewhere) && (playing & local) != 0 && ((playing & winner) == 0 || askerElsewhere)) {
-				// A ruling for a continuation every player of which has since left names no machine to return to: this one plays on.
+				// A ruling for a continuation every player of which has since left names no machine to return to: this one plays on. So does
+				// one for seats an earlier ruling this seat stood by sends back to this continuation: they are on their way here.
 				uint32_t left = 0;
 				for (uint8_t peer: m_AnnouncedLeavers) left |= SeatBit(peer);
+				for (const auto& [earlier, won]: m_PeerFrameTieWinners) if (earlier < split && (won & local) != 0) left |= won & ~playing;
 				if ((winner & ~playing) != 0 && (winner & ~playing & ~left) == 0) {
 					if (m_PeerSplitsStanding.insert(split).second)
 						DiagnosticLine() << "[net-split-arbitration] local=" << static_cast<int>(m_Config.localPeerId) << " split=" << split << " frame=" << m_Stats.nextFrame
