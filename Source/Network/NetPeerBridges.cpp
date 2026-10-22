@@ -951,21 +951,6 @@ namespace RTE {
 			if (arbitration != m_PeerSplitArbitrations.end()) arbitration->second.offeredHold = certificate;
 			refused("foreign continuation"); return;
 		}
-		// Two holds certified at one frame by groups that each play a seat the other holds are two continuations. A seat that signed
-		// neither takes the first it installed there and leaves the other to the heal, or it would part from both.
-		if (agreed.preparedFrame == 0 && (voters & SeatBit(m_Config.localPeerId)) == 0) {
-			uint32_t held = 0;
-			for (uint8_t peer: agreed.members) held |= SeatBit(peer);
-			for (auto other = m_PeerBridgeCertificates.lower_bound({certificate.frame, 0}); other != m_PeerBridgeCertificates.end() && other->first.first == certificate.frame; ++other) {
-				if (!IsHoldDecision(other->first.second) || other->first.second == DecisionKind(certificate)) continue;
-				uint32_t installedHeld = 0;
-				for (uint8_t peer: other->second.members) installedHeld |= SeatBit(peer);
-				if ((other->second.connectedMask & held) == 0 && (agreed.connectedMask & installedHeld) == 0) continue;
-				const auto arbitration = m_PeerSplitArbitrations.find(PeerSplitEpoch(agreed.frame));
-				if (arbitration != m_PeerSplitArbitrations.end()) arbitration->second.offeredHold = certificate;
-				refused("other continuation at its frame"); return;
-			}
-		}
 		// A hold, rather than a normally in-flight input or receipt, opens the arbitration question. Asking earlier can assign a
 		// healthy startup gap a permanent winner and then reuse that unrelated answer when a machine actually stops.
 		if (agreed.preparedFrame == 0) CheckPeerFrameTie(certificate.frame, agreed.connectedMask, nowMs);
