@@ -3000,9 +3000,10 @@ namespace RTE {
 				if (agreed && !liveStarted && !startLive()) co_return false;
 				if (liveStarted && replay.applied + 1 == activation && fixture.peers[seat - 1]->IsRunning()) break;
 			}
-			if (!activation && fixture.hub.schedule && recoveryPercent <= 100) {
-				// The driver's original capacity property gives a machine with no surplus no finite catch-up deadline.
-				// It stays a private reader under the AI; every survivor is still checked on every step, with no wait exemption.
+			if (!activation && fixture.hub.schedule && (recoveryPercent <= 100 || fixture.hub.now > fixture.hub.schedule->endMs)) {
+				// The driver's original capacity property gives a machine with no surplus no finite catch-up deadline, and one whose surplus
+				// has not closed its replay when the case ends a deadline past it. It stays a private reader under the AI; every survivor is
+				// still checked on every step, with no wait exemption, and the return property judges its hold.
 				fixture.imageWithoutHeadroom[seat - 1] = true;
 				// The arbitration stopped this side and it plays no continuation of its own: its return is the capacity property's to judge.
 				for (auto& late: fixture.lateSplits) if (!late.resolvedAt && (late.a == seat || late.b == seat)) late.resolvedAt = fixture.hub.now;
