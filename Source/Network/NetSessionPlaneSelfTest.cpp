@@ -1870,22 +1870,6 @@ namespace RTE {
 								if (!through || frame <= through) separated = from;
 							}
 						}
-						// Section 11.1: a seat that plays in one group with a seat proven apart from this pair's other side holds what its group
-						// holds; it is apart from that side by the same proven cause, until an image return replaces one history.
-						if (authors && !separated) for (uint8_t third = 1; third <= hub.row.seats && !separated; ++third) {
-							if (third == authorA || third == authorB) continue;
-							for (const auto& [near, far, members]: {std::tuple{authorA, authorB, l}, std::tuple{authorB, authorA, r}}) {
-								if (!(members & (1U << (third - 1))) || frameMembers[third - 1].size() <= frame || !(frameMembers[third - 1][frame] & (1U << (near - 1)))) continue;
-								const uint8_t low = std::min(third, far), high = std::max(third, far);
-								if (splitFrom[low][high] && splitFrom[low][high] <= frame) { separated = splitFrom[low][high]; break; }
-								if (pairSeparatedFrom[low][high] && pairSeparatedFrom[low][high] <= frame) { separated = pairSeparatedFrom[low][high]; break; }
-								const auto& intervals = inputSplits[low][high];
-								const auto after = intervals.upper_bound(frame);
-								if (after == intervals.begin()) continue;
-								const auto& [from, through] = *std::prev(after);
-								if (!through || frame <= through) { separated = from; break; }
-							}
-						}
 						const uint32_t first = authors ? 1U << (authorA - 1) : 0, second = authors ? 1U << (authorB - 1) : 0;
 						// The proven cause of one owner's seat played on one side and held on the other: its input, or the receipt covering it, lost on the wire.
 						const auto recordPartition = [&](uint8_t owner) {
