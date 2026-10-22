@@ -476,9 +476,13 @@ namespace RTE {
 			if (!arbitration.holdFrame || *arbitration.holdFrame <= m_Config.startFrame || arbitration.derived) continue;
 			const uint64_t hold = *arbitration.holdFrame;
 			// This seat's hold that parted it from the sender, and the sender's own hold, part the same two histories - unless the halves
-			// parted earlier, holding a third seat at different frames: its group's own split names that.
+			// parted earlier, holding a third seat at different frames: their last groups before those holds then differ, and the earlier
+			// of the two names it. A group either half formed after the other was held names nothing both played.
 			if ((PeerFrameMembersAt(hold - 1) & sender) == 0 || (PeerFrameMembersAt(hold) & sender) != 0) continue;
-			const uint64_t common = std::min({hold, remoteBoundary, split > m_Config.startFrame ? split : hold}) - 1;
+			uint64_t parted = std::min(hold, remoteBoundary);
+			const uint64_t own = split > m_Config.startFrame ? split : 0, other = remoteSplit > m_Config.startFrame ? remoteSplit : 0;
+			if (own != other && std::max(own, other) < parted) parted = own == 0 ? other : other == 0 ? own : std::min(own, other);
+			const uint64_t common = parted - 1;
 			if (common < m_Config.startFrame || m_PeerSplitArbitrations.contains(common)) return;
 			uint32_t self = SeatBit(m_Config.localPeerId);
 			const uint32_t owners = PeerVotingOwners(self, common, PeerVotingScope::History);
