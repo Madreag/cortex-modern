@@ -1623,6 +1623,7 @@ namespace RTE {
 			std::vector<std::vector<ImageStart>> imageStarts;
 			std::vector<uint64_t> heldSince;
 			std::array<std::array<uint64_t, NetMatchConfigUtil::c_MaxPeerCount + 1>, NetMatchConfigUtil::c_MaxPeerCount + 1> heldByObserver{}; //!< When each seat's own engine began holding each seat, its spells included.
+			std::map<std::pair<uint8_t, uint64_t>, uint8_t> lossyHoldAuthors; //!< A seat's hold at a frame, and the observer that installed it while its own links lost packets.
 			uint64_t hashedThrough = 0;
 			bool leaverStopped = false;
 			// The round ended by the engine's own rule: every other seat left or was removed, and the last one completes it.
@@ -2457,7 +2458,20 @@ namespace RTE {
 					const auto lossAt = [&](uint64_t at) {
 						return std::any_of(hub.schedule->bursts.begin(), hub.schedule->bursts.end(), [&](const Burst& burst) { return burst.seat == observer && at >= burst.atMs && at < burst.atMs + burst.ms; });
 					};
-					const auto ownFault = [&](uint8_t seat) { const uint64_t since = heldByObserver[observer][seat]; return lossAt(hub.now) || (since && lossAt(since)); };
+					// A view of that same hold taken over with the continuation this observer read from the lossy one is the same loss's.
+					const auto ownFault = [&](uint8_t seat) {
+						const uint64_t since = heldByObserver[observer][seat];
+						uint64_t frame = 0;
+						if (const auto boundaries = installedBoundaries[observer - 1].find(seat); boundaries != installedBoundaries[observer - 1].end())
+							for (auto boundary = boundaries->second.rbegin(); boundary != boundaries->second.rend(); ++boundary) if (boundary->second) { frame = boundary->first; break; }
+						if (lossAt(hub.now) || (since && lossAt(since))) {
+							if (frame) lossyHoldAuthors.try_emplace({seat, frame}, observer);
+							return true;
+						}
+						const auto author = lossyHoldAuthors.find({seat, frame});
+						return frame && author != lossyHoldAuthors.end() && author->second != observer &&
+						    std::any_of(imageStarts[observer].begin(), imageStarts[observer].end(), [&](const ImageStart& start) { return start.donor == author->second; });
+					};
 					for (const auto& [seat, since]: views[observer]) if (seat >= 1 && seat <= hub.row.seats && !ownFault(seat)) held[seat] = true;
 					for (uint8_t seat = 1; seat <= hub.row.seats; ++seat) if (seat != observer && peer.HasHeldAISeat(seat) && !ownFault(seat)) held[seat] = true;
 				}
