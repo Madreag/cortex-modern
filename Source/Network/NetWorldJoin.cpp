@@ -2422,12 +2422,14 @@ namespace RTE {
 		const double closingRate = capacity > 0 ? std::min(session->closingRate, std::max(0.0, capacity - 1)) : session->closingRate;
 		const bool closing = session->closingMeasured && closingRate > 0.1;
 		const auto phaseWork = [&]() -> std::optional<uint64_t> {
-			if (!provesHeadroom || closing || !session->closingMeasured || session->tailLinkRttMs == 0 ||
+			// A link its transport has not measured is bounded by the tail acknowledgement's round trip, and none of the trail is put down to it.
+			const double linkMs = session->tailLinkRttMs != 0 ? static_cast<double>(session->tailLinkRttMs) : session->tailAckRttMs;
+			if (!provesHeadroom || closing || !session->closingMeasured || linkMs <= 0 ||
 			    !session->headroom.AboveRateOver(static_cast<uint64_t>(std::ceil(1000.0 / m_SimTickMs)))) return std::nullopt;
-			const uint64_t transit = static_cast<uint64_t>(std::floor(session->tailLinkRttMs / (2 * m_SimTickMs)));
+			const uint64_t transit = session->tailLinkRttMs != 0 ? static_cast<uint64_t>(std::floor(session->tailLinkRttMs / (2 * m_SimTickMs))) : 0;
 			if (behind <= transit + m_Config.slowPlayerBoundTicks) return 0;
 			const double needed = std::ceil((behind - transit) * capacity / (capacity - 1));
-			const uint64_t flight = static_cast<uint64_t>(std::ceil(session->tailLinkRttMs / m_SimTickMs));
+			const uint64_t flight = static_cast<uint64_t>(std::ceil(linkMs / m_SimTickMs));
 			const uint16_t configured = session->assignedPeerId && session->assignedPeerId <= m_Config.peerInputDelayFrames.size()
 			    ? m_Config.peerInputDelayFrames[session->assignedPeerId - 1] : m_Config.inputDelayFrames;
 			const uint64_t pipeline = std::max<uint64_t>(configured, flight + 1) + flight + m_Config.slowPlayerBoundTicks;
