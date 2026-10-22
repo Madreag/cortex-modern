@@ -52,9 +52,12 @@ namespace RTE {
 
 	bool NetLockstepCoordinator::SendPeerFrameMessage(NetHostMigrationMessage message, NetTransportLane lane, uint8_t onlyPeer) {
 		if (!UsesPeerFrameGroups() || PeerFrameBlackout(m_TimingNowMs)) return false;
-		// A certificate proves itself by the votes it carries. A seat that passes one on sends it as its own: the receiver reads a message
-		// only from the seat its link is bound to.
-		if (message.type == NetHostMigrationMessageType::PeerBridgeCommit) message.senderPeerId = m_Config.localPeerId;
+		// A certificate proves itself by the votes it carries. A seat that passes one on sends it as its own, with its own progress: the
+		// receiver reads a message only from the seat its link is bound to, and takes its applied frame as that seat's.
+		if (message.type == NetHostMigrationMessageType::PeerBridgeCommit) {
+			message.senderPeerId = m_Config.localPeerId;
+			message.appliedFrame = m_LastCompletedSimulationTick.value_or(0);
+		}
 		std::vector<uint8_t> bytes;
 		if (!NetHostMigrationCodec::Encode(message, m_Config.migrationKey, bytes)) return false;
 		// Votes and certificates are independently authenticated and resent. An unreliable copy reaches a live plane even
