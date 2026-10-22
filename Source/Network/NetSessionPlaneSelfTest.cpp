@@ -3992,11 +3992,15 @@ namespace RTE {
 						if (burst.atMs <= since && (linkShared(burst.seat, seat) || fixture.InputSplitCausedHold(seat, since, until, burst.seat, burst.atMs, burst.atMs + burst.ms))) {
 							caused = true; troubleEnd = std::max(troubleEnd, burst.atMs + burst.ms);
 						}
-						// Loss on its own link while it is held slows its return as any trouble of its own does: its catch-up's tail crosses that
-						// link and loses that share of what it reads there.
-						else if (burst.atMs > since && burst.atMs <= lookTo && linkShared(burst.seat, seat)) {
-							troubleEnd = std::max(troubleEnd, burst.atMs + burst.ms);
-							if (burst.seat == seat) backlog += (std::min(burst.atMs + burst.ms, lookTo) - burst.atMs) * burst.percent / 100;
+						// Loss on its own link while it is held slows its return as any trouble of its own does.
+						else if (burst.atMs > since && burst.atMs <= lookTo && linkShared(burst.seat, seat)) troubleEnd = std::max(troubleEnd, burst.atMs + burst.ms);
+						// Its catch-up's tail crosses its own link: loss there from its first hold in reach, through a return it trailed and this
+						// hold, takes that share of what it reads.
+						if (burst.seat == seat) {
+							uint64_t catchingFrom = since;
+							for (size_t span = 0; span < index; ++span) if (fixture.heldSpans[seat][span].second >= lookFrom) catchingFrom = std::min(catchingFrom, fixture.heldSpans[seat][span].first);
+							const uint64_t from = std::max({burst.atMs, catchingFrom, lookFrom}), to = std::min(burst.atMs + burst.ms, lookTo);
+							if (from < to) backlog += (to - from) * burst.percent / 100;
 						}
 						// Its image's tail crosses that link: the loss after the rewind starves the replay it closes on.
 						if (image && linkShared(burst.seat, seat) && burst.atMs + burst.ms > rewoundAt)
