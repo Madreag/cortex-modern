@@ -7423,7 +7423,8 @@ namespace RTE {
 				for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
 					const bool present = peer == m_Config.localPeerId ? m_LocalFrames.contains(frame) : remote != m_RemoteFrames.end() && remote->second.contains(peer);
 					detail << " seat=" << static_cast<int>(peer) << ":" << present << "/" << (sources != m_PeerSourceInputs.end() && sources->second.contains(peer)) << "/" << PeerInputAccepted(frame, peer)
-					    << "/voters=" << PeerInputVoters(frame, peer);
+					    << "/voters=" << PeerInputVoters(frame, peer) << "/required=" << IsRemoteRequiredForFrame(peer, frame)
+					    << "/remote=" << (m_RemoteFrames.contains(frame) && m_RemoteFrames.at(frame).contains(peer));
 					if (const auto receipts = m_PeerInputReceipts.find(peer); receipts != m_PeerInputReceipts.end())
 						for (const auto& [voter, through]: receipts->second) detail << "," << static_cast<int>(voter) << "=" << through;
 				}
