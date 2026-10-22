@@ -547,8 +547,8 @@ namespace RTE {
 		    PeerGroupHasAuthority(proposal.connectedMask | SeatBit(proposal.members.front()), proposal.frame);
 		const bool localDeadline = PeerConsumerHoldDue(frame, nowMs);
 		// Another continuation's member that still feeds is held where the voters agree: each holding it at its own frame would leave
-		// the voters on different histories.
-		const bool agreedContinuation = otherContinuation && otherVoter && feeding;
+		// the voters on different histories. A seat whose own bound has passed on the frame holds it there and plays on.
+		const bool agreedContinuation = otherContinuation && otherVoter && feeding && !localDeadline;
 		// Newer arrivals cannot extend the consumer's deadline for an older missing input.
 		const bool heldAhead = ((otherVoter || cooperativeAhead) && feeding && (ownYield || !localDeadline) && !otherContinuation) || agreedContinuation;
 		if (heldAhead) {
