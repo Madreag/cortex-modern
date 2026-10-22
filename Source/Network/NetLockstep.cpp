@@ -3820,7 +3820,9 @@ namespace RTE {
 	}
 
 	void NetLockstepCoordinator::AdjudicatePeerRoundEnds(uint64_t nowMs) {
-		if (!UsesPeerFrameGroups() || !IsRunning() || m_Config.localPeerId != GetHostPeerId() || m_RemotePeerIds.empty()) return;
+		// A host stopped to take a ruling half's image is a held host; once that half has left it has no donor.
+		const bool stoppedForImage = IsStopped() && m_LocalSeatHeld && m_Stats.timeoutReason.starts_with("PeerHeld:");
+		if (!UsesPeerFrameGroups() || (!IsRunning() && !stoppedForImage) || m_Config.localPeerId != GetHostPeerId() || m_RemotePeerIds.empty()) return;
 		// A closed duplicate route says nothing about a seat still talking on
 		// another route. Uncertain silence never supplies an end declaration.
 		std::erase_if(m_PeerRoundEnds, [&](const auto& ended) {
@@ -3829,7 +3831,7 @@ namespace RTE {
 		if (!std::all_of(m_RemotePeerIds.begin(), m_RemotePeerIds.end(), [&](uint8_t peer) { return m_PeerRoundEnds.contains(peer); })) return;
 		// An ordinary leave keeps its seat with the AI while the remaining player continues.
 		// The host's End Match, the planned last frame and a held host with no donors still end promptly.
-		if (!IsOwnHostSeatHeld() && !m_PendingCompleteStop && !std::all_of(m_RemotePeerIds.begin(), m_RemotePeerIds.end(), [&](uint8_t peer) {
+		if (!IsOwnHostSeatHeld() && !stoppedForImage && !m_PendingCompleteStop && !std::all_of(m_RemotePeerIds.begin(), m_RemotePeerIds.end(), [&](uint8_t peer) {
 			const auto& ended = m_PeerRoundEnds.at(peer);
 			return ended.completedRound || (m_FinalFrame != UINT64_MAX && ended.frame > m_FinalFrame);
 		})) return;
@@ -3839,6 +3841,11 @@ namespace RTE {
 		DiagnosticLine() << "[net-peer-departure] all-remote-ended applied=" << m_LastCompletedSimulationTick.value_or(0)
 		    << " now_ms=" << nowMs << " unix_ms="
 		    << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << std::endl;
+		if (stoppedForImage) {
+			m_LocalSeatHeld = false; m_LocalHoldFrame = 0;
+			m_Stats.timeoutReason = std::string(NetLockstepCodec::StopReasonName(NetLockstepStopReason::Complete)) + ":all other players left the round";
+			return;
+		}
 		Complete("all other players left the round");
 	}
 
@@ -12372,7 +12379,16 @@ namespace RTE {
 	void NetLockstepCoordinator::HandlePacket(const NetLockstepPacket& packet, uint64_t nowMs, NetPeerId fromTransport) {
 		// Authenticated mesh controls reach this dispatch without HandleEvent's ended-round guard. A losing
 		// continuation awaits its image; another member's new start cannot handshake or fail that old round.
-		if (m_State == NetLockstepState::Stopped || m_State == NetLockstepState::Failed) return;
+		if (m_State == NetLockstepState::Stopped || m_State == NetLockstepState::Failed) {
+			// It still hears who left the round: a losing half has no one to return to once its winners have gone.
+			const auto* stop = std::get_if<NetLockstepStop>(&packet.payload);
+			if (stop && m_State == NetLockstepState::Stopped && UsesPeerFrameGroups() && IsKnownRemotePeer(stop->senderPeerId) &&
+			    SenderOwnsTransport(stop->senderPeerId, fromTransport) && (stop->reason == NetLockstepStopReason::PeerLeft || stop->reason == NetLockstepStopReason::Complete)) {
+				NotePeerRoundEnd(stop->senderPeerId, stop->frame, nowMs, false, stop->reason == NetLockstepStopReason::Complete);
+				if (stop->reason == NetLockstepStopReason::PeerLeft) m_AnnouncedLeavers.insert(stop->senderPeerId);
+			}
+			return;
+		}
 		// Only decoded traffic from a bound seat renews its silence deadline.
 		const uint8_t sender = std::visit(Overloaded{
 			[](const NetLockstepStart& start) { return start.localPeerId; },
