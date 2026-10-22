@@ -6447,9 +6447,22 @@ namespace RTE {
 		if (peer != m_Config.localPeerId) return;
 		// Folded samples consume the old queue without extending its frontier. Advance the producer by that exact difference
 		// before the future decrease, preserving every committed tick and using the existing bounded catch-up budget.
+		uint64_t advance = previous - delay;
+		// A member that follows the pace leader's clock takes the leader's own fall near this one by following it: only what its own
+		// fall exceeds is its to add, or it runs ahead of the group for good.
+		if (UsesPeerFrameGroups() && m_FrameGroupMembers != 0) {
+			const uint8_t leader = (m_FrameGroupMembers & NetPeerFrameDetail::SeatBit(m_PeerPaceReference)) != 0 ? m_PeerPaceReference :
+			    static_cast<uint8_t>(std::countr_zero(m_FrameGroupMembers) + 1);
+			if (const auto changes = m_DelayChanges.find(leader); leader != m_Config.localPeerId && changes != m_DelayChanges.end())
+				for (auto change = changes->second.lower_bound(frame > previous ? frame - previous : 0); change != changes->second.end() && change->first <= frame + previous; ++change) {
+					const uint16_t before = change == changes->second.begin() ? PeerInputDelay(leader) : std::prev(change)->second;
+					if (change->second < before) advance -= std::min<uint64_t>(advance, before - change->second);
+				}
+		}
+		if (advance == 0) return;
 		const uint64_t due = std::max(*m_LastCompletedSimulationTick, InputDelayRetimingTarget().value_or(*m_LastCompletedSimulationTick));
 		const uint64_t freshFrom = frame + std::min<uint64_t>(previous - delay, UINT64_MAX - frame);
-		m_InputDelayPace = {nowMs, due + std::min<uint64_t>(previous - delay, UINT64_MAX - due),
+		m_InputDelayPace = {nowMs, due + std::min<uint64_t>(advance, UINT64_MAX - due),
 		    std::max(freshFrom, m_InputDelayPace ? m_InputDelayPace->freshFromFrame : 0)};
 		DiagnosticLine() << "[net-input-retiming] local=" << static_cast<int>(peer) << " frame=" << frame << " from=" << previous << " to=" << delay
 		    << " displayed=" << *m_LastCompletedSimulationTick << " phase_target=" << m_InputDelayPace->frame << " now_ms=" << nowMs << std::endl;
