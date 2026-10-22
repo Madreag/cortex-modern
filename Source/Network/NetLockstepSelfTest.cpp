@@ -703,7 +703,8 @@ namespace RTE {
 				peer.m_Config.peerFrameGroups = true; peer.m_Config.peerCount = peer.m_Config.matchConfig.peerCount = 2;
 				peer.m_Config.matchConfig.players.resize(2); peer.m_Config.matchConfig.successorOrder = {2};
 				peer.m_MigrationPhase = NetHostMigrationPhase::None; peer.m_Config.authorityPeerId = 1;
-				peer.m_TimingNowMs = 16000; peer.m_AuthorityLastHeardMs = 0;
+				// The authority was last heard longer ago than the host-loss silence.
+				peer.m_TimingNowMs = 16000; peer.m_AuthorityLastHeardMs = 500;
 				peer.m_FrameGroupMembers = 2; peer.m_FrameGroupChanges = {{1, 3}, {100, 2}};
 				peer.m_MigrationHistory[4422] = {1, 2, 3};
 				if (arm) {
@@ -1028,6 +1029,9 @@ namespace RTE {
 				peer.m_FrameGroupMembers = arm.group; peer.m_FrameGroupChanges = {{1, 15}, {339, arm.group}};
 				peer.m_LastCompletedSimulationTick = peer.m_LastDeliveredFrame = 340; peer.m_Stats.nextFrame = 341;
 				peer.CheckPeerFrameTie(339, arm.group, 6000);
+				// A group checks in once its split has settled: the bound after its first question, with no round trip measured here.
+				const uint64_t settledMs = 6000 + static_cast<uint64_t>(std::ceil(peer.m_Config.slowPlayerBoundTicks * peer.m_Config.simTickMs));
+				peer.PollPeerFrameTies(settledMs);
 				const bool asked = peer.m_PeerFrameTie.has_value();
 				if (!asked || peer.m_PeerFrameTie->queryOnly != arm.query) {
 					*error = arm.query ? "a seat smaller than half of its round asked the referee to rule for it: group=" + std::to_string(arm.group) :
@@ -1035,7 +1039,7 @@ namespace RTE {
 					return false;
 				}
 				if (arm.query) {
-					peer.PollPeerFrameTies(6000 + c_NetMinorityTieGraceMs);
+					peer.PollPeerFrameTies(settledMs + c_NetMinorityTieGraceMs);
 					if (peer.m_PeerSplitArbitrations.empty() || peer.m_PeerSplitArbitrations.begin()->second.request.queryOnly) {
 						*error = "a smaller group never asked for itself after the referee's deadline with its split still open"; return false;
 					}
@@ -1140,9 +1144,10 @@ namespace RTE {
 				peer.EncodeMigrationFrame(ready, bytes);
 				return bytes;
 			};
-			// The referee answers a split's first question, as the directory does.
+			// The referee answers a split's first question that is not a query, as the directory does; a query of an undecided split waits.
 			auto decided = std::make_shared<std::map<uint64_t, std::vector<uint16_t>>>();
 			const auto referee = [decided](const NetFrameTieRequest& request) {
+				if (request.queryOnly && !decided->contains(request.frame)) return NetFrameTieReply{NetFrameTieReply::State::Waiting};
 				const auto [answer, inserted] = decided->try_emplace(request.frame, request.members);
 				NetFrameTieReply reply{NetFrameTieReply::State::Decided};
 				reply.members = answer->second;
@@ -1207,11 +1212,34 @@ namespace RTE {
 				}
 				if (!delivered) { check(false, "arm " + std::to_string(arm) + ": a witness did not traverse the authenticated peer wire"); continue; }
 				if (local == 2) peer.CheckPeerFrameTie(161, 6, 1200);
+				// The other continuation's member still feeds: its input for the next frame arrived just now.
+				peer.m_Stats.peers[other].arrivals = {{1200, 161}};
+				// Every seat reported what it applied, as its heartbeats do.
+				for (uint8_t seat: peer.m_RemotePeerIds) peer.m_PeerAppliedThrough[seat] = 160;
 				(void)peer.ProposePeerBridge(161, 1200);
-				const bool held = (peer.PeerFrameMembersAt(161) & (1U << (other - 1))) == 0;
+				// With another voter in its group, the lowest seat holds a member that still feeds at a frame the voters agree ahead.
+				bool heldAhead = false;
+				for (const auto& [key, votes]: peer.m_PeerBridgeVotes)
+					if (key.first > 161 && NetPeerFrameDetail::IsHoldDecision(key.second) && votes.contains(local))
+						heldAhead |= std::find(votes.at(local).members.begin(), votes.at(local).members.end(), other) != votes.at(local).members.end();
+				const bool held = (peer.PeerFrameMembersAt(161) & (1U << (other - 1))) == 0 || heldAhead;
 				check(held == diverged, "arm " + std::to_string(arm) + (diverged ? ": a member playing another continuation stayed in this group" :
 				    ": a member with the same history was held") + " members=" + std::to_string(peer.PeerFrameMembersAt(161)));
 				if (!diverged || !held) continue;
+				if (heldAhead) {
+					// The other voter co-signs the hold ahead; this seat takes it at its frame.
+					NetHostMigrationMessage vote;
+					for (const auto& [key, votes]: peer.m_PeerBridgeVotes)
+						if (key.first > 161 && NetPeerFrameDetail::IsHoldDecision(key.second) && votes.contains(local)) vote = votes.at(local);
+					vote.senderPeerId = 3; vote.voterMask = 1U << 2;
+					if (!NetHostMigrationCodec::Encode(vote, peer.m_Config.migrationKey, signedBytes) ||
+					    !NetHostMigrationCodec::Decode(signedBytes, peer.m_Config.migrationKey, authenticated) || !peer.HandlePeerFrameMessage(authenticated, 1210)) {
+						check(false, "arm " + std::to_string(arm) + ": the co-signature did not traverse the authenticated peer wire"); continue;
+					}
+					peer.m_LastCompletedSimulationTick = peer.m_LastDeliveredFrame = vote.frame - 1; peer.m_Stats.nextFrame = vote.frame;
+					(void)peer.TakePendingPeerDecisions(1220);
+					check((peer.PeerFrameMembersAt(vote.frame) & (1U << (other - 1))) == 0, "arm " + std::to_string(arm) + ": the co-signed hold ahead was not taken at its frame");
+				}
 				peer.m_LastCompletedSimulationTick = peer.m_LastDeliveredFrame = 165; peer.m_Stats.nextFrame = 166; peer.m_ReadyFrames.clear();
 				if (arm == 0) {
 					// The other half reports its continuation, held from 162, with this one's history acknowledged.
@@ -1381,14 +1409,15 @@ namespace RTE {
 					check(peer.m_PeerBridgeCertificates.contains({100, NetPeerFrameDetail::DecisionKind(vote)}) && peer.m_FrameGroupMembers == 3, mode + " a matching historical hold was rejected");
 				} else check(!peer.m_PeerBridges.contains(role == 0 ? 1 : 3) && peer.m_FrameGroupMembers == (role == 0 ? 3U : 7U) &&
 				    peer.m_PendingPeerDecisions.empty(), mode + " foreign hold replaced played history");
-				// The question is the one this seat asked before the hold arrived: its own group, a query first where it is under half.
+				// The question is the one this seat asked before the hold arrived: its own group, a query first where it is under half, or
+				// under a referee until its group has settled.
 				const auto describe = [](const std::optional<NetFrameTieRequest>& tie) {
 					if (!tie) return std::string("none");
 					std::string text = "query_only=" + std::to_string(tie->queryOnly) + " members=";
 					for (uint16_t member: tie->members) text += std::to_string(member);
 					return text;
 				};
-				check(asked && asked->members == std::vector<uint16_t>{1} && asked->queryOnly == (role == 1) && peer.m_PeerFrameTie == asked,
+				check(asked && asked->members == std::vector<uint16_t>{1} && asked->queryOnly == (role == 1 || directory) && peer.m_PeerFrameTie == asked,
 				    mode + " foreign hold replaced the local arbitration question: asked " + describe(asked) + ", now " + describe(peer.m_PeerFrameTie));
 			}
 			for (bool directory: {false, true}) for (unsigned role = 0; role < 3; ++role) {
@@ -3408,8 +3437,19 @@ namespace RTE {
 				std::optional<NetFrameTieRequest> asked;
 				peer.m_Config.frameTieReferee = [&](const NetFrameTieRequest& request) { asked = request; return NetFrameTieReply{}; };
 				peer.CheckPeerFrameTie(5000, 10, 1000);
+				// It then holds seats 1 and 3 there and plays on with seat 4.
+				for (uint8_t seat: {uint8_t(1), uint8_t(3)}) { peer.m_PeerBridges[seat] = {5000, 5000, true, std::nullopt, {}, 10}; peer.m_PeerFrameHolds[seat][5000] = true; }
+				peer.m_FrameGroupMembers = 10; peer.m_FrameGroupChanges[5000] = 10;
+				// The group checks in once its split has settled: the bound after its question, with no round trip measured here.
+				peer.PollPeerFrameTies(1000 + static_cast<uint64_t>(std::ceil(peer.m_Config.slowPlayerBoundTicks * peer.m_Config.simTickMs)));
 				if (!asked || asked->owners != std::vector<uint16_t>{1, 2, 3, 4} || asked->members != std::vector<uint16_t>{2} || asked->queryOnly != (local == 4)) {
-					*error = "a neutral seat checked in as a voter outside the referee's assigned half"; return false;
+					std::string seen = "local=" + std::to_string(local);
+					if (asked) {
+						seen += " owners="; for (uint16_t owner: asked->owners) seen += std::to_string(owner);
+						seen += " members="; for (uint16_t member: asked->members) seen += std::to_string(member);
+						seen += " query_only=" + std::to_string(asked->queryOnly);
+					} else seen += " none";
+					*error = "a neutral seat checked in as a voter outside the referee's assigned half: " + seen; return false;
 				}
 			}
 			return true;
@@ -4113,9 +4153,16 @@ namespace RTE {
 				return reply;
 			};
 			const uint64_t frame = host.m_Stats.nextFrame;
+			// The host held seat 2 at the frame.
+			host.m_FrameGroupMembers = 1; host.m_FrameGroupChanges = {{1, 3}, {frame, 1}};
 			host.CheckPeerFrameTie(frame, 1U, 0);
-			host.CheckPeerFrameTie(frame, 2U, 10);
-			host.CheckPeerFrameTie(frame + 1, 1U, 20);
+			// Until its split settles - the bound, with no round trip measured here - the seat only queries; then it checks in.
+			if (asked.size() != 1 || !asked[0].queryOnly) { *error = "the seat checked in for its own half before its split settled"; return false; }
+			asked.clear();
+			const uint64_t settledMs = static_cast<uint64_t>(std::ceil(host.m_Config.slowPlayerBoundTicks * host.m_Config.simTickMs));
+			host.PollPeerFrameTies(settledMs);
+			host.CheckPeerFrameTie(frame, 2U, settledMs + 10);
+			host.CheckPeerFrameTie(frame + 1, 1U, settledMs + 20);
 			if (asked.size() < 2 || asked[0].queryOnly || !asked[1].queryOnly || asked[0].frame != asked[1].frame) {
 				*error = "the seat did not check in for its own half and then ask what the other half's referee decided"; return false;
 			}
