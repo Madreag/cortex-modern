@@ -623,7 +623,31 @@ namespace RTE {
 			    static_cast<uint8_t>(std::countr_zero(m_FrameGroupMembers) + 1);
 			// The pace leader advances at the ordinary rate after a shared pause.
 			// No displayed peer clock justifies replaying the group's paused time.
-			if (reference == m_Config.localPeerId) return false;
+			if (reference == m_Config.localPeerId) {
+				// A stall of its own leaves members playing past it, though: it catches up to its own clock while one shows ahead by more
+				// than that member's jitter, or every member that follows it feels its machine.
+				if (!m_PeerPaceStartMs || m_TimingNowMs < *m_PeerPaceStartMs ||
+				    next >= m_PeerPaceStartFrame + static_cast<uint64_t>((m_TimingNowMs - *m_PeerPaceStartMs) / m_Config.simTickMs)) return false;
+				bool ahead = false;
+				for (uint32_t members = m_FrameGroupMembers & ~SeatBit(m_Config.localPeerId); members; members &= members - 1) {
+					const auto peer = static_cast<uint8_t>(std::countr_zero(members) + 1);
+					const auto applied = m_PeerAppliedThrough.find(peer), observed = m_PeerAppliedAtMs.find(peer);
+					const auto stats = m_Stats.peers.find(peer);
+					const auto [wire, route] = PeerFrameRoute(peer);
+					if (applied == m_PeerAppliedThrough.end() || observed == m_PeerAppliedAtMs.end() || m_TimingNowMs < observed->second ||
+					    !wire || !wire->IsPeerPingMeasured(route)) continue;
+					// Only a member still reporting every tick shows where it plays now: a paused one's last report says nothing of the pause.
+					const double jitterMs = stats == m_Stats.peers.end() ? 0.0 : stats->second.jitterMs;
+					if (m_TimingNowMs - observed->second > 2 * m_Config.simTickMs + jitterMs) continue;
+					const double transit = wire->GetPeerPingMs(route) / 2.0 / m_Config.simTickMs;
+					const double shown = applied->second + (m_TimingNowMs - observed->second) / m_Config.simTickMs + transit;
+					// A stall past this seat's delay leaves a member waiting on its input: the bound holds this seat, and a burst of late
+					// input would reach some members in time and others not.
+					if (static_cast<double>(m_LastQueuedTargetFrame) < shown + transit) return false;
+					ahead |= shown > next + std::ceil(jitterMs / m_Config.simTickMs) + 1;
+				}
+				return ahead;
+			}
 			if (const auto ahead = playingClockAhead(reference)) return *ahead;
 		}
 		if (!m_PeerHadHitch || !m_PeerPaceStartMs || m_TimingNowMs < *m_PeerPaceStartMs || m_Config.simTickMs <= 0) return false;

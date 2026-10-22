@@ -1909,6 +1909,30 @@ namespace RTE {
 			return true;
 		}
 
+		static bool ALeaderCatchesUpOnlyAMemberPlayingPastIt(std::string* error) {
+			for (unsigned arm = 0; arm != 5; ++arm) {
+				DelayWire wire; wire.rtt = 100;
+				NetLockstepCoordinator peer; ConfigureDelay(peer, wire, 0, 7);
+				// This seat leads the group's pace: a stall of its own, a pause the group shared, a member level with it, its own clock met,
+				// and a stall past its delay that leaves the member waiting on its input.
+				peer.m_PeerPaceReference = 1;
+				peer.m_PeerPaceStartMs = 0; peer.m_PeerPaceStartFrame = 1;
+				peer.m_LastCompletedSimulationTick = arm == 3 ? 60 : 49; peer.m_Stats.nextFrame = *peer.m_LastCompletedSimulationTick + 1;
+				peer.m_LastQueuedTargetFrame = arm == 4 ? 56 : *peer.m_LastCompletedSimulationTick + 20;
+				peer.m_PeerAppliedThrough[2] = arm == 0 || arm == 4 ? 55 : arm == 1 ? 50 : arm == 2 ? 47 : 66;
+				peer.m_PeerAppliedAtMs[2] = arm == 1 ? 600 : 995;
+				peer.m_TimingNowMs = 1000;
+				const bool catching = peer.PeerFrameCatchUpNeeded();
+				std::cout << "[leader-own-stall] arm=" << arm << " catch_up=" << catching << " expected=" << (arm == 0) << std::endl;
+				if (catching != (arm == 0)) {
+					*error = arm == 0 ? "a pace leader that stalled alone stayed behind the member playing past it" :
+					                    "a pace leader caught up to a member that was not playing past it, arm " + std::to_string(arm);
+					return false;
+				}
+			}
+			return true;
+		}
+
 		static bool ActivePacePreservesReceiptRunway(std::string* error) {
 			DelayWire wire; wire.rtt = 250;
 			NetLockstepCoordinator peer; ConfigureDelay(peer, wire, 0, 16);
@@ -33806,6 +33830,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::ReplayedReturnRestoresFrameGroup, "replayed_return_restores_frame_group");
 		row(&SessionPlaneRecoveryTest::WaitingMeshPublishesOwnStart, "waiting_mesh_publishes_its_own_start");
 		row(&SessionPlaneRecoveryTest::NeutralReplayStopsAtThePlayingClock, "neutral_replay_stops_at_the_playing_clock");
+		row(&SessionPlaneRecoveryTest::ALeaderCatchesUpOnlyAMemberPlayingPastIt, "a_leader_catches_up_only_a_member_playing_past_it");
 		row(&SessionPlaneRecoveryTest::StoppedContinuationHasNoStartHandshake, "stopped_continuation_has_no_start_handshake");
 		row(&SessionPlaneRecoveryTest::PrivateStartsWaitForReplay, "private_starts_wait_for_replayed_admission");
 		row(&SessionPlaneRecoveryTest::ReplayDoesNotAwaitLiveAdmission, "replay_does_not_await_live_admission");
