@@ -62,6 +62,9 @@ namespace RTE {
 		if (!UsesPeerFrameGroups() || !IsRunning() || m_PlaneTicking || m_GrantedSimulationTick || !m_LastCompletedSimulationTick) return;
 		const bool superseded = m_CertifiedSupersedingGeneration > m_Config.migrationGeneration;
 		if (m_Config.localPeerId == GetHostPeerId() && !superseded) return;
+		// A seat that has not heard the host in this round - one that returned into it with the host held - times the host's
+		// silence from its own first tick in it.
+		if (m_AuthorityLastHeardMs == 0) m_AuthorityLastHeardMs = nowMs;
 		if (!superseded && !m_PeerAdminOwnVote && !MigrationUsesDirectory() &&
 		    (nowMs < m_AuthorityLastHeardMs || nowMs - m_AuthorityLastHeardMs < c_NetHostLossSilenceMs)) return;
 		if (!m_PeerAdminRequest) {
@@ -71,6 +74,9 @@ namespace RTE {
 			m_PeerAdminRequest->configHash = m_RoundConfigHash; m_PeerAdminRequest->appliedFrame = *m_LastCompletedSimulationTick;
 			m_PeerAdminRequest->preparedFrame = m_Stats.nextFrame - 1;
 			m_MigrationPhase = NetHostMigrationPhase::Contacting; m_MigrationSinceMs = nowMs;
+			if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) DiagnosticLine() << "[net-admin] request local=" << static_cast<int>(m_Config.localPeerId)
+			    << " authority_heard_ms=" << m_AuthorityLastHeardMs << " superseded=" << superseded << " own_vote=" << m_PeerAdminOwnVote.has_value()
+			    << " directory=" << MigrationUsesDirectory() << " now_ms=" << nowMs << std::endl;
 		}
 		if (m_MigrationChoice && !MigrationUsesDirectory() && !m_PeerAdminOwnVote) {
 			uint32_t chosen = 0;
