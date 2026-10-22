@@ -2827,7 +2827,10 @@ namespace RTE {
 				const bool donorHeld = !(s_FrameMembers(*fixture.peers[donor - 1], fixture.worlds[donor - 1].applied + 1) & (1U << (donor - 1)));
 				// A donor whose player leaves closes every return it serves.
 				const bool donorLeft = fixture.hub.schedule && fixture.hub.schedule->Left(donor, fixture.hub.now);
-				if (!proposed && (fixture.imageReading[donor - 1] || donorHeld || donorLeft)) {
+				// One whose link to its donor went dark before its certificate reached it misses its activation once the donor's round
+				// reaches it: the donor's service drops that return too, and the seat asks again once it reaches its ruling half.
+				const bool donorCut = !liveStarted && activation && fixture.hub.LiveSplit(seat, donor) && fixture.worlds[donor - 1].applied + 1 >= activation;
+				if ((!proposed && (fixture.imageReading[donor - 1] || donorHeld || donorLeft)) || donorCut) {
 					DiagnosticLine() << "[session-plane-image-donor-lost] returner=" << unsigned(seat) << " donor=" << unsigned(donor)
 					                 << " replay_applied=" << replay.applied << " now_ms=" << fixture.hub.now << std::endl;
 					fixture.imageReading[seat - 1] = false;
