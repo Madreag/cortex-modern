@@ -1550,6 +1550,7 @@ namespace RTE {
 			// whoever authors their later frames - a reader of one half that returns into it carries that half's separation.
 			std::array<std::array<uint64_t, 5>, 5> pairSeparatedFrom{};
 			std::array<std::array<std::map<uint64_t, uint64_t>, 5>, 5> inputSplits;
+			std::array<std::array<std::map<uint64_t, std::pair<uint64_t, uint64_t>>, 5>, 5> inputSplitTimes; //!< When each proven separation opened and, once the pair agrees again, closed.
 			struct InputSplitCause { uint8_t human, held, sender, receiver; uint64_t faultAt, observedAt; };
 			std::vector<InputSplitCause> inputSplitCauses;
 			std::array<std::array<uint32_t, 5>, 5> partitionOwners{}; //!< The owners whose partition between a pair has its proven cause.
@@ -1827,9 +1828,17 @@ namespace RTE {
 				}
 			}
 			bool InputSplitCausedHold(uint8_t seat, uint64_t since, uint64_t until, uint8_t troubled, uint64_t from, uint64_t to) const {
+				// Section 11.1: the halves a proven partition parted hold each other's seats from it to their reconverging return.
+				const auto separatedAt = [&](uint8_t a, uint8_t b, uint64_t at) {
+					if (a > b) std::swap(a, b);
+					return std::any_of(inputSplitTimes[a][b].begin(), inputSplitTimes[a][b].end(), [&](const auto& separation) {
+						return separation.second.first <= at && (separation.second.second == 0 || at <= separation.second.second);
+					});
+				};
 				return std::any_of(inputSplitCauses.begin(), inputSplitCauses.end(), [&](const InputSplitCause& cause) {
 					return (seat == cause.human || seat == cause.held) && (troubled == cause.sender || troubled == cause.receiver) &&
-					    cause.faultAt >= from && cause.faultAt < to && cause.faultAt <= since && since <= cause.observedAt && cause.observedAt <= until;
+					    cause.faultAt >= from && cause.faultAt < to && cause.faultAt <= since && (since <= cause.observedAt || separatedAt(cause.human, cause.held, since)) &&
+					    cause.observedAt <= until;
 				});
 			}
 			bool CompareHistories(std::string& error, bool finalVerdict = false) {
@@ -1842,7 +1851,7 @@ namespace RTE {
 						const uint8_t authorA = frameAuthors[a - 1].at(frame), authorB = frameAuthors[b - 1].at(frame);
 						if (left.hashes.at(frame) == right.hashes.at(frame)) {
 							if (l == r && (l & (1U << (a - 1))) && (l & (1U << (b - 1))))
-								for (auto& [from, through]: inputSplits[a][b]) if (!through && frame >= from) through = frame - 1;
+								for (auto& [from, through]: inputSplits[a][b]) if (!through && frame >= from) { through = frame - 1; inputSplitTimes[a][b][from].second = hub.now; }
 							pairSeparatedFrom[a][b] = 0;
 							continue;
 						}
@@ -1885,7 +1894,7 @@ namespace RTE {
 						    left.shownAt.contains(frame) && right.shownAt.contains(frame)) {
 							for (uint8_t owner = 1; owner <= hub.row.seats; ++owner) {
 								if (!recordPartition(owner)) continue;
-								inputSplits[a][b][frame] = 0; separated = frame; sawSplit = true;
+								inputSplits[a][b][frame] = 0; inputSplitTimes[a][b][frame] = {hub.now, 0}; separated = frame; sawSplit = true;
 								break;
 							}
 						}
@@ -2142,7 +2151,7 @@ namespace RTE {
 					}
 					hashedThrough = 0; sharedDigests.clear(); roundStartMs = hub.now;
 					if (const auto unresolved = UnresolvedLateSplits(); !unresolved.empty()) { error = unresolved + " before the round ended"; return false; }
-					compared = {}; splitFrom = {}; inputSplits = {}; inputSplitCauses.clear(); partitionOwners = {}; earlierLateSplits.insert(earlierLateSplits.end(), lateSplits.begin(), lateSplits.end()); lateSplits.clear(); unexplained = {}; sawSplit = splitHistories = false;
+					compared = {}; splitFrom = {}; inputSplits = {}; inputSplitTimes = {}; inputSplitCauses.clear(); partitionOwners = {}; earlierLateSplits.insert(earlierLateSplits.end(), lateSplits.begin(), lateSplits.end()); lateSplits.clear(); unexplained = {}; sawSplit = splitHistories = false;
 					imageTasks.clear(); imageTasks.resize(hub.row.seats);
 					// As the service's tail log, the committed record starts again with the round: frame numbers restart.
 					committed.assign(hub.row.seats, {}); for (auto& donors: abandonedDonors) donors.clear(); returnActivations = {}; carriedCommands.assign(hub.row.seats, {});
