@@ -259,14 +259,24 @@ namespace RTE {
 		}
 		// A bounded subscription includes future history, sent only after the donor displays it.
 		const uint64_t horizon = m_Stats.nextFrame + NetLockstepCodec::c_MaxFutureFrameSkew;
+		// A playing donor reports its applied frame about every tick; one silent for a few ticks and half a round trip has stopped serving.
+		const auto serving = [&](uint8_t peer) {
+			const auto at = m_PeerAppliedAtMs.find(peer);
+			return at != m_PeerAppliedAtMs.end() && (nowMs < at->second || nowMs - at->second <= static_cast<uint64_t>(std::ceil(4 * m_Config.simTickMs)) + roundTripMs / 2);
+		};
 		uint32_t requestsInBatch = 0;
 		for (uint64_t frame = m_Stats.nextFrame; frame < horizon && requestsInBatch < 8;) {
 			const auto pending = m_PeerTailRequestedUntil.find(frame);
-			if (m_PeerCommittedTail.contains(frame) || (pending != m_PeerTailRequestedUntil.end() && nowMs < pending->second)) { ++frame; continue; }
+			const auto askedOf = m_PeerTailRequestedOf.find(frame);
+			// A request to a donor that has since stopped is asked again of another at once.
+			const bool askedServing = askedOf == m_PeerTailRequestedOf.end() || serving(askedOf->second);
+			if (m_PeerCommittedTail.contains(frame) || (pending != m_PeerTailRequestedUntil.end() && nowMs < pending->second && askedServing)) { ++frame; continue; }
 			uint8_t donor = 0; uint64_t through = 0, retryMs = 500;
+			bool donorServing = false;
 			for (const auto& [peer, applied]: m_PeerAppliedThrough) {
 				if (peer == m_Config.localPeerId || applied < frame || !HasPeerFrameRoute(peer)) continue;
-				if (donor == 0 || applied > through) { donor = peer; through = applied; }
+				const bool peerServing = serving(peer);
+				if (donor == 0 || (peerServing && !donorServing) || (peerServing == donorServing && applied > through)) { donor = peer; through = applied; donorServing = peerServing; }
 				const auto [wire, route] = PeerFrameRoute(peer);
 				if (wire && wire->IsPeerPingMeasured(route)) retryMs = std::max<uint64_t>(retryMs, 2ULL * wire->GetPeerPingMs(route) + 200);
 				if (const auto path = m_PeerReceiptDelaySamples.find(peer); path != m_PeerReceiptDelaySamples.end())
@@ -274,7 +284,7 @@ namespace RTE {
 			}
 			if (donor == 0) break;
 			if (m_PeerTailDonor != 0 && m_PeerAppliedThrough.contains(m_PeerTailDonor) &&
-			    m_PeerAppliedThrough.at(m_PeerTailDonor) >= frame && HasPeerFrameRoute(m_PeerTailDonor)) donor = m_PeerTailDonor;
+			    m_PeerAppliedThrough.at(m_PeerTailDonor) >= frame && HasPeerFrameRoute(m_PeerTailDonor) && (serving(m_PeerTailDonor) || !donorServing)) donor = m_PeerTailDonor;
 			// A retry asks another donor than the one that did not deliver this frame, not merely another than the last one asked.
 			if (const auto asked = m_PeerTailRequestedOf.find(frame); pending != m_PeerTailRequestedUntil.end() && asked != m_PeerTailRequestedOf.end() && asked->second == donor)
 				for (const auto& [peer, applied]: m_PeerAppliedThrough)
