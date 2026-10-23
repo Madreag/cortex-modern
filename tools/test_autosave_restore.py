@@ -973,7 +973,8 @@ def arm_resume(repo: Path, root: Path, port: int, client_stall: str = "", client
         args += fullstate_args()
         if who == 'client':
             args += stall_args(client_stall)
-        runs[who] = make_run(repo, args, first / who, 420, env={"CCCP_HEADLESS": "1"})
+        # The host asks to start only once its client is seated and ready, never on the client's head start alone.
+        runs[who] = make_run(repo, args, first / who, 420, env={"CCCP_HEADLESS": "1", "CC_TEST_NET_MATCH_E2E_WAIT_PEERS": "1"})
         stage_baseline(runs[who], 1200)
 
     def drive(who: str) -> None:
@@ -1034,7 +1035,7 @@ def arm_resume(repo: Path, root: Path, port: int, client_stall: str = "", client
         if who == 'client' and client_stall:
             stall_tick, stall_ms = map(int, client_stall.split(':'))
             args += stall_args(f'{resume_tick + stall_tick}:{stall_ms}')
-        env = {"CCCP_HEADLESS": "1", **({"CCCP_TEST_CAPTURE_OUTGROWN": "1"} if who == "client" and client_outgrows else {})}
+        env = {"CCCP_HEADLESS": "1", "CC_TEST_NET_MATCH_E2E_WAIT_PEERS": "1", **({"CCCP_TEST_CAPTURE_OUTGROWN": "1"} if who == "client" and client_outgrows else {})}
         resumed[who] = make_run(repo, args, second / who, 420, env=env)
         stage_baseline(resumed[who], 1200)
         # What a restarted process finds on its own disk: its checkpoints, its manifests, its admission
