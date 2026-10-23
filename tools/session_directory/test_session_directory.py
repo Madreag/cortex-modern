@@ -656,13 +656,14 @@ class DirectoryTests(unittest.TestCase):
         sockets = []
         honest = threading.Event()
         accepted = 0
-        accept_lock = threading.Lock()
+        accept_lock = threading.Condition()
         get_request = self.server.httpd.get_request
         def caller_address():
             nonlocal accepted
             connection, address = get_request()
             with accept_lock:
                 accepted += 1
+                accept_lock.notify_all()
             # Distinct callers use real local sockets without requiring a second loopback alias.
             return connection, ("127.0.0.2" if honest.is_set() else address[0], address[1])
         address_fixture = mock.patch.object(self.server.httpd, "get_request", side_effect=caller_address)
@@ -673,8 +674,9 @@ class DirectoryTests(unittest.TestCase):
                 sockets.append(connection)
                 try: connection.sendall(b"GET /v1/sessions HTTP/1.1\r\nX-Test: ")
                 except OSError: pass
-            time.sleep(0.15)
+            # The fixture waits for the directory to take every connection, never for a fixed time.
             with accept_lock:
+                accept_lock.wait_for(lambda: accepted >= 64, timeout=10)
                 self.assertEqual(accepted, 64, "U4: not every unfinished local request reached the fixture")
             honest.set()
             conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=1)
