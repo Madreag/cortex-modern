@@ -191,7 +191,9 @@
             "-input-script",
             "{INPUT_SCRIPT}",
             "-net-match-report",
-            "{OUT}/client-match.json"
+            "{OUT}/client-match.json",
+            "-max-ticks",
+            "1200"
           ],
           "start_when": {
             "run": "died",
