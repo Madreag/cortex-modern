@@ -503,8 +503,9 @@ namespace RTE {
 	/// How often a frame-group peer sends its undecided votes and recent certificates again, and its progress at the least.
 	constexpr uint64_t c_NetPeerVoteResendMs = 100;
 	constexpr uint64_t c_NetPeerHeartbeatMs = 250;
-	/// A receipt whose boundary is one of these asks a member for its applied records of named frames, or answers with them.
-	constexpr uint64_t c_NetPeerRecordRequest = 1, c_NetPeerRecordAnswer = 2;
+	/// A receipt whose boundary is one of these asks a member for its applied records of named frames, answers with them, or carries
+	/// the action the seat deciding for a continuation took on a ruling.
+	constexpr uint64_t c_NetPeerRecordRequest = 1, c_NetPeerRecordAnswer = 2, c_NetPeerSplitDecision = 3;
 	constexpr size_t c_NetPeerRecordBatch = 64;
 	constexpr uint64_t c_NetFrameTieBoundMs = 1000;
 	/// One reading of host loss for every path that judges it: the round's own check, the roll call and a held seat's catch-up.
@@ -1722,6 +1723,10 @@ namespace RTE {
 		bool PeerGroupNeedsArbitration(uint32_t voters, uint64_t frame = UINT64_MAX) const;
 		/// The frame from which the whole group last played together at or before frame: the name every half gives the split after it.
 		uint64_t PeerSplitEpoch(uint64_t frame) const;
+		/// The seat that decides for a continuation how it takes a ruling: the round's host when it plays there, else its lowest seat.
+		uint8_t PeerSplitDecider(uint32_t group) const;
+		/// Records this seat's decision for its continuation and sends it to the seats that follow it.
+		void AnnouncePeerSplitDecision(uint64_t split, uint32_t winners, uint32_t group, uint8_t action, uint64_t nowMs);
 		/// A member whose committed record of a frame this seat also applied differs plays another continuation.
 		void NotePeerContinuation(uint8_t peer, uint64_t frame, const NetHash32& applied, uint32_t peerMembers);
 		/// Records whether a member's witnessed record of a frame this peer applied is its own, for the checksum that follows.
@@ -2270,6 +2275,10 @@ namespace RTE {
 		std::map<uint8_t, std::map<uint64_t, NetGameSeatRelease>> m_SeatReleases; //!< The agreed frames the host's releases land on, every peer the same.
 		std::set<uint8_t> m_AnnouncedLeavers; //!< Host: clean leavers being held, whose closing links are not sent their hold.
 		std::set<uint64_t> m_PeerSplitsStanding; //!< Splits ruled for a continuation whose every player has left, which this one outlives.
+		/// How the seat deciding for a continuation took a ruling: 1 stops, 2 stands; the ruling's winners and the continuation's seats then.
+		struct PeerSplitDecision { uint8_t action = 0; uint32_t winners = 0, group = 0; };
+		std::map<uint64_t, std::map<uint8_t, PeerSplitDecision>> m_PeerSplitDecisions; //!< Each split's decisions, by deciding seat.
+		std::map<uint64_t, std::pair<NetHostMigrationMessage, uint64_t>> m_PeerSplitDecisionsSent; //!< This seat's announced decisions, sent again until then.
 		std::set<uint8_t> m_SlowMachineHolds; //!< Host: seats whose latest hold was for a machine that cannot keep up.
 		std::map<uint8_t, std::pair<NetLockstepStop, NetPeerId>> m_PendingMemberEnds; //!< Host: members' own ends this round has not played past yet.
 		/// Host: takes each member's end this round has played past, and goes on, as that member's leave.

@@ -1056,27 +1056,41 @@ namespace RTE {
 			// partition, and seat 1 of the group of three that held seat 2 and later held seat 3 for a hang of its own.
 			struct Arm { uint8_t local; uint32_t asked, playing, winner; bool stops; uint32_t later = 0; };
 			for (const Arm arm: {Arm{4, 11, 11, 5, true}, Arm{1, 11, 11, 5, true}, Arm{3, 5, 4, 5, false}, Arm{1, 3, 3, 3, false}, Arm{1, 0, 13, 13, false, 9}}) {
-				Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
-				peer.m_Config.peerCount = peer.m_Config.matchConfig.peerCount = 4;
-				peer.m_Config.matchConfig.players.push_back({4, 3, false, "Fourth"});
-				peer.m_Config.matchConfig.successorOrder = {2, 3, 4};
-				peer.m_Config.localPeerId = arm.local; peer.m_Config.authorityPeerId = 1;
-				peer.m_Config.peerFrameGroups = peer.m_Config.substituteSlowPeers = true;
-				std::vector<uint16_t> winners;
-				for (uint8_t seat = 1; seat <= 4; ++seat) if (arm.winner & (1U << (seat - 1))) winners.push_back(seat);
-				peer.m_Config.frameTieReferee = [winners](const NetFrameTieRequest&) { NetFrameTieReply reply{NetFrameTieReply::State::Decided}; reply.members = winners; return reply; };
-				peer.m_RoundConfigHash = NetMatchConfigUtil::HashConfig(peer.m_Config.matchConfig);
-				peer.m_MigrationPhase = NetHostMigrationPhase::None;
-				peer.m_FrameGroupMembers = arm.playing; peer.m_FrameGroupChanges = {{1, 15}, {339, arm.playing}};
-				if (arm.later) { peer.m_FrameGroupMembers = arm.later; peer.m_FrameGroupChanges[345] = arm.later; }
-				NetFrameTieRequest request;
-				request.frame = 39; request.roundId = peer.m_Config.matchConfig.roundId; request.configHash = peer.m_RoundConfigHash; request.host = 1;
-				request.owners = {1, 2, 3, 4};
-				for (uint8_t seat = 1; seat <= 4; ++seat) if (arm.asked & (1U << (seat - 1))) request.members.push_back(seat);
-				NetLockstepCoordinator::PeerSplitArbitration question{request, 15, 339};
-				question.asked = arm.asked;
-				peer.m_PeerSplitArbitrations[39] = question;
-				peer.m_LastCompletedSimulationTick = peer.m_LastDeliveredFrame = 350; peer.m_Stats.nextFrame = 351;
+				Wire wires[2]; NetLockstepCoordinator seats[2];
+				const auto build = [&](int n, uint8_t local) {
+					auto& peer = seats[n]; Configure(peer, wires[n]);
+					peer.m_Config.peerCount = peer.m_Config.matchConfig.peerCount = 4;
+					peer.m_Config.matchConfig.players.push_back({4, 3, false, "Fourth"});
+					peer.m_Config.matchConfig.successorOrder = {2, 3, 4};
+					peer.m_Config.localPeerId = local; peer.m_Config.authorityPeerId = 1;
+					peer.m_Config.peerFrameGroups = peer.m_Config.substituteSlowPeers = true;
+					std::vector<uint16_t> winners;
+					for (uint8_t seat = 1; seat <= 4; ++seat) if (arm.winner & (1U << (seat - 1))) winners.push_back(seat);
+					peer.m_Config.frameTieReferee = [winners](const NetFrameTieRequest&) { NetFrameTieReply reply{NetFrameTieReply::State::Decided}; reply.members = winners; return reply; };
+					peer.m_RoundConfigHash = NetMatchConfigUtil::HashConfig(peer.m_Config.matchConfig);
+					peer.m_MigrationPhase = NetHostMigrationPhase::None;
+					peer.m_FrameGroupMembers = arm.playing; peer.m_FrameGroupChanges = {{1, 15}, {339, arm.playing}};
+					if (arm.later) { peer.m_FrameGroupMembers = arm.later; peer.m_FrameGroupChanges[345] = arm.later; }
+					NetFrameTieRequest request;
+					request.frame = 39; request.roundId = peer.m_Config.matchConfig.roundId; request.configHash = peer.m_RoundConfigHash; request.host = 1;
+					request.owners = {1, 2, 3, 4};
+					for (uint8_t seat = 1; seat <= 4; ++seat) if (arm.asked & (1U << (seat - 1))) request.members.push_back(seat);
+					NetLockstepCoordinator::PeerSplitArbitration question{request, 15, 339};
+					question.asked = arm.asked;
+					peer.m_PeerSplitArbitrations[39] = question;
+					peer.m_LastCompletedSimulationTick = peer.m_LastDeliveredFrame = 350; peer.m_Stats.nextFrame = 351;
+				};
+				build(0, arm.local);
+				auto& peer = seats[0];
+				// A seat that does not decide for its continuation takes the decision of the seat that does.
+				if (const uint8_t decider = peer.PeerSplitDecider(peer.PeerFrameMembersAt(350)); decider != arm.local) {
+					build(1, decider);
+					seats[1].PollPeerFrameTies(6205);
+					for (const auto& bytes: wires[1].sent) {
+						NetHostMigrationMessage message;
+						if (NetHostMigrationCodec::Decode(bytes, peer.m_Config.migrationKey, message) && message.type == NetHostMigrationMessageType::PeerReceipt) peer.HandlePeerFrameMessage(message, 6207);
+					}
+				}
 				peer.PollPeerFrameTies(6209);
 				const bool stopped = peer.IsStopped() && peer.m_LocalSeatHeld;
 				std::cout << "[straddling-ruling] local=" << int(arm.local) << " asked=" << arm.asked << " playing=" << arm.playing << " winner=" << arm.winner << " stopped=" << stopped << std::endl;
@@ -1085,6 +1099,72 @@ namespace RTE {
 					                     "a seat stopped for a ruling on its own question: local=" + std::to_string(arm.local);
 					return false;
 				}
+			}
+			return true;
+		}
+
+		static bool ALosingGroupActsAsOneOnARuling(std::string* error) {
+			// Every seat of the continuation a ruling goes against takes the same action on it, whichever of them learned of the winners'
+			// leaves or returns first and in whatever order their polls of the ruling come back. Arms: the leaves land between the two
+			// polls, after the first seat's; between them, after the second's; the losing host's own winners return into it; nobody left.
+			struct Arm { const char* name; uint8_t first, second; uint32_t losers, winners; uint8_t heardBy; bool returning, stand; };
+			for (const Arm arm: {Arm{"leaves between the polls, heard by the later", 4, 3, 12, 3, 3, false, true},
+			                     Arm{"leaves between the polls, heard by the earlier", 4, 3, 12, 3, 4, false, false},
+			                     Arm{"the losing host's winners return into it", 2, 1, 3, 12, 0, true, true},
+			                     Arm{"nobody left", 4, 3, 12, 3, 0, false, false}}) {
+				Wire wires[2]; NetLockstepCoordinator seats[2];
+				std::vector<uint16_t> winners;
+				for (uint8_t seat = 1; seat <= 4; ++seat) if (arm.winners & (1U << (seat - 1))) winners.push_back(seat);
+				const uint8_t ids[2] = {arm.first, arm.second};
+				for (int n = 0; n < 2; ++n) {
+					auto& peer = seats[n]; Configure(peer, wires[n]);
+					peer.m_Config.peerCount = peer.m_Config.matchConfig.peerCount = 4;
+					peer.m_Config.matchConfig.players.push_back({4, 3, false, "Fourth"});
+					peer.m_Config.matchConfig.successorOrder = {2, 3, 4};
+					peer.m_Config.localPeerId = ids[n]; peer.m_Config.authorityPeerId = 1;
+					peer.m_Config.peerFrameGroups = peer.m_Config.substituteSlowPeers = true;
+					peer.m_Config.frameTieReferee = [winners](const NetFrameTieRequest&) { NetFrameTieReply reply{NetFrameTieReply::State::Decided}; reply.members = winners; return reply; };
+					peer.m_RoundConfigHash = NetMatchConfigUtil::HashConfig(peer.m_Config.matchConfig);
+					peer.m_MigrationPhase = NetHostMigrationPhase::None;
+					peer.m_RemotePeerIds.clear(); peer.m_RemoteTransports.clear();
+					for (uint8_t seat = 1; seat <= 4; ++seat) if (seat != ids[n]) peer.m_RemotePeerIds.push_back(seat);
+					peer.m_RemoteTransports[ids[1 - n]] = 40 + ids[1 - n];
+					peer.m_FrameGroupMembers = arm.losers; peer.m_FrameGroupChanges = {{1, 15}, {339, arm.losers}};
+					for (uint64_t frame = 30; frame <= 350; ++frame) peer.m_MigrationHistory[frame] = {static_cast<uint8_t>(frame), 3};
+					NetFrameTieRequest request;
+					request.frame = 39; request.roundId = peer.m_Config.matchConfig.roundId; request.configHash = peer.m_RoundConfigHash; request.host = 1;
+					request.owners = {1, 2, 3, 4};
+					for (uint8_t seat = 1; seat <= 4; ++seat) if (arm.losers & (1U << (seat - 1))) request.members.push_back(seat);
+					NetLockstepCoordinator::PeerSplitArbitration question{request, 15, 339};
+					question.asked = arm.losers;
+					peer.m_PeerSplitArbitrations[39] = question;
+					peer.m_LastCompletedSimulationTick = peer.m_LastDeliveredFrame = 350; peer.m_Stats.nextFrame = 351;
+				}
+				if (arm.returning) for (uint16_t winner: winners) seats[1].m_ReturningLinks[static_cast<uint8_t>(winner)] = 60 + winner;
+				const auto hear = [&](int n) { for (uint16_t winner: winners) seats[n].m_AnnouncedLeavers.insert(static_cast<uint8_t>(winner)); };
+				const auto pass = [&](uint64_t now) {
+					for (int n = 0; n < 2; ++n) {
+						for (const auto& bytes: wires[n].sent) {
+							NetHostMigrationMessage message;
+							if (NetHostMigrationCodec::Decode(bytes, seats[1 - n].m_Config.migrationKey, message) && message.type == NetHostMigrationMessageType::PeerReceipt)
+								seats[1 - n].HandlePeerFrameMessage(message, now);
+						}
+						wires[n].sent.clear();
+					}
+				};
+				if (arm.heardBy == arm.first) hear(0);
+				seats[0].PollPeerFrameTies(6209);
+				if (arm.heardBy == arm.second) hear(1);
+				seats[1].PollPeerFrameTies(6215);
+				for (uint64_t now = 6220; now <= 6400; now += 20) {
+					pass(now);
+					for (auto& peer: seats) if (peer.IsRunning()) peer.PollPeerFrameTies(now);
+				}
+				const auto stopped = [&](int n) { return seats[n].IsStopped() && seats[n].m_LocalSeatHeld; };
+				std::cout << "[losing-group] " << arm.name << " seat" << int(arm.first) << "_stopped=" << stopped(0) << " seat" << int(arm.second) << "_stopped=" << stopped(1)
+				          << " standing=" << seats[0].m_PeerSplitsStanding.contains(39) << "," << seats[1].m_PeerSplitsStanding.contains(39) << std::endl;
+				if (stopped(0) != stopped(1)) { *error = std::string("seats of one losing group acted differently on one ruling: ") + arm.name; return false; }
+				if (stopped(0) == arm.stand) { *error = std::string("a losing group ") + (arm.stand ? "stopped for a ruling whose winners had all left or were returning to it: " : "stood on a ruling whose winners still played: ") + arm.name; return false; }
 			}
 			return true;
 		}
@@ -33522,6 +33602,12 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS a_lost_witness_still_decides_the_hash\n[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "losing-group") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::ALosingGroupActsAsOneOnARuling(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS a_losing_group_acts_as_one_on_a_ruling\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "fixed-return-link") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::FixedDelayReturnFollowsTheMeasuredLink(&error)) return fail(error);
@@ -33859,6 +33945,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::AnOpenVoteAsksForItsFramesRecordAtOnce, "an_open_vote_asks_for_its_frames_record_at_once");
 		row(&SessionPlaneRecoveryTest::ADirectMigrationNeedsThisSeatsGroup, "a_direct_migration_needs_this_seats_group");
 		row(&SessionPlaneRecoveryTest::OnlyASeatCountingThisOneIsAnotherContinuation, "only_a_seat_counting_this_one_is_another_continuation");
+		row(&SessionPlaneRecoveryTest::ALosingGroupActsAsOneOnARuling, "a_losing_group_acts_as_one_on_a_ruling");
 		row(&SessionPlaneRecoveryTest::AStraddlingRulingIsTheOtherHalfsQuestion, "a_straddling_ruling_is_the_other_halfs_question");
 		row(&SessionPlaneRecoveryTest::AMinorityGroupOnlyQueriesTheReferee, "a_minority_group_only_queries_the_referee");
 		row(&SessionPlaneRecoveryTest::AReturningSeatTakesItsMembersTermsAsTheirStarts, "a_returning_seat_takes_its_members_terms_as_their_starts");

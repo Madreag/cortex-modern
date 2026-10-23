@@ -493,23 +493,40 @@ namespace RTE {
 			// A ruling that names only seats of this group as it stood at its own hold is this group's, whatever seat it held since: a seat
 			// held later for a fault of its own never played the other continuation.
 			const uint32_t atHold = PeerFrameMembersAt(*arbitration.holdFrame) & owners;
-			if ((winner & local) != 0 && (atHold & local) != 0 && (winner & ~atHold) == 0 && (winner & elsewhere) == 0) continue;
+			uint8_t action = 0;
+			uint32_t left = 0;
+			const bool ours = (winner & local) != 0 && (atHold & local) != 0 && (winner & ~atHold) == 0 && (winner & elsewhere) == 0;
 			const bool askerElsewhere = (winner & other) != 0 && (winner & playing) != 0 && arbitration.asked != winner;
-			if (((winner & local) == 0 || askerElsewhere) && (playing & local) != 0 && ((playing & winner) == 0 || askerElsewhere)) {
+			if (!ours && ((winner & local) == 0 || askerElsewhere) && (playing & local) != 0 && ((playing & winner) == 0 || askerElsewhere)) {
 				// A ruling for a continuation every player of which has since left names no machine to return to: this one plays on.
-				uint32_t left = 0;
 				for (uint8_t peer: m_AnnouncedLeavers) left |= SeatBit(peer);
 				// A winner already returning into this continuation through its image has left its own.
 				for (const auto& [peer, link]: m_ReturningLinks) left |= SeatBit(peer);
-				if ((winner & ~playing) != 0 && (winner & ~playing & ~left) == 0) {
-					if (m_PeerSplitsStanding.insert(split).second)
-						DiagnosticLine() << "[net-split-arbitration] local=" << static_cast<int>(m_Config.localPeerId) << " split=" << split << " frame=" << m_Stats.nextFrame
-						    << " winners=" << winner << " left=" << left << " now_ms=" << nowMs << " action=stand" << std::endl;
-					continue;
-				}
+				action = (winner & ~playing) != 0 && (winner & ~playing & ~left) == 0 ? 2 : 1;
+			}
+			// One seat decides for the continuation from what it knows, and every other seat of it takes that decision, so a ruling
+			// never stops some of its seats while the others play on.
+			const uint32_t group = PeerFrameMembersAt(m_LastCompletedSimulationTick.value_or(*arbitration.holdFrame));
+			if ((group & local) == 0) continue;
+			const auto decided = m_PeerSplitDecisions.find(split);
+			const uint8_t decider = PeerSplitDecider(group);
+			// A decision holds only for the ruling it took and the continuation it was taken in.
+			const auto* decision = decided == m_PeerSplitDecisions.end() || !decided->second.contains(decider) ? nullptr : &decided->second.at(decider);
+			if (decision && decision->winners == winner && (decision->group & local) != 0) action = decision->action;
+			else if (decider != m_Config.localPeerId) continue;
+			else if (action != 0) AnnouncePeerSplitDecision(split, winner, group, action, nowMs);
+			if (action == 2) {
+				if (m_PeerSplitsStanding.insert(split).second)
+					DiagnosticLine() << "[net-split-arbitration] local=" << static_cast<int>(m_Config.localPeerId) << " split=" << split << " frame=" << m_Stats.nextFrame
+					    << " winners=" << winner << " left=" << left << " decider=" << static_cast<int>(decider) << " now_ms=" << nowMs << " action=stand" << std::endl;
+				continue;
+			}
+			if (action == 1) {
 				// Preparation may lead the displayed world by several ticks. Finish any granted tick, then discard that
 				// unplayed preparation: the private image replaces this branch at its actual completed boundary.
 				if (m_GrantedSimulationTick) continue;
+				// The decision served the continuation this seat now leaves; the one it returns into has its own.
+				m_PeerSplitDecisions.erase(split); m_PeerSplitDecisionsSent.erase(split);
 				m_Stats.nextFrame = GetResumeFrame();
 				m_ReadyFrames.clear();
 				// This branch's world parted from the ruling half's after the split's last common frame, so it returns through the
@@ -519,10 +536,27 @@ namespace RTE {
 				m_Stats.timeoutReason = m_Config.frameTieReferee ? "PeerHeld:the directory selected the other split; returning through a private image" :
 				    "PeerHeld:the healed histories selected the other split; returning through a private image";
 				DiagnosticLine() << "[net-split-arbitration] local=" << static_cast<int>(m_Config.localPeerId)
-				    << " split=" << split << " frame=" << m_Stats.nextFrame << " winners=" << winner << " now_ms=" << nowMs << " action=image_return" << std::endl;
+				    << " split=" << split << " frame=" << m_Stats.nextFrame << " winners=" << winner << " decider=" << static_cast<int>(decider) << " now_ms=" << nowMs << " action=image_return" << std::endl;
 				return;
 			}
 		}
+	}
+
+	uint8_t NetLockstepCoordinator::PeerSplitDecider(uint32_t group) const {
+		const uint8_t host = GetHostPeerId();
+		if ((group & SeatBit(host)) != 0) return host;
+		return group == 0 ? 0 : static_cast<uint8_t>(std::countr_zero(group) + 1);
+	}
+
+	void NetLockstepCoordinator::AnnouncePeerSplitDecision(uint64_t split, uint32_t winners, uint32_t group, uint8_t action, uint64_t nowMs) {
+		auto notice = PeerFrameMessage(NetHostMigrationMessageType::PeerReceipt);
+		notice.preparedFrame = UINT64_MAX; notice.boundary = c_NetPeerSplitDecision; notice.frame = split; notice.completeFrom = action; notice.connectedMask = group;
+		for (uint8_t seat = 1; seat <= m_Config.peerCount; ++seat) if ((winners & SeatBit(seat)) != 0) notice.members.push_back(seat);
+		m_PeerSplitDecisions[split][m_Config.localPeerId] = {action, winners, group};
+		// A seat alone in its continuation has no seat to tell.
+		if ((group & ~SeatBit(m_Config.localPeerId)) == 0) return;
+		m_PeerSplitDecisionsSent[split] = {notice, nowMs + c_NetSeatDisconnectSilenceMs};
+		SendPeerFrameMessage(std::move(notice), NetTransportLane::ControlReliable);
 	}
 
 	uint32_t NetLockstepCoordinator::DirectPeerWinner(uint32_t first, uint32_t second) const {
@@ -837,6 +871,8 @@ namespace RTE {
 				if (key.first + NetLockstepCodec::c_MaxFutureFrameSkew < m_Stats.nextFrame && !standingHold) continue;
 				SendPeerFrameMessage(certificate);
 			}
+			std::erase_if(m_PeerSplitDecisionsSent, [&](const auto& sent) { return nowMs >= sent.second.second; });
+			for (const auto& [split, sent]: m_PeerSplitDecisionsSent) SendPeerFrameMessage(sent.first, NetTransportLane::ControlReliable);
 		}
 		RepairPeerReceiptGaps(nowMs);
 		RequestPeerRecords(nowMs);
@@ -870,6 +906,7 @@ namespace RTE {
 		std::erase_if(m_PeerSplitArbitrations, [&](const auto& question) {
 			return question.first < historyFloor && m_PeerFrameTieWinners.contains(question.first);
 		});
+		std::erase_if(m_PeerSplitDecisions, [&](const auto& decision) { return decision.first < historyFloor && !m_PeerSplitArbitrations.contains(decision.first); });
 		for (auto* history: {&m_PeerFrameTieWinners, &m_FrameGroupChanges, &m_PeerSplitRenewals}) {
 			const auto floor = history->lower_bound(historyFloor);
 			if (floor != history->begin()) history->erase(history->begin(), std::prev(floor));

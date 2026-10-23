@@ -362,6 +362,14 @@ namespace RTE {
 			if (message.senderPeerId == GetHostPeerId()) NoteAuthorityHeard(nowMs);
 		};
 		if (message.type == NetHostMigrationMessageType::PeerReceipt) {
+			if (message.successorPeerId == message.senderPeerId && message.preparedFrame == UINT64_MAX && message.boundary == c_NetPeerSplitDecision &&
+			    (message.completeFrom == 1 || message.completeFrom == 2) && message.frame > 0) {
+				// A decision carries no progress of its sender's: the seats that follow it take it at their next poll.
+				uint32_t winners = 0;
+				for (uint8_t seat: message.members) winners |= SeatBit(seat);
+				m_PeerSplitDecisions[message.frame].insert_or_assign(message.senderPeerId, PeerSplitDecision{static_cast<uint8_t>(message.completeFrom), winners, message.connectedMask});
+				return true;
+			}
 			if (message.successorPeerId == message.senderPeerId && message.preparedFrame == UINT64_MAX && message.boundary == c_NetPeerRecordRequest) {
 				heard();
 				AnswerPeerRecordRequest(message);

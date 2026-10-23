@@ -1589,6 +1589,7 @@ namespace RTE {
 			std::vector<bool> splitParticipant, hungLastStep;
 			std::vector<uint32_t> observedSplit;
 			std::vector<uint64_t> playingMaxWait, lostAt, lostFrame, lossServedAt, imageReturns;
+			std::vector<uint32_t> lostRuling; //!< The winners of the ruling each seat stopped on, its own or its deciding seat's.
 			std::vector<size_t> decisionsRead;
 			std::vector<std::set<std::tuple<uint64_t, uint64_t, NetHash32, uint64_t>>> splitDecisions;
 			bool sawSplit = false, splitHistories = false;
@@ -1722,9 +1723,7 @@ namespace RTE {
 					if (!connected) continue;
 					uint32_t ruling = (1U << hub.row.seats) - 1;
 					if (lostAt[seat - 1] && lostAt[seat - 1] != lossServedAt[seat - 1] && hub.row.internet) {
-						ruling = 0;
-						for (const auto& answer: hub.directoryClients.at(seat).consumed)
-							if (answer.atMs == lostAt[seat - 1]) for (uint16_t member: answer.reply.members) ruling |= 1U << (member - 1);
+						ruling = lostRuling[seat - 1];
 						// FLAGGED fixture departure: a ruling half that lost a ruling of its own since rejoins another continuation through its
 						// image; this seat asks again from that half, wherever it now plays.
 						for (uint32_t asked = 0; asked != ruling;) {
@@ -1733,8 +1732,7 @@ namespace RTE {
 								const auto client = hub.directoryClients.find(winner);
 								if (!(asked & (1U << (winner - 1))) || !lostAt[winner - 1] || !(imageNeeded[winner - 1] || imageReading[winner - 1]) ||
 								    client == hub.directoryClients.end()) continue;
-								for (const auto& answer: client->second.consumed)
-									if (answer.atMs == lostAt[winner - 1]) for (uint16_t member: answer.reply.members) ruling |= 1U << (member - 1);
+								ruling |= lostRuling[winner - 1];
 							}
 						}
 					} else if (!hub.row.internet && sawSplit && directRuling) ruling = directRuling;
@@ -2005,6 +2003,7 @@ namespace RTE {
 				imageTasks.clear(); imageTasks.resize(row.seats);
 				splitParticipant.resize(row.seats); hungLastStep.assign(row.seats, false); observedSplit.resize(row.seats);
 				lostAt.resize(row.seats); lostFrame.resize(row.seats); lossServedAt.resize(row.seats); imageReturns.resize(row.seats); decisionsRead.resize(row.seats);
+				lostRuling.resize(row.seats);
 				firstDisplayedAt.resize(row.seats); startupFinishAt.resize(row.seats); preFaultPaceLeadMs.resize(row.seats);
 				settledHostWaits.resize(row.seats); paceBegin.resize(row.seats); paceEnd.resize(row.seats);
 				firstAdminChangeMs.assign(row.seats, UINT64_MAX);
@@ -2178,6 +2177,7 @@ namespace RTE {
 					committed.assign(hub.row.seats, {}); for (auto& donors: abandonedDonors) donors.clear(); returnActivations = {}; carriedCommands.assign(hub.row.seats, {});
 					directRuling = 0;
 					std::fill(lostAt.begin(), lostAt.end(), 0); std::fill(lostFrame.begin(), lostFrame.end(), 0); std::fill(lossServedAt.begin(), lossServedAt.end(), 0);
+					std::fill(lostRuling.begin(), lostRuling.end(), 0);
 					std::fill(imageAt.begin(), imageAt.end(), 0); std::fill(imageReturns.begin(), imageReturns.end(), 0);
 					std::fill(imageNeeded.begin(), imageNeeded.end(), false);
 					std::fill(imageReading.begin(), imageReading.end(), false); std::fill(imageWithoutHeadroom.begin(), imageWithoutHeadroom.end(), false);
@@ -2270,6 +2270,10 @@ namespace RTE {
 							const auto key = std::make_tuple(decision.request.generation, decision.request.roundId, decision.request.configHash, decision.request.frame);
 							// A ruling for a continuation whose every player this seat has heard leave names no machine to return to: it plays on.
 							const uint32_t playing = s_FrameMembers(peer, world.applied);
+							// One seat decides for its continuation how it takes a ruling - the round's host when it plays there, else the lowest
+							// seat - and every other seat of it takes that decision when it arrives, so only the deciding seat stops on reading it.
+							const uint8_t host = peer.GetHostPeerId();
+							const uint8_t decider = (playing & (1U << (host - 1))) ? host : static_cast<uint8_t>(std::countr_zero(playing) + 1);
 							bool winnersElsewhere = false, winnersLeft = true;
 							for (const uint16_t winner: decision.reply.members) {
 								if (winner == 0 || winner > hub.row.seats || (playing & (1U << (winner - 1))) != 0) continue;
@@ -2277,7 +2281,7 @@ namespace RTE {
 								winnersLeft &= hub.schedule && hub.schedule->Left(static_cast<uint8_t>(winner), hub.now) && peer.HasHeardLeave(static_cast<uint8_t>(winner));
 							}
 							winnersLeft &= winnersElsewhere;
-							if (IsLosingDecision(id, decision.request, decision.reply) && !winnersLeft &&
+							if (IsLosingDecision(id, decision.request, decision.reply) && !winnersLeft && decider == id &&
 							    splitDecisions[id - 1].insert(key).second) {
 								if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) DiagnosticLine() << "[session-plane-decision-class] seat=" << unsigned(id)
 								    << " query_only=" << decision.request.queryOnly << " question=" << decision.request.frame << " now_ms=" << hub.now
@@ -2286,6 +2290,7 @@ namespace RTE {
 								// FLAGGED fixture departure: preparation can lead the world by hundreds of ticks. The ruling's decision
 								// boundary is the actual completed cursor, as in the direct oracle; never compare a stop to prepared input.
 								lostAt[id - 1] = hub.now; lostFrame[id - 1] = peer.GetResumeFrame(); imageNeeded[id - 1] = true;
+								for (uint16_t member: decision.reply.members) lostRuling[id - 1] |= 1U << (member - 1);
 							}
 						}
 					}
@@ -2295,6 +2300,18 @@ namespace RTE {
 						const bool imageStop = peer.IsLocalSeatHeld() && peer.GetStats().timeoutReason.starts_with("PeerHeld:");
 						if (imageStop && directLoser && !lostAt[id - 1]) {
 							lostAt[id - 1] = hub.now; lostFrame[id - 1] = peer.GetResumeFrame();
+						}
+						// A seat that follows its continuation's deciding seat stops on that seat's ruling, never on one the deciding seat stood on.
+						if (imageStop && hub.row.internet && !lostAt[id - 1] && peer.GetStats().timeoutReason.find("selected the other split") != std::string::npos) {
+							const uint32_t playing = s_FrameMembers(peer, world.applied);
+							const uint8_t host = peer.GetHostPeerId();
+							const uint8_t decider = (playing & (1U << (host - 1))) ? host : static_cast<uint8_t>(std::countr_zero(playing) + 1);
+							if (decider != id) {
+								if (!lostAt[decider - 1] && !imageNeeded[decider - 1] && !imageReading[decider - 1]) {
+									error = "authority ruling: peer " + std::to_string(id) + " stopped on a ruling its continuation's deciding seat " + std::to_string(decider) + " did not stop on"; return false;
+								}
+								if (lostAt[decider - 1]) { lostAt[id - 1] = hub.now; lostFrame[id - 1] = peer.GetResumeFrame(); lostRuling[id - 1] = lostRuling[decider - 1]; }
+							}
 						}
 						// FLAGGED fixture departure: every genuine held stop enters recovery, including a case's other affected seats.
 						if (imageStop) {
