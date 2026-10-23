@@ -768,6 +768,7 @@ class KillAndRestartTest(unittest.TestCase):
 
     def test_a_scene_that_kills_and_restarts_its_players_is_accepted(self):
         peers.check_scene(self.document)
+        peers.check_scene(peers.scene("mp-host-hang"))
 
     def test_a_player_restarts_only_from_its_own_earlier_runtime(self):
         for reference in ({"run": "died", "peer": "host"}, {"run": "resumed", "peer": "client"}):

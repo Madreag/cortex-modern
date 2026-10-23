@@ -85,6 +85,36 @@ class HangGateTests(unittest.TestCase):
         self.assertEqual(calls, ["suspend", "resume"])
         self.assertLess(receipt["suspended_ms"], 5000)
 
+    def hang(self, silences, ended, menu_after_ms, receipt=None, line=True):
+        import tempfile
+        folder = Path(tempfile.mkdtemp())
+        player, probe = folder / "joiner", folder / "host-stage" / "probe"
+        player.mkdir()
+        probe.mkdir(parents=True)
+        LINE = "The host stopped responding. The round has ended; the world continues from its last save when the host is back."
+        (probe / e2e_video.SUSPEND_RECEIPT).write_text(json.dumps(receipt or {"suspended_ms": 25003, "method": "SIGSTOP"}))
+        log = "".join(f"[net-lockstep] host silent {value}ms against 15000ms (rtt 0) heard=1 wait_start=0 next=900\n" for value in silences)
+        if ended is not None:
+            log += f"[net-lockstep] host unresponsive {ended}ms: the round ends at frame 900\n"
+        (player / "stdout.log").write_text(log)
+        (player / "console.log").write_text(("NETWORK: " + LINE + "\n") if line else "")
+        index = [{"frame": 1, "screen": "MultiplayerScreen", "wall_ms": 0}, {"frame": 2, "screen": "game", "wall_ms": 1000},
+                 {"frame": 3, "screen": "game", "wall_ms": 2000}, {"frame": 4, "screen": "MultiplayerScreen", "wall_ms": 2000 + menu_after_ms}]
+        return e2e_video.host_hang_evidence({"root": str(player), "index": index}, {"probe_dir": str(probe)},
+                                            {"window_ms": 15000, "line": LINE})
+
+    def test_a_player_back_on_the_menu_at_the_window_with_the_reason_passes(self):
+        evidence = self.hang([1000, 14000], 15004, 400)
+        self.assertTrue(evidence["pass"], evidence["reason"])
+        self.assertEqual(evidence["return_ms"], 15404)
+
+    def test_a_player_kept_past_the_window_fails(self):
+        self.assertIn("sat through", self.hang([1000, 14000, 16000, 17000], 17020, 400)["reason"])
+        self.assertIn("never ended", self.hang([1000, 14000], None, 400)["reason"])
+        self.assertIn("back on the multiplayer menu 18004", self.hang([14000], 15004, 3000)["reason"])
+        self.assertIn("word for word", self.hang([14000], 15004, 400, line=False)["reason"])
+        self.assertIn("not past", self.hang([14000], 15004, 400, receipt={"suspended_ms": 9000})["reason"])
+
 
 if __name__ == "__main__":
     unittest.main()

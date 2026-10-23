@@ -1454,6 +1454,48 @@ def drop_evidence(record, tick):
     return {"path": str(path), "receipt": receipt, "pass": passed}
 
 
+HOST_UNRESPONSIVE = re.compile(r"(?m)^\[net-lockstep\] host unresponsive (\d+)ms: the round ends at frame (\d+)")
+HOST_SILENT = re.compile(r"(?m)^\[net-lockstep\] host silent (\d+)ms against ")
+
+
+def host_hang_evidence(record, host, spec):
+    """A player whose host stopped answering past the hold window, each fact on one machine's own clock: the host's stop
+    receipt, the player's round ending at the window with the reason in its console, no silence it sat through past the
+    window, and its first multiplayer-menu frame after its last game frame."""
+    window, grace = int(spec["window_ms"]), int(spec.get("grace_ms", 1000))
+    path = Path(host["probe_dir"]) / SUSPEND_RECEIPT if host else None
+    try:
+        receipt = json.loads(path.read_text(encoding="utf-8")) if path else {}
+    except (OSError, ValueError):
+        receipt = {}
+    root = Path(record["root"])
+    text = (root / "stdout.log").read_text(encoding="utf-8", errors="replace") if (root / "stdout.log").is_file() else ""
+    console = (root / "console.log").read_text(encoding="utf-8", errors="replace") if (root / "console.log").is_file() else ""
+    ended = HOST_UNRESPONSIVE.search(text)
+    silent = [int(value) for value in HOST_SILENT.findall(text)]
+    rows = [row for row in record.get("index", []) if isinstance(row.get("wall_ms"), (int, float))]
+    played = next((index for index, row in enumerate(rows) if row.get("screen") == "game"), None)
+    menu = next((index for index in range(played or 0, len(rows)) if played is not None and rows[index].get("screen") == "MultiplayerScreen"), None)
+    last_game = max((index for index in range(menu or 0) if rows[index].get("screen") == "game"), default=None) if menu else None
+    menu_ms = rows[menu]["wall_ms"] - rows[last_game]["wall_ms"] if menu is not None and last_game is not None else None
+    ended_ms = int(ended[1]) if ended else None
+    return_ms = ended_ms + menu_ms if ended_ms is not None and menu_ms is not None else None
+    limit = int(spec.get("return_ms", window + 2 * grace))
+    reasons = [text for failed, text in (
+        (not receipt or receipt.get("error"), f"the host's box recorded no whole-process stop ({path})"),
+        (receipt and receipt.get("suspended_ms", 0) <= window, f"the host was stopped {receipt.get('suspended_ms')} ms, not past the {window} ms window"),
+        (ended is None, "the player's round never ended on the host's silence"),
+        (ended_ms is not None and not window <= ended_ms <= window + grace, f"the round ended {ended_ms} ms into the host's silence"),
+        (silent and max(silent) >= window + grace, f"the player sat through {max(silent or [0])} ms of the host's silence"),
+        (spec.get("line") and "NETWORK: " + spec["line"] not in console, "the reason is not in the player's console word for word"),
+        (return_ms is None, "no multiplayer-menu frame after the player's last game frame"),
+        (return_ms is not None and return_ms > limit, f"the player was back on the multiplayer menu {return_ms} ms into the host's silence")) if failed]
+    return {"receipt": receipt, "receipt_path": str(path) if path else None, "round_ended_ms": ended_ms,
+            "round_end_frame": int(ended[2]) if ended else None, "longest_silence_reported_ms": max(silent) if silent else None,
+            "menu_after_last_game_frame_ms": menu_ms, "return_ms": return_ms, "return_limit_ms": limit, "window_ms": window,
+            "pass": not reasons, "reason": "; ".join(reasons) or None}
+
+
 def completed_probe(path):
     try:
         result = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -1908,6 +1950,12 @@ def review(scenario, capture, out):
                 assertions["peer_drop"] = {"peer": required["peer"], **drop_evidence(witness, required["tick"])}
                 if not assertions["peer_drop"]["pass"]:
                     assertions.update(probe="fail", reason="The other peer has no matching recorded process drop")
+            if item.get("host_hang"):
+                required = item["host_hang"]
+                host = next((row for row in capture["peers"] if row["peer"] == required["host"]), None)
+                assertions["host_hang"] = {"host": required["host"], **host_hang_evidence(record, host, required)}
+                if not assertions["host_hang"]["pass"]:
+                    assertions.update(probe="fail", reason=assertions["host_hang"]["reason"])
             video_frames = found if record.get("video") else None
             encode_result = record.get("encode", {})
             seconds = None
