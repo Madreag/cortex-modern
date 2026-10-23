@@ -24,14 +24,14 @@ import secrets
 import world_mod_cross as acceptance_cross
 
 HERE = Path(__file__).resolve().parent
-# The lane that owns this run's scratch on every box: --lane or CC_CROSS_PEERS_LANE, never a default. The manifest
-# writes it as {lane}, so a merged-away lane's root is never where a run lands.
-LANE_ENV = 'CC_CROSS_PEERS_LANE'
+# The name of this run's scratch on every box: --lane or CC_CROSS_PEERS_LANE, never a default. The manifest
+# writes it as {lane}, so a run never lands in an old run's root.
+SCRATCH_NAME_ENV = 'CC_CROSS_PEERS_LANE'
 SCRATCH_ROOT = Path(os.environ.get('CCCP_SCRATCH_ROOT', str(Path(tempfile.gettempdir())/'cortex-modern')))
 SCRATCH = None
-LANE = None
+SCRATCH_NAME = None
 # The Mac inventory's live marker a Mac launch requires: --mac-guard or CC_CROSS_PEERS_MAC_GUARD, never a default. The
-# manifest writes it as {mac_guard}, so a merged-away inventory lane's marker never guards a run.
+# manifest writes it as {mac_guard}, so an old inventory run's marker never guards a run.
 MAC_GUARD_ENV = 'CC_CROSS_PEERS_MAC_GUARD'
 MAC_GUARD = None
 LIMIT = 4_000_000_000
@@ -70,25 +70,25 @@ def quote_ps(value):
     return "'" + str(value).replace("'", "''") + "'"
 
 
-def set_lane(lane):
-    global LANE, SCRATCH
-    if not lane or not re.fullmatch(r'[A-Za-z0-9_-]+', lane):
-        raise ValueError(f'a lane name ([A-Za-z0-9_-]+) is required: --lane or {LANE_ENV}')
-    LANE, SCRATCH = lane, SCRATCH_ROOT / lane
+def set_scratch_name(name):
+    global SCRATCH_NAME, SCRATCH
+    if not name or not re.fullmatch(r'[A-Za-z0-9_-]+', name):
+        raise ValueError(f'a scratch name ([A-Za-z0-9_-]+) is required: --lane or {SCRATCH_NAME_ENV}')
+    SCRATCH_NAME, SCRATCH = name, SCRATCH_ROOT / name
 
 
-def with_lane(value):
-    """A manifest value with {lane} and {mac_guard} replaced by this run's lane and Mac guard."""
+def with_names(value):
+    """A manifest value with {lane} and {mac_guard} replaced by this run's scratch name and Mac guard."""
     if isinstance(value, str):
         if '{lane}' in value:
-            if LANE is None: raise ValueError(f'the manifest names {{lane}} but no lane was given: --lane or {LANE_ENV}')
-            value = value.replace('{lane}', LANE)
+            if SCRATCH_NAME is None: raise ValueError(f'the manifest names {{lane}} but no scratch name was given: --lane or {SCRATCH_NAME_ENV}')
+            value = value.replace('{lane}', SCRATCH_NAME)
         if '{mac_guard}' in value:
             if MAC_GUARD is None: raise ValueError(f'the manifest names {{mac_guard}} but no guard was given: --mac-guard or {MAC_GUARD_ENV}')
             value = value.replace('{mac_guard}', MAC_GUARD)
         return value
-    if isinstance(value, list): return [with_lane(item) for item in value]
-    if isinstance(value, dict): return {key: with_lane(item) for key, item in value.items()}
+    if isinstance(value, list): return [with_names(item) for item in value]
+    if isinstance(value, dict): return {key: with_names(item) for key, item in value.items()}
     return value
 
 
@@ -98,7 +98,7 @@ def load_boxes(path, roster='three-way'):
         source = cross_manifest()
     else:
         source = json.loads(Path(path).read_text(encoding='utf-8-sig'))
-    manifest = with_lane(source)
+    manifest = with_names(source)
     if roster is not None:
         manifest['instances'] = [peer for peer in manifest['instances'] if not peer.get('rosters') or roster in peer['rosters']]
         active = {peer['box'] for peer in manifest['instances']}
@@ -281,7 +281,7 @@ def make_plan(options):
         specs[-1]['forced_ends']=[f for f in faults if f['action']=='brain-eliminate']
         if specs[-1]['barriers']:
             specs[-1]['env']['CC_TEST_CROSS_CAPTURE_BARRIER'] = own+'/barriers.json'
-    return dict(version=1, run=stem, lane=LANE, mac_guard=MAC_GUARD, started=dt.datetime.now(MST).strftime('%Y-%m-%d %I:%M:%S %p MST'),
+    return dict(version=1, run=stem, lane=SCRATCH_NAME, mac_guard=MAC_GUARD, started=dt.datetime.now(MST).strftime('%Y-%m-%d %I:%M:%S %p MST'),
                 driver_commit=command(['git','-C',HERE.parent,'rev-parse','HEAD']).strip(),
                 driver_tracked_changes=command(['git','-C',HERE.parent,'status','--porcelain','--untracked-files=no']).splitlines(),
                 driver_sources={str(path.relative_to(HERE)):digest_file(path) for path in
@@ -972,7 +972,7 @@ def run_payload(path):
         write_json(root / 'payload-owned.json', dict(box=box['name'], runner_pid=os.getpid()))
         preflight = json.loads((root / 'preflight.json').read_text(encoding='utf-8'))
         if box['kind'] == 'windows-local' and len(payload['specs']) != 1:
-            raise RuntimeError('this lane permits only one local engine at a time; dry-run supports larger manifests')
+            raise RuntimeError('this run permits only one local engine at a time; dry-run supports larger manifests')
         capabilities = read_capabilities(box, root)
         requested = payload['specs'][0]['flags']
         requested = int(requested[requested.index('-net-match-peers') + 1])
@@ -1434,10 +1434,10 @@ def run_plan(plan, root):
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--boxes', type=Path, default=Path(os.environ['CCCP_CROSS_BOXES']) if os.environ.get('CCCP_CROSS_BOXES') else None)
-    parser.add_argument('--lane', default=os.environ.get(LANE_ENV), help=f'the lane whose scratch holds the run on every box (or {LANE_ENV}); no default')
+    parser.add_argument('--lane', default=os.environ.get(SCRATCH_NAME_ENV), help=f'the name of the scratch that holds the run on every box (or {SCRATCH_NAME_ENV}); no default')
     parser.add_argument('--mac-guard', default=os.environ.get(MAC_GUARD_ENV),
                         help=f"the Mac inventory's live marker a Mac launch requires (or {MAC_GUARD_ENV}); no default")
-    parser.add_argument('--out', type=Path, help='default: <lane scratch>/dry-run')
+    parser.add_argument('--out', type=Path, help='default: <scratch>/dry-run')
     parser.add_argument('--host', default='pc')
     parser.add_argument('--local-setting', action='append', type=setting_pair, default=[], metavar='KEY=VALUE',
                         help='seed windows-local after directory settings; repeatable, last value wins')
@@ -1466,7 +1466,7 @@ def parse_args(argv=None):
     parser.add_argument('--preflight', type=Path, help=argparse.SUPPRESS)
     options = parser.parse_args(argv)
     if not (options.payload or options.preflight):
-        try: set_lane(options.lane)
+        try: set_scratch_name(options.lane)
         except ValueError as error: parser.error(str(error))
         global MAC_GUARD
         MAC_GUARD = options.mac_guard or None
@@ -1486,7 +1486,7 @@ def main(argv=None):
         return acceptance_cross.main(arguments)
     options = parse_args(argv)
     if options.selftest_launch_guard:
-        if not options.out.resolve().is_relative_to(SCRATCH.resolve()): raise ValueError('self-test output must stay inside lane scratch')
+        if not options.out.resolve().is_relative_to(SCRATCH.resolve()): raise ValueError('self-test output must stay inside the run\'s scratch')
         result=launch_guard_selftest(options.out)
         print(json.dumps(result,indent=2)); return 0 if result['passed'] else 1
     if options.payload: return run_payload(options.payload)

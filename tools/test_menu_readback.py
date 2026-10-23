@@ -2393,7 +2393,7 @@ def assert_fontsmall_latin1_ink(repo):
 
 
 def frame_luma(png, rect, border=2):
-    """Mean luma of a control's 2-px frame, the compare_luma.py shape from the disabled-state lane."""
+    """Mean luma of a control's 2-px frame, the compare_luma.py shape from the disabled-state check."""
     with Image.open(png) as source:
         image = source.convert("RGB")
     x, y, w, h = rect

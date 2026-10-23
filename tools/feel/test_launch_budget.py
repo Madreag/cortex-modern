@@ -33,7 +33,7 @@ class ExclusiveMatrixTest(unittest.TestCase):
             self.assertEqual(json.loads(self.marker.read_text(encoding='utf-8'))['token'], 'chain-token')
 
     def test_another_owners_reservation_is_refused(self):
-        self.marker.write_text(json.dumps(dict(pid=1, token='other-lane')), encoding='utf-8')
+        self.marker.write_text(json.dumps(dict(pid=1, token='other-run')), encoding='utf-8')
         with patch.dict(os.environ, {'CCCP_FEEL_MATRIX_RUN': 'chain-token'}):
             with self.assertRaises(FileExistsError):
                 with launch_budget.exclusive_matrix():
@@ -90,7 +90,7 @@ class CrossFlagTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'reserved for the cross match'):
                 self.start(self.run_record())
         self.marker.write_text(json.dumps(dict(pid=1, token='cross-driver')), encoding='utf-8')
-        with patch.dict(os.environ, {'CCCP_FEEL_MATRIX_RUN': 'some-lane'}):
+        with patch.dict(os.environ, {'CCCP_FEEL_MATRIX_RUN': 'some-run'}):
             with self.assertRaisesRegex(RuntimeError, 'refused'):
                 self.start(self.run_record())
 

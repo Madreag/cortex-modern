@@ -10,7 +10,7 @@ run in place: a retained runtime under a run root is never copied or moved.
         --match <matchId> --tick <savedTick> --port 49470
 
 The port is the host's listen port and must sit in the caller's reserved private block
-(this lane's block is 49470-49499); a port outside the private range is refused.
+(this tool's block is 49470-49499); a port outside the private range is refused.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ from run_sim_test import make_run
 from compare_sim_traces import compare_fullstate
 from feel.records import retract_private_history
 
-# The private port range: a lane takes its own block inside it so two lanes never share a listener.
+# The private port range: a run takes its own block inside it so two runs never share a listener.
 PRIVATE_PORTS = (49152, 65535)
 # A resumed peer that is resynced replays the ticks it already ran, so a pass is compared on its own.
 MIN_SHARED_TICKS = 30

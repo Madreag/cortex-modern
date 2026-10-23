@@ -28,7 +28,7 @@ ACTIVITY = REPO / "tools/fixtures/ai_pass_writes_activity.lua"
 WRITER = REPO / "tools/fixtures/ai_pass_writer.lua"
 HARNESS = REPO / "tools/heal_driver/recovery_e2e.py"
 PORT_RANGE = range(48400, 48420)
-LANE_PORT_RANGE = range(48670, 48680)  # A second lane range, so this arm can run beside another one.
+LANE_PORT_RANGE = range(48670, 48680)  # A second port range, so this arm can run beside another one.
 PRESET = "Determinism AI Pass Writes"
 PROBE = re.compile(r"\[f72b-probe\] simms=(\d+) heard=(-?\d+) vel=([^ ]+) health=([^ ]+) victim=(\d) particles=(\d+)")
 TABLE_SENT = re.compile(r"\[f72b-pass\] table uid=(\d+)")

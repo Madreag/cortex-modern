@@ -1920,7 +1920,7 @@ class CheckpointWaitTests(unittest.TestCase):
                 self.assertNotIsInstance(raised.exception, CheckpointsShort)
 
     def test_a_held_peers_missed_capture_waits_only_when_its_own_line_names_it(self):
-        # live-retention-2 on this lane: the client, held and catching up, did not take the capture the host wrote at 480.
+        # live-retention-2 once: the client, held and catching up, did not take the capture the host wrote at 480.
         records = {"host": {"exit_code": 0}, "client": {"exit_code": 0}}
         held = {"host": [131, 480], "client": [131]}
         named = {"host": self.capture_lines([131, 480]),

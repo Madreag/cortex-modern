@@ -59,7 +59,7 @@ class AcceptanceBoxRoles(unittest.TestCase):
             marker.write_text(json.dumps(dict(token='USER-AT-DESK')))
             held = built(marker=marker)['plan']
             self.assertEqual(held.get('window', {}).get('variant'), 'WITHOUT')
-            marker.write_text(json.dumps(dict(token='named-window',pid=os.getpid(),stream_root=str(Path(folder)/'lane'))))
+            marker.write_text(json.dumps(dict(token='named-window',pid=os.getpid(),stream_root=str(Path(folder)/'stream'))))
             free = built(marker=marker)['plan']
             self.assertEqual(free.get('window', {}).get('variant'), 'WITH')
             self.assertEqual(held['window']['reason'], 'deferred to the box-a window')

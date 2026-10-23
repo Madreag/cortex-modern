@@ -5,7 +5,7 @@ feel driver, and REMOTE's own single-player tick budget.
                                 --runs N --out <scratch>/<run> [--dry-run]
     python tools/two_box_match.py --scenario sp-soak [--minutes 10] --out <scratch>/<run>
 
-The local peer starts through run_sim_test.make_run. The REMOTE peer starts inside the owner's interactive session:
+The local peer starts through run_sim_test.make_run. The REMOTE peer starts inside the signed-in user's interactive session:
 this file is copied to REMOTE, tools/remote/session1.ps1 becomes the configured session script and the cortex-session1 task
 runs it, which calls this file with --remote-peer, again through make_run and the private-desktop runner with
 CCCP_HEADLESS=1. Both boxes use the same absolute run directory, so after the fetch the feel driver's own reducers
@@ -35,14 +35,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / 'remote'))
 from remote_box import SSH_NOISE, WINDOWS_TAR, RemoteBox  # noqa: E402  (shipped beside this file on REMOTE)
 
 HERE = Path(__file__).resolve().parent
-# The calling lane's own scratch root, the same absolute path on both boxes.
+# The caller's own scratch root, the same absolute path on both boxes.
 LANE = os.environ.get('CC_REMOTE_CROSS_LANE', 'two-box-match')
 SCRATCH = Path(os.environ.get('CCCP_SCRATCH_ROOT', str(Path(tempfile.gettempdir())/'cortex-modern'))) / LANE  # the same absolute path on both boxes
 PAYLOAD = SCRATCH / 'payload'
 SESSION1_SCRIPT = os.environ.get('CCCP_SESSION_SCRIPT', 'session/run.ps1')
 TASK = 'cortex-session1'
 REPO = Path(__file__).resolve().parents[1]
-GAME_PORT, DIRECTORY_PORT = 49860, 49875  # the lane's block is 49860-49879 on both boxes
+GAME_PORT, DIRECTORY_PORT = 49860, 49875  # this tool's block is 49860-49879 on both boxes
 BRIDGE_UDP, BRIDGE_TCP = 49876, 49877
 # REMOTE reserves TCP 49675-49974 (netsh int ipv4 show excludedportrange), so the tunnel's loopback ends there sit outside it.
 REMOTE_TCP = {DIRECTORY_PORT: 49985, BRIDGE_TCP: 49986}
@@ -54,10 +54,11 @@ TURN = {'here': os.environ.get('CCCP_TURN_LOCAL_URL', ''), 'remote': os.environ.
 CLOUDFLARE_TURN_CONFIG = Path(os.environ.get('CCCP_CLOUDFLARE_TURN_CONFIG', 'relay/turn-config-cloudflare.json'))
 BOX_LOG = Path(os.environ.get('CCCP_BOX_LOG', str(SCRATCH/'steps.log')))
 SECRET_KEYS = ('NetworkTurnUser', 'NetworkTurnPass', 'NetworkPlayerTurnUser', 'NetworkPlayerTurnPass')
-# The Linux box (BOXES.md): the lane's directory there, its clone of the tree at the tip and that tree's gcc build.
+# The Linux box: this run's directory there, its clone of the tree at the tip and that tree's gcc build.
 LINUX_SSH = os.environ.get('CCCP_LINUX_SSH', 'host-d')
-LINUX_LANE = os.environ.get('CCCP_LINUX_RUN_ROOT', f'.cortex-modern/runs/{LANE}')
-LINUX_REPO = f'{LINUX_LANE}/repo'
+LINUX_MACHINE = os.environ.get('CCCP_LINUX_MACHINE', 'box-linux')
+LINUX_ROOT = os.environ.get('CCCP_LINUX_RUN_ROOT', f'.cortex-modern/runs/{LANE}')
+LINUX_REPO = f'{LINUX_ROOT}/repo'
 LINUX_BINARY = f'{LINUX_REPO}/build-gcc/CortexCommand'
 # The soak (tools/soak_two_peer.py's defaults): an autosave a minute on the host, three 1.5 s stalls of the client, the memory
 # census every minute and the full-state hash every second.
@@ -324,7 +325,7 @@ def soak_flags(peer, ticks):
 
 
 class LinuxPeer:
-    """A match peer on the Linux box: its spec with this box's run root mapped to the lane's there, this file's remote-peer path
+    """A match peer on the Linux box: its spec with this box's run root mapped to the run's there, this file's remote-peer path
     run over ssh (the POSIX runner, the tree's gcc build), its files fetched back here when it ends."""
 
     def __init__(self, spec, local_root, log_path, relay_book=None):
@@ -332,7 +333,7 @@ class LinuxPeer:
         require_public(spec['settings']);require_public(spec['env'])
         self.relay_book=relay_book
         self.local_root = Path(local_root)
-        self.remote_root = f'{LINUX_LANE}/runs/{self.local_root.parent.name}/{self.local_root.name}'
+        self.remote_root = f'{LINUX_ROOT}/runs/{self.local_root.parent.name}/{self.local_root.name}'
         local = str(self.local_root)
 
         def posix(value):
@@ -346,7 +347,7 @@ class LinuxPeer:
         spec_path = self.local_root / f'{self.peer}-spec.linux.json'
         write_json(spec_path, self.spec)
         remote_spec = f'{self.remote_root}/{self.peer}-spec.json'
-        payload = f'{LINUX_LANE}/payload'
+        payload = f'{LINUX_ROOT}/payload'
         run([*SSH_LINUX, f'mkdir -p {self.remote_root} {payload}/remote'])
         for source, target in ((spec_path, remote_spec), (self.local_root / 'input.txt', f'{self.remote_root}/input.txt'),
                                (self.local_root / 'input-schedule.json', f'{self.remote_root}/input-schedule.json'),
@@ -673,7 +674,7 @@ def box_free():
 
 
 def box_load():
-    """Compilers, linkers and engines running on this box right now (other lanes' builds skew the local peer's tick)."""
+    """Compilers, linkers and engines running on this box right now (other runs' builds skew the local peer's tick)."""
     names = subprocess.run(['pwsh', '-NoProfile', '-Command', "(Get-Process cl, link, 'Cortex Command*' -ErrorAction SilentlyContinue).ProcessName"],
                            capture_output=True, text=True, creationflags=subprocess.CREATE_NO_WINDOW).stdout.splitlines()
     names = [name.strip() for name in names if name.strip()]
@@ -709,7 +710,7 @@ def run_match(h, options, index, login):
     sides = {'host': host_side, 'client': 'remote' if host_side == 'here' else 'here'}
     local_peer = 'host' if host_side == 'here' else 'client'
     remote_peer_name = 'client' if local_peer == 'host' else 'host'
-    machines = {peer: 'LINUX-3090' if peer == 'client' and options.client_box == 'linux' else MACHINE[side] for peer, side in sides.items()}
+    machines = {peer: LINUX_MACHINE if peer == 'client' and options.client_box == 'linux' else MACHINE[side] for peer, side in sides.items()}
     say(f'{name}: host={machines["host"]} client={machines["client"]} path={options.path} port={port} {stamp()}')
     if DRY_RUN:
         root = options.out / name

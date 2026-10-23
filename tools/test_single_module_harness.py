@@ -101,7 +101,7 @@ def main() -> int:
         "--arm",
         choices=("detect", "no_module", "missing"),
         default="detect",
-        help="detect is the suite row; no_module and missing are lane checks",
+        help="detect is the suite row; no_module and missing are extra checks",
     )
     parser.add_argument("--missing-module", default="NoSuchModule.rte")
     options = parser.parse_args()

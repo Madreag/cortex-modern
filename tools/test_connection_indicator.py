@@ -589,13 +589,13 @@ def main():
     parser.add_argument("--timeout", type=int, default=240, help="single-engine startup and probe budget, including cold module loads")
     options = parser.parse_args()
     if not options.single_engine and not options.layout_detector and (not options.peer_boxes or not options.host_address):
-        parser.error("four-seat pictures need --peer-boxes and --host-address assigned by the lead")
+        parser.error("four-seat pictures need --peer-boxes and --host-address assigned to this run")
     if options.layout_detector and options.single_engine:
         parser.error("--layout-detector runs four seats; it cannot be combined with --single-engine")
     if options.layout_detector and (options.peer_boxes or options.host_address):
         parser.error("--layout-detector starts only local peers; omit --peer-boxes and --host-address")
     if options.layout_detector and not 1024 <= options.port <= 65535 - 2 * len(scene_document()["runs"]):
-        parser.error("--port must leave a lane block for both trees' local cases")
+        parser.error("--port must leave a port block for both trees' local cases")
     if options.timeout < 120:
         parser.error("--timeout must leave at least 120 seconds for cold loads and framed gestures")
     options.runtime_dll_dir = [directory.resolve() for directory in options.runtime_dll_dir]

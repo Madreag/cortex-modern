@@ -96,8 +96,8 @@ class RelayRows(unittest.TestCase):
         self.assertEqual(hotspot.get('scenario'),'mp-relay-hotspot')
         self.assertEqual(hotspot.get('rows'),list('abcdef'))
         self.assertEqual(hotspot.get('state'),'AWAITING')
-        self.assertIn('user approves a hotspot session',hotspot.get('reason',''))
-        self.assertEqual(hotspot.get('operator'),'lead-tools/hotspot_relay.sh <row> [--network lte|5g]')
+        self.assertIn('an approved hotspot session',hotspot.get('reason',''))
+        self.assertEqual(hotspot.get('operator'),'hotspot_relay.sh <row> [--network lte|5g]')
         self.assertFalse(any(row.get('scenario')=='mp-relay-hotspot' for row in self.plan['rows']))
 
     def test_c510_all_retained_files_gate_even_after_scrub(self):

@@ -22,8 +22,8 @@ REQUIRED_SUBSYSTEMS = CORE | {'controller'}
 CORE_CHECKS=('three_real_boxes','preflight_complete','full_history','zero_desync','zero_unscheduled_holds',
              'hold_evidence_complete','native_completion','adopted_peer_count','adopted_roster','native_desync_checks','record_integrity','binary_admission_limit')
 CAPTURE_ROWS={
-    1:'capture-rows lane row 1: unsupported userdata in object[...][AI][Behavior].slot[12] at Source/Managers/LuaMan.cpp:1613',
-    2:'capture-rows lane row 2: Windows/Mac hex-float text at Source/System/FloatText.h:324-326,608-610; PieMenu.cpp:259; Arm.cpp:506; Scene.cpp:2056,2059,2142'}
+    1:'open capture row 1: unsupported userdata in object[...][AI][Behavior].slot[12] at Source/Managers/LuaMan.cpp:1613',
+    2:'open capture row 2: Windows/Mac hex-float text at Source/System/FloatText.h:324-326,608-610; PieMenu.cpp:259; Arm.cpp:506; Scene.cpp:2056,2059,2142'}
 
 
 
@@ -429,7 +429,7 @@ def verdict_line(result):
     text=f'{attempt_label(result)} {result["run"]}: '+', '.join(f'{n}={p["frames"]} frames{unkeyed(p)}' for n,p in peers.items())
     text+=f'; unequal={comparison["unequal_keys"]} unknown={comparison["unknown_keys"]} holds={holds} unscheduled={result["unscheduled_holds"]} classifications={classifications}; '
     text+='; '.join(name+'='+oracle['status'] for name,oracle in result['oracles'].items())
-    if result.get('assigned_capture_rows'): text+='; full-state NOT COVERED by capture-rows lane rows '+','.join(result['assigned_capture_rows'])
+    if result.get('assigned_capture_rows'): text+='; full-state NOT COVERED by open capture rows '+','.join(result['assigned_capture_rows'])
     return text
 
 
@@ -617,9 +617,9 @@ def coverage(events, peers, manifest):
         ('gold', 'Gold collection and funds', ['gold_deposited'], 1, 'collection per originating seat', 'No verified placed-vein mining chain and purchase/refund-adjusted positive funds assertion.'),
         ('objects', 'Doors, turrets, wounds, gibs and corpses', ['door_open_completed', 'door_close_completed', 'wound_added', 'wound_damage', 'gibbed', 'dying', 'dead'], 1, 'each successful kind per observing peer per soak', 'Emitter-output, turret attribution and corpse-settling records are not complete.'),
         ('ai', 'AI modes, paths, buying and difficulty', [], 1, 'each mode and one AI purchase per soak', 'No complete mode/path-before-and-after-terrain or CPU purchase oracle.'),
-        ('rules', 'Rosters, scenes, natural ends and changed rematches', [], 2, 'natural ends and one changed-settings rematch', 'match_boundary counts do not identify natural ends or prove result/lobby surfaces and changed settings; round_result_presented is required from the engineer.'),
+        ('rules', 'Rosters, scenes, natural ends and changed rematches', [], 2, 'natural ends and one changed-settings rematch', 'match_boundary counts do not identify natural ends or prove result/lobby surfaces and changed settings; round_result_presented is still required.'),
         ('scripts', 'Callbacks, timers, coroutines and errors', [], 1, 'both preselected error arms per soak', 'Before/after-write error outcomes and callback/timer/coroutine success records are incomplete.'),
-        ('presentation', 'Window, menus, audio and music', [], 1, 'each change and authority scope per soak', 'Audio authority/music transitions require records outside this lane; actual OS presentation is not demonstrated.'),
+        ('presentation', 'Window, menus, audio and music', [], 1, 'each change and authority scope per soak', 'Audio authority/music transitions require records outside this tool; actual OS presentation is not demonstrated.'),
         ('session', 'Chat, pause, delay, leave, saves, resume and replay', [], 1, 'each defined recovery per soak', 'Recipient, authorization, archive, full playback and first-controllable-input oracles are incomplete.'),
         ('migration', 'Migration, late join, spectate and removal', [], 1, 'each coverable recovery per soak', 'WAN migration endpoint fix is absent; fourth real box and removal retry arms are not demonstrated.'),
         ('members', 'Team members and brains (row 14)', [], 1, 'each member-seat lifecycle and brain rule', 'NOT COVERED until netcode row 14 lands.'),
@@ -669,8 +669,8 @@ def coverage(events, peers, manifest):
             status,reason='NOT APPLICABLE','The destruction minimum applies to soaks; smoke event totals remain visible.'
         result.append(dict(id=key, item=label, status=status, reason=reason, unit=unit, minimum=minimum, peers=counts,
                            required=required, coverage_window=dict(declared_ticks=ticks, measured_progress_ticks=progress, ticks=window_ticks),
-                           scope='run-owned native counts per observing peer; missing semantic receipts remain engineer work',
-                           engineer_receipts=missing_receipts.get(key, [])))
+                           scope='run-owned native counts per observing peer; missing semantic receipts remain engine work',
+                           missing_receipts=missing_receipts.get(key, [])))
     return result
 
 
@@ -683,19 +683,19 @@ def requirements(manifest, comparison, metrics):
                      reread='', evidence=[], required=False)]
     items = load(Path(source), [])
     reasons = {
-        2: 'WAN migration requires NetMatchService.cpp:8284 endpoint publication and NetLockstep.cpp:3304,3334 dialing changes owned by the catch-up lane.',
+        2: 'WAN migration requires NetMatchService.cpp:8284 endpoint publication and NetLockstep.cpp:3304,3334 dialing changes in the catch-up code.',
         3: 'MIXED uses human teams 0,0,1 plus peerless CPU team 2 through real host options; ordinary AI actors supply allied units. Adopted configurations and all roster arms still need run evidence.',
-        20: 'SoundContainer.cpp:405 authority and music-transition emissions are outside this lane; muted output proves no audible result.',
+        20: 'SoundContainer.cpp:405 authority and music-transition emissions are outside this tool; muted output proves no audible result.',
         22: 'A fourth real box and its persistent-world arrival arm are absent.',
         32: 'The adopted wave supplies held-seat end records at NetMatchService.cpp:1026,5357,8654. Three-box faulted final-tail equality and completed-lobby outcomes remain unproved; an end-record notification alone is not a full hash history.',
         34: 'Hold and catch-up ends are wired into the default schedule with peer/round/incarnation-bound phase signals and native end witnesses. Both executed overlaps and the post-migration end are not yet demonstrated; migration awaits the endpoint seam.',
         35: 'Pre-auth/proof/image/tail/activation overlaps await the WAN endpoint fix; queued/cancelled phases never complete recovery.',
         36: 'Capture-announced and writer-pending barriers have RED/GREEN bounded-release tests; migration overlap, archive validity and restarted writer cadence still await a real endpoint-capable arm.',
         40: 'Initial history uses the configured start frame; settled live authority is read from the public runner report. NetMatchService.cpp:7831 omits the private catch-up branch/checkpoint digest (NetMatchService.h:1590,1643), so restored keys stay UNKNOWN.',
-        45: 'Checkpoint boot/handover anchors and survivor segment indexing need ScenarioRunner.cpp:2653 and NetMatchService.cpp:3455 outside this lane.',
+        45: 'Checkpoint boot/handover anchors and survivor segment indexing need ScenarioRunner.cpp:2653 and NetMatchService.cpp:3455 outside this tool.',
         47: 'Raw memory samples, measured instrumentation and declared bounds are judged per attempt. A complete comparable workload across every round, checkpoint and recovery is absent; any observed bound failure remains RED.',
-        50: 'Movement/aim submitted-render measurements are reported; other action/input-sequence stamps require FrameMan.cpp:277,344 outside this lane.',
-        51: 'Remote-unit render discontinuities require FrameMan/LocalPrediction records outside this lane; local corrections retain their own labels.',
+        50: 'Movement/aim submitted-render measurements are reported; other action/input-sequence stamps require FrameMan.cpp:277,344 outside this tool.',
+        51: 'Remote-unit render discontinuities require FrameMan/LocalPrediction records outside this tool; local corrections retain their own labels.',
         53: 'Fresh produced/applied controller input and authenticated goodbye now have native terminal records, bound to a continuous payload clock. Full phase-specific queued/cancelled admission and survivor end-to-end runs remain incomplete at NetMatchService.cpp:939,5319 and NetWorldJoin.cpp:1139.',
         54: 'FrameMan.cpp:277,344 lacks round/execution ids; multi-round raw presentation reduction cannot safely reuse single-round identities.',
         69: 'The real Void Wanderers mission/economy/scene-transition and unchanged-reference arm has not run.',
@@ -1443,7 +1443,7 @@ def write_page(root, result, events):
     parts.append('<h2>Full-state scope and cadence</h2><p>Every listed Shared section is compared. Native PerPeer exclusions are retained below; their behavioral restoration remains a separate requirement.</p><pre>'+escape(json.dumps(dict(verdict=result['fullstate'],records=result['fullstate_records']),indent=2))+'</pre>')
     if result['assigned_capture_rows']:
         parts.append('<p class="fail">Mandatory full-state evidence remains RED / NOT COVERED by these assigned engine rows. No sample, refusal or difference is masked.</p><ul>'+''.join('<li>'+escape(reason)+'</li>' for reason in result['assigned_capture_rows'].values())+'</ul>')
-    parts.append('<p>Rerun command preserves the declared deadlines, roster, expanded fault schedule and barriers. Known box routes use the current manifest and its guards; original routes remain in this run’s manifest. Add --quiet-window only for a new window scheduled by the lead.</p><pre>'+escape(result['rerun_after_capture_fix'])+'</pre>')
+    parts.append('<p>Rerun command preserves the declared deadlines, roster, expanded fault schedule and barriers. Known box routes use the current manifest and its guards; original routes remain in this run’s manifest. Add --quiet-window only for a new window scheduled for it.</p><pre>'+escape(result['rerun_after_capture_fix'])+'</pre>')
     parts.append('<h2>Engine and driver findings</h2>')
     for finding in result['findings']:
         parts.append('<p class="fail">' + (f'<a href="{escape(finding["path"])}">{escape(finding["path"])}:{finding["line"]}</a> ' if 'path' in finding else '') + escape(finding.get('text',finding.get('reason',''))) + '</p>')

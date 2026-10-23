@@ -12,7 +12,7 @@ def main(argv=None):
     parser.add_argument('--repo', type=Path, required=True)
     parser.add_argument('--out', type=Path, required=True)
     parser.add_argument('--scenario', required=True)
-    parser.add_argument('--owner', default='rows lane')
+    parser.add_argument('--owner', default='rows')
     parser.add_argument('--size')
     parser.add_argument('--port')
     parser.add_argument('--scratch-root')

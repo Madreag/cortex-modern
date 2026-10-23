@@ -126,7 +126,7 @@ def main(argv=None):
     parser.add_argument('--frozen-commit', help='the commit the export was made from (default: the repo HEAD)')
     args = parser.parse_args(argv)
     if not args.out.resolve().is_relative_to(args.scratch.resolve()):
-        parser.error('the composed bundle must stay inside this lane scratch')
+        parser.error("the composed bundle must stay inside this run's scratch")
     with storage_scope(args.scratch, reserve=1024**2) as budget:
         value = compose(args.repo, args.export, args.out, args.frozen_commit)
         print(json.dumps(dict(frozen_commit=value['frozen_commit'], coordinator_commit=value['coordinator_commit'],

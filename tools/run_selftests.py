@@ -275,7 +275,7 @@ def box_state():
 
 
 def wait_for_quiet_box(limit_s=QUIET_WAIT_S, poll_s=5.0):
-    """Waits until no engine and no build runs on the box (other lanes' included), up to limit_s; the rerun starts either way."""
+    """Waits until no engine and no build runs on the box (other runs' included), up to limit_s; the rerun starts either way."""
     start = time.monotonic()
     while True:
         state = box_state()

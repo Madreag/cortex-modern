@@ -555,7 +555,7 @@ class PortClaim:
 
 
 def directory_port_for(scenario, run, base):
-    """The run's session directory port: the scenario's place below the top of the driver's block, so a lane's own block
+    """The run's session directory port: the scenario's place below the top of the driver's block, so a caller's own block
     carries it with the runs. None when the scenario serves no directory."""
     named = run.get("directory_port", scenario.get("directory_port"))
     if not named:
@@ -2525,7 +2525,7 @@ def run_one(options, scenario, run, run_index, out):
     if capture_peer not in {peer["name"] for peer in definitions}:
         raise ValueError("--capture-peer must name a peer of this run")
     # The engine records its rendered texture on every platform. The capture
-    # peer and every recorder are isolated on the lead's explicitly named boxes.
+    # peer and every recorder are isolated on the explicitly named boxes.
     detector = getattr(options, "layout_detector", False)
     peers = [spread.Peer(peer["name"], os="any", size=size,
                          reviewed=not detector and peer["name"] == capture_peer, readback=True, share_ok=detector,
@@ -3167,7 +3167,7 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="print planned settings and engine arguments without creating files or starting services")
     parser.add_argument("--fps", type=int, default=DEFAULT_FPS)
     parser.add_argument("--port", type=int, help=f"the run block base; defaults to the scenario's port_base inside {PORT_LO}-{PORT_HI}")
-    parser.add_argument("--port-block", help=f"the calling lane's own port block LO-HI, used instead of {PORT_LO}-{PORT_HI}; --port is then required")
+    parser.add_argument("--port-block", help=f"the caller's own port block LO-HI, used instead of {PORT_LO}-{PORT_HI}; --port is then required")
     parser.add_argument("--sheet-every", type=int, default=15)
     parser.add_argument("--review-only", type=Path)
     parser.add_argument("--finalize-only", type=Path)
