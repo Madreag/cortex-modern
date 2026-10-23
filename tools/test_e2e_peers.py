@@ -839,6 +839,22 @@ class KillAndRestartTest(unittest.TestCase):
         self.assertEqual(found["tokens"], {"RESUME_MATCH": "m1", "RESUME_TICK": 600})
         self.assertTrue(all(row["path"].startswith(str(runtime)) for row in found["evidence"]))
 
+    def test_a_host_player_that_ends_before_its_engine_starts_ends_the_wait(self):
+        import sys
+        import time
+        runner = self.root / "host" / "run0.runner"
+        runner.mkdir(parents=True)
+        (runner / "request.json").write_text(json.dumps({"out": str(runner), "role": "host"}), encoding="utf-8")
+        log = self.root / "run0-host.log"
+        log.write_text("ValueError: player checkout differs from the committed scene launcher\n", encoding="utf-8")
+        player = subprocess.Popen([sys.executable, "-c", "pass"])
+        player.wait()
+        started = time.monotonic()
+        with self.assertRaisesRegex(RuntimeError, "ended before starting its engine: ValueError: player checkout differs"):
+            peers.wait_host_start({"ssh": peers.LOCAL, "python": sys.executable}, str(Path(peers.__file__)), str(runner / "request.json"),
+                                  player, log, settle_s=1)
+        self.assertLess(time.monotonic() - started, 30)
+
     def test_a_killed_players_partial_recording_is_collected_and_its_save_stays_on_its_box(self):
         request = self.request("host", box=dict(repo=str(Path(peers.__file__).resolve().parents[1])),
                                scene_relative="tools/e2e/mp-resume-from-disk-relay.json")

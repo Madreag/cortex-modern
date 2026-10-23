@@ -636,6 +636,24 @@ def selected_boxes(value, path, one_box=False):
     return result
 
 
+def wait_host_start(box, tool, remote, player, log, settle_s=10):
+    """The host's engine is up before anyone joins. A player that ends before its engine starts (a refused build, a busy box)
+    ends the wait with what it printed; no runner has to write a receipt for that."""
+    waiter = subprocess.Popen(remote_command(box, [box["python"], tool, "--wait-start", remote]), stdout=subprocess.PIPE, text=True)
+    ended = None
+    while waiter.poll() is None:
+        if player.poll() is not None:
+            ended = ended or time.monotonic()
+            if time.monotonic() - ended >= settle_s:
+                waiter.terminate()
+                waiter.wait()
+                tail = Path(log).read_text(encoding="utf-8", errors="replace").strip().splitlines()[-1:] if Path(log).is_file() else []
+                raise RuntimeError("host launch refused: the player ended before starting its engine" + (": " + tail[0] if tail else ""))
+        time.sleep(1)
+    if waiter.returncode:
+        raise RuntimeError("host launch refused: " + waiter.stdout.read().strip())
+
+
 def collect_player(out, name, role, player):
     box, request, process, remote, tool, log = player
     process.wait()
@@ -753,9 +771,7 @@ def capture_scene(args):
                 players[role] = (box, request, process, remote, tool, log)
                 requests[(name, role)] = (box, remote, tool)
                 if role == "host":
-                    ready = ssh(box, [box["python"], tool, "--wait-start", remote], capture_output=True, text=True)
-                    if ready.returncode:
-                        raise RuntimeError("host launch refused: " + ready.stdout.strip())
+                    wait_host_start(box, tool, remote, process, controls / (name + "-host.log"))
             if player_files(document, run) or facts or any(video.pace_specs(document, name, role) for role in players):
                 sharing = threading.Thread(target=share_player_files, args=(players, stop, file_errors, controls))
                 sharing.start()
