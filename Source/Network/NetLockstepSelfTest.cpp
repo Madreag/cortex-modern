@@ -534,7 +534,7 @@ namespace RTE {
 				peer.m_SeatTransitions[held] = {{100, NetLockstepCoordinator::SeatTransition::Held}, {180, NetLockstepCoordinator::SeatTransition::Back}};
 				peer.m_PeerBridges[held] = {100, 100, true, 180, {}, peer.m_FrameGroupMembers};
 				peer.m_PeerFrameHolds[held] = {{100, true}, {180, false}};
-				peer.m_ReclaimTransactions[held] = {held, 1, 180 * 8 + held, 1, 180, 5, 190};
+				peer.m_ReclaimTransactions[held] = {held, 1, static_cast<uint64_t>(180 * 8 + held), 1, 180, 5, 190};
 				if (held != 1) peer.m_PeerLeaveFrames[held] = 100;
 				for (uint64_t frame: {99, 100, 179, 180, 190, 191}) {
 					const bool neutral = frame >= 180 && frame <= 190;
