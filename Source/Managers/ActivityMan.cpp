@@ -99,6 +99,7 @@
 #include <chrono>
 #include <charconv>
 #include <condition_variable>
+#include <cstddef>
 #include <deque>
 #include <map>
 #include <cstdlib>
@@ -806,6 +807,11 @@ struct ActivityMan::PreparedAutosave {
 			header.tick = tick; header.identity = identity; written = header.written;
 			clock->call->parts[0] = std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - began).count();
 		};
+		// Test lever CCCP_TEST_CAPTURE_OUTGROWN=1: the world outgrows each capture's plan just before its arm, as a tick that takes a
+		// new native buffer does; the buffer is given back once the capture is decided.
+		static const bool s_Outgrown = std::getenv("CCCP_TEST_CAPTURE_OUTGROWN") != nullptr;
+		const auto giveBack = [](void* buffer) { CheckpointNativeStorage::Deallocate(buffer); };
+		const std::unique_ptr<void, decltype(giveBack)> outgrown(s_Outgrown ? CheckpointNativeStorage::Allocate(size_t{1} << 20, alignof(std::max_align_t)) : nullptr, giveBack);
 		const bool accepted = queue.TryCapture(result, fill);
 		const char* refusal = accepted ? nullptr : queue.ArmRefusal();
 		if (!accepted) {
