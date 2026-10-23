@@ -12,6 +12,7 @@ wait_ms 700
 assert_screen ScenarioConfig
 activate P1T1Box
 activate P5T2Box
+activate P5T3Box
 slider_set SliderActivityDifficulty 0
 slider_set SliderStartingGold 30000
 setcheck CheckboxRequireClearPathToOrbit 0
