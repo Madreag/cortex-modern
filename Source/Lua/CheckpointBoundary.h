@@ -96,9 +96,9 @@ namespace RTE::CheckpointLua {
 		bool Arm(std::array<int64_t, 7>* parts = nullptr) {
 			const auto started = RTE::SteadyClock::now();
 			for (const Heap& heap: m_Heaps) heap.prepared->StopWarming();
-			if (!Current()) return false;
+			if (!Current()) { m_Refusal = StaleReason(); m_Stale = m_Status.load(std::memory_order_acquire) == Status::Prepared; return false; }
 			Status expected = Status::Prepared;
-			if (!m_Status.compare_exchange_strong(expected, Status::Arming, std::memory_order_acq_rel)) return false;
+			if (!m_Status.compare_exchange_strong(expected, Status::Arming, std::memory_order_acq_rel)) { m_Refusal = "the plan was already used"; return false; }
 			try {
 				// The saver's walk asks what memory was free or retained as of this fence, not as the game moves it on.
 				m_Held = CheckpointHeldMemory::Open();
@@ -168,7 +168,13 @@ namespace RTE::CheckpointLua {
 				const auto [heapsArmed, heapsUs] = heaps.get();
 				const auto fenced = RTE::SteadyClock::now();
 				if (failure) std::rethrow_exception(failure);
-				if (!nativeArmed || !heapsArmed) { Cancel(); return false; }
+				if (!nativeArmed || !heapsArmed) {
+					// The native inventory read current before it was fenced; one that grew meanwhile is a plan the world outgrew.
+					m_Stale = !nativeArmed && !m_Native->Current();
+					m_Refusal = !nativeArmed ? (m_Stale ? "the native inventory grew while it was fenced" : "the native pages could not be fenced") : "a Lua heap could not be fenced";
+					Cancel();
+					return false;
+				}
 				m_ArmSplitUs = {std::chrono::duration_cast<std::chrono::microseconds>(nativeFenced - started).count(), heapsUs};
 				for (const auto& root: m_Roots) std::memcpy(const_cast<void*>(root.view), root.source, root.bytes);
 				if (parts) {
@@ -226,6 +232,9 @@ namespace RTE::CheckpointLua {
 		void NoteWarm(bool warmed, int64_t askedUsBefore, int64_t warmUs) noexcept { m_WarmAtArm = warmed; m_WarmAskedUsBefore = askedUsBefore; m_WarmUs = warmUs; }
 		std::tuple<bool, int64_t, int64_t> WarmAtArm() const noexcept { return {m_WarmAtArm, m_WarmAskedUsBefore, m_WarmUs}; }
 		const BindingLease& Bindings() const { return m_Bindings; }
+		/// Why the last Arm refused, or null; and whether it refused because the world outgrew the plan, which a new plan cures.
+		const char* Refusal() const noexcept { return m_Refusal; }
+		bool RefusedStale() const noexcept { return m_Stale; }
 		/// What the engine held free or retained at the fence, for the walk of the frozen script graphs.
 		const CheckpointHeldMemory* HeldMemory() const noexcept { return m_Held.get(); }
 		/// Ends the record once the script graphs are walked; nothing after them asks.
@@ -298,6 +307,12 @@ namespace RTE::CheckpointLua {
 	private:
 		Boundary() = default;
 		enum class Status { Prepared, Arming, Armed, Frozen, Cancelled };
+		const char* StaleReason() const noexcept {
+			if (m_Status.load(std::memory_order_acquire) != Status::Prepared) return "the plan was already used";
+			if (!m_Native || !m_Native->Current()) return "the native inventory grew since the plan";
+			if (!m_Bindings.Current()) return "the script bindings changed since the plan";
+			return "a Lua heap grew or closed since the plan";
+		}
 		struct Heap { HeapOwner::PreparationLease lease; std::shared_ptr<HeapOwner::Prepared> prepared; };
 		// A collection writes every page of its state's heap, so the heap collected in the next tick, which comes before any
 		// idle time, and those collected soon after while they fit a couple of milliseconds of copying, are copied whole at
@@ -376,6 +391,8 @@ namespace RTE::CheckpointLua {
 		bool m_WarmAtArm = false;
 		int64_t m_WarmAskedUsBefore = -1, m_WarmUs = 0;
 		std::atomic<Status> m_Status{Status::Prepared};
+		const char* m_Refusal = nullptr;
+		bool m_Stale = false;
 		std::unique_ptr<CheckpointNativeStorage::Prepared> m_Native;
 		mutable std::shared_ptr<CheckpointHeldMemory> m_Held;
 		BindingLease m_Bindings;

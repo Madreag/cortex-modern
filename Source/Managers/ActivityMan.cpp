@@ -790,12 +790,11 @@ struct ActivityMan::PreparedAutosave {
 		if (!NetActorOwnership::CheckpointValuesReady()) { owner.NoteAutosaveRefusal(false, "the saved actor owners are not ready"); return false; }
 		if (!ContentFile::CheckpointSamplesReady()) { owner.NoteAutosaveRefusal(false, "the loaded samples are not ready"); return false; }
 		if (result.valid() && result.wait_for(std::chrono::seconds(0)) != std::future_status::ready) { owner.NoteAutosaveRefusal(false, "the previous capture is still being written"); return false; }
-		const auto [notReady, failed] = queue.NotReadyState();
 		const long uid = MovableObject::GetUniqueIDCounter();
 		const uint64_t simDraws = g_SimRNG.GetDrawCount(), renderDraws = g_RenderRNG.GetDrawCount(), soundCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
 		// The plan keeps the hold until it is replaced, so no frozen iterator outlives the container it describes.
 		auto ranges = HoldOwnedLuaRanges();
-		const bool accepted = queue.TryCapture(result, [&](Header& header) noexcept {
+		const auto fill = [&](Header& header) noexcept {
 			header.ranges = ranges;
 			clock = header.clock; header.clock->started = began;
 			clock->call->simulation = std::this_thread::get_id();
@@ -806,8 +805,14 @@ struct ActivityMan::PreparedAutosave {
 			std::memcpy(header.match.data(), match.data(), match.size()); header.match[match.size()] = 0;
 			header.tick = tick; header.identity = identity; written = header.written;
 			clock->call->parts[0] = std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - began).count();
-		});
-		if (!accepted) owner.NoteAutosaveRefusal(notReady.empty() || failed, !notReady.empty() ? std::string_view(notReady) : std::string_view("the capture's pages could not be armed"));
+		};
+		const bool accepted = queue.TryCapture(result, fill);
+		const char* refusal = accepted ? nullptr : queue.ArmRefusal();
+		if (!accepted) {
+			const auto [nowNotReady, failed] = queue.NotReadyState();
+			if (refusal) owner.NoteAutosaveRefusal(true, "the capture's pages could not be armed: ", refusal);
+			else owner.NoteAutosaveRefusal(nowNotReady.empty() || failed, !nowNotReady.empty() ? std::string_view(nowNotReady) : std::string_view("the capture's pages could not be armed"));
+		}
 		if (accepted) {
 			owner.NoteAutosaveRefusal(false, {});
 			owner.m_LastAutosaveTick = tick; owner.m_LastAutosaveBytes = 0;
