@@ -3724,7 +3724,8 @@ namespace RTE {
 		constexpr uint64_t c_MatchSoundIdentityBase = 1ULL << 40;
 		const uint64_t soundCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
 		g_AudioMan.SetCheckpointSoundContainerCursor(c_MatchSoundIdentityBase);
-		std::cerr << "[scenario] pinned sound identity cursor " << soundCursor << " -> " << c_MatchSoundIdentityBase << std::endl;
+		// One write, so another thread's line cannot land inside it.
+		std::cerr << ("[scenario] pinned sound identity cursor " + std::to_string(soundCursor) + " -> " + std::to_string(c_MatchSoundIdentityBase) + "\n") << std::flush;
 		// Remember the user's values so the closing session can hand them back.
 		if (!s_SimSettingsPinned) {
 			s_SimSettingsPinned = true;
