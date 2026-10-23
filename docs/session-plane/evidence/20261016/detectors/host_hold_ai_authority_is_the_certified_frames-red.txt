@@ -1,2 +1,0 @@
-[net-session-plane-selftest] FAIL host_hold_ai_authority_is_the_certified_frames: the two seats did not certify the host's hold before the AI boundary
-[net-session-plane-selftest] FAIL

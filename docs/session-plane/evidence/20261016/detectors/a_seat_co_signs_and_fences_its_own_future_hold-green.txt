@@ -1,2 +1,0 @@
-[net-lockstep-selftest] PASS a_seat_co_signs_and_fences_its_own_future_hold
-[net-lockstep-selftest] PASS

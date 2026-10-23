@@ -1,2 +1,0 @@
-[net-session-plane-selftest] PASS host_hold_ai_authority_is_the_certified_frames
-[net-session-plane-selftest] PASS

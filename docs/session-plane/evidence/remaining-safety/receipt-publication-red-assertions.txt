@@ -1,1 +1,0 @@
-[net-lockstep-selftest] FAIL: a lost cumulative receipt was never republished without another input

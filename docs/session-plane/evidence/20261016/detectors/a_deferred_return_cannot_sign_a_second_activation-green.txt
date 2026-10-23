@@ -1,2 +1,0 @@
-[net-lockstep-selftest] PASS a_deferred_return_cannot_sign_a_second_activation
-[net-lockstep-selftest] PASS

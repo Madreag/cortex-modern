@@ -1,1 +1,0 @@
-[net-lockstep-selftest] FAIL: delivering an old return cleared a newer certified hold before its AI handoff

@@ -1,2 +1,0 @@
-[net-lockstep-selftest] PASS an_image_return_takes_its_members_retained_starts
-[net-lockstep-selftest] FAIL: an image return did not take its members' authenticated retained starts: running=0 host=0 third=0

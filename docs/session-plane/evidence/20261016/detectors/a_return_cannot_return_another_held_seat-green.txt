@@ -1,2 +1,0 @@
-[net-lockstep-selftest] PASS a_return_cannot_return_another_held_seat
-[net-lockstep-selftest] PASS

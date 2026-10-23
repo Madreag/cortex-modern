@@ -1,2 +1,0 @@
-[net-lockstep-selftest] PASS private_capture_has_a_distinct_wire_and_admission_contract
-[net-lockstep-selftest] PASS

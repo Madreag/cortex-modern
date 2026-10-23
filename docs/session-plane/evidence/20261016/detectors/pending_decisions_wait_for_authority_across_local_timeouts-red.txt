@@ -1,1 +1,0 @@
-[net-lockstep-selftest] FAIL: a local five-second timer erased an unresolved certified hold

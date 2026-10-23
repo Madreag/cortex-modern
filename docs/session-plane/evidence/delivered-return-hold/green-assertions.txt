@@ -1,2 +1,0 @@
-[net-lockstep-selftest] PASS an_old_return_delivery_preserves_a_newer_certified_hold
-[net-lockstep-selftest] PASS

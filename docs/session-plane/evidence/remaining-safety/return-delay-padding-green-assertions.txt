@@ -1,2 +1,0 @@
-[net-lockstep-selftest] PASS a_return_delay_rise_pads_only_owed_live_inputs
-[net-lockstep-selftest] PASS

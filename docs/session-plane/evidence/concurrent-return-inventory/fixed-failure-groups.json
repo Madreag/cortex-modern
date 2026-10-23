@@ -1,7 +1,0 @@
-{
-  "path": "<RUN>/net-session-plane-selftest/fixed-failure-groups.txt",
-  "binary": "8aeb250c6f8c017121a42c66909d8860297b4c65d3719e1922faf8e0eb0bf50a",
-  "digest": "615febeb46b3955b13a093a3b59e6b3f727ee074abd8c7413409939baf1ec9e7",
-  "suite_root": "<RUN>",
-  "saved_cases_ran": 108
-}

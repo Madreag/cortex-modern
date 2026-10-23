@@ -1,7 +1,0 @@
-{
-  "path": "<REPO>/reviews/mac/internet-authority-inventory/net-session-plane-selftest/fixed-failure-groups.txt",
-  "binary": "66c30f1a90f87e2a21ba02f47793be491a1482d373d9a7a9e5b547244bb7d9bd",
-  "digest": "3189f72cff1121de4c55594e3deb6957d3f94e8858866224eb5f3590fb9a2ad3",
-  "suite_root": "<REPO>/reviews/mac/internet-authority-inventory",
-  "saved_cases_ran": 108
-}

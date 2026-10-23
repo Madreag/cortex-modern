@@ -1,5 +1,0 @@
-{
-  "pid": 2987282,
-  "action": "Stopped only our orchestration parent while its inventory child finishes. No engine or foreign process was signalled.",
-  "reason": "Add the direct <map> include required by the cross-platform rule before freezing the long final suite/5000. This attempt will not be called complete."
-}

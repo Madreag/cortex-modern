@@ -1,1 +1,0 @@
-[net-lockstep-selftest] FAIL: a return delay rise padded across its old admission: local input precedes the sender's admission delay

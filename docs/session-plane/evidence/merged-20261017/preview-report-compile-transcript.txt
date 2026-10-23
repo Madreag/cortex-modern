@@ -1,5 +1,0 @@
-ninja: Entering directory `build-gcc'
-[1/4] Compiling C++ object CortexCommand.p/Source_Managers_LocalPrediction.cpp.o
-[2/4] Compiling C++ object CortexCommand.p/Source_Managers_FrameMan.cpp.o
-[3/4] Compiling C++ object CortexCommand.p/Source_Main.cpp.o
-[4/4] Linking target CortexCommand

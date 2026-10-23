@@ -1,2 +1,0 @@
-[net-lockstep-selftest] PASS a_future_removal_does_not_rewrite_an_earlier_frame_prefix
-[net-lockstep-selftest] PASS

@@ -1,1 +1,0 @@
-[net-lockstep-selftest] FAIL: a neutral seat checked in as a voter outside the referee's assigned half

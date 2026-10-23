@@ -1,1 +1,0 @@
-[net-lockstep-selftest] FAIL: the old migration contract accepted a private capture request

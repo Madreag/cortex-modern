@@ -1,9 +1,0 @@
-{
-  "exit_code": 1,
-  "source_head": "60328c3f2491ffbba4a55b33e7eca215752cf08e",
-  "files": {
-    "Source/Network/NetSessionDirectoryCapacitySelfTest.py": "f76f0d59dbac734481d56b49bc919c4f5e11e6d10e2e3aa3447f97fc89deaaa9",
-    "tools/session_directory/connection_authority.py": "96db53f65f5baecf4796e1dc8f5f8226441fd378c9e2c54ea771bbdf4769b1af"
-  },
-  "scope": "real signed endpoint fixture with isolated temporary persisted store"
-}

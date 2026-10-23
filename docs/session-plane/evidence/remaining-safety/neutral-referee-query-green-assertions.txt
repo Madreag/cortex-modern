@@ -1,2 +1,0 @@
-[net-lockstep-selftest] PASS a_neutral_seat_only_queries_the_assigned_referee_half
-[net-lockstep-selftest] PASS

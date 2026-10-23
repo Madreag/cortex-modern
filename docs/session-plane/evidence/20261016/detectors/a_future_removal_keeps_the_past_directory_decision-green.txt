@@ -1,2 +1,0 @@
-[net-lockstep-selftest] PASS a_future_removal_keeps_the_past_directory_decision
-[net-lockstep-selftest] PASS

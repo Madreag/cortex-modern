@@ -1,2 +1,0 @@
-[net-lockstep-selftest] PASS a_later_return_keeps_the_earlier_scheduled_return
-[net-lockstep-selftest] PASS

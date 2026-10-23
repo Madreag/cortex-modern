@@ -1,2 +1,0 @@
-[net-lockstep-selftest] PASS a_return_start_uses_its_certified_admission
-[net-lockstep-selftest] PASS

@@ -1,6 +1,0 @@
-{
-  "retained_in_engine": false,
-  "reason": "Both original schedules fail at identical frames on the selection candidate; source was restored before the fixture RED/GREEN.",
-  "source_sha256": "a30a4f97da23acb3a52d788978a238cc72da734c7f3dc7672345781ad0dd9dac",
-  "compressed_sha256": "4b2e0be18be64cb4e7ef9f4c79f25e8f554ac5e9ad6e16866a54ebf761d59ec4"
-}
