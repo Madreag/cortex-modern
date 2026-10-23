@@ -632,6 +632,20 @@ def running_stills(spans, rows, minimum_s=1.0, capped_stop_ms=None, allowed=None
     return stills
 
 
+def stopped_by_scene(peer):
+    """The scene's own whole-process stop of this peer, from the receipt its hang lever wrote: the tick it stopped at and the span
+    on the recorder's clock it drew nothing in."""
+    try:
+        receipt = json.loads((Path(peer.get("probe_dir") or "") / SUSPEND_RECEIPT).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    frame = receipt.get("last_recorded_frame") or {}
+    if receipt.get("error") or "sim_tick" not in frame or "wall_ms" not in frame:
+        return None
+    return {"tick": frame["sim_tick"], "from_ms": frame["wall_ms"], "to_ms": frame["wall_ms"] + receipt.get("suspended_ms", 0),
+            "reason": f"the scene stopped this peer's whole process for {receipt.get('seconds')} s"}
+
+
 def named_still_windows(scenario, run_name, peer, video_dir):
     """The scenario's still states for this peer as recorder-clock windows: from a first mark to its closing mark, or from the
     first picture of a tick window to its last."""
@@ -1263,6 +1277,9 @@ def capture_evidence_items(scenario, capture, peer):
     text = log.read_text(encoding='utf-8', errors='replace') if log.is_file() else ''
     # A scene's own lever may freeze a peer's screen on purpose (its stalled host); those windows are named, with the reason, not judged.
     excluded = [spec for spec in scenario.get('drawn_frames_exclude', []) if spec.get('peer') == name]
+    stopped = stopped_by_scene(peer)
+    if stopped:
+        excluded.append(dict(peer=name, first_tick=stopped['tick'], last_tick=stopped['tick'] + 1, reason=stopped['reason']))
     exclude = [(spec['first_tick'], spec['last_tick']) for spec in excluded]
     drawn = frame_pace.check(text, 'lockstep', exclude=exclude)
     if drawn['status'] == 'NONE':
@@ -1271,8 +1288,10 @@ def capture_evidence_items(scenario, capture, peer):
     allowed, stills, error = [], None, ''
     ffmpeg = find_ffmpeg()
     try:
+        # The picture a stopped peer leaves on its screen holds from its last frame until it draws again.
+        held = [(stopped['from_ms'] - 1000, stopped['to_ms'] + 2000, stopped['reason'])] if stopped else []
         stills = freeze_scan(ffmpeg, peer.get('video'), read_index(peer['video_dir']) if peer.get('video_dir') else [],
-                             peer.get('video_dir'), allowed, named_still_windows(scenario, capture['name'], name, peer.get('video_dir')))
+                             peer.get('video_dir'), allowed, named_still_windows(scenario, capture['name'], name, peer.get('video_dir')) + held)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as failed:
         error = f'still scan: {type(failed).__name__}: {failed}'
     if stills is None:
@@ -2122,6 +2141,8 @@ def stage_peer(scenario, peer, root, tokens):
 
 
 SUSPEND_RECEIPT = "injected-suspend.json"
+
+
 def hang_peer(handle, seconds, stop):
     """Stops every thread of a peer's engine for the given seconds, then lets it run on: a machine that stops answering.
     A stalled simulation is not this; its network thread still answers."""

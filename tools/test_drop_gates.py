@@ -76,6 +76,18 @@ class HangGateTests(unittest.TestCase):
             child.kill()
             child.wait()
 
+    def test_a_stopped_peer_is_named_where_it_drew_nothing(self):
+        import tempfile
+        probe = Path(tempfile.mkdtemp())
+        self.assertIsNone(e2e_video.stopped_by_scene({"probe_dir": str(probe)}))
+        (probe / e2e_video.SUSPEND_RECEIPT).write_text(json.dumps({"seconds": 25.0, "suspended_ms": 25003,
+                                                                   "last_recorded_frame": {"sim_tick": 833, "wall_ms": 1000}}))
+        stopped = e2e_video.stopped_by_scene({"probe_dir": str(probe)})
+        self.assertEqual((stopped["tick"], stopped["from_ms"], stopped["to_ms"]), (833, 1000, 26003))
+        self.assertIn("stopped this peer's whole process for 25.0 s", stopped["reason"])
+        (probe / e2e_video.SUSPEND_RECEIPT).write_text(json.dumps({"error": "ProcessLookupError", "last_recorded_frame": {"sim_tick": 1, "wall_ms": 1}}))
+        self.assertIsNone(e2e_video.stopped_by_scene({"probe_dir": str(probe)}))
+
     def test_a_capture_that_stops_lets_its_hung_peer_run_on_at_once(self):
         calls = []
         handle = SimpleNamespace(suspend=lambda: calls.append("suspend"), resume=lambda: calls.append("resume"))
