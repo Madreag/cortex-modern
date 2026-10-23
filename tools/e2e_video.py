@@ -1462,6 +1462,20 @@ def completed_probe(path):
         return False
 
 
+def peer_gate_met(gate, root):
+    """One peer's own fact, read from its files under the run root: a finished probe, a log line, a recorded tick or an event."""
+    name, root = gate["peer"], Path(root)
+    if gate.get("probe_complete"):
+        return completed_probe(root / f"{name}-stage" / "probe" / "net-ui-result.json")
+    if gate.get("log"):
+        return log_line_seen(root / name / "stdout.log", gate["log"])
+    video = root / name / "video"
+    if "sim_tick" in gate:
+        return any(row.get("screen") == "game" and row.get("sim_tick", 0) >= gate["sim_tick"] for row in read_index(video))
+    path = video / "events.jsonl"
+    return path.is_file() and gate["event"] in path.read_text(encoding="utf-8", errors="replace")
+
+
 def window_progress(observed, required):
     """The ticks the engine committed across a marked window, by its own counters at the window's two ends: the
     round's committed frame when a lockstep round runs through both, else every sim update. The window's own length
@@ -2108,6 +2122,24 @@ def peer_arguments(peer, tokens, fps):
     return args + [str(value) for value in substitute(peer.get("args", []), tokens)]
 
 
+LISTED_SESSION = re.compile(r"(?m)^\[net-directory\] registered session_id=(\S+) heartbeat_s=\d+")
+
+
+def write_listed_lobby(log, path):
+    """A host without a menu names its listed lobby as a menu's write_lobby does, from its own registered-session line;
+    a host that lists again under a new session names the new one."""
+    found = LISTED_SESSION.findall(log.read_text(encoding="utf-8", errors="replace")) if log.is_file() else []
+    if not found:
+        return
+    text = json.dumps({"session_id": found[-1]}) + "\n"
+    if path.is_file() and path.read_text(encoding="utf-8") == text:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    partial = path.with_name(path.name + ".part")
+    partial.write_text(text, encoding="utf-8")
+    os.replace(partial, path)
+
+
 def gameplay_signals(video, stage, epochs=1):
     last_tick, starts = None, []
     for row in read_index(video):
@@ -2304,6 +2336,8 @@ def _run_one(options, scenario, run, run_index, out, case_root=None):
                         "stage": str(stage), "probe_dir": str(stage / "probe"),
                         "gameplay_signal": str(stage / "gameplay-started.json"),
                         "start_delay_s": peer.get("start_delay_s", 0)}
+        if peer.get("lobby_file"):
+            staged[name]["lobby_file"] = str(substitute(peer["lobby_file"], tokens))
 
     if dry:
         return {"name": root.name, "root": str(root), "size": size, "port": port, "peers": list(staged.values())}
@@ -2353,15 +2387,10 @@ def _run_one(options, scenario, run, run_index, out, case_root=None):
         name = gate["peer"]
         if gate.get("ended"):
             return name in records and records[name].get("exit_code") is not None
-        if gate.get("probe_complete"):
-            return completed_probe(Path(shared[f"PROBE_DIR_{name}"]) / "net-ui-result.json")
-        if gate.get("log"):
-            return log_line_seen(root / name / "stdout.log", gate["log"])
-        video = Path(shared[f"VIDEO_{name}"])
-        if "sim_tick" in gate:
-            return any(row.get("screen") == "game" and row.get("sim_tick", 0) >= gate["sim_tick"] for row in read_index(video))
-        path = video / "events.jsonl"
-        return path.is_file() and gate["event"] in path.read_text(encoding="utf-8", errors="replace")
+        # A peer another box plays is known here only by the facts that box reports.
+        if name not in runs and hasattr(getattr(options, "remote_capture", None), "peer_fact"):
+            return options.remote_capture.peer_fact(gate)
+        return peer_gate_met(gate, root)
 
     def kill_at_tick(name, tick):
         video = Path(shared[f"VIDEO_{name}"])
@@ -2385,7 +2414,7 @@ def _run_one(options, scenario, run, run_index, out, case_root=None):
                 probe = next((part for part in gate_parts(gate) if part.get("probe_complete")), None)
                 # A peer dropped because a probe finished ends a scenario, not a fault: its recorder writes the
                 # frames it already took first, so the probe's last marked window keeps its video.
-                flushed = await_recorder(shared[f"VIDEO_{probe['peer']}"], stop_watchers) if probe else None
+                flushed = await_recorder(shared[f"VIDEO_{probe['peer']}"], stop_watchers) if probe and probe["peer"] in runs else None
                 rows = read_index(shared[f"VIDEO_{name}"])
                 receipt = {"requested_event": gate, "last_recorded_frame": rows[-1] if rows else None, "recorder_flush": flushed}
                 # A gate on the peer's own tick is a drop after that recorded tick, as kill_at_tick receipts it.
@@ -2435,7 +2464,8 @@ def _run_one(options, scenario, run, run_index, out, case_root=None):
                     break
             gate = peer.get("start_when")
             if gate:
-                native_launch = launched[gate["peer"]] if getattr(options, "remote_capture", None) and not gate.get("run") else None
+                # A peer another box plays has started before this one is launched.
+                native_launch = launched.get(gate["peer"]) if getattr(options, "remote_capture", None) and not gate.get("run") else None
                 if not await_start_gate(gate, gate_met, failed, native_launch):
                     records[name] = {"error": f"start gate not reached: {gate}"}
                     failed.set()
@@ -2502,6 +2532,8 @@ def _run_one(options, scenario, run, run_index, out, case_root=None):
                 epochs = next(peer.get("gameplay_epochs", 1) for peer in peers if peer["name"] == name)
                 if not signal.exists() or epochs > 1:
                     gameplay_signals(shared[f"VIDEO_{name}"], staged[name]["stage"], epochs)
+                if staged[name].get("lobby_file"):
+                    write_listed_lobby(root / name / "stdout.log", Path(staged[name]["lobby_file"]))
             if failed.is_set():
                 for handle in runs.values():
                     drop_peer(handle, "another scenario peer failed")

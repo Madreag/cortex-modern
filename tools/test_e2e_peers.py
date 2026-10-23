@@ -90,7 +90,7 @@ class SceneBoxesTest(unittest.TestCase):
             (out / "run0" / (role + "-stage/probe")).mkdir(parents=True)
             (out / (role + "-started.json")).write_text('{}')
             request = out / "request.json"
-            request.write_text(json.dumps(dict(out=str(out), role=role, run_name="run0", signal_files=files)))
+            request.write_text(json.dumps(dict(out=str(out), scene_out=str(out), role=role, run_name="run0", signal_files=files)))
             requests[role] = request
         marker = self.root / 'native-host/run0/host-stage/probe/fight-ticks-complete.json'
         marker.write_bytes(b'{')
@@ -98,11 +98,11 @@ class SceneBoxesTest(unittest.TestCase):
         content = b'{"frame":73000,"name":"fight-ticks-complete"}\n'
         marker.write_bytes(content)
         copied = peers.read_player_files(requests['host'])['files']
-        peers.write_player_files(requests['joiner'], copied)
+        peers.write_player_files(requests['joiner'], {"files": copied})
         received = self.root / 'native-joiner/run0/host-stage/probe/fight-ticks-complete.json'
         self.assertEqual(received.read_bytes(), content)
         with self.assertRaises(ValueError):
-            peers.write_player_files(requests['host'], copied)
+            peers.write_player_files(requests['host'], {"files": copied})
 
 
 class FightEndCheckTest(unittest.TestCase):
@@ -479,7 +479,7 @@ class JoinerBoxTest(unittest.TestCase):
         out = self.root / "native-joiner"
         (out / "run0" / "joiner").mkdir(parents=True)
         request = out / "request.json"
-        request.write_text(json.dumps(dict(out=str(out), role="joiner", run_name="run0", signal_files=[])))
+        request.write_text(json.dumps(dict(out=str(out), scene_out=str(out), role="joiner", run_name="run0", signal_files=[])))
         self.assertIsNone(peers.read_player_files(request)["pace"])
         (out / "run0" / "joiner" / peers.video.PACE_REPORT).write_text(json.dumps({"line": "[fight-pace] RED"}))
         self.assertEqual(peers.read_player_files(request)["pace"]["line"], "[fight-pace] RED")
@@ -564,13 +564,13 @@ class WindowsJoinersTest(unittest.TestCase):
             (out / (role + "-started.json")).write_text("{}")
             (out / "run0" / (role + "-stage/probe/fight-ticks-complete.json")).write_text('{"name":"fight-ticks-complete"}')
             request = out / "request.json"
-            request.write_text(json.dumps(dict(out=str(out), role=role, run_name="run0", signal_files=files)))
+            request.write_text(json.dumps(dict(out=str(out), scene_out=str(out), role=role, run_name="run0", signal_files=files)))
             requests[role] = request
         (self.root / "native-joiner1/run0/joiner1-stage/probe/joined.mark").write_text("")
         states = {role: peers.read_player_files(requests[role])["files"] for role in roles}
         for role in roles:
             incoming = {path: data for other, state in states.items() if other != role for path, data in state.items()}
-            peers.write_player_files(requests[role], incoming)
+            peers.write_player_files(requests[role], {"files": incoming})
             received = self.root / ("native-" + role) / "run0"
             for other in roles:
                 self.assertTrue((received / (other + "-stage/probe/fight-ticks-complete.json")).is_file(), (role, other))
@@ -584,7 +584,7 @@ class WindowsJoinersTest(unittest.TestCase):
         (out / "run0" / "joiner2").mkdir()
         (out / "run0" / "joiner2" / "stdout.log").write_text("joiner2\n")
         request = out / "request.json"
-        request.write_text(json.dumps(dict(out=str(out), role="joiner2", run_index=0, scene_relative="tools/e2e/fight15-s11.json",
+        request.write_text(json.dumps(dict(out=str(out), scene_out=str(out), role="joiner2", run_index=0, scene_relative="tools/e2e/fight15-s11.json",
                                            box=dict(repo=str(Path(peers.__file__).resolve().parents[1])))))
         with mock.patch("builtins.print"):
             peers.pack(request)
@@ -597,7 +597,8 @@ class WindowsJoinersTest(unittest.TestCase):
         repo = Path(peers.__file__).resolve().parents[1]
         request = self.root / "request.json"
         request.write_text(json.dumps(dict(box=dict(repo=str(repo), scratch=str(self.root), os="win32"), role="joiner2", run_index=0,
-                                           out=str(self.root / "native-joiner2"), commit="tip", scene_relative="tools/e2e/fight15-s11.json",
+                                           out=str(self.root / "native-joiner2" / "run0.runner"), scene_out=str(self.root / "native-joiner2"),
+                                           commit="tip", scene_relative="tools/e2e/fight15-s11.json",
                                            scene_sha256="scene", port=peers.video.PORT_LO, fps=30, sheet_every=15)))
         seen = {}
 
@@ -617,15 +618,16 @@ class WindowsJoinersTest(unittest.TestCase):
         boxes = peers.selected_boxes("host=TEST-PC,joiner1=Node,joiner2=BOX-C,joiner3=PAD", self.boxes)
         roots = {"TEST-PC": "C:/sample-project/mx/scene-peers-desync", "Node": "C:/sample-project/mx/two-box-harness",
                  "BOX-C": "W:/mx/two-box-harness", "PAD": "C:/sample-project/mx/scene-peers-desync"}
-        # The PAD's joiner of fe5db-testpc-node-mac-pad-4p1 could not read this 125-character Data file at 260 characters.
+        # The PAD's joiner of fe5db-testpc-node-mac-pad-4p1 could not read this 125-character Data file at 260 characters, when each
+        # run had its own folder; one folder for the scene's runs brings that name to 255, and a name three characters longer to 261.
         longest = len("Data/Browncoats.rte/Scenes/Objects/BunkerSystems/RefineryAuthorizationConsole/RefineryAuthorizationConsolePieSliceActions.lua")
-        for run in ("fe5db-testpc-node-mac-pad-4p1", "fe5db-4p2"):
+        for run in ("fe5db-testpc-node-mac-pad-4p1-ab", "fe5db-testpc-node-mac-pad-4p1", "fe5db-4p2"):
             for box in boxes.values():
                 box["scratch"] = roots[box["name"]] + "/" + run
-            if run == "fe5db-4p2":
+            if run != "fe5db-testpc-node-mac-pad-4p1-ab":
                 peers.check_windows_paths(boxes, run, "run0", Path("."), longest)
                 continue
-            with self.assertRaisesRegex(ValueError, "^PAD: the joiner3's game files would reach 260 characters"):
+            with self.assertRaisesRegex(ValueError, "^PAD: the joiner3's game files would reach 261 characters"):
                 peers.check_windows_paths(boxes, run, "run0", Path("."), longest)
         self.assertEqual(peers.longest_data_path(Path(peers.__file__).resolve().parents[1]), longest)
 
@@ -656,6 +658,27 @@ class LobbyIdentityTest(unittest.TestCase):
 
     SCENES = sorted(path.stem for path in (Path(peers.__file__).parent / "e2e").glob("fight15-s[0-9][0-9].json"))
     LOBBY = "{PROBE_DIR_host}/lobby.json"
+
+    def test_a_host_with_no_menu_names_the_lobby_it_listed(self):
+        with tempfile.TemporaryDirectory() as folder:
+            log, lobby = Path(folder) / "stdout.log", Path(folder) / "probe" / "lobby.json"
+            log.write_text("[net-directory] registering\n", encoding="utf-8")
+            peers.video.write_listed_lobby(log, lobby)
+            self.assertFalse(lobby.exists())
+            log.write_text("[net-directory] registered session_id=s-1 heartbeat_s=20\n", encoding="utf-8")
+            peers.video.write_listed_lobby(log, lobby)
+            self.assertEqual(json.loads(lobby.read_text(encoding="utf-8")), {"session_id": "s-1"})
+            # A host that lists again after it went quiet is joined under its new listing.
+            with log.open("a", encoding="utf-8") as text:
+                text.write("[net-directory] registered session_id=s-2 heartbeat_s=20\n")
+            peers.video.write_listed_lobby(log, lobby)
+            self.assertEqual(json.loads(lobby.read_text(encoding="utf-8")), {"session_id": "s-2"})
+        document = copy.deepcopy(peers.scene("mp-resume-from-disk-relay"))
+        resumed = document["runs"][1]["peers"][0]
+        peers.check_scene(document)
+        resumed.pop("lobby_file")
+        with self.assertRaisesRegex(ValueError, "the host's menu never writes it"):
+            peers.check_scene(document)
 
     def test_every_two_box_joiner_joins_its_own_hosts_lobby(self):
         for name in self.SCENES:
@@ -724,6 +747,113 @@ class LobbyIdentityTest(unittest.TestCase):
         launched.assert_not_called()
         capture = json.loads((root / "s13-held" / "capture.json").read_text())
         self.assertIn("is held by another lobby", capture["interrupted"])
+
+
+class KillAndRestartTest(unittest.TestCase):
+    """A peer is dropped, hung and restarted on its own box; only facts and its run's files cross to the collector."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name).resolve()
+        self.document = peers.scene("mp-resume-from-disk-relay")
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def edited(self, run_name, peer_name, **values):
+        document = copy.deepcopy(self.document)
+        run = next(run for run in document["runs"] if run["name"] == run_name)
+        next(peer for peer in run["peers"] if peer["name"] == peer_name).update(values)
+        return document
+
+    def test_a_scene_that_kills_and_restarts_its_players_is_accepted(self):
+        peers.check_scene(self.document)
+
+    def test_a_player_restarts_only_from_its_own_earlier_runtime(self):
+        for reference in ({"run": "died", "peer": "host"}, {"run": "resumed", "peer": "client"}):
+            with self.assertRaisesRegex(ValueError, "its own runtime of an earlier run"):
+                peers.check_scene(self.edited("resumed", "client", retain_runtime_from=reference))
+
+    def test_the_host_never_waits_to_start_on_another_player(self):
+        with self.assertRaisesRegex(ValueError, "the host starts first"):
+            peers.check_scene(self.edited("died", "host", start_when={"peer": "client", "event": "video_mark resume-client-lobby"}))
+
+    def test_a_gate_on_another_players_end_is_refused(self):
+        with self.assertRaisesRegex(ValueError, "another player's end"):
+            peers.check_scene(self.edited("died", "host", kill_when={"peer": "client", "ended": True}))
+
+    def request(self, role, run="died", **values):
+        runner = self.root / role / (run + ".runner")
+        runner.mkdir(parents=True, exist_ok=True)
+        path = runner / "request.json"
+        path.write_text(json.dumps(dict(out=str(runner), scene_out=str(self.root / role), role=role, run_name=run, run_index=0,
+                                        signal_files=[], **values)), encoding="utf-8")
+        return path
+
+    def test_a_players_gate_on_the_other_box_is_met_by_the_fact_that_box_reports(self):
+        run = self.document["runs"][0]
+        wanted = peers.gate_facts(self.document, run)
+        host_request = self.request("host", gate_facts=wanted["host"])
+        client_request = self.request("client", gate_facts=wanted["client"])
+        retained = {"peer": "host", "log": "^\\[autosave\\] retained tick="}
+        listening = next(part for part in wanted["host"] if part.get("event"))
+        waiting = peers.PlayerRun(json.loads(client_request.read_text()), self.root / "client-started.json")
+        self.assertEqual(peers.read_player_files(host_request)["facts"], [])
+        log = self.root / "host" / "died" / "host" / "stdout.log"
+        log.parent.mkdir(parents=True)
+        log.write_text("[autosave] tick=60 capture_ms=4\n[autosave] retained tick=60 keep=2 \n", encoding="utf-8")
+        facts = peers.read_player_files(host_request)["facts"]
+        self.assertEqual(facts, [peers.fact_key(retained)])
+        self.assertFalse(waiting.peer_fact(retained))
+        # The joiner's start waits before its engine starts, so the facts reach it before its run's folder exists.
+        peers.write_player_files(client_request, {"files": {}, "facts": {"host": facts}})
+        self.assertTrue(waiting.peer_fact(retained))
+        self.assertFalse(waiting.peer_fact(listening))
+        with self.assertRaises(ValueError):
+            peers.write_player_files(client_request, {"facts": {"client": facts}})
+
+    def test_a_restarted_player_finds_its_own_runtime_and_the_other_players_end(self):
+        half = self.root / "host" / "died" / "host-capture.json"
+        half.parent.mkdir(parents=True)
+        runtime = self.root / "host" / "died" / "host" / "runtime"
+        half.write_text(json.dumps({"peers": [{"peer": "host", "root": str(runtime.parent), "runtime": str(runtime),
+                                               "record": {"exit_code": 137}}]}), encoding="utf-8")
+        earlier = [{"name": "died", "peers": [{"peer": "host", "record": {"exit_code": 137}}, {"peer": "client", "record": {"exit_code": 137}}]}]
+        runs = peers.completed_runs({"completed_runs": earlier}, self.root / "host", "host")
+        self.assertEqual(peers.video.prior_peer(runs, {"run": "died", "peer": "host"})["runtime"], str(runtime))
+        self.assertTrue(peers.video.cross_run_ready(runs, {"run": "died", "peers": ["host", "client"], "ended": True}))
+        self.assertTrue(Path(peers.video.prior_peer(runs, {"run": "died", "peer": "host"})["runtime"]).is_relative_to(self.root / "host"))
+
+    def test_the_save_is_read_on_the_box_that_wrote_it(self):
+        runtime = self.root / "host" / "died" / "host" / "runtime"
+        store = runtime / "Autosaves"
+        store.mkdir(parents=True)
+        for tick in (540, 600):
+            (store / f"m1-{tick}.ccmanifest").write_text(f"SavedTick = {tick}\nMatchId = m1\n", encoding="utf-8")
+            (store / f"m1-{tick}.ccsave").write_bytes(b"save")
+        (store / "m1.admission").write_bytes(b"admission")
+        (self.root / "host" / "died" / "host-capture.json").write_text(json.dumps({"peers": [{"peer": "host", "root": str(runtime.parent),
+                                                                                               "runtime": str(runtime)}]}), encoding="utf-8")
+        found = peers.checkpoint(self.request("host"))
+        self.assertEqual(found["tokens"], {"RESUME_MATCH": "m1", "RESUME_TICK": 600})
+        self.assertTrue(all(row["path"].startswith(str(runtime)) for row in found["evidence"]))
+
+    def test_a_killed_players_partial_recording_is_collected_and_its_save_stays_on_its_box(self):
+        request = self.request("host", box=dict(repo=str(Path(peers.__file__).resolve().parents[1])),
+                               scene_relative="tools/e2e/mp-resume-from-disk-relay.json")
+        died = self.root / "host" / "died"
+        for relative in ("host/video/frames.jsonl", "host/video/fragment-0000.mp4", "host/stdout.log", "host-stage/probe/lobby.json",
+                         "host/runtime/Autosaves/m1-600.ccsave", "client-stage/probe/marker.json", "host.ticket"):
+            (died / relative).parent.mkdir(parents=True, exist_ok=True)
+            (died / relative).write_text("{}", encoding="utf-8")
+        (self.root / "host" / "died.runner" / "session.log").write_text("session\n", encoding="utf-8")
+        with mock.patch("builtins.print"):
+            peers.pack(request)
+        import tarfile
+        with tarfile.open(self.root / "host" / "died.tgz") as archive:
+            names = sorted(archive.getnames())
+        self.assertEqual(names, ["commands/died-host-session.log", "died/host-stage/probe/lobby.json", "died/host.ticket",
+                                 "died/host/stdout.log", "died/host/video/fragment-0000.mp4", "died/host/video/frames.jsonl"])
 
 
 if __name__ == "__main__":
