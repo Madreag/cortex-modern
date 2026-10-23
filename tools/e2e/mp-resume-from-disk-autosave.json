@@ -29,7 +29,12 @@
           "menu_script": "mp-resume-from-disk.host.menu.txt",
           "input_script": "mp-resume-from-disk.input.txt",
           "probe": "mp-resume-from-disk.before.probe.json",
-          "kill_at_tick": 601,
+          "kill_when": {
+            "all": [
+              {"peer": "host", "sim_tick": 601},
+              {"peer": "host", "log": "^\\[autosave\\] retained tick="}
+            ]
+          },
           "observe_after_failure": true,
           "settings": {
             "NetworkDisplayName": "Host",
@@ -59,7 +64,12 @@
           "menu_script": "mp-resume-from-disk.client.menu.txt",
           "input_script": "mp-resume-from-disk.input.txt",
           "probe": "mp-resume-from-disk.before.probe.json",
-          "kill_at_tick": 601,
+          "kill_when": {
+            "all": [
+              {"peer": "client", "sim_tick": 601},
+              {"peer": "host", "log": "^\\[autosave\\] retained tick="}
+            ]
+          },
           "observe_after_failure": true,
           "settings": {
             "NetworkDisplayName": "Joiner",

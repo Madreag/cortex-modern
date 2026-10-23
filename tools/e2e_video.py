@@ -394,14 +394,22 @@ def checkpoint_tokens(peer):
     return {"RESUME_MATCH": match, "RESUME_TICK": tick}, evidence
 
 
+def gate_parts(gate):
+    """The single gates a gate waits for: an "all" gate is met only when every one of its parts is."""
+    return gate["all"] if "all" in gate else [gate]
+
+
 def run_preflight(scenario, run, captures, tokens):
     peers = run.get("peers") or scenario.get("peers", [])
     for node in [run, *peers]:
         kill_gate = node.get("kill_when")
         # A list of gates drops the peer at the first one met.
         for gate in (kill_gate if isinstance(kill_gate, list) else [kill_gate] if kill_gate else []):
-            if gate.get("peer") not in {peer["name"] for peer in peers} or \
-                    [bool(gate.get("event")), gate.get("probe_complete") is True, bool(gate.get("log")), "sim_tick" in gate].count(True) != 1:
+            parts = gate_parts(gate)
+            if not isinstance(parts, list) or not parts or any(
+                    not isinstance(part, dict) or part.get("peer") not in {peer["name"] for peer in peers} or
+                    [bool(part.get("event")), part.get("probe_complete") is True, bool(part.get("log")), "sim_tick" in part].count(True) != 1
+                    for part in parts):
                 return {"class": "harness", "reason": "A process-drop gate must name a peer and one of an event, a completed probe, a log line or a sim tick"}
         condition = node.get("start_when", {})
         if condition.get("run") and not cross_run_ready(captures, condition):
@@ -2292,6 +2300,8 @@ def _run_one(options, scenario, run, run_index, out, case_root=None):
 
     threads, killers = [], []
     def gate_met(gate):
+        if "all" in gate:
+            return all(gate_met(part) for part in gate["all"])
         if gate.get("run"):
             return cross_run_ready(getattr(options, "completed_runs", []), gate)
         if gate.get("directory_listed") and not directory_session(shared.get("DIRECTORY_ROOT"), port):
@@ -2328,16 +2338,22 @@ def _run_one(options, scenario, run, run_index, out, case_root=None):
                 return
             gate = next((candidate for candidate in gates if gate_met(candidate)), None)
             if gate:
+                probe = next((part for part in gate_parts(gate) if part.get("probe_complete")), None)
                 # A peer dropped because a probe finished ends a scenario, not a fault: its recorder writes the
                 # frames it already took first, so the probe's last marked window keeps its video.
-                flushed = await_recorder(shared[f"VIDEO_{gate['peer']}"], stop_watchers) if gate.get("probe_complete") else None
+                flushed = await_recorder(shared[f"VIDEO_{probe['peer']}"], stop_watchers) if probe else None
                 rows = read_index(shared[f"VIDEO_{name}"])
-                write_json(Path(shared[f"VIDEO_{name}"]) / "injected-drop.json", {"requested_event": gate, "last_recorded_frame": rows[-1] if rows else None,
-                                                                                  "recorder_flush": flushed})
-                description = ("completed peer probe" if gate.get("probe_complete") else "peer log line " + gate["log"] if gate.get("log")
-                               else f"{gate['peer']} sim tick {gate['sim_tick']}" if "sim_tick" in gate else "peer event " + gate["event"])
+                receipt = {"requested_event": gate, "last_recorded_frame": rows[-1] if rows else None, "recorder_flush": flushed}
+                # A gate on the peer's own tick is a drop after that recorded tick, as kill_at_tick receipts it.
+                own_tick = next((part["sim_tick"] for part in gate_parts(gate) if "sim_tick" in part and part["peer"] == name), None)
+                if own_tick is not None:
+                    receipt["requested_tick"] = own_tick
+                write_json(Path(shared[f"VIDEO_{name}"]) / "injected-drop.json", receipt)
+                description = " and ".join("completed peer probe" if part.get("probe_complete") else "peer log line " + part["log"] if part.get("log")
+                                           else f"{part['peer']} sim tick {part['sim_tick']}" if "sim_tick" in part else "peer event " + part["event"]
+                                           for part in gate_parts(gate))
                 # The scenario is over: the peer prints its screen watches' summaries before it goes.
-                if gate.get("probe_complete"):
+                if probe:
                     await_watch_flush(root / name / "stdout.log", stop_watchers)
                 drop_peer(runs[name], "scenario drop after " + description)
                 return
