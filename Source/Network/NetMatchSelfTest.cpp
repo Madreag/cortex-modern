@@ -440,36 +440,36 @@ namespace RTE {
 			NetInputDelayEstimator unmeasured;
 			for (uint64_t now = 0; now < 500; now += 100) unmeasured.Observe(now, 0);
 			unmeasured.Observe(500, 401);
-			if (unmeasured.RequiredFrames(1000.0 / 60.0) != 38 || unmeasured.JitterMs() != 0) {
+			if (unmeasured.RequiredFrames(1000.0 / 60.0) != 26 || unmeasured.JitterMs() != 0) {
 				*error = "unmeasured RTT samples inflate a returning link's delay";
 				return false;
 			}
 			for (uint64_t now = 600; now <= 6000; now += 100) unmeasured.Observe(now, 0);
-			if (unmeasured.RequiredFrames(1000.0 / 60.0) != 38 || unmeasured.JitterMs() != 0) {
+			if (unmeasured.RequiredFrames(1000.0 / 60.0) != 26 || unmeasured.JitterMs() != 0) {
 				*error = "an unmeasured returning link loses its measured delay";
 				return false;
 			}
 			if (unmeasured.P95Ms() != 0) { *error = "an expired receipt window still carries old samples"; return false; }
 			unmeasured.Observe(6100, 100);
-			if (unmeasured.RequiredFrames(1000.0 / 60.0) != 10 || unmeasured.P95Ms() != 100 || unmeasured.JitterMs() != 0) {
+			if (unmeasured.RequiredFrames(1000.0 / 60.0) != 7 || unmeasured.P95Ms() != 100 || unmeasured.JitterMs() != 0) {
 				*error = "a new RTT reading did not replace the old unmeasured link estimate";
 				return false;
 			}
 			NetInputDelayEstimator estimate;
 			estimate.Observe(0, 401);
-			if (estimate.RequiredFrames(1000.0 / 60.0) != 38 || estimate.RequiredFrames(1000.0 / 120.0) != 74) {
-				*error = "401ms RTT did not cover one-way transit and one retransmission at the actual tick length";
+			if (estimate.RequiredFrames(1000.0 / 60.0) != 26 || estimate.RequiredFrames(1000.0 / 120.0) != 50) {
+				*error = "401ms RTT did not cover one round trip plus one tick at the actual tick length";
 				return false;
 			}
 			for (uint64_t now = 100; now <= 5000; now += 100) estimate.Observe(now, now >= 4700 ? 501 : 401);
-			if (estimate.P95Ms() != 501 || estimate.JitterMs() != 100 || estimate.RequiredFrames(1000.0 / 60.0) != 53 ||
-			    estimate.Change(5000, 26, 1000.0 / 60.0) != std::optional<uint16_t>{53}) {
+			if (estimate.P95Ms() != 501 || estimate.JitterMs() != 100 || estimate.RequiredFrames(1000.0 / 60.0) != 32 ||
+			    estimate.Change(5000, 26, 1000.0 / 60.0) != std::optional<uint16_t>{32}) {
 				*error = "the five-second RTT tail did not raise the delay with its jitter margin";
 				return false;
 			}
 			for (uint64_t now = 5100; now <= 10100; now += 100) estimate.Observe(now, 100);
 			if (estimate.Change(10100, 38, 1000.0 / 60.0) || estimate.Change(15099, 38, 1000.0 / 60.0) ||
-			    estimate.Change(15100, 38, 1000.0 / 60.0) != std::optional<uint16_t>{10}) {
+			    estimate.Change(15100, 38, 1000.0 / 60.0) != std::optional<uint16_t>{7}) {
 				*error = "a lower delay did not wait for five settled seconds";
 				return false;
 			}
@@ -799,10 +799,10 @@ namespace RTE {
 					return false;
 				}
 				invalid = bytes;
-				invalid[reservedOffset] = 64;
+				invalid[reservedOffset] = 128;
 				const auto unknown = NetLobbyProtocol::Decode(invalid);
 				if (unknown.ok || unknown.error.code != NetLobbyErrorCode::ReservedFieldNonZero) {
-					*error = "a reserved word of 64 was not refused";
+					*error = "a reserved word of 128 was not refused";
 					return false;
 				}
 				const auto hash = NetMatchConfigUtil::HashConfig(config);
@@ -2010,11 +2010,11 @@ namespace RTE {
 				return false;
 			}
 			const size_t plainSize = bytes.size();
-			// Known values are 1 dedicated, 2 path, 4 world, 8 redundancy, 16 migration and 32 return window.
-			bytes[reservedOffset] = 64;
+			// Known values are 1 dedicated, 2 path, 4 world, 8 redundancy, 16 migration, 32 return window and 64 directory arbitration.
+			bytes[reservedOffset] = 128;
 			const NetLobbyDecodeResult refused = NetLobbyProtocol::Decode(bytes);
 			if (refused.ok || refused.error.code != NetLobbyErrorCode::ReservedFieldNonZero) {
-				*error = "a reserved word of 64 was not refused";
+				*error = "a reserved word of 128 was not refused";
 				return false;
 			}
 			bytes[reservedOffset] = 0;
@@ -2519,23 +2519,26 @@ namespace RTE {
 			void Stop() override { m_Inner.Stop(); }
 			std::vector<NetTransportEvent> PollEvents() override { return m_Inner.PollEvents(); }
 			uint32_t GetPeerPingMs(NetPeerId) const override { return m_PingMs; }
-			void SetPingMs(uint32_t pingMs) { m_PingMs = pingMs; }
+			bool IsPeerPingMeasured(NetPeerId) const override { return m_PingMeasured; }
+			void SetPingMs(uint32_t pingMs) { m_PingMs = pingMs; m_PingMeasured = true; }
 			void SetMissingTimingReplies() { m_MissingTimingReplies = true; }
 			uint32_t TimingRepliesDropped() const { return m_TimingRepliesDropped; }
 
 		private:
 			LoopbackTransport& m_Inner;
 			uint32_t m_PingMs = 0;
+			bool m_PingMeasured = false;
 			bool m_MissingTimingReplies = false;
 			uint32_t m_TimingRepliesDropped = 0;
 		};
 
 		bool TestLobbyStartTimingEnds(std::string* error) {
-			for (unsigned row = 0; row < 4; ++row) {
+			for (unsigned row = 0; row < 5; ++row) {
 				LoopbackTransport a, b; NetPeerId ar, br;
 				if (!StartLoopbackTransports(static_cast<uint16_t>(43570 + row), a, b, ar, br, error)) return false;
 				PingingLoopbackTransport measured(a), missing(b);
-				measured.SetPingMs(row == 1 ? 0 : row == 2 ? 800 : 120);
+				// An absent reading and a measured zero are distinct transport states.
+				if (row != 1) measured.SetPingMs(row == 4 ? 0 : row == 2 ? 800 : 120);
 				missing.SetMissingTimingReplies();
 				NetLobbySession host, client;
 				NetLobbySessionConfig hc;
@@ -2555,8 +2558,8 @@ namespace RTE {
 				const uint64_t deadline = row == 3 ? 800 : 2300;
 				while (now <= deadline && !(host.IsStarted() && client.IsStarted())) step();
 				// Without timing replies the bounded fallback uses the measured link: 120 ms needs ceil(120/tick)+1 = 9,
-				// an unmeasured link keeps one tick, and the 800 ms leg retains the existing 36-tick startup ceiling.
-				const uint16_t expected = row == 1 ? 1 : row == 2 ? 36 : 9;
+				// An unmeasured link keeps one tick, measured zero needs one tick, and 800 ms keeps the 36-tick startup ceiling.
+				const uint16_t expected = row == 1 || row == 4 ? 1 : row == 2 ? 36 : 9;
 				if (!host.IsStarted() || !client.IsStarted() || host.GetMatchConfigHash() != client.GetMatchConfigHash() ||
 				    NetMatchConfigUtil::PeerInputDelay(host.GetMatchConfig(), 1) != expected ||
 				    NetMatchConfigUtil::PeerInputDelay(host.GetMatchConfig(), 2) != expected ||
@@ -2954,6 +2957,13 @@ namespace RTE {
 			    service.GetStatusText() != "Match stopped" ||
 			    service.GetErrorText() != "PeerDisconnected:test") {
 				*error = "runtime error was not visible through match service state";
+				return false;
+			}
+			// A round its hung host can no longer carry ends on one plain line.
+			NetMatchService ended;
+			ended.ReportRuntimeError(std::string(c_NetHostUnresponsiveText));
+			if (ended.GetState() != NetMatchServiceState::Failed || ended.GetStatusText() != c_NetHostUnresponsiveText || ended.GetErrorText() != c_NetHostUnresponsiveText) {
+				*error = "a round its host stopped responding in did not end on its one line: status=" + ended.GetStatusText() + " error=" + ended.GetErrorText();
 				return false;
 			}
 			return true;

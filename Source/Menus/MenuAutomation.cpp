@@ -55,6 +55,8 @@
 #include <cctype>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
+#include <cstdint>
 #include <cstdlib>
 #include <condition_variable>
 #include <deque>
@@ -265,6 +267,17 @@ namespace RTE::MenuAutomation {
 		else return false;
 		return true;
 	}
+	std::string NormalizedWords(const std::string& text) {
+		std::istringstream words(text);
+		std::string result, word;
+		while (words >> word) { result += ' '; result += word; }
+		return result + ' ';
+	}
+
+	bool CarriesSentence(const std::string& text, const std::string& sentence) {
+		return NormalizedWords(text).find(NormalizedWords(sentence)) != std::string::npos;
+	}
+
 	bool Text(GUIControl* control, std::string& text) {
 		if (!DisplayText(control, text)) return false;
 		text = Captured(Credential(control), text);
@@ -1488,6 +1501,13 @@ namespace RTE::MenuAutomation {
 		if (state == "running") return snapshot.serviceState == "Running";
 		if (state == "local_held" || state == "remote_held") {
 			const bool local = state == "local_held";
+			// The overlay reads the retained roster during continuity and private catch-up too. These are held frames even
+			// before the AI handoff or when the lobby member cache has already learned a future return.
+			if (local) {
+				const auto view = g_NetMatchService.GetSeatView(snapshot.localPeerId);
+				if (NetPlayerPresentation::OwnSeatHeld(snapshot, view, !view && ScenarioRunner::IsLockstepSeatReleased(snapshot.localPeerId)) ||
+				    ScenarioRunner::IsLockstepOwnSeatHeld()) return true;
+			}
 			// A catch-up alone is no hold: a host serves one and a late joiner runs one with nobody's seat held. This peer's
 			// own return is the catch-up or resync that follows the hold its host told it of.
 			const uint64_t frame = ScenarioRunner::GetLockstepCompletedFrame();
@@ -1531,6 +1551,17 @@ namespace RTE::MenuAutomation {
 		}
 		if (expected < 0 || expected == shown) return "";
 		return "summary RTT " + std::to_string(shown) + " ms against " + std::to_string(expected) + " ms listed";
+	}
+
+	std::string InputDelayContradiction(GUIControlManager* menu) {
+		if (!ScenarioRunner::IsLockstepControllerSyncActive() || !g_SettingsMan.GetNetworkShowDiagnostics()) return "";
+		GUIControl* status = WatchedControl(menu, "LabelNetMatchStatus");
+		std::string text;
+		if (!status || !Shown(status) || !Text(status, text)) return "the live input delay is not shown";
+		char expected[96];
+		const uint16_t delay = ScenarioRunner::GetLockstepLocalInputDelay();
+		std::snprintf(expected, sizeof(expected), "Input delay %u ticks / %.1f ms", static_cast<unsigned>(delay), delay * g_TimerMan.GetDeltaTimeMS());
+		return text.find(expected) == std::string::npos ? std::string("the live overlay lacks ") + expected + ": " + text : "";
 	}
 
 	/// Whether a text box's line is as tall as the box shows, under the box's top margin.
@@ -1694,7 +1725,7 @@ namespace RTE::MenuAutomation {
 			} cost{watch, {}};
 			if (!WatchStateHolds(watch.state)) continue;
 			++watch.active;
-			if (!linesRead && watch.rule != "layout" && watch.rule != "overlap" && watch.rule != "rtt" && watch.rule != "seat_rows") {
+			if (!linesRead && watch.rule != "layout" && watch.rule != "overlap" && watch.rule != "rtt" && watch.rule != "input_delay" && watch.rule != "seat_rows") {
 				lines = ShownLines(menu);
 				linesRead = true;
 			}
@@ -1713,17 +1744,20 @@ namespace RTE::MenuAutomation {
 				detail = "no shown line carries the text";
 			} else if (watch.rule == "forbid" && carries(watch.text)) {
 				detail = "a shown line carries the text";
-			} else if (watch.rule == "equals" || watch.rule == "contains" || watch.rule == "shown") {
+			} else if (watch.rule == "equals" || watch.rule == "contains" || watch.rule == "sentence" || watch.rule == "shown") {
 				GUIControl* control = WatchedControl(menu, watch.control);
 				std::string text;
 				const bool shown = control && Shown(control) && Text(control, text);
 				if (!shown) detail = watch.control + " is not shown";
 				else if (watch.rule == "equals" && text != watch.text) detail = watch.control + " reads " + Json(text).dump();
 				else if (watch.rule == "contains" && text.find(watch.text) == std::string::npos) detail = watch.control + " reads " + Json(text).dump();
+				else if (watch.rule == "sentence" && !CarriesSentence(text, watch.text)) detail = watch.control + " reads " + Json(text).dump();
 			} else if (watch.rule == "duplicates") {
 				detail = DuplicateLine(lines);
 			} else if (watch.rule == "rtt") {
 				if (const std::string contradiction = RttContradiction(menu); !contradiction.empty()) detail = contradiction;
+			} else if (watch.rule == "input_delay") {
+				if (const std::string contradiction = InputDelayContradiction(menu); !contradiction.empty()) detail = contradiction;
 			} else if (watch.rule == "layout") {
 				if (Json offenders = LayoutOffenders(menu); !offenders.empty()) detail = offenders;
 			} else if (watch.rule == "overlap") {
@@ -2091,7 +2125,7 @@ namespace RTE::MenuAutomation {
 			if (mode == "start") {
 				TextWatch watch;
 				args >> watch.rule >> watch.state;
-				if (watch.rule == "equals" || watch.rule == "contains" || watch.rule == "shown") args >> watch.control;
+				if (watch.rule == "equals" || watch.rule == "contains" || watch.rule == "sentence" || watch.rule == "shown") args >> watch.control;
 				std::getline(args >> std::ws, watch.text);
 				// JSON preserves an exact multiline label in a one-line input script.
 				if (watch.text.starts_with("json:")) {
@@ -2099,9 +2133,9 @@ namespace RTE::MenuAutomation {
 					if (!text.is_string()) { observation = "invalid watch text JSON"; return false; }
 					watch.text = text.get<std::string>();
 				}
-				const bool textRule = watch.rule == "require" || watch.rule == "forbid" || watch.rule == "equals" || watch.rule == "contains";
-				const bool known = textRule || watch.rule == "shown" || watch.rule == "duplicates" || watch.rule == "rtt" || watch.rule == "layout" || watch.rule == "overlap" || watch.rule == "seat_rows";
-				if (!known || watch.state.empty() || (textRule && watch.text.empty()) || ((watch.rule == "equals" || watch.rule == "contains" || watch.rule == "shown") && watch.control.empty())) {
+				const bool textRule = watch.rule == "require" || watch.rule == "forbid" || watch.rule == "equals" || watch.rule == "contains" || watch.rule == "sentence";
+				const bool known = textRule || watch.rule == "shown" || watch.rule == "duplicates" || watch.rule == "rtt" || watch.rule == "input_delay" || watch.rule == "layout" || watch.rule == "overlap" || watch.rule == "seat_rows";
+				if (!known || watch.state.empty() || (textRule && watch.text.empty()) || ((watch.rule == "equals" || watch.rule == "contains" || watch.rule == "sentence" || watch.rule == "shown") && watch.control.empty())) {
 					observation = "unknown or incomplete watch";
 					return false;
 				}
@@ -2812,6 +2846,13 @@ namespace RTE::MenuAutomation {
 			std::cout << "[menu-automation-selftest] " << (value ? "PASS" : "FAIL") << " " << label << " " << detail << std::endl;
 		};
 		{
+			const std::string sentence = "The AI is playing for you until you are back";
+			check("own_hold_probe_reads_the_whole_wrapped_sentence",
+			      CarriesSentence("The AI is playing for you\nuntil you are back\nInput delay 5 ticks / 83.3 ms", sentence) &&
+			      !CarriesSentence("until you are back", sentence) && !CarriesSentence("The AI is playing for you", sentence) &&
+			      !CarriesSentence("The AI is playing for you until you are backed", sentence), sentence);
+		}
+		{
 			// Chat uses the overlay's manager as its active menu; it is still one surface.
 			GUIControlManager menu, network, overlay;
 			const auto chat = WatchedManagersFor(&overlay, &network, &overlay);
@@ -2918,7 +2959,7 @@ namespace RTE::MenuAutomation {
 			same("hint_bound_one_tick", NetSlowPlayerHint(NetSlowPlayerPolicy::Substitute, 1, tickMs),
 			     "A player late past 1 tick (17 ms), host too, is held to the AI while others play on.");
 			same("hint_bound_pause", NetSlowPlayerHint(NetSlowPlayerPolicy::Pause, 3, tickMs), "Everyone waits for a late player, host included, for up to 20 s.");
-			same("hint_auto_delay", NetAutoDelayText(3), "ping plus a 3-tick margin, raised live if inputs arrive late");
+			same("hint_auto_delay", NetAutoDelayText(), "measured ping and recent jitter, re-sized live");
 			same("hint_autosave_range", NetAutosaveRangeHint(), "Every 60 s to 60 min; 5 min by default");
 			same("hint_autosave_note", NetAutosaveNote(), "Every player takes each checkpoint at the same tick; a player who rejoins starts from one.");
 			same("hint_autosave_cost", NetAutosaveCostHint(), "Saving may cause a brief pause for other players on slower hosts");
@@ -2934,7 +2975,7 @@ namespace RTE::MenuAutomation {
 			const std::string summary = NetHostOptionsSummary(config, snapshot);
 			const std::string connection = NetHostConnectionSummary(config, snapshot);
 			check("hint_summary_policy", connection.find("\nWhen a player falls behind: Give the seat to the AI (host too) until they catch up\n") != std::string::npos, connection);
-			check("hint_summary_delay", connection.starts_with("Input delay: Automatic, ping plus a 3-tick margin, raised live if inputs arrive late - now 4 (auto, 50ms ping)\n"), connection);
+			check("hint_summary_delay", connection.starts_with("Input delay: Automatic, measured ping and recent jitter, re-sized live - now 4 (auto, 50ms ping)\n"), connection);
 			check("hint_summary_no_rejoin", summary.find("rejoin") == std::string::npos, summary);
 			check("summary_short_rows_share_lines", connection.find(" ticks   Slow player bound: 3 ticks\n") != std::string::npos && summary.find("\nDifficulty: ") != std::string::npos &&
 			      summary.find("   Starting gold: ") != std::string::npos, summary);

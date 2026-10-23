@@ -12,7 +12,7 @@ def identity(manifest, peers):
     errors, diagnostics = [], []
     host_box = manifest.get('acceptance_host_box', manifest.get('world_host_box', 'box-a'))
     if host_box not in (('box-a', 'LAPTOP', 'HANDHELD') if row == 'world-soak' else ('box-a', 'LAPTOP')):
-        errors.append("host box is outside the lead's named hosts for this row")
+        errors.append("host box is outside the named hosts for this row")
     expected = {"pc":host_box, "remote":"REMOTE", "mac":"Mac", "linux":"Linux"}
     if row == "world-soak":
         expected = {"pc":host_box, "remote-first":"REMOTE", "remote":"REMOTE"}

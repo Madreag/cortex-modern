@@ -3,7 +3,7 @@
 
     python3 run_official13.py --repo <tree> --binary <tree>/build-gcc/CortexCommand --out <dir> --head <sha>
 
-The Mac lane's run_official13.py with its paths as arguments: SELFTESTS is longer than 13 on the wave, so the adapter
+The Mac's run_official13.py with its paths as arguments: SELFTESTS is longer than 13 on the wave, so the adapter
 names the set instead of asserting the list's length.
 """
 

@@ -39,13 +39,13 @@ if (Test-Path -LiteralPath $path) {
     return None if value == '<<ABSENT>>' else json.loads(value.lstrip('\ufeff'))
 
 
-def task_profile(box, lane):
+def task_profile(box, scratch_name):
     if box.get('name') not in HOSTS or box.get('ssh') != HOSTS[box['name']]:
         raise ValueError('R5 tasks require the named LAPTOP and REMOTE aliases')
     if box.get('kind') != 'windows-task' or box.get('runner') != 'cortex-session1' or box.get('task_script') != box['approved_task_script']:
         raise ValueError('R5 engines require the existing session tasks')
-    if box.get('scratch') != str(box['scratch_root']).rstrip('/')+'/'+lane or not box.get('helpers', '').startswith(box['scratch']+'/'):
-        raise ValueError('task helper and evidence paths must stay inside this lane')
+    if box.get('scratch') != str(box['scratch_root']).rstrip('/')+'/'+scratch_name or not box.get('helpers', '').startswith(box['scratch']+'/'):
+        raise ValueError('task helper and evidence paths must stay inside this run\'s scratch')
     if '..' in box['helpers'].replace('\\', '/').split('/'):
         raise ValueError('task helper path leaves its owned root')
     expected = box['approved_tree']
@@ -165,8 +165,8 @@ def validate_preflights(plan):
 def run_payload(path):
     payload = json.loads(Path(path).read_text(encoding='utf-8-sig'))
     box, specs = payload['box'], payload['specs']
-    lane = Path(box['scratch']).name
-    task_profile(box, lane)
+    scratch_name = Path(box['scratch']).name
+    task_profile(box, scratch_name)
     expected = {'pc'} if box['name'] == 'LAPTOP' else {'remote-first', 'remote'}
     if {spec.get('peer') for spec in specs} != expected or any(spec.get('acceptance_row') != 'world-soak' for spec in specs):
         raise ValueError('task payload differs from the authorized R5 process roster')
@@ -197,7 +197,7 @@ def launch(plan, root):
     by_name = {box['name']: box for box in plan['boxes']}
     remote_roots = {name:box['scratch']+'/'+plan['run'] for name,box in by_name.items()}
     if not world.public_directory_available(Path(__file__).resolve().parent.parent):
-        raise RuntimeError('public directory is unavailable; a lane-owned fallback must be staged before this run')
+        raise RuntimeError('public directory is unavailable; a run-owned fallback must be staged before this run')
     plan['driver_findings'] = []
     write_json(root/'manifest.json', plan)
     started, published, late_released = [], False, False
@@ -290,7 +290,7 @@ def main(argv=None):
         parser.error('--out and --lane are required')
     owned = Path(os.environ.get('CCCP_SCRATCH_ROOT', str(Path(tempfile.gettempdir())/'cortex-modern')))/options.lane
     if not re.fullmatch(r'[A-Za-z0-9_-]+', options.lane) or not options.out.resolve().is_relative_to(owned.resolve()) or options.out.resolve() == owned.resolve():
-        parser.error('output must be a fresh run inside the named lane scratch')
+        parser.error('output must be a fresh run inside the named scratch')
     with storage_scope(owned, reserve=1024**2):
         if options.launch_staged:
             plan = json.loads((options.out/'manifest.json').read_text(encoding='utf-8'))

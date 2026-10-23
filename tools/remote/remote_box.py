@@ -1,4 +1,4 @@
-"""A second Windows box reached over ssh, whose engine runs only inside the owner's interactive session through one
+"""A second Windows box reached over ssh, whose engine runs only inside the signed-in user's interactive session through one
 scheduled task (REMOTE's cortex-session1). Shared by tools/two_box_match.py and the inventory's split runner.
 
     python tools/remote/remote_box.py hash --root <dir> --list <file>      sha256 of each listed relative path (JSON)

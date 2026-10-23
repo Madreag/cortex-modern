@@ -132,7 +132,7 @@ def local_reservation(root):
     marker = Path(os.environ.get("CCCP_FEEL_MARKER", str(Path(tempfile.gettempdir()) / "cccp-feel-matrix-running")))
     load = local_load()
     if load:
-        write_json(Path(root)/"reservation-blocked.json", dict(load=load, reason="engineer/build priority"))
+        write_json(Path(root)/"reservation-blocked.json", dict(load=load, reason="build priority"))
         raise RuntimeError("a build or engine is active; no acceptance engine launched")
     token = secrets.token_hex(24)
     record = dict(stream_root=str(root), pid=os.getpid(), token=token,

@@ -122,6 +122,9 @@ namespace RTE {
 		std::function<bool(uint8_t, const NetHash32&, std::vector<uint8_t>&)> sealMigration;
 		std::function<bool(const NetLobbyMigration&)> openMigration;
 		std::function<void(NetLockstepConfig&)> configureMigration;
+		// Host: whether the session directory referees a round with these seats. Every peer: whether this machine checks in with it.
+		std::function<bool(const NetMatchConfig&)> directoryArbitration;
+		std::function<bool()> directorySession;
 		// Host: the checkpoint a match resumed from disk stands on. The lobby offers it to every peer
 		// and streams its state only to those that do not already hold that archive.
 		std::string resumeMatchId;
@@ -201,10 +204,10 @@ namespace RTE {
 			m_WorldJoinHolds = std::move(holds);
 			m_WorldJoinLeaves = std::move(leaves);
 		}
-		bool StartWorldJoinLockstep(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, uint64_t startFrame, uint64_t updateTick, std::string* error = nullptr);
+		bool StartWorldJoinLockstep(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, uint64_t startFrame, uint64_t updateTick, std::string* error = nullptr, const NetLockstepCoordinator* replay = nullptr);
 		/// One tick of a starting joiner's handshake. Returns whether the coordinator is running; a
 		/// false with an error set is the start giving up.
-		bool PumpWorldJoinLockstepStart(NetLockstepCoordinator& coordinator, uint64_t updateTick, std::string* error = nullptr);
+		bool PumpWorldJoinLockstepStart(NetLockstepCoordinator& coordinator, uint64_t updateTick, std::string* error = nullptr, const NetLockstepCoordinator* replay = nullptr);
 		/// Drops a joiner's lockstep start whose activation the host has taken back; the round it follows goes on.
 		void CancelWorldJoinLockstepStart() { if (m_WorldJoinStarting) { m_WorldJoinStarting = false; m_State = NetMatchRuntimeState::Running; } }
 		/// Whether a joiner's lockstep start is mid-handshake and wants its tick this pump.
@@ -274,6 +277,10 @@ namespace RTE {
 		bool WaitForSessionReady(INetTransport& transport, NetSession& session, uint32_t expectedReadyPeers, uint64_t maxWaitMs, std::string* error);
 		/// A round starts only on the seat roster the host agreed it on: a peer that heard another is refused by name.
 		bool AgreeOnSeatRoster(INetTransport& transport, NetSession& session, std::string* error);
+	public:
+		/// Why a peer cannot play a round the session directory referees, or empty when it can.
+		static std::string DirectoryRuleRefusal(const NetMatchConfig& config, bool directorySession);
+	private:
 		/// Stamps a moved seat roster into the open lobby's config as its next revision; a start the host asked for stays asked.
 		void StampSeatRoster(const NetReconnectHost& admission);
 		uint32_t m_RosterAgreedRevision = 0;

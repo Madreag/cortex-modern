@@ -24,6 +24,8 @@ import time
 
 # Directory checks can use an OpenSSL-backed interpreter independently of the engine runner.
 DIRECTORY_TEST_PYTHON = os.environ.get("CCCP_DIRECTORY_TEST_PYTHON") or sys.executable
+# The directory's test file takes 110-180 s on the slowest box and 400 s with its CPUs oversubscribed twice.
+DIRECTORY_TEST_TIMEOUT_S = 900
 
 SELFTEST_FIXTURES = {
     "mod-api-shims": ["mod-api-shims.lua"],
@@ -273,7 +275,7 @@ def box_state():
 
 
 def wait_for_quiet_box(limit_s=QUIET_WAIT_S, poll_s=5.0):
-    """Waits until no engine and no build runs on the box (other lanes' included), up to limit_s; the rerun starts either way."""
+    """Waits until no engine and no build runs on the box (other runs' included), up to limit_s; the rerun starts either way."""
     start = time.monotonic()
     while True:
         state = box_state()
@@ -474,9 +476,8 @@ def current_fixed_failure_report(options):
 
 
 def run_row(options, make_run, name, case, sanitizer):
-    # These probes assert the headless policy itself. A headed-only collection
-    # must explicitly permit their mode; it must never score a headed run as one.
-    headless_policy = getattr(options, "headless_policy_rows", False) and name in {
+    # These probes require headless mode even when the rest of the collection is headed.
+    headless_policy = name in {
         "headless-assert-continues", "headless-render-cap"
     }
     if not headless_policy:
@@ -486,7 +487,7 @@ def run_row(options, make_run, name, case, sanitizer):
     try:
         os.environ.update(CC_RUNNER_HEADED="0", CC_TEST_VISIBLE_WINDOW="0", CCCP_HEADLESS="1")
         result = run_row_in_mode(options, make_run, name, case, sanitizer)
-        result["presentation"] = "explicit headless-policy probe"
+        result["presentation"] = "explicit headless-policy probe" if getattr(options, "headless_policy_rows", False) else "default headless-policy probe"
         return result
     finally:
         for key, value in previous.items():
@@ -613,12 +614,14 @@ def run_row_in_mode(options, make_run, name, case, sanitizer):
             scored.update(budget_s=budget, elapsed_s=record.get("elapsed_seconds"), walked_classes=len(BINDING_WALK_CLASS.findall(stdout)))
     if name == "net-directory":
         service_log = case / "service-tests.log"
+        service_budget = max(options.timeout, DIRECTORY_TEST_TIMEOUT_S)
         with service_log.open("w", encoding="utf-8") as stream:
             stream.write(f"Directory test interpreter: {DIRECTORY_TEST_PYTHON}\n")
             stream.flush()
             service = subprocess.run([DIRECTORY_TEST_PYTHON, str(options.repo / "tools/session_directory/test_session_directory.py")],
-                                     cwd=options.repo, stdout=stream, stderr=subprocess.STDOUT, timeout=options.timeout,
+                                     cwd=options.repo, stdout=stream, stderr=subprocess.STDOUT, timeout=service_budget,
                                      creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        scored["service_timeout_s"] = service_budget
         scored["service_python"] = DIRECTORY_TEST_PYTHON
         scored["service_exit_code"] = service.returncode
         scored["service_log"] = str(service_log)
@@ -721,7 +724,7 @@ def main():
     parser.add_argument("--only", action="append", default=[], metavar="ROW",
                         help="run just this row (repeatable); product failures remain failures")
     parser.add_argument("--headless-policy-rows", action="store_true",
-                        help="explicitly run only the two headless-policy probes in headless mode, even in a headed collection")
+                        help="explicitly select the default headless mode for the two headless-policy probes")
     parser.add_argument("--self-test", action="store_true", help="the runner's own rows; no engine")
     options = parser.parse_args()
 
@@ -750,6 +753,8 @@ def main():
 
     if options.repo is None or options.out is None:
         parser.error("--repo and --out are required unless --score-stdout is set")
+    # Repository files must keep their meaning after a runner enters its private cwd.
+    options.repo = options.repo.resolve()
     unknown = [name for name in options.only if name not in SELFTESTS and name not in LOAD_SENSITIVE]
     if unknown:
         parser.error(f"no such row: {', '.join(unknown)}")

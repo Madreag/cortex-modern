@@ -464,8 +464,8 @@ static std::string ResyncSaveName() {
 			return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(SteadyNow().time_since_epoch()).count());
 		}
 
-		// The port mapper is file-scope because NetMatchService.h is outside this lane's edit set and
-		// the service is a process singleton: one mapping belongs to one hosted match at a time.
+		// The port mapper is file-scope, kept out of NetMatchService.h, and the service is a process
+		// singleton: one mapping belongs to one hosted match at a time.
 		NetPortMap s_PortMap;
 		bool s_PortMapRequested = false; //!< This match's host asked the router for a mapping.
 		bool s_PortMapApplied = false;   //!< The row already carries the mapped external address.
@@ -2610,6 +2610,9 @@ static std::string ResyncSaveName() {
 			// pump error would demote it back to a generic fault.
 			if (m_ErrorText == "Could not reach the host - the match can be rejoined") {
 				m_StatusText = m_ErrorText;
+			} else if (error == c_NetHostUnresponsiveText) {
+				// The round's end names its cause in one line.
+				m_StatusText = m_ErrorText = error;
 			} else {
 				m_StatusText = "Match stopped";
 				m_ErrorText = error;
@@ -2763,9 +2766,69 @@ static std::string ResyncSaveName() {
 		}
 	}
 
+	bool NetMatchService::EverySeatChecksIn(const NetMatchConfig& config) const {
+		// The directory referees a round only when it hears every human seat: one typed-address or LAN seat puts the round on the
+		// direct-play rule, for every seat alike.
+		if (m_ConnectionAuthority.DirectorySessionId().empty()) return false;
+		const auto routes = m_ConnectionAuthority.PeerRoutes();
+		for (const NetH4Seat& seat: NetH4BuildSeatTable(config))
+			if (!seat.cpu && seat.lockstepPeerId != config.hostPeerId && seat.lockstepPeerId != 0 && !routes.contains(seat.stableSeat)) return false;
+		return true;
+	}
+
+	void NetMatchService::InstallRoundRefereesLocked(NetLockstepConfig& config) {
+		// The agreed config names the round's rule, so every seat follows the same one.
+		if (config.matchConfig.directoryArbitration && !m_ConnectionAuthority.DirectorySessionId().empty()) {
+			config.frameTieReferee = [this, seats = NetH4BuildSeatTable(config.matchConfig)](const NetFrameTieRequest& peerRequest) {
+				auto request = peerRequest;
+				const auto stable = [&](uint16_t peer) -> uint16_t {
+					const auto seat = std::find_if(seats.begin(), seats.end(), [&](const auto& slot) { return slot.lockstepPeerId == peer; });
+					return seat == seats.end() ? UINT16_MAX : seat->stableSeat;
+				};
+				request.host = stable(request.host);
+				for (auto& member: request.members) member = stable(member);
+				for (auto& owner: request.owners) owner = stable(owner);
+				std::sort(request.members.begin(), request.members.end()); std::sort(request.owners.begin(), request.owners.end());
+				auto reply = m_ConnectionAuthority.QueryFrameTie(request);
+				if (reply.state == NetFrameTieReply::State::Decided) {
+					for (auto& member: reply.members) {
+						const auto seat = std::find_if(seats.begin(), seats.end(), [&](const auto& slot) { return slot.stableSeat == member; });
+						member = seat == seats.end() ? UINT16_MAX : seat->lockstepPeerId;
+					}
+					std::sort(reply.members.begin(), reply.members.end());
+				}
+				return reply;
+			};
+			config.hostChangeReferee = [this, seats = NetH4BuildSeatTable(config.matchConfig)](const NetHostChangeRequest& peerRequest) {
+				auto request = peerRequest;
+				const auto stable = [&](uint16_t peer) -> uint16_t {
+					const auto seat = std::find_if(seats.begin(), seats.end(), [&](const auto& slot) { return slot.lockstepPeerId == peer; });
+					return seat == seats.end() ? UINT16_MAX : seat->stableSeat;
+				};
+				const auto peer = [&](uint16_t stableSeat) -> uint16_t {
+					const auto seat = std::find_if(seats.begin(), seats.end(), [&](const auto& slot) { return slot.stableSeat == stableSeat; });
+					return seat == seats.end() ? UINT16_MAX : seat->lockstepPeerId;
+				};
+				if (request.agreedHost != UINT16_MAX) {
+					request.agreedHost = stable(request.agreedHost);
+					for (auto& member: request.agreedMembers) member = stable(member);
+					std::sort(request.agreedMembers.begin(), request.agreedMembers.end());
+				}
+				auto reply = m_ConnectionAuthority.QueryHostChange(request);
+				if (reply.state == NetHostChangeReply::State::Decided) {
+					reply.host = peer(reply.host); reply.donor = peer(reply.donor);
+					for (auto& member: reply.members) member = peer(member);
+					std::sort(reply.members.begin(), reply.members.end());
+				}
+				return reply;
+			};
+		}
+	}
+
 	NetHostLeaveOutcome NetMatchService::HostLeaveOutcome() const {
 		// The frame's menus call this inside the plane's window, and it reads the round without the plane's lock.
 		NetLockstepPlane::Gap plane("host leave outcome");
+		// A leave is a drop: the round goes to a lone survivor too, which plays on as a dropped host's would.
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			if (!m_IsHost || !m_Coordinator || !m_Coordinator->IsRunning() || m_Coordinator->GetConfig().matchConfig.successorOrder.empty()) {
@@ -2781,7 +2844,7 @@ static std::string ResyncSaveName() {
 			const auto view = GetSeatView(member.peerId);
 			return view ? view->seat.owner != 0 && view->seat.link == NetSeatLink::Connected : member.connected;
 		});
-		return survivors >= 2 ? NetHostLeaveOutcome::HandsOver : NetHostLeaveOutcome::EndsMatch;
+		return survivors >= 1 ? NetHostLeaveOutcome::HandsOver : NetHostLeaveOutcome::EndsMatch;
 	}
 
 	void NetMatchService::ConfirmHostLeave(NetHostLeaveOutcome outcome) {
@@ -4985,6 +5048,13 @@ static std::string ResyncSaveName() {
 				(void)m_WorldJoin.BeginFinalTail(connection, m_CompletedRoundFinalFrame);
 			const auto* prior = m_WorldJoin.FindSession(connection);
 			const uint64_t previous = prior ? prior->activationTick : 0;
+			// The coordinator that proposes a return sizes how far its activation may trail the round.
+			if (prior) {
+				m_WorldJoin.NoteReturnTrailRoom(connection, m_Coordinator->PeerReturnTrailRoom(prior->assignedPeerId, connection, nowFrame));
+				// The proposal waits until the activation is a notice past the head, which leads the frame activations are placed from.
+				const uint64_t head = std::max(nowFrame, m_Coordinator->SentInputThrough());
+				m_WorldJoin.NoteReturnNotice(connection, ReturnNoticeTicksLocked(*prior, head) + (head - nowFrame));
+			}
 			if (const uint64_t announced = ApplyWorldJoinReport(lobby, m_WorldJoin, report, connection, nowFrame, nowMs); announced != 0) {
 				if (previous && previous != announced) m_Coordinator->MoveObservationEpoch(previous, announced);
 				else m_Coordinator->SetObservationEpoch(announced);
@@ -5363,6 +5433,17 @@ static std::string ResyncSaveName() {
 		});
 	}
 
+	uint64_t NetMatchService::ReturnNoticeTicksLocked(const NetWorldJoinSession& session, uint64_t head) const {
+		uint64_t noticeTicks = 1;
+		for (const auto& [peer, stats]: m_Coordinator->GetStats().peers) {
+			if (peer == session.assignedPeerId || m_Coordinator->IsPeerGoneAtFrame(peer, head) || m_Coordinator->IsSeatUnderAI(peer, head)) continue;
+			noticeTicks = std::max(noticeTicks, static_cast<uint64_t>(std::ceil((stats.pingMs + stats.jitterMs) / m_Coordinator->GetConfig().simTickMs)));
+		}
+		// After the members agree, the returner starts its live round with them over its own link before it plays there: the
+		// notice is both trips and the bound.
+		return noticeTicks + static_cast<uint64_t>(std::ceil(session.tailLinkRttMs / m_Coordinator->GetConfig().simTickMs)) + m_Coordinator->GetConfig().slowPlayerBoundTicks;
+	}
+
 	void NetMatchService::DrivePrivateMatchRejoins(uint64_t nowMs) {
 		if (!m_Runner || !m_Session || !m_Coordinator || !m_WorldJoin.IsPrivateMatch()) return;
 		// A deferred repair starts once the returner is back, or past the headroom bound if it never gets there.
@@ -5450,7 +5531,8 @@ static std::string ResyncSaveName() {
 				}
 			}
 			if (m_Coordinator->IsSeatReleased(session.assignedPeerId)) m_Coordinator->NoteAdmissionLink(session.assignedPeerId, session.connection, NetLockstepNowMs());
-			else m_Coordinator->NoteReturningLink(session.assignedPeerId, session.connection, NetLockstepNowMs());
+			// A finished return is no longer one: the seat plays, and a later hold of it ends what this link said.
+			else if (session.phase != NetWorldJoinPhase::Active) m_Coordinator->NoteReturningLink(session.assignedPeerId, session.connection, NetLockstepNowMs());
 			// Our image to a returner fills its link, and the link's smoothed round trip takes a moment to come back once the image has
 			// landed: a sample taken then times our own queue, never the link the seat will play on.
 			if (session.phase == NetWorldJoinPhase::SnapshotTransfer && session.transferStarted) m_ReturnerLinkSettlesMs[session.connection] = nowMs + c_ReturnerLinkSettleMs;
@@ -5477,11 +5559,7 @@ static std::string ResyncSaveName() {
 			if (session.activationTick == 0 || session.phase != NetWorldJoinPhase::CatchingUp) continue;
 			if (!m_PrivateActivations.contains(session.connection)) {
 				const uint64_t head = std::max(m_Coordinator->GetStats().nextFrame, m_Coordinator->SentInputThrough());
-				uint64_t noticeTicks = 1;
-				for (const auto& [peer, stats]: m_Coordinator->GetStats().peers) {
-					if (peer == session.assignedPeerId || m_Coordinator->IsPeerGoneAtFrame(peer, head) || m_Coordinator->IsSeatUnderAI(peer, head)) continue;
-					noticeTicks = std::max(noticeTicks, static_cast<uint64_t>(std::ceil((stats.pingMs + stats.jitterMs) / m_Coordinator->GetConfig().simTickMs)));
-				}
+				const uint64_t noticeTicks = ReturnNoticeTicksLocked(session, head);
 				if (session.activationTick > head + noticeTicks + 1) continue;
 				const uint64_t nowFrame = m_Coordinator->GetStats().nextFrame;
 				const uint64_t behind = nowFrame > session.acknowledgedThrough ? nowFrame - session.acknowledgedThrough : 0;
@@ -5495,6 +5573,7 @@ static std::string ResyncSaveName() {
 					}
 					continue;
 				}
+				if (!session.activationReachable) continue;
 				// The returner reclaims only at the frame it was told, and a park re-stamps a reclaim it covers: an activation
 				// a named or agreed park may reach is moved past the park and told again, never scheduled into it.
 				const uint64_t simulated = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
@@ -6525,7 +6604,8 @@ static std::string ResyncSaveName() {
 		if (!m_Coordinator || !m_Session || !m_Runner || member == 0 || member == m_Coordinator->GetHostPeerId() || !m_Coordinator->HasHeldAISeat(member) ||
 		    m_Coordinator->HasAgreedSeatReclaim(member)) return;
 		const auto link = std::find_if(readyPeers.begin(), readyPeers.end(), [&](const NetSessionPeerInfo& peer) { return peer.assignedPeerId + 1 == member; });
-		if (link == readyPeers.end() || m_Coordinator->UsesTransportPeer(link->transportPeerId)) return;
+		// A frame-group round keeps a held seat's own link bound to it; elsewhere a bound link is a seat still playing.
+		if (link == readyPeers.end() || (m_Coordinator->UsesTransportPeer(link->transportPeerId) && !m_Coordinator->UsesPeerFrameGroups())) return;
 		const NetPeerId connection = link->transportPeerId;
 		const auto heldSeats = m_Coordinator->HeldTransactions();
 		const auto hold = heldSeats.find(member);
@@ -6934,7 +7014,7 @@ static std::string ResyncSaveName() {
 				m_Runner->ConfigureWorldJoinSeats(std::move(holds), std::move(leaves));
 			}
 			if (!m_Runner->IsWorldJoinLockstepStarting()) {
-				m_Runner->StartWorldJoinLockstep(*wire, *m_Session, *m_Coordinator, m_WorldCatchUp.activationTick, m_WorldCatchUp.appliedThrough, &error);
+				m_Runner->StartWorldJoinLockstep(*wire, *m_Session, *m_Coordinator, m_WorldCatchUp.activationTick, m_WorldCatchUp.appliedThrough, &error, m_CatchUpCoordinator.get());
 				// The round's start reads the wire the catch-up reads: the tail it takes goes on to the catch-up, not to a lobby that has ended.
 				AttachCoordinatorSessionSink();
 			} else {
@@ -6943,7 +7023,7 @@ static std::string ResyncSaveName() {
 						m_Coordinator->InjectEvent(*it, NetLockstepNowMs()); m_CatchUpWireBytes -= it->bytes.size(); it = m_CatchUpWirePackets.erase(it);
 					} else ++it;
 				}
-				m_Runner->PumpWorldJoinLockstepStart(*m_Coordinator, m_WorldCatchUp.appliedThrough, &error);
+				m_Runner->PumpWorldJoinLockstepStart(*m_Coordinator, m_WorldCatchUp.appliedThrough, &error, m_CatchUpCoordinator.get());
 			}
 			if (!error.empty()) { m_PrivateJoinError = error; m_ErrorText = error; }
 		}
@@ -7817,7 +7897,7 @@ static std::string ResyncSaveName() {
 				return refuse("the admission file names another match");
 			}
 			admissionState = body.at("admission").get<std::vector<uint8_t>>();
-			// directory_row rides the file for the persistent-world slice that reads it; this lane
+			// directory_row rides the file for the persistent-world slice that reads it; this path
 			// re-advertises the live row instead, so it is not taken here.
 			(void)body.at("directory_row");
 			directorySession = body.at("directory_session").get<std::string>();
@@ -7839,7 +7919,7 @@ static std::string ResyncSaveName() {
 		std::fill(plaintext.begin(), plaintext.end(), 0);
 		if (admissionState.empty()) return refuse("the admission file carries no admission state");
 		// The resumed lobby republishes the same roster as a new revision, so every peer acks it again.
-		config.configRevision += 1;
+		NetMatchConfigUtil::PrepareResumedConfig(config);
 		request.resumeConfig = config;
 		request.resumeTick = checkpoint->savedTick;
 		request.activityPreset = config.activityPreset;
@@ -8501,9 +8581,11 @@ static std::string ResyncSaveName() {
 			if (peer.assignedPeerId + 1 != peerId) continue;
 			if (opened && !m_WorldJoin.FindSession(peer.transportPeerId)) return false;
 			std::string reason;
+			const std::optional<uint32_t> rtt = ActiveWireLocked()->IsPeerPingMeasured(peer.transportPeerId)
+			    ? std::optional<uint32_t>{ActiveWireLocked()->GetPeerPingMs(peer.transportPeerId)} : std::nullopt;
 			const bool fits = opened
-			    ? m_Coordinator->PreparePeerAdmission(peerId, ActiveWireLocked()->GetPeerPingMs(peer.transportPeerId), NetLockstepNowMs(), &reason)
-			    : m_Coordinator->PreparePeerRejoin(peerId, ActiveWireLocked()->GetPeerPingMs(peer.transportPeerId), NetLockstepNowMs(), &reason);
+			    ? m_Coordinator->PreparePeerAdmission(peerId, rtt, NetLockstepNowMs(), &reason)
+			    : m_Coordinator->PreparePeerRejoin(peerId, rtt, NetLockstepNowMs(), &reason);
 			if (fits) {
 				m_RejoinFitReasons.erase(peerId);
 				return true;
@@ -10780,6 +10862,8 @@ static std::string ResyncSaveName() {
 		}
 		runnerConfig.sealMigration = [this](uint8_t peer, const NetHash32& hash, std::vector<uint8_t>& sealed) { return SealMigrationCapsule(peer, hash, sealed); };
 		runnerConfig.openMigration = [this](const NetLobbyMigration& capsule) { return OpenMigrationCapsule(capsule); };
+		runnerConfig.directoryArbitration = [this](const NetMatchConfig& config) { return EverySeatChecksIn(config); };
+		runnerConfig.directorySession = [this] { return !m_ConnectionAuthority.DirectorySessionId().empty(); };
 		runnerConfig.configureMigration = [this](NetLockstepConfig& config) {
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			if (config.matchConfig.successorOrder.empty())
@@ -10802,51 +10886,7 @@ static std::string ResyncSaveName() {
 				ice = m_MigrationIce.route;
 			}
 			config.migrationTransportFactory = [this, ice] { return MakeMigrationTransport(ice); };
-			if (!m_ConnectionAuthority.DirectorySessionId().empty()) {
-				config.frameTieReferee = [this, seats = NetH4BuildSeatTable(config.matchConfig)](const NetFrameTieRequest& peerRequest) {
-					auto request = peerRequest;
-					const auto stable = [&](uint16_t peer) -> uint16_t {
-						const auto seat = std::find_if(seats.begin(), seats.end(), [&](const auto& slot) { return slot.lockstepPeerId == peer; });
-						return seat == seats.end() ? UINT16_MAX : seat->stableSeat;
-					};
-					request.host = stable(request.host);
-					for (auto& member: request.members) member = stable(member);
-					for (auto& owner: request.owners) owner = stable(owner);
-					std::sort(request.members.begin(), request.members.end()); std::sort(request.owners.begin(), request.owners.end());
-					auto reply = m_ConnectionAuthority.QueryFrameTie(request);
-					if (reply.state == NetFrameTieReply::State::Decided) {
-						for (auto& member: reply.members) {
-							const auto seat = std::find_if(seats.begin(), seats.end(), [&](const auto& slot) { return slot.stableSeat == member; });
-							member = seat == seats.end() ? UINT16_MAX : seat->lockstepPeerId;
-						}
-						std::sort(reply.members.begin(), reply.members.end());
-					}
-					return reply;
-				};
-				config.hostChangeReferee = [this, seats = NetH4BuildSeatTable(config.matchConfig)](const NetHostChangeRequest& peerRequest) {
-					auto request = peerRequest;
-					const auto stable = [&](uint16_t peer) -> uint16_t {
-						const auto seat = std::find_if(seats.begin(), seats.end(), [&](const auto& slot) { return slot.lockstepPeerId == peer; });
-						return seat == seats.end() ? UINT16_MAX : seat->stableSeat;
-					};
-					const auto peer = [&](uint16_t stableSeat) -> uint16_t {
-						const auto seat = std::find_if(seats.begin(), seats.end(), [&](const auto& slot) { return slot.stableSeat == stableSeat; });
-						return seat == seats.end() ? UINT16_MAX : seat->lockstepPeerId;
-					};
-					if (request.agreedHost != UINT16_MAX) {
-						request.agreedHost = stable(request.agreedHost);
-						for (auto& member: request.agreedMembers) member = stable(member);
-						std::sort(request.agreedMembers.begin(), request.agreedMembers.end());
-					}
-					auto reply = m_ConnectionAuthority.QueryHostChange(request);
-					if (reply.state == NetHostChangeReply::State::Decided) {
-						reply.host = peer(reply.host); reply.donor = peer(reply.donor);
-						for (auto& member: reply.members) member = peer(member);
-						std::sort(reply.members.begin(), reply.members.end());
-					}
-					return reply;
-				};
-			}
+			InstallRoundRefereesLocked(config);
 			config.migrationEndpoint = [this, seats = NetH4BuildSeatTable(config.matchConfig)](const NetMatchMigrationPeer& agreed) {
 				if (m_ConnectionAuthority.DirectorySessionId().empty()) return agreed;
 				NetMatchMigrationPeer current = agreed;
@@ -11248,7 +11288,11 @@ static std::string ResyncSaveName() {
 
 	NetKickBanResult NetMatchService::ApplyUnbanLocked(const NetAuthBytes32& identity) {
 		std::string error;
+		const auto bans = m_BanStore.List();
+		const bool banned = std::any_of(bans.begin(), bans.end(), [&](const NetHostBanRecord& ban) { return ban.identity == identity; });
 		m_LastKickBanResult = m_BanStore.Unban(identity, &error) ? NetKickBanResult::Ok : NetKickBanResult::PersistenceFailed;
+		// A lifted ban lets its player ask for a seat in the running match too, the same tick; a kick stays.
+		if (m_LastKickBanResult == NetKickBanResult::Ok && banned && m_ReconnectHost.LiftParticipantBan(identity)) PublishModerationView();
 		return m_LastKickBanResult;
 	}
 
@@ -12065,8 +12109,7 @@ static std::string ResyncSaveName() {
 			// The rest of the host's saved session options ride the same config to every peer.
 			config.delayPolicy = request.delayPolicy.value_or(config.delayPolicy);
 			config.slowPlayerBoundTicks = request.slowPlayerBoundTicks.value_or(config.slowPlayerBoundTicks);
-			// Only the default policy is offered, whatever a saved preset carries: the others do not yet keep a dropped player's seat.
-			config.slowPlayerPolicy = NetSlowPlayerPolicy::Substitute;
+			NetMatchConfigUtil::KeepOfferedSlowPlayerPolicy(config);
 			config.idleWaitMinutes = request.idleWaitMinutes.value_or(config.idleWaitMinutes);
 			config.automaticRepair = request.automaticRepair.value_or(config.automaticRepair);
 			config.pathHorizonTicks = request.pathHorizonTicks.value_or(config.pathHorizonTicks);
@@ -12109,7 +12152,7 @@ static std::string ResyncSaveName() {
 		// The host's accepted Advanced draft is the lobby's setup, every field of its list; the request keeps the session's identity.
 		if (request.hostDraft && !world) {
 			NetMatchConfigUtil::CopyHostDraft(*request.hostDraft, config);
-			config.slowPlayerPolicy = NetSlowPlayerPolicy::Substitute;
+			NetMatchConfigUtil::KeepOfferedSlowPlayerPolicy(config);
 		}
 		if (world && rosterHumans == 0) {
 			for (uint8_t peerId = firstHumanPeer; peerId <= config.peerCount; ++peerId) {

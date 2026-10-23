@@ -1684,7 +1684,7 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 		m_BaseDelayFrames = ScenarioRunner::GetLockstepInputDelayFrames();
 	}
 	char metrics[128];
-	std::snprintf(metrics, sizeof(metrics), "delay %u ticks / %.1f ms", static_cast<unsigned>(m_MatchDelayFrames), m_MatchDelayFrames * g_TimerMan.GetDeltaTimeMS());
+	std::snprintf(metrics, sizeof(metrics), "Input delay %u ticks / %.1f ms", static_cast<unsigned>(m_MatchDelayFrames), m_MatchDelayFrames * g_TimerMan.GetDeltaTimeMS());
 	// The summary reads the links the per-player lines list - the widest a host has, a client's own to its host - so the
 	// two never disagree; a link not measured yet reads as unknown in both.
 	std::optional<uint32_t> ping;
@@ -1804,8 +1804,7 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 		};
 		if (menuLobby) return "In the lobby";
 		if (hostLost) return snapshot.statusText.starts_with("Changing hosts") ? "Changing hosts - the match picks up in a moment" : "Host lost - contacting the next host...";
-		// The toast and the full-screen wait say the rest; the box's line never repeats theirs.
-		if (ownRejoin) return "Rejoining - catching up with the match";
+		// The toast band suppresses this sentence when the status box already shows it.
 		if (ownHeld) return NetPlayerPresentation::PlayingSummary(true, 0, {});
 		if (resyncing) return "Match repair in progress";
 		if (placing) {
@@ -1915,7 +1914,7 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 				for (const std::string& cause: heldCauses) text += "\n" + cause;
 			}
 			if (placing) text += "\n" + countOnly + " brains placed";
-			text += "\nInput " + std::string(metrics);
+			text += "\n" + std::string(metrics);
 			char pace[64];
 			std::snprintf(pace, sizeof(pace), " / PACE %.1f tps", s_paceTps);
 			text += "\nRTT " + (!hostLost && ping ? PingWords(*ping) : "--") + " ms" + pace;
@@ -2553,6 +2552,11 @@ void NetModerationGUI::DrawMatchToasts(const std::string& screenLine) {
 	std::vector<size_t> indices;
 	std::vector<std::string> lines;
 	const auto sentence = [](const std::string& text) { return text.substr(0, text.find_last_not_of(". ") + 1); };
+	std::vector<std::string> statusLines;
+	if (m_StatusRect.visible && m_StatusWrap.active) {
+		std::istringstream status(m_StatusWrap.source);
+		for (std::string line; std::getline(status, line);) statusLines.push_back(sentence(line));
+	}
 	const uint8_t localPeer = ScenarioRunner::GetLockstepLocalPeerId();
 	const PauseMenuGUI* pauseMenu = g_MenuMan.GetActivePauseMenu();
 	const std::string menuSaveLine = pauseMenu ? pauseMenu->GetShownSaveLine() : std::string();
@@ -2564,6 +2568,8 @@ void NetModerationGUI::DrawMatchToasts(const std::string& screenLine) {
 		// A seat's toast reads its current state, so two events about one seat can read alike: the band shows that line once.
 		std::string line = ToastText(queued[index]);
 		if (std::find(lines.begin(), lines.end(), line) != lines.end()) continue;
+		// The status box was drawn this frame. Its full sentences need only one visible copy, even when they wrap.
+		if (std::find(statusLines.begin(), statusLines.end(), sentence(line)) != statusLines.end()) continue;
 		if (!statusShown.empty() && statusShown.find(sentence(line)) != std::string::npos) continue;
 		// The screen beneath shows its own line; the band does not read it out again, nor this seat's own state when that is the line.
 		const bool ownSeat = queued[index].senderPeerId == 0 || queued[index].senderPeerId == localPeer;

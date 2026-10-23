@@ -99,6 +99,7 @@ class ConnectionAuthority:
         self._db = None
         self._closed = False
         self._records: dict[str, dict[str, Any]] = {}
+        self._tie_rows: dict[str, dict[str, bytes]] = {}
         if path is not None:
             path = Path(path)
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -111,20 +112,51 @@ class ConnectionAuthority:
                 self._db.execute("PRAGMA journal_mode=DELETE")
                 self._db.execute("PRAGMA synchronous=FULL")
                 self._db.execute("CREATE TABLE IF NOT EXISTS connections (session TEXT PRIMARY KEY, record BLOB NOT NULL)")
+                self._db.execute("CREATE TABLE IF NOT EXISTS connection_frame_ties (session TEXT NOT NULL, name TEXT NOT NULL, record BLOB NOT NULL, PRIMARY KEY(session, name))")
                 now = time.time()
                 for sid, sealed in self._db.execute("SELECT session, record FROM connections"):
                     try:
                         if str(uuid.UUID(sid)) != sid or not 28 <= len(sealed) <= MAX_RECORD_BYTES + 28:
                             raise ValueError()
-                        raw = self._seal.decrypt(sealed[:12], sealed[12:], sid.encode("ascii"))
+                        separate_history = False
+                        try:
+                            raw = self._seal.decrypt(sealed[:12], sealed[12:], sid.encode("ascii"))
+                        except InvalidTag:
+                            raw = self._seal.decrypt(sealed[:12], sealed[12:], self._record_context(sid))
+                            separate_history = True
                         record = json.loads(raw)
                         if not isinstance(record, dict) or type(record.get("version")) is not int or record["version"] > CONNECTION_PROTOCOL:
+                            raise ValueError()
+                        if separate_history != ("_frame_tie_history" in record):
                             raise ValueError()
                         # No current game presents an older protocol's tokens: its matches are dropped, never served.
                         if record["version"] < CONNECTION_PROTOCOL:
                             continue
                         if record.get("retain_until", 0) > now:
+                            history = record.pop("_frame_tie_history", None)
+                            count = self._db.execute("SELECT COUNT(*) FROM connection_frame_ties WHERE session=?", (sid,)).fetchone()[0]
+                            rows = {}
+                            if history is not None:
+                                if ("frame_ties" in record or not isinstance(history, dict) or type(history.get("count")) is not int
+                                        or history["count"] != count):
+                                    raise ValueError()
+                                ties = {}
+                                for name, sealed_tie in self._db.execute("SELECT name, record FROM connection_frame_ties WHERE session=?", (sid,)):
+                                    if not isinstance(name, str) or not 28 <= len(sealed_tie) <= MAX_RECORD_BYTES + 28:
+                                        raise ValueError()
+                                    raw_tie = self._seal.decrypt(sealed_tie[:12], sealed_tie[12:], self._tie_context(sid, name))
+                                    tie = json.loads(raw_tie)
+                                    if not isinstance(tie, dict):
+                                        raise ValueError()
+                                    ties[name] = tie
+                                    rows[name] = self._json(tie)
+                                if self._tie_digest(ties) != history.get("sha256"):
+                                    raise ValueError()
+                                record["frame_ties"] = ties
+                            elif count:
+                                raise ValueError()
                             self._records[sid] = record
+                            self._tie_rows[sid] = rows
                     except (ValueError, InvalidTag, TypeError):
                         raise ValueError("connection state could not be verified; restore the matching directory state and service key") from None
                 self.prune(now)
@@ -139,29 +171,65 @@ class ConnectionAuthority:
                 self._db.close()
                 self._db = None
 
+    @staticmethod
+    def _json(value: Any) -> bytes:
+        return json.dumps(value, separators=(",", ":"), ensure_ascii=True, sort_keys=True).encode()
+
+    @classmethod
+    def _tie_digest(cls, ties: dict[str, Any]) -> str:
+        return hashlib.sha256(cls._json(ties)).hexdigest()
+
+    @staticmethod
+    def _tie_context(sid: str, name: str) -> bytes:
+        return sid.encode("ascii") + b"\0frame-tie\0" + name.encode("ascii")
+
+    @staticmethod
+    def _record_context(sid: str) -> bytes:
+        # An older directory must refuse the record rather than forget its separately retained decisions.
+        return sid.encode("ascii") + b"\0frame-tie-history-v1"
+
     def _save(self, sid: str, record: dict[str, Any]) -> None:
         if self._closed:
             raise ConnectionErrorReply(503, "directory_restarting", "The directory is restarting. Your match can keep playing; reconnecting will retry.")
         if sid not in self._records and len(self._records) >= MAX_MATCHES:
             raise ConnectionErrorReply(503, "connection_capacity", "The directory is full. Wait a moment and host again.")
-        raw = json.dumps(record, separators=(",", ":"), ensure_ascii=True).encode()
-        if len(raw) > MAX_RECORD_BYTES:
+        # Decisions outlive the live record; its sealed digest detects missing or replaced history after a restart.
+        stored = {key: value for key, value in record.items() if key not in ("frame_ties", "_frame_tie_history")}
+        rows = {name: self._json(tie) for name, tie in record.get("frame_ties", {}).items()}
+        if "frame_ties" in record:
+            stored["_frame_tie_history"] = dict(count=len(rows), sha256=self._tie_digest(record["frame_ties"]))
+        raw = self._json(stored)
+        if len(raw) > MAX_RECORD_BYTES or any(len(row) > MAX_RECORD_BYTES for row in rows.values()):
             raise ConnectionErrorReply(503, "connection_capacity", "The directory is busy. Your match can keep playing; retry the connection shortly.")
         if self._db is not None:
             nonce = secrets.token_bytes(12)
-            sealed = nonce + self._seal.encrypt(nonce, raw, sid.encode("ascii"))
+            context = self._record_context(sid) if "_frame_tie_history" in stored else sid.encode("ascii")
+            sealed = nonce + self._seal.encrypt(nonce, raw, context)
             with self._db:
+                previous = self._tie_rows.get(sid, {})
+                for name, raw_tie in rows.items():
+                    if previous.get(name) == raw_tie:
+                        continue
+                    tie_nonce = secrets.token_bytes(12)
+                    sealed_tie = tie_nonce + self._seal.encrypt(tie_nonce, raw_tie, self._tie_context(sid, name))
+                    self._db.execute("INSERT INTO connection_frame_ties VALUES (?, ?, ?) ON CONFLICT(session, name) DO UPDATE SET record=excluded.record",
+                                     (sid, name, sealed_tie))
+                for name in previous.keys() - rows.keys():
+                    self._db.execute("DELETE FROM connection_frame_ties WHERE session=? AND name=?", (sid, name))
                 self._db.execute("INSERT INTO connections VALUES (?, ?) ON CONFLICT(session) DO UPDATE SET record=excluded.record", (sid, sealed))
         self._records[sid] = record
+        self._tie_rows[sid] = rows
 
     def prune(self, now: float) -> None:
         with self._lock:
             for sid in [sid for sid, record in self._records.items() if record.get("retain_until", 0) <= now]:
                 self._records.pop(sid, None)
+                self._tie_rows.pop(sid, None)
             if self._db is not None:
                 with self._db:
                     for (sid,) in self._db.execute("SELECT session FROM connections").fetchall():
                         if sid not in self._records:
+                            self._db.execute("DELETE FROM connection_frame_ties WHERE session=?", (sid,))
                             self._db.execute("DELETE FROM connections WHERE session=?", (sid,))
 
     def records(self) -> list[tuple[str, dict[str, Any]]]:
@@ -197,8 +265,10 @@ class ConnectionAuthority:
                 # listing must not reserve a day of connection-table capacity.
                 if self._db is not None:
                     with self._db:
+                        self._db.execute("DELETE FROM connection_frame_ties WHERE session=?", (sid,))
                         self._db.execute("DELETE FROM connections WHERE session=?", (sid,))
                 self._records.pop(sid, None)
+                self._tie_rows.pop(sid, None)
                 return
             record.update(ended=True, seats={}, session=None, retain_until=now + MATCH_RETENTION_SECONDS,
                           world_boot=(record.get("session") or {}).get("fields", {}).get("world_boot", 0))
@@ -269,11 +339,15 @@ class ConnectionAuthority:
         participant = bounded_hex(data, "participant", 32).hex()
         name = player_name(data.get("name"))
         action = data.get("action")
-        if action not in ("removed", "banned"):
+        if action not in ("removed", "banned", "lifted"):
             raise ConnectionErrorReply(400, "connection_request", "Choose Remove or Ban for this player.")
         with self._lock:
             record = self._match(sid, now)
-            record["removed"][participant] = dict(name=name, action=action)
+            # A ban the host lifted lets the player take a seat again.
+            if action == "lifted":
+                record["removed"].pop(participant, None)
+            else:
+                record["removed"][participant] = dict(name=name, action=action)
             record["route_revision"] += 1
             self._save(sid, record)
             return {"ok": True, "connection_protocol": CONNECTION_PROTOCOL}
@@ -367,32 +441,40 @@ class ConnectionAuthority:
         host = bounded_int(request, "host_seat", 0, MAX_SEATS - 1)
         owners, members = request.get("owners"), request.get("members")
         query_only = request.get("query_only", False)
-        if (not isinstance(owners, list) or not isinstance(members, list) or len(owners) not in (2, 4)
+        if (not isinstance(owners, list) or not isinstance(members, list) or not 2 <= len(owners) <= 4
                 or any(type(seat) is not int or seat < 0 or seat >= MAX_SEATS for seat in owners + members)
                 or owners != sorted(set(owners)) or members != sorted(set(members))
-                or len(members) * 2 != len(owners) or not set(members) <= set(owners)
+                or not 0 < len(members) < len(owners) or not set(members) <= set(owners)
                 or type(query_only) is not bool or host not in owners or answer["seat"] not in owners
                 or (not query_only and answer["seat"] not in members)):
             raise ConnectionErrorReply(400, "frame_tie_request", "The tied groups did not name retained seats. Reconnecting will retry.")
         key = f"{generation}:{round_id}:{config_hash}:{frame}"
         with self._lock:
             record = self._match(sid, now)
+            # A seat the host removed is dropped from every check-in: a half cut off from the host could not know of the
+            # removal, and the decision it asks for never names it.
+            removed_seats = {int(seat) for seat, lease in record["seats"].items() if lease["participant"] in record["removed"]}
+            owners = [seat for seat in owners if seat not in removed_seats]
+            members = [seat for seat in members if seat not in removed_seats]
             ties = record.setdefault("frame_ties", {})
             prior = ties.get(key)
             if prior is not None and "winner" in prior:
-                if prior["owners"] != owners or prior["host"] != host:
+                if [seat for seat in prior["owners"] if seat not in removed_seats] != owners or prior["host"] != host:
                     raise ConnectionErrorReply(409, "frame_tie_mismatch", "The groups disagree about the retained seats. Reconnecting will retry.")
                 # A newer admin generation or roster cannot rewrite an already
                 # displayed decision. The caller's current seat authentication
                 # above still has to succeed before this history is disclosed.
                 return dict(connection_protocol=CONNECTION_PROTOCOL, generation=generation, round_id=round_id,
-                            frame=frame, config_hash=config_hash, status="decided", members=prior["winner"])
+                            frame=frame, config_hash=config_hash, status="decided",
+                            members=[seat for seat in prior["winner"] if seat not in removed_seats])
+            if len(owners) < 2 or len(members) >= len(owners) or (not query_only and not members):
+                raise ConnectionErrorReply(400, "frame_tie_request", "The tied groups did not name retained seats. Reconnecting will retry.")
             session = record.get("session") or {}
             if (generation != session.get("migration_gen", 0) or host != record.get("host_seat")
                     or config_hash != session.get("fields", {}).get("match_config_hash")):
                 raise ConnectionErrorReply(409, "frame_tie_round", "The check-in names another host generation or match. Reconnecting will retry.")
-            if any(str(seat) not in record["seats"] or record["seats"][str(seat)]["participant"] in record["removed"] for seat in owners):
-                raise ConnectionErrorReply(403, "frame_tie_seats", "A seat in this check-in was removed by the host.")
+            if any(str(seat) not in record["seats"] for seat in owners):
+                raise ConnectionErrorReply(403, "frame_tie_seats", "A seat in this check-in is not in the match.")
             retained = sorted(int(seat) for seat, lease in record["seats"].items() if int(seat) < 4 and lease["participant"] not in record["removed"])
             if owners != retained:
                 raise ConnectionErrorReply(409, "frame_tie_owners", "The check-in did not name every retained seat. Reconnecting will retry.")
@@ -402,13 +484,13 @@ class ConnectionAuthority:
             if key not in ties:
                 ties[key] = {"owners": owners, "host": host, "until": now, "groups": []}
             tie = ties[key]
-            if tie["owners"] != owners or tie["host"] != host:
+            if [seat for seat in tie["owners"] if seat not in removed_seats] != owners or tie["host"] != host:
                 raise ConnectionErrorReply(409, "frame_tie_mismatch", "The groups disagree about the retained seats. Reconnecting will retry.")
             # A record kept from the collecting rule ends its window as that rule did.
             if "winner" not in tie and now >= tie["until"] and tie["groups"]:
                 tie["winner"] = tie["groups"][0]
-            # Both halves name a split by the last frame the whole group played, so the first half to check in keeps it
-            # at once: a half that still reaches the referee plays on inside the slow-player bound and the other returns.
+            # Survivors already play through local holds. These immutable decisions arbitrate only competing split
+            # histories: the first group to check in keeps its history, and the other group returns through an image.
             if "winner" not in tie and not query_only:
                 tie["groups"].append(members)
                 tie["winner"] = members
@@ -418,7 +500,7 @@ class ConnectionAuthority:
             result = {"connection_protocol": CONNECTION_PROTOCOL, "generation": generation, "round_id": round_id,
                       "frame": frame, "config_hash": config_hash, "status": "decided" if "winner" in tie else "waiting"}
             if "winner" in tie:
-                result["members"] = tie["winner"]
+                result["members"] = [seat for seat in tie["winner"] if seat not in removed_seats]
             self._save(sid, record)
             return result
 

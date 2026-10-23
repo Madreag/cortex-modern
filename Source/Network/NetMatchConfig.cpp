@@ -199,17 +199,23 @@ namespace RTE {
 	}
 
 	void NetInputDelayEstimator::Observe(uint64_t nowMs, uint32_t rttMs) {
+		Observe(nowMs, rttMs, rttMs != 0);
+	}
+
+	void NetInputDelayEstimator::Observe(uint64_t nowMs, uint32_t rttMs, bool measured) {
 		ForgetSilencesBefore(nowMs);
 		if (!m_Samples.empty() && nowMs < m_Samples.back().first) {
 			m_Samples.clear(); ++m_SamplesRevision;
 			m_LastMeasuredRttMs = 0;
+			m_HasMeasurement = false;
 			m_BelowSince.reset();
 		}
 		while (!m_Samples.empty() && nowMs - m_Samples.front().first > c_WindowMs) { m_Samples.pop_front(); ++m_SamplesRevision; }
-		if (rttMs == 0) return;
+		if (!measured) { m_BelowSince.reset(); return; }
+		m_LastMeasuredRttMs = rttMs;
+		m_HasMeasurement = true;
 		if (!m_Samples.empty() && nowMs - m_Samples.back().first < c_SampleMs) return;
 		m_Samples.emplace_back(nowMs, rttMs); ++m_SamplesRevision;
-		m_LastMeasuredRttMs = rttMs;
 	}
 
 	void NetInputDelayEstimator::ObserveSilence(uint64_t nowMs, uint32_t silenceMs) {
@@ -257,16 +263,16 @@ namespace RTE {
 
 	uint32_t NetInputDelayEstimator::RequiredFrames(double tickMs, uint16_t floor) const {
 		if (!std::isfinite(tickMs) || tickMs <= 0) return std::numeric_limits<uint32_t>::max();
-		// Missing readings do not make a legacy link faster than its last measurement.
-		const uint32_t rtt = std::max(P95Ms(), m_Samples.empty() ? m_LastMeasuredRttMs : m_Samples.back().second);
-		// Cover one retransmission after the one-way trip and the input stream's own silences, which a smoothed round trip never
-		// shows; a link that keeps going silent carries twice its longest, since its next silence is not always as brief.
-		const uint32_t silenceMargin = std::min(m_Silences.size() > 1 ? 2 * SilenceMs() : SilenceMs(), c_MaxSilenceMarginMs);
-		const double frames = std::ceil((1.5 * rtt) / tickMs) + 1 + std::ceil(std::max(JitterMs(), silenceMargin) / tickMs);
+		if (!m_HasMeasurement) return floor;
+		const uint32_t rtt = m_LastMeasuredRttMs;
+		// One round trip plus the p95 excess over that measured trip. Machine and application-pump costs never size the link.
+		const uint32_t margin = std::max(P95Ms(), rtt) - rtt;
+		const double frames = std::ceil(rtt / tickMs) + 1 + std::ceil(margin / tickMs);
 		return static_cast<uint32_t>(std::clamp(frames, static_cast<double>(floor), static_cast<double>(std::numeric_limits<uint32_t>::max())));
 	}
 
 	std::optional<uint16_t> NetInputDelayEstimator::Change(uint64_t nowMs, uint16_t current, double tickMs, uint16_t floor) {
+		if (!m_HasMeasurement) { m_BelowSince.reset(); return std::nullopt; }
 		const uint16_t needed = static_cast<uint16_t>(std::min<uint32_t>(RequiredFrames(tickMs, floor), NetMatchConfigUtil::c_MaxInputDelayFrames));
 		if (needed >= current) {
 			m_BelowSince.reset();
@@ -278,11 +284,9 @@ namespace RTE {
 
 	uint32_t NetInputDelayEstimator::SenderRequiredFrames(double tickMs, uint16_t bound, uint16_t floor) const {
 		if (!std::isfinite(tickMs) || tickMs <= 0) return std::numeric_limits<uint32_t>::max();
-		const uint32_t rtt = std::max(P95Ms(), m_Samples.empty() ? 0U : m_Samples.back().second);
-		// The RTT percentile already includes the link's jitter. One production tick covers a receipt delivered between samples;
-		// the combat wait bound belongs to a hold decision, never to every player's permanent input delay.
+		// Machine cost and the combat wait bound belong to a hold decision, never to every player's permanent input delay.
 		(void)bound;
-		return static_cast<uint32_t>(std::clamp(std::ceil(rtt / tickMs) + 1, static_cast<double>(floor), static_cast<double>(NetMatchConfigUtil::c_MaxInputDelayFrames)));
+		return std::min<uint32_t>(RequiredFrames(tickMs, floor), NetMatchConfigUtil::c_MaxInputDelayFrames);
 	}
 
 	namespace {
@@ -497,6 +501,17 @@ namespace RTE {
 			}
 		}
 		return true;
+	}
+
+	void NetMatchConfigUtil::KeepOfferedSlowPlayerPolicy(NetMatchConfig& config) {
+		// The other policies do not yet keep a dropped player's seat; a legacy config has no policy of its own to choose.
+		if (config.version >= c_TimingOptionsVersion) config.slowPlayerPolicy = NetSlowPlayerPolicy::Substitute;
+	}
+
+	void NetMatchConfigUtil::PrepareResumedConfig(NetMatchConfig& config) {
+		config.configRevision += 1;
+		// A save from a build that still offered another policy resumes on the one this build offers.
+		KeepOfferedSlowPlayerPolicy(config);
 	}
 
 	bool NetMatchConfigUtil::ValidateLocalAlpha(const NetMatchConfig& config, std::string* error) {
@@ -798,6 +813,8 @@ namespace RTE {
 		if (config.returnWindowMinutes != c_DefaultReturnWindowMinutes) {
 			fields.emplace_back("return_window_minutes", std::to_string(config.returnWindowMinutes));
 		}
+		// And the directory's arbitration: peers that would decide a split by two rules never agree on the round.
+		if (config.directoryArbitration) fields.emplace_back("directory_arbitration", "true");
 		// The world identity is frozen for the world's life: its members' rosters change under a
 		// separate revision, so what a joiner validates against stays the same string every boot. Only
 		// a world takes the v5 domain, so every ordinary roster hashes as it always did.

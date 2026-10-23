@@ -1,8 +1,8 @@
 """Worked use of spread_peers.run_case with the unchanged mp-host-join case.
 
-python tools/spread_example.py --out <lane>/example
+python tools/spread_example.py --out <scratch>/example
     --peer-boxes host=<BOX>,seat2=<BOX> --pool-registry <installed>/boxes.json
-    --runner-label <lane> --port-block LO-HI --port LO
+    --runner-label <label> --port-block LO-HI --port LO
 
 The callback uses the existing video driver for its staging, start gates,
 recording, rendering and every review assertion. No scenario is rewritten.

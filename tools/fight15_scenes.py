@@ -479,6 +479,25 @@ def game_scenes():
          scene_checks("host", host) + scene_checks("joiner", joiner))
 
 
+# Stock reinforced fill buried around the bunker and again before its door, offsets from its center: the endless waves
+# wear an undefended brain down inside twenty minutes, and get through fill above the ground or by the chamber's door,
+# which the pathfinder always treats as open.
+COLLAR = ((-144, -144), (-48, -144), (48, -144), (144, -144), (-144, -48), (-144, 48), (144, -48), (144, 48), (240, 48))
+
+
+def defenses(player):
+    steps = []
+    for offset_x, offset_y in COLLAR:
+        steps += [wait(editing=True), dict(op="editor_pick", input_player=0, brain=False, **{"class": "TerrainObject"}, preset="Reinforced Concrete Fill"),
+                  dict(op="editor_move", input_player=0, relative_to="bunker", offset_x=offset_x, offset_y=offset_y), wait(picker_open=False, player=player)]
+        steps += click() + [wait(sim_advanced=30, elapsed_ms=600), dict(op="assert_editor", input_player=0, equals=dict(placement_refused=False))]
+    return steps
+
+
+def defense_lines(seats):
+    return [rf"\[net-match\] editor purchase applied: seat={seat} preset=Base.rte/Reinforced Concrete Fill funds=" for seat in seats]
+
+
 def ai_fight():
     host_menu, join_menu = host_setup(4, cpu=True), join_setup(4)
     # These are stock activity options: Infinite gold selects Skirmish Defense's endless AI mode.
@@ -507,6 +526,7 @@ def ai_fight():
         steps += [dict(op="assert_editor", input_player=0, equals=dict(screen_text="Click to ADD a new object - Drag for precision"))]
         steps += click() + [wait(sim_advanced=90, elapsed_ms=1600)] + capture(f"bunker-installed-{peer}")
         steps += [dict(op="assert_editor", input_player=0, equals=dict(placement_refused=False))]
+        steps += defenses(0 if peer == "host" else 1)
         steps += place(peer, x=fraction, relative_to="bunker")
         for minute in range(1, 21):
             steps += [dict(op="measure_minute", within_ms=70000)]
@@ -521,9 +541,9 @@ def ai_fight():
         probes[peer] = game_probe(steps, timeout=1600000)
         checks += scene_checks(peer, steps)
         checks.append(dict(id=f"shared-bunkers-{peer}", peer=peer, mark=f"playing-{peer}", screen="game",
-                           what="Both ordinary editor placements reached the shared scene before the brains started playing.",
+                           what="Both bunkers and their reinforced fill reached the shared scene before the brains started playing.",
                            log_regex=[rf"\[net-match\] editor purchase applied: seat={seat} preset=Base.rte/Brain Chamber Left 2x2 - 1 funds="
-                                      for seat in (0, 1)]))
+                                      for seat in (0, 1)] + defense_lines((0, 1))))
         checks.append(dict(id=f"twenty-minutes-{peer}", peer=peer, mark=f"fight-ended-{peer}", screen="MultiplayerScreen",
                            what="Twenty full running minutes at >=58 ticks/s, living local player, AI weapon fire and named end reason.",
                             continuous_minutes=dict(count=20, minimum_tps=58.0),
@@ -669,7 +689,7 @@ def seat_dialog_scene():
 
 def ban_scene():
     """D3, D9 and G6: Ban in the lobby seat dialog asks first and bans the connected player; Banned players lists the ban and
-    Remove ban lifts it, saying the player may join the host's next games and stays out of this match."""
+    Remove ban lifts it with its removal, saying the player may ask to join again, and the player's next Connect is let in."""
     seat, rejoin, done = seat_dialog_parts()
     host, joiner = host_setup(), join_setup()
     seated_for_removal(host, joiner)
@@ -680,20 +700,20 @@ def ban_scene():
              "activate TabHostPageSession", "wait_ms 600", "activate ButtonHostSessBanned", "wait_ms 900", "video_mark banned-list-host",
              "assert_visible HostBannedDialog 1", "assert_label LabelHostBannedList Joiner", "assert_label LabelHostBannedList session",
              "wait_file {PROBE_DIR_joiner}/refused.json 120", "activate ButtonHostBannedRemove", "wait_ms 300", "video_mark ban-lifted-host",
-             "wait_label LabelHostBannedStatus Remove ban: Done. They may join your next games, not this match.", "assert_text_fits LabelHostBannedStatus",
+             "wait_label LabelHostBannedStatus Remove ban: Done. They may ask to join again, this match included.", "assert_text_fits LabelHostBannedStatus",
              "assert_label_absent LabelHostBannedList Joiner", "touch_file {PROBE_DIR}/unbanned.json", "activate ButtonHostBannedClose", "wait_ms 600",
-             "activate ButtonHostOptBack", "wait_substate Lobby 30", "wait_file {PROBE_DIR_joiner}/still-refused.json 120"] + lobby_exit()
+             "activate ButtonHostOptBack", "wait_substate Lobby 30", "wait_file {PROBE_DIR_joiner}/readmitted.json 120"] + lobby_exit()
     joiner += ["video_mark seated-joiner", "wait_label LabelMultiplayerLandingStatus The host banned you from this session",
               "video_mark banned-joiner", "assert_text_fits LabelMultiplayerLandingStatus"]
     joiner += rejoin + ["wait_label LabelJoinSelected The host banned you from this session", "video_mark ban-refused-joiner", "touch_file {PROBE_DIR}/refused.json",
                "wait_file {PROBE_DIR_host}/unbanned.json 120", "activate ButtonMultiplayerConnect",
-               "wait_label LabelJoinSelected The host removed you from this session", "video_mark still-refused-joiner",
-               "touch_file {PROBE_DIR}/still-refused.json"] + lobby_exit()
+               "wait_connected 2 90", "wait_substate Lobby 90", "video_mark readmitted-joiner",
+               "touch_file {PROBE_DIR}/readmitted.json"] + lobby_exit()
     host[-3:-3] = ["touch_file {PROBE_DIR}/scene-end.json"]
     joiner[-3:-3] = ["touch_file {PROBE_DIR}/scene-end.json"]
     checks = seat_dialog_checks({"host": ["seat-dialog-host", "ban-confirm-host", "banned-list-host", "ban-lifted-host"],
-                                 "joiner": ["banned-joiner", "ban-refused-joiner", "still-refused-joiner"]})
-    emit(31, "Ban in the lobby seat dialog asks first; Banned players lists it and Remove ban lifts it for the host's next games", host, joiner,
+                                 "joiner": ["banned-joiner", "ban-refused-joiner", "readmitted-joiner"]})
+    emit(31, "Ban in the lobby seat dialog asks first; Banned players lists it and Remove ban lifts it, the player let in again", host, joiner,
          done, done, checks, timeout=420)
 
 

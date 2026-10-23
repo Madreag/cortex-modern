@@ -25,8 +25,10 @@
 #include "HDFirearm.h"
 #include "InputScript.h"
 #include "LocalPrediction.h"
+#include "MenuMan.h"
 #include "MovableMan.h"
 #include "NetMatchService.h"
+#include "NetModerationGUI.h"
 #include "PreviewEventLedger.h"
 #include "ScenarioRunner.h"
 #include "AsyncLineWriter.h"
@@ -84,6 +86,8 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#else
+#include <sys/resource.h>
 #endif
 
 using namespace RTE;
@@ -262,6 +266,14 @@ namespace {
 	};
 	FeelState s_Feel;
 
+	bool FeelHarnessAllowed() {
+		const auto enabled = [](const char* name) {
+			const char* value = std::getenv(name);
+			return value && std::string_view(value) == "1";
+		};
+		return enabled("CCCP_HEADLESS") || (enabled("CC_TEST_FEEL_HEADED") && enabled("CC_RUNNER_HEADED"));
+	}
+
 	double FeelNowMS() {
 		return std::chrono::duration<double, std::milli>(RTE::SteadyClock::now().time_since_epoch()).count();
 	}
@@ -279,6 +291,11 @@ namespace {
 			const uint64_t kernelTime = (static_cast<uint64_t>(kernel.dwHighDateTime) << 32) | kernel.dwLowDateTime;
 			const uint64_t userTime = (static_cast<uint64_t>(user.dwHighDateTime) << 32) | user.dwLowDateTime;
 			return static_cast<double>(kernelTime + userTime) / 10000.0;
+		}
+#else
+		rusage usage{};
+		if (getrusage(RUSAGE_SELF, &usage) == 0) {
+			return 1000.0 * (usage.ru_utime.tv_sec + usage.ru_stime.tv_sec) + (usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) / 1000.0;
 		}
 #endif
 		return -1.0;
@@ -353,8 +370,7 @@ namespace {
 }
 
 bool FrameMan::SetFeelRenderSettings(const std::string& path) {
-	const char* headless = std::getenv("CCCP_HEADLESS");
-	if (!headless || std::string(headless) != "1") return false;
+	if (!FeelHarnessAllowed()) return false;
 	std::ifstream in(path);
 	std::string key, equals, extra;
 	double hz = -1;
@@ -379,8 +395,7 @@ void FrameMan::ApplyHeadlessPresentationDefault() {
 }
 
 bool FrameMan::SetFeelRecordDirectory(const std::string& path) {
-	const char* headless = std::getenv("CCCP_HEADLESS");
-	if (!headless || std::string(headless) != "1" || !std::filesystem::is_directory(path) || FeelRecordingEnabled()) return false;
+	if (!FeelHarnessAllowed() || !std::filesystem::is_directory(path) || FeelRecordingEnabled()) return false;
 	const auto raw = std::filesystem::path(path) / "raw.jsonl";
 	if (std::filesystem::exists(raw)) return false;
 	s_Feel.useBounded = std::getenv("CC_TEST_CROSS_RECORDS") != nullptr;
@@ -390,7 +405,7 @@ bool FrameMan::SetFeelRecordDirectory(const std::string& path) {
 	}
 	else if (!s_Feel.out.Open(raw.string())) return false;
 	s_Feel.directory = path;
-	FeelWrite({{"type", "schema"}, {"version", 1}, {"clock", "RTE::SteadyClock milliseconds (monotonic)"}, {"cpu_clock", "GetProcessTimes kernel+user milliseconds"},
+	FeelWrite({{"type", "schema"}, {"version", 1}, {"clock", "RTE::SteadyClock milliseconds (monotonic)"}, {"cpu_clock", "process kernel+user milliseconds"},
 	    {"presentation_boundary", "UploadFrame return (upload, swap, and frame housekeeping)"}, {"pixels_per_meter", c_PPM},
 	    {"event_clock", "observation interval, not a mixer callback timestamp"}, {"event_start_capacity", 64}});
 	return true;
@@ -467,13 +482,22 @@ bool FrameMan::FeelBeginDraw() {
 	if (const double capHz = FeelCapHz(); capHz > 0) {
 		const double now = FeelNowMS();
 		if (s_Feel.nextDrawMS > now) return false;
-		s_Feel.nextDrawMS = std::max(now, s_Feel.nextDrawMS) + 1000.0 / capHz;
+		if (ScenarioRunner::IsLockstepControllerSyncActive() && s_Feel.nextDrawMS > 0) {
+			// Preview work can cross a draw deadline. Keep the match's cadence anchored to its scheduled slots,
+			// skipping elapsed slots after a hitch instead of carrying every late draw into all later deadlines.
+			const double periodMS = 1000.0 / capHz;
+			s_Feel.nextDrawMS += (std::floor((now - s_Feel.nextDrawMS) / periodMS) + 1) * periodMS;
+		} else {
+			s_Feel.nextDrawMS = std::max(now, s_Feel.nextDrawMS) + 1000.0 / capHz;
+		}
 	}
 	if (!FeelRecordingEnabled()) return true;
 	const FeelCost cost;
 	s_Feel.drawBeginMS = FeelNowMS();
 	s_Feel.frame = {{"type", "frame"}, {"frame", s_Feel.frameNumber + 1}, {"tick", g_TimerMan.GetSimUpdateCount()},
 	    {"draw_begin_ms", s_Feel.drawBeginMS}, {"cap_hz", s_Feel.capHz}, {"active", s_Feel.iterationActive},
+	    {"activity_running", g_ActivityMan.ActivityRunning()}, {"lockstep_active", ScenarioRunner::IsLockstepControllerSyncActive()},
+	    {"lockstep_paused", ScenarioRunner::IsLockstepPaused()},
 	    {"alpha", g_TimerMan.GetSimUpdateProportion()}, {"committed_actors", FeelLocalActors()}};
 	s_Feel.frame["scene_width"] = g_SceneMan.GetSceneWidth();
 	s_Feel.frame["scene_height"] = g_SceneMan.GetSceneHeight();
@@ -517,6 +541,10 @@ void FrameMan::FeelAfterPresent() {
 	    {"adoption_lead_ticks", g_MovableMan.GetLastPreviewSwap().leadTicks}, {"swap_pose_delta", g_MovableMan.GetLastPreviewSwap().poseDelta}};
 	s_Feel.frame["delay"] = ScenarioRunner::GetLockstepLocalInputDelay();
 	s_Feel.frame["input_delay_text"] = g_NetMatchService.GetInputDelayText();
+	if (const auto* panel = g_MenuMan.GetNetworkPanel()) {
+		const auto& status = panel->GetStatusWrap();
+		s_Feel.frame["input_delay_overlay"] = status.active ? status.wrapped : "";
+	}
 	s_Feel.frame["peer"] = ScenarioRunner::GetLockstepLocalPeerId();
 	const auto lobby = g_NetMatchService.GetLobbySnapshot();
 	s_Feel.frame["rtt"] = FeelJson::array();

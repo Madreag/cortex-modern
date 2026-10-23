@@ -1,4 +1,4 @@
-"""One lead-routed execution interface for real-network cases with native peers.
+"""One caller-routed execution interface for real-network cases with native peers.
 
 Contract (version 3.2, compatible with every published named-box call)
 --------------------
@@ -17,15 +17,15 @@ Windows session task runs that same recorder and returns its evidence through
 the existing collector. Recorder peers remain isolated within their case.
 Peer.readback permits the named reviewed screen's native readback.
 Every peer must be named in peer_boxes, by actual name or host/seatN alias.
-A value may contain the lead's first and second named boxes (BOX|SECOND).
+A value may contain the caller's first and second named boxes (BOX|SECOND).
 Only those candidates are tried, in that order; the next is tried only after
 NO or the first candidate's runner-wait expires. Input/hash/root/port conflicts
 remain case defects and never trigger an alternative. Sharing, native OS and
 reviewed-recorder policy are checked on the actual assignment. Receipts retain
 requested_peer_boxes and route_attempts alongside the actual peer_boxes.
-The lead supplies those boxes; this interface never chooses an unnamed box.
+The caller supplies those boxes; this interface never chooses an unnamed box.
 Peer.task_slot, Match.parameters["peer_task_slots"], or --peer-task-slot PEER=N
-may pin a registered Windows payload slot named by the lead. No slot is claimed
+may pin a registered Windows payload slot named by the caller. No slot is claimed
 through preparation; its ownership is checked before the payload is changed.
 Preserved native task wrappers are authenticated before submission. A foreign
 wrapper refuses "FOREIGN TASK WRAPPER: BOX TASK PATH" without changing it.
@@ -35,7 +35,7 @@ throughout. remote_box.py is included in the native control module ship set.
 Extra assignments for another arm are unused, as in the published interface.
 The case supplies arguments, environment and fixtures through Peer or by calling
 case.make_run() in ``drive(case)``. ``match`` is a Match with the game's port,
-the lane's directory port, and optional unchanged case parameters. The helper
+the run's directory port, and optional unchanged case parameters. The helper
 freezes committed inputs, verifies the
 shipped/native executable hash, and starts native runners/tasks. ``drive``
 still stages the case's scripts, orders starts and applies its own assertions.
@@ -44,7 +44,7 @@ stages in that already created root; a foreign or closed claim refuses.
 Without ``drive``, the call starts host first and finishes every declared peer.
 It collects verified evidence into ``out`` and returns topology="spread",
 peer_boxes, native identities, executable hashes, records and driver_result.
-Shareable peers use one box only when the lead explicitly names it twice.
+Shareable peers use one box only when the caller explicitly names it twice.
 Quiet peers remain alone; reviewed and held peers remain isolated in their case.
 Distinct cases require distinct live result roots and game ports. A matching
 executable path does not exclude another case. Existing per-box runner capacity,
@@ -73,13 +73,13 @@ peer_boxes, refused_peer, refused_box and the exact reason. Prefixes are
 "match port <port> differs from host port <port>", "native executable hash
 differs from preparation", and "Windows process suspension is unavailable".
 Missing peer names and retired --spread exit 2 with
-"NO BOX NAMED: the lead routes every peer (ROUTING.md section 6)".
+"NO BOX NAMED: the caller names every peer's box".
 Forbidden explicit sharing refuses "TWO PEERS ON ONE BOX WITHOUT share_ok".
 Live result-root and port conflicts refuse "RUN ROOT CONFLICT" and
 "PORT CONFLICT <port>", naming the box and conflicting peer/case. Native
 ownership markers use the existing facts writer and capacity mutex; no queue
 or placement layer is added. INTERFACE_VERSION is recorded in each result.
-Exhausted named candidates return their boxes and exact reasons to the lead.
+Exhausted named candidates return their boxes and exact reasons to the caller.
 No case assertion, oracle, timeout or default single-box launch is changed.
 Peer.output_name optionally declares an existing non-ASCII output directory;
 make_run(..., role=...) also accepts its declared logical peer explicitly.
@@ -89,7 +89,7 @@ CCCP_TEST_SCREEN_WATCHES) staged for POSIX use LF terminators, so Windows
 CRLF never becomes part of a native command's text. Binary/replay inputs and
 immutable module content are unchanged; single-box staging is unchanged.
 Peer.lane (or Match.parameters["lane"]) supplies the caller's run label.
-Match.parameters["label"] may specify the lead's exact native holder label.
+Match.parameters["label"] may specify the caller's exact native holder label.
 Match.parameters["runner_wait"] or --runner-wait may specify that holder's
 wait in seconds. It updates only the existing local holder command, without
 an enclosing holder or a second slot. Engine/script timeouts remain unchanged.
@@ -97,7 +97,7 @@ Admission uses one runner-wait budget on each named box, shared across probes,
 shipment and launch. NO is limited to off-limits, incompatible OS, physical
 engine ceiling, or physical free memory below the native required floor. Other
 admission conditions wait: FIFO/start spacing, exclusive holders (including an
-ownerless marker, preserved for the lead), capacity mutexes, CPU, SSH, payload
+ownerless marker, preserved for review), capacity mutexes, CPU, SSH, payload
 slots, builds and quiet-box availability. Every retry checks the original
 native guard, renews this peer's ownership and releases locks between probes.
 Quiet peers launch only alone and below the strict CPU guard.
@@ -139,7 +139,7 @@ make_run(..., runtime=...) copies owned retained regular files, settings and
 Data overlays without following links into the immutable game tree. Native
 overlay ancestors are private; other Data directories remain linked inputs.
 Incomplete retained runtimes and private tickets refuse before launch.
-The lead may explicitly share all eligible peers; box identities remain in
+The caller may explicitly share all eligible peers; box identities remain in
 the result so the topology is reviewable. --pool-registry reads box facts only.
 The dispatcher argument and --pool-dispatcher remain compatible transport-kit
 location hints; their script is never executed. Existing complete peer_boxes
@@ -200,7 +200,7 @@ def file_sha256(path):
 
 TOPOLOGY_LOCAL = "single-box: not proof"
 INTERFACE_VERSION = "3.2-named-ranked-waits"
-NO_BOX_NAMED = "NO BOX NAMED: the lead routes every peer (ROUTING.md section 6)"
+NO_BOX_NAMED = "NO BOX NAMED: the caller names every peer's box"
 _options = None
 _cases = contextvars.ContextVar("spread_cases", default=None)
 NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -270,7 +270,7 @@ class Match:
         if not 1024 <= self.port <= 65535:
             raise ValueError("match port is outside the test range")
         if self.directory_port is not None and (not 1024 <= self.directory_port <= 65535 or self.directory_port == self.port):
-            raise ValueError("directory port must be a different lane-owned test port")
+            raise ValueError("directory port must be a different run-owned test port")
 
 
 def native_address_probe(destination=None):
@@ -413,15 +413,15 @@ def directory_endpoint(value):
 
 def add_arguments(parser):
     group = parser.add_mutually_exclusive_group()
-    group.add_argument("--spread", action="store_true", help="retired: the lead must name every peer with --peer-boxes")
-    group.add_argument("--peer-boxes", help="host=BOX|SECOND,seat2=BOX,... (only lead-named boxes; actual peer names accepted)")
+    group.add_argument("--spread", action="store_true", help="retired: name every peer with --peer-boxes")
+    group.add_argument("--peer-boxes", help="host=BOX|SECOND,seat2=BOX,... (only named boxes; actual peer names accepted)")
     parser.add_argument("--pool-dispatcher", type=Path, help="compatible hint to the existing per-box transport kit; never executed")
-    parser.add_argument("--pool-registry", type=Path, help="box facts for the lead's named peers")
-    parser.add_argument("--runner-label", help="the lead's exact label for the native run holder")
-    parser.add_argument("--runner-wait", type=float, help="the lead's wait in seconds for the existing local holder")
-    parser.add_argument("--wait-for-holder", help="exact holder label the lead explicitly authorized waiting behind")
+    parser.add_argument("--pool-registry", type=Path, help="box facts for the named peers")
+    parser.add_argument("--runner-label", help="the caller's exact label for the native run holder")
+    parser.add_argument("--runner-wait", type=float, help="the caller's wait in seconds for the existing local holder")
+    parser.add_argument("--wait-for-holder", help="exact holder label the caller explicitly authorized waiting behind")
     parser.add_argument("--peer-port", action="append", default=[], metavar="PEER=PORT", help="explicit peer match port (also supports a wrong-parameter detecting run)")
-    parser.add_argument('--peer-task-slot', action='append', default=[], metavar='PEER=SLOT', help='the lead\'s registered Windows session slot')
+    parser.add_argument('--peer-task-slot', action='append', default=[], metavar='PEER=SLOT', help='the caller\'s registered Windows session slot')
 
 
 def enabled(options=None):
@@ -447,7 +447,7 @@ def check_port_block(port, block, count=1):
         raise ValueError("port block must be LO-HI")
     low, high = map(int, block.split("-"))
     if not 1024 <= low <= port <= port + count - 1 <= high <= 65535:
-        raise ValueError("case ports are outside the declared lane-owned block")
+        raise ValueError("case ports are outside the declared run-owned block")
     return low, high
 
 
@@ -486,7 +486,7 @@ def role_value(values, names, name):
 
 
 def named_peer_choices(peers, values):
-    """Parse only the lead's ordered named candidates; no catalog ranking."""
+    """Parse only the caller's ordered named candidates; no catalog ranking."""
     names = [peer.name for peer in peers]
     assignments = {}
     for index, name in enumerate(names):
@@ -710,7 +710,7 @@ def run_case(repo, out, peers, match, *, drive=None, peer_boxes=None, dispatcher
 
 
 def launch_native(backend, box, claim, request, wait=0):
-    """Keep the installed transport; pass a lead-specified wait to its holder."""
+    """Keep the installed transport; pass a caller-specified wait to its holder."""
     import math
     wait = float(wait or 0)
     if not math.isfinite(wait) or wait < 0:
@@ -779,7 +779,7 @@ def transient_admission(reason):
 
 
 class AdmissionWait:
-    """One deadline for every transient on one lead-named candidate, before its timer."""
+    """One deadline for every transient on one named candidate, before its timer."""
     def __init__(self, box, needs, wait=0, *, renew=None):
         import math
         self.wait = float(wait or 0)
@@ -900,7 +900,7 @@ def native_exclusive_state(probe, box, *, facts, root, **kwargs):
         holders.append(holder)
         if not holder['live']:
             ownerless.append(f"ownerless exclusive marker {path}; no live recorded owner")
-    # An ownerless marker is evidence for the lead; the facts probe must not
+    # An ownerless marker is evidence for review; the facts probe must not
     # archive it as a stale reservation. Other capacity checks stay unchanged.
     kwargs = dict(kwargs, read_only=True)
     state = probe(box, **kwargs)
@@ -954,7 +954,7 @@ def capacity_lock_seconds(wait, remaining=None):
 
 @contextlib.contextmanager
 def named_capacity_mutex(path, *, mutex, box, peer, wait=0, remaining=None):
-    """Use the native capacity lock with the lead's bounded contention wait."""
+    """Use the native capacity lock with the caller's bounded contention wait."""
     from types import SimpleNamespace
     retry = AdmissionWait(box, SimpleNamespace(peer_id=peer), wait)
     if remaining is not None:
@@ -1652,7 +1652,7 @@ class Case:
             raise SpreadRefusal(f"spread peer {self.names[0]} on {self.assigned_boxes[self.names[0]]}: "
                                 f"RUN ROOT CONFLICT {self.out}; {error}") from error
         self.stack.callback(facts.release_reservation, marker, owner["token"])
-        # Keep engine artifacts in the caller's catalog-derived scratch lane.
+        # Keep engine artifacts in the caller's catalog-derived scratch folder.
         try:
             catalog = self.pool.load_registry(self.registry)["boxes"]
             local = next((box for box in catalog if box["kind"] == "local"), None)

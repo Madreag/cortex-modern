@@ -21,17 +21,17 @@ def main(argv=None):
     sys.path[:0]=[str(Path(__file__).resolve().parent),str(Path(__file__).resolve().parent.parent)]
     from acceptance_posix_guard import assert_available
     assert_available()
-    lane = options.lane.resolve(); stream = lane/'stream.zsh'
+    stream_root = options.lane.resolve(); stream = stream_root/'stream.zsh'
     if hashlib.sha256(stream.read_bytes()).hexdigest() != options.stream_sha256:
         raise ValueError('shipped Mac stream hash differs from the declared tree file')
-    if (lane/'completion.json').exists(): raise ValueError('this Mac stream already completed; retain it and use a new lane')
+    if (stream_root/'completion.json').exists(): raise ValueError('this Mac stream already completed; retain it and use a new stream folder')
     if options.label_suffix and not re.fullmatch(r'[A-Za-z0-9_-]+', options.label_suffix):
         parser.error('label suffix must contain only letters, digits, underscore and hyphen')
     label = 'com.cortex.acceptance.' + options.collection_id + ('.' + options.label_suffix if options.label_suffix else '')
-    agent = lane/'acceptance-stream.plist'
-    data = dict(Label=label, ProgramArguments=['/bin/zsh', str(stream)], WorkingDirectory=str(lane), RunAtLoad=True,
-        KeepAlive=False, ProcessType='Background', StandardOutPath=str(lane/'job.out'), StandardErrorPath=str(lane/'job.err'),
-        EnvironmentVariables=dict(SHA=options.source_sha, ACCEPTANCE_COLLECTION=options.collection_id, LANE=str(lane),
+    agent = stream_root/'acceptance-stream.plist'
+    data = dict(Label=label, ProgramArguments=['/bin/zsh', str(stream)], WorkingDirectory=str(stream_root), RunAtLoad=True,
+        KeepAlive=False, ProcessType='Background', StandardOutPath=str(stream_root/'job.out'), StandardErrorPath=str(stream_root/'job.err'),
+        EnvironmentVariables=dict(SHA=options.source_sha, ACCEPTANCE_COLLECTION=options.collection_id, LANE=str(stream_root),
                                   CCCP_HEADLESS='1', PYTHONDONTWRITEBYTECODE='1'))
     if os.environ.get('CC_ACCEPTANCE_BOX_OWNER'):
         data['EnvironmentVariables']['CC_ACCEPTANCE_BOX_OWNER']=os.environ['CC_ACCEPTANCE_BOX_OWNER']
@@ -40,7 +40,7 @@ def main(argv=None):
     subprocess.run(['/bin/launchctl', 'bootstrap', session, str(agent)], check=True)
     receipt = dict(label=label, session=session, stream=str(stream), stream_sha256=options.stream_sha256,
                    source_sha=options.source_sha, collection_id=options.collection_id, plist_sha256=hashlib.sha256(agent.read_bytes()).hexdigest())
-    (lane/'launch-receipt.json').write_text(json.dumps(receipt, indent=2) + '\n', encoding='utf-8')
+    (stream_root/'launch-receipt.json').write_text(json.dumps(receipt, indent=2) + '\n', encoding='utf-8')
     print(json.dumps(receipt))
     return 0
 

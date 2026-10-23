@@ -677,7 +677,7 @@ class LobbyIdentityTest(unittest.TestCase):
             peers.check_scene(document)
 
     def test_a_run_never_starts_on_a_port_another_lobby_lists(self):
-        # Another lane's lobby on this run's port: its joiners could take that row for their host's.
+        # Another run's lobby on this run's port: its joiners could take that row for their host's.
         listing = {"sessions": [{"session_id": "0123456789abcdef", "name": "Captain", "activity": "Skirmish Defense", "listen_port": 49436}]}
         urls = []
         def fetch(url):

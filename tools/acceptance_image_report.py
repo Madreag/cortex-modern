@@ -62,7 +62,7 @@ def report(list_path, run_roots, out):
     measurements = [read_run(root, executable_sha256) for root in run_roots]
     table, complete = markdown(scenes, measurements)
     facts = dict(build=dict(configuration="Final", sanitizer=False, executable_sha256=executable_sha256,
-                            evidence="task-designated engineer Final release build; every runner digest matches the native lobby-list run"),
+                            evidence="task-designated Final release build; every runner digest matches the native lobby-list run"),
                  offered_scenes=[row["module"]+"/"+row["name"] for row in scenes],
                  scenes=[{**row, "name":row["module"]+"/"+row["name"]} for row in measurements])
     result = judge("image-sizes", facts)
