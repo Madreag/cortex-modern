@@ -4461,7 +4461,8 @@ static std::string ResyncSaveName() {
 			// tail privately, which replays this tick late; the host's own held seat still names the round's park.
 			bool taken = false;
 			const bool privateReader = m_Coordinator && !m_IsHost && m_Coordinator->IsLocalPrivateReaderAt(tick);
-			if (!ScenarioRunner::WorldCatchUpActive() && !privateReader && g_ActivityMan.ActivityRunning()) {
+			const bool attempted = !ScenarioRunner::WorldCatchUpActive() && !privateReader && g_ActivityMan.ActivityRunning();
+			if (attempted) {
 				if (m_Coordinator) m_Coordinator->BeginSynchronizedCapture(tick);
 				const auto captureBegan = RTE::SteadyClock::now();
 				CrossCaptureBarrierFromEnvironment("capture_announced", tick, m_AutosaveIdentity.roundId);
@@ -4515,9 +4516,10 @@ static std::string ResyncSaveName() {
 					System::PrintDiagnosticLine(line.str());
 				}
 			} else {
-				// A capture this peer did not take holds nothing, and says so at once.
+				// A capture this peer did not take holds nothing, and says so at once; one it did not try names why, not an older refusal.
 				const ActivityMan::AutosaveRefusal refusal = g_ActivityMan.LastAutosaveRefusal();
-				System::PrintDiagnosticLine(std::format("[autosave] named tick={} not taken: catch_up={} running={} reason={}", tick, ScenarioRunner::WorldCatchUpActive(), g_ActivityMan.ActivityRunning(), refusal.reason));
+				const std::string reason = attempted ? refusal.reason : ScenarioRunner::WorldCatchUpActive() ? "this peer was catching up" : privateReader ? "this peer reads the round's tail privately" : "the activity is not running";
+				System::PrintDiagnosticLine(std::format("[autosave] named tick={} not taken: catch_up={} running={} reason={}", tick, ScenarioRunner::WorldCatchUpActive(), g_ActivityMan.ActivityRunning(), reason));
 				if (m_IsHost && joinCapture && m_WorldJoin.IsPrivateMatch()) NotePrivateBaseRefusalLocked(refusal);
 				output.send.push_back({0, NetGameCheckpoint::Missed, tick});
 			}
