@@ -85,7 +85,7 @@ class HangGateTests(unittest.TestCase):
         self.assertEqual(calls, ["suspend", "resume"])
         self.assertLess(receipt["suspended_ms"], 5000)
 
-    def hang(self, silences, ended, menu_after_ms, receipt=None, line=True):
+    def hang(self, silences, ended, menu_after_ms, receipt=None, line=True, after=""):
         import tempfile
         folder = Path(tempfile.mkdtemp())
         player, probe = folder / "joiner", folder / "host-stage" / "probe"
@@ -95,7 +95,7 @@ class HangGateTests(unittest.TestCase):
         (probe / e2e_video.SUSPEND_RECEIPT).write_text(json.dumps(receipt or {"suspended_ms": 25003, "method": "SIGSTOP"}))
         log = "".join(f"[net-lockstep] host silent {value}ms against 15000ms (rtt 0) heard=1 wait_start=0 next=900\n" for value in silences)
         if ended is not None:
-            log += f"[net-lockstep] host unresponsive {ended}ms: the round ends at frame 900\n"
+            log += f"[net-lockstep] host unresponsive {ended}ms: the round ends at frame 900\n" + after
         (player / "stdout.log").write_text(log)
         (player / "console.log").write_text(("NETWORK: " + LINE + "\n") if line else "")
         index = [{"frame": 1, "screen": "MultiplayerScreen", "wall_ms": 0}, {"frame": 2, "screen": "game", "wall_ms": 1000},
@@ -114,6 +114,10 @@ class HangGateTests(unittest.TestCase):
         self.assertIn("back on the multiplayer menu 18004", self.hang([14000], 15004, 3000)["reason"])
         self.assertIn("word for word", self.hang([14000], 15004, 400, line=False)["reason"])
         self.assertIn("not past", self.hang([14000], 15004, 400, receipt={"suspended_ms": 9000})["reason"])
+        reconnect = "[net-match] rejoin phase Active -> Connecting\n"
+        self.assertIn("before it asked", self.hang([14000], 15004, 400, after=reconnect)["reason"])
+        asked = "[menu-script] activate ButtonMultiplayerReconnect click ButtonMultiplayerReconnect PASS\n"
+        self.assertTrue(self.hang([14000], 15004, 400, after=asked + reconnect)["pass"])
 
 
 if __name__ == "__main__":

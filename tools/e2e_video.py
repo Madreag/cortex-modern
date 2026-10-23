@@ -1479,6 +1479,10 @@ def host_hang_evidence(record, host, spec):
     last_game = max((index for index in range(menu or 0) if rows[index].get("screen") == "game"), default=None) if menu else None
     menu_ms = rows[menu]["wall_ms"] - rows[last_game]["wall_ms"] if menu is not None and last_game is not None else None
     ended_ms = int(ended[1]) if ended else None
+    # From the round's end until the player presses Rejoin Match, nothing reconnects to the host that stopped answering.
+    after = text[ended.end():] if ended else ""
+    asked = after.find("activate ButtonMultiplayerReconnect")
+    reconnect = re.search(r"(?m)^\[net-match\] rejoin phase \w+ -> Connecting", after[:asked] if asked >= 0 else after)
     return_ms = ended_ms + menu_ms if ended_ms is not None and menu_ms is not None else None
     limit = int(spec.get("return_ms", window + 2 * grace))
     reasons = [text for failed, text in (
@@ -1488,11 +1492,13 @@ def host_hang_evidence(record, host, spec):
         (ended_ms is not None and not window <= ended_ms <= window + grace, f"the round ended {ended_ms} ms into the host's silence"),
         (silent and max(silent) >= window + grace, f"the player sat through {max(silent or [0])} ms of the host's silence"),
         (spec.get("line") and "NETWORK: " + spec["line"] not in console, "the reason is not in the player's console word for word"),
+        (reconnect is not None, "the player was put back to waiting on the silent host before it asked to rejoin"),
         (return_ms is None, "no multiplayer-menu frame after the player's last game frame"),
         (return_ms is not None and return_ms > limit, f"the player was back on the multiplayer menu {return_ms} ms into the host's silence")) if failed]
     return {"receipt": receipt, "receipt_path": str(path) if path else None, "round_ended_ms": ended_ms,
             "round_end_frame": int(ended[2]) if ended else None, "longest_silence_reported_ms": max(silent) if silent else None,
             "menu_after_last_game_frame_ms": menu_ms, "return_ms": return_ms, "return_limit_ms": limit, "window_ms": window,
+            "reconnected_before_asked": reconnect is not None,
             "pass": not reasons, "reason": "; ".join(reasons) or None}
 
 
