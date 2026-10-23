@@ -464,8 +464,8 @@ static std::string ResyncSaveName() {
 			return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(SteadyNow().time_since_epoch()).count());
 		}
 
-		// The port mapper is file-scope because NetMatchService.h is outside this lane's edit set and
-		// the service is a process singleton: one mapping belongs to one hosted match at a time.
+		// The port mapper is file-scope, kept out of NetMatchService.h, and the service is a process
+		// singleton: one mapping belongs to one hosted match at a time.
 		NetPortMap s_PortMap;
 		bool s_PortMapRequested = false; //!< This match's host asked the router for a mapping.
 		bool s_PortMapApplied = false;   //!< The row already carries the mapped external address.
@@ -7817,7 +7817,7 @@ static std::string ResyncSaveName() {
 				return refuse("the admission file names another match");
 			}
 			admissionState = body.at("admission").get<std::vector<uint8_t>>();
-			// directory_row rides the file for the persistent-world slice that reads it; this lane
+			// directory_row rides the file for the persistent-world slice that reads it; this path
 			// re-advertises the live row instead, so it is not taken here.
 			(void)body.at("directory_row");
 			directorySession = body.at("directory_session").get<std::string>();

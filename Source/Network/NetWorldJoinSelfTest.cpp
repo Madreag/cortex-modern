@@ -8910,7 +8910,7 @@ namespace RTE {
 		return true;
 	}
 
-	// SEAT-ROSTER S2 at the service: a private return's phases come from the round - its image in moves the roster on, an abandoned
+	// A bounded return at the service: a private return's phases come from the round - its image in moves the roster on, an abandoned
 	// transfer fails the return - and a failed return is begun again only after the roster's backoff and under its bound.
 	bool TestAPrivateReturnFollowsTheRoundOnTheRoster(std::string* error) {
 		ScriptedAuthCrypto crypto;
