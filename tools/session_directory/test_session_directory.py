@@ -893,6 +893,13 @@ class DirectoryTests(unittest.TestCase):
         honest = {"CF-Connecting-IP": "192.0.2.200"}
         status, row = self.call("POST", "/v1/sessions", sample_register(), headers=honest)
         self.assertEqual(status, 200)
+        httpd = self.server.httpd
+        # Each dripper is paced on the directory taking it up, never on how long a sleep lasts.
+        taken = threading.Semaphore(0)
+        serve = httpd.process_request_thread
+        def counted(request: socket.socket, client_address: Any) -> None:
+            taken.release()
+            serve(request, client_address)
         sockets = []
         stop = threading.Event()
         def drip():
@@ -902,15 +909,19 @@ class DirectoryTests(unittest.TestCase):
                     except OSError: pass
         worker = threading.Thread(target=drip)
         try:
-            for index in range(64):
-                connection = socket.create_connection(("127.0.0.1", self.port), timeout=1)
-                sockets.append(connection)
-                try:
-                    connection.sendall((f"POST /v1/sessions HTTP/1.1\r\nHost: localhost\r\nX-Install-Key: {index:016x}\r\nCF-Connecting-IP: 192.0.2.1\r\nContent-Length: 4096\r\n\r\n{{").encode())
-                except OSError:
-                    pass
-                time.sleep(0.015)
+            with mock.patch.object(httpd, "process_request_thread", counted):
+                for index in range(64):
+                    connection = socket.create_connection(("127.0.0.1", self.port), timeout=1)
+                    sockets.append(connection)
+                    try:
+                        connection.sendall((f"POST /v1/sessions HTTP/1.1\r\nHost: localhost\r\nX-Install-Key: {index:016x}\r\nCF-Connecting-IP: 192.0.2.1\r\nContent-Length: 4096\r\n\r\n{{").encode())
+                    except OSError:
+                        pass
+                    self.assertTrue(taken.acquire(timeout=10), "T5: the directory never took up a dripping body")
             worker.start()
+            # A dripper the directory answered or closed is readable; the heartbeat must meet all 64 still held.
+            answered, _, _ = select.select(sockets, [], [], 0)
+            self.assertEqual(len(sockets) - len(answered), 64, "T5: the dripping bodies were let go before the heartbeat arrived")
             started = time.monotonic()
             try:
                 status, _ = self.call("POST", f"/v1/sessions/{row['session_id']}/heartbeat", {"token": row["token"], "peer_count": 1, "seats_free": 1}, headers=honest)
@@ -943,7 +954,16 @@ class DirectoryTests(unittest.TestCase):
         address = {"CF-Connecting-IP": "192.0.2.250"}
         status, row = self.call("POST", "/v1/sessions", sample_register(), headers=address)
         self.assertEqual(status, 200)
+        httpd = self.server.httpd
         threads, answers = [], []
+        # Each poll is paced on the directory's waiter decision, and its replies are counted, never timed.
+        decided, answered = threading.Semaphore(0), threading.Semaphore(0)
+        begin = httpd.begin_signal_wait
+        def counted(source: str) -> bool:
+            try:
+                return begin(source)
+            finally:
+                decided.release()
         def poll(index, source):
             conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=30)
             try:
@@ -955,14 +975,21 @@ class DirectoryTests(unittest.TestCase):
                 answers.append((0, type(error).__name__))
             finally:
                 conn.close()
+                answered.release()
+        # A held wait lasts the poll's whole 25 s, so the waiter capacity is full when the heartbeat comes, on any clock.
+        held = ExitStack()
+        held.enter_context(mock.patch.object(session_directory, "SIGNAL_POLL_WINDOW_S", session_directory.MAX_SIGNAL_WAIT_S))
+        held.enter_context(mock.patch.object(httpd, "begin_signal_wait", counted))
         try:
-            for count, shared in ((64, True), (200, False)):
+            for count, shared, waiting in ((64, True, session_directory.MAX_SIGNAL_WAITERS_PER_SOURCE), (200, False, session_directory.MAX_SIGNAL_WAITERS)):
                 for index in range(count):
                     source = "192.0.2.1" if shared else f"198.51.{index // 250}.{index % 250 + 1}"
                     worker = threading.Thread(target=poll, args=(len(threads) + 1000, source))
                     threads.append(worker)
                     worker.start()
-                    time.sleep(0.015)
+                    self.assertTrue(decided.acquire(timeout=10), "R2: a poll never reached the directory's waiter decision")
+                with httpd._waiter_lock:
+                    self.assertEqual(httpd._waiters, waiting, "R2: the waiter capacity was not full when the heartbeat came")
                 started = time.monotonic()
                 try:
                     status, _ = self.call("POST", f"/v1/sessions/{row['session_id']}/heartbeat",
@@ -972,13 +999,17 @@ class DirectoryTests(unittest.TestCase):
                 self.assertEqual(status, 200, "R2: waiting polls prevented an honest heartbeat")
                 self.assertLess(time.monotonic() - started, self.server.store.expiry_s, "R2: heartbeat answered after its lease")
                 self.assertEqual(self.call("GET", "/v1/sessions", headers=address)[1]["total"], 1)
+            for _ in range(len(threads) - session_directory.MAX_SIGNAL_WAITERS):
+                self.assertTrue(answered.acquire(timeout=10), "R2: a poll past the waiter capacity was not answered at once")
             self.assertTrue(any(status == 200 and body.get("retry_after_s") for status, body in answers),
                             "R2: excess waiters did not get an immediate empty answer and retry hint")
         finally:
             completed = list(answers)
             self.server.store.stop()
+            held.close()
             for worker in threads:
                 worker.join(3)
+        self.assertEqual(len(completed), len(threads) - session_directory.MAX_SIGNAL_WAITERS, "R2: a held waiter was answered before the directory stopped")
         self.assertTrue(all(status == 200 for status, _ in completed),
                         f"R2: bounded waiters dropped an honest polling request: {[(status, body) for status, body in completed if status != 200]!r}")
 
