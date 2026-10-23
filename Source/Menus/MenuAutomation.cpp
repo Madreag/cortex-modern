@@ -1211,6 +1211,53 @@ namespace RTE::MenuAutomation {
 		return true;
 	}
 
+	// A list that refreshes under the hand moves its rows: the hand follows the game the row names, presses only over that game's
+	// current row, and reads the selection back as that game.
+	bool HandNamedRow(GUIControlManager* manager, const std::string& listName, std::function<int()> rowNow, std::string& observation) {
+		GUIControl* control = manager ? manager->GetControl(listName) : nullptr;
+		auto* list = dynamic_cast<GUIListPanel*>(control);
+		std::string why;
+		const bool unseen = list && Hand::Unseen(control);
+		if (!list || (!unseen && !Hand::Target(manager, control, nullptr, why))) {
+			observation = listName + (list ? " " + why : " is not a list");
+			return false;
+		}
+		const int first = rowNow();
+		if (first < 0 || !list->GetItem(first)) {
+			observation = listName + " no longer lists the named game";
+			return false;
+		}
+		auto point = std::make_shared<std::pair<int, int>>();
+		std::vector<Hand::Phase> phases;
+		if (unseen) Hand::AppendSight(phases, manager, listName);
+		const auto reach = [manager, list, rowNow, point](std::string& note) {
+			const int row = rowNow();
+			if (row < 0 || !list->GetItem(row)) { note = "the named game left the list"; return Hand::Beat::Fail; }
+			const Hand::Beat reached = Hand::ReachRow(manager, list, row, *point, note);
+			if (reached == Hand::Beat::Next) Hand::Move(point->first, point->second);
+			return reached;
+		};
+		phases.push_back(reach);
+		phases.push_back([list, rowNow, point, reach](std::string& note) {
+			const int row = rowNow();
+			if (row < 0 || !list->GetItem(row)) { note = "the named game left the list"; return Hand::Beat::Fail; }
+			// The list moved since the hand reached the row: reach the game's row again before pressing.
+			if (list->GetItem(point->first, point->second) != list->GetItem(row)) return reach(note) == Hand::Beat::Fail ? Hand::Beat::Fail : Hand::Beat::Again;
+			return Hand::Button(true) ? Hand::Beat::Next : Hand::Beat::Fail;
+		});
+		phases.push_back([](std::string&) { return Hand::Button(false) ? Hand::Beat::Next : Hand::Beat::Fail; });
+		phases.push_back([list, rowNow](std::string& note) {
+			const int row = rowNow();
+			if (row >= 0 && list->GetSelectedIndex() == row) return Hand::Beat::Next;
+			note = "the list selected row " + std::to_string(list->GetSelectedIndex()) + ", not the named game's row " + std::to_string(row);
+			return Hand::Beat::Fail;
+		});
+		Hand::Start("click the named game's row of " + listName, std::move(phases));
+		NoteReached(listName);
+		observation = listName + " row " + std::to_string(first);
+		return true;
+	}
+
 	bool HandDrag(GUIControlManager* manager, const std::string& name, int value, std::string& observation) {
 		auto* slider = manager ? dynamic_cast<GUISlider*>(manager->GetControl(name)) : nullptr;
 		std::string why;
@@ -2593,7 +2640,13 @@ namespace RTE::MenuAutomation {
 				if (command == "click_row") {
 					// A row named by the game it lists (wait_row's name) is clicked in the list that shows it now.
 					std::string listName;
-					if (row < 0 && g_MenuMan.GetMainMenu() && g_MenuMan.GetMainMenu()->AutomationRowOf(target, listName, row)) return HandRow(manager, listName, row, 1, nullptr, observation);
+					if (row < 0 && g_MenuMan.GetMainMenu() && g_MenuMan.GetMainMenu()->AutomationRowOf(target, listName, row)) {
+						return HandNamedRow(manager, listName, [target]() {
+							std::string shown;
+							int now = -1;
+							return g_MenuMan.GetMainMenu() && g_MenuMan.GetMainMenu()->AutomationRowOf(target, shown, now) ? now : -1;
+						}, observation);
+					}
 					return HandRow(manager, target, row, 1, nullptr, observation);
 				}
 				auto* list = dynamic_cast<GUIListBox*>(manager->GetControl(target));
