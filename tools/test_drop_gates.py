@@ -98,17 +98,20 @@ class HangGateTests(unittest.TestCase):
                                                                    "last_recorded_frame": {"sim_tick": 1700, "wall_ms": 1000}}))
         (host / "stdout.log").write_text("[autosave] tick=1201 capture_ms=8.2 bytes=1\n[autosave] tick=2401 capture_ms=8.1 bytes=1\n")
 
-        def back(at):
-            (player / "stdout.log").write_text("[menu-script] activate ButtonMultiplayerReconnect click ButtonMultiplayerReconnect PASS\n"
-                                               f"[net-world] catch-up complete peer=2 at={at} input_horizon={at}\n")
-            return e2e_video.world_return_evidence({"root": str(player)}, {"root": str(host), "probe_dir": str(probe)})
+        ended = "[net-lockstep] host unresponsive 15000ms: the round ends at frame 1700\n"
 
-        evidence = back(2210)
+        def back(line, pressed=True):
+            (player / "stdout.log").write_text(ended + line)
+            record = {"root": str(player), "probe_dir": self.probe(folder / "joiner-stage" / "probe", ("Failed", "Failed"), pressed)}
+            return e2e_video.world_return_evidence(record, {"root": str(host), "probe_dir": str(probe)})
+
+        evidence = back("[net-world] catch-up complete peer=2 at=2210 input_horizon=2210\n")
         self.assertTrue(evidence["pass"], evidence["reason"])
         self.assertEqual((evidence["last_save_before_stop"], evidence["player_back_at_tick"]), (1201, 2210))
-        self.assertIn("before the host's last save", back(1100)["reason"])
-        (player / "stdout.log").write_text("[net-world] catch-up complete peer=2 at=2210 input_horizon=2210\n")
-        self.assertIn("never pressed Rejoin Match", e2e_video.world_return_evidence({"root": str(player)}, {"root": str(host), "probe_dir": str(probe)})["reason"])
+        # A dedicated round's return catches up privately.
+        self.assertEqual(back("[net-match] private catch-up complete frame=2300 in_place=0 from=1201 clock=1\n")["player_back_at_tick"], 2300)
+        self.assertIn("before the host's last save", back("[net-world] catch-up complete peer=2 at=1100 input_horizon=1100\n")["reason"])
+        self.assertIn("never pressed Rejoin Match", back("[net-world] catch-up complete peer=2 at=2210 input_horizon=2210\n", pressed=False)["reason"])
 
     def test_a_capture_that_stops_lets_its_hung_peer_run_on_at_once(self):
         calls = []
@@ -119,7 +122,22 @@ class HangGateTests(unittest.TestCase):
         self.assertEqual(calls, ["suspend", "resume"])
         self.assertLess(receipt["suspended_ms"], 5000)
 
-    def hang(self, silences, ended, menu_after_ms, receipt=None, line=True, after=""):
+    @staticmethod
+    def probe(folder, services, pressed=True):
+        """A player's probe result: the landing's reason waited for, the steps after it, the Rejoin Match press."""
+        script = [{"op": "wait", "service": "Running"},
+                  {"op": "wait", "scope": "menu", "control": "LabelMultiplayerLandingStatus", "text_contains": "The host stopped responding."},
+                  *({"op": "wait", "elapsed_ms": 1200} for _ in services[1:]),
+                  {"op": "menu", "command": "activate ButtonMultiplayerReconnect"}]
+        steps = [{"index": 0, "observed": {"service": "Running"}}] + [{"index": 1 + index, "observed": {"service": service}}
+                                                                      for index, service in enumerate(services)]
+        if pressed:
+            steps.append({"index": len(script) - 1, "observed": {"service": "Failed"}})
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "net-ui-result.json").write_text(json.dumps({"script": {"steps": script}, "steps": steps}))
+        return str(folder)
+
+    def hang(self, silences, ended, menu_after_ms, receipt=None, line=True, after="", services=("Failed", "Failed")):
         import tempfile
         folder = Path(tempfile.mkdtemp())
         player, probe = folder / "joiner", folder / "host-stage" / "probe"
@@ -134,8 +152,8 @@ class HangGateTests(unittest.TestCase):
         (player / "console.log").write_text(("NETWORK: " + LINE + "\n") if line else "")
         index = [{"frame": 1, "screen": "MultiplayerScreen", "wall_ms": 0}, {"frame": 2, "screen": "game", "wall_ms": 1000},
                  {"frame": 3, "screen": "game", "wall_ms": 2000}, {"frame": 4, "screen": "MultiplayerScreen", "wall_ms": 2000 + menu_after_ms}]
-        return e2e_video.host_hang_evidence({"root": str(player), "index": index}, {"probe_dir": str(probe)},
-                                            {"window_ms": 15000, "line": LINE})
+        return e2e_video.host_hang_evidence({"root": str(player), "index": index, "probe_dir": self.probe(folder / "joiner-stage" / "probe", services)},
+                                            {"probe_dir": str(probe)}, {"window_ms": 15000, "line": LINE})
 
     def test_a_player_back_on_the_menu_at_the_window_with_the_reason_passes(self):
         evidence = self.hang([1000, 14000], 15004, 400)
@@ -148,10 +166,8 @@ class HangGateTests(unittest.TestCase):
         self.assertIn("back on the multiplayer menu 18004", self.hang([14000], 15004, 3000)["reason"])
         self.assertIn("word for word", self.hang([14000], 15004, 400, line=False)["reason"])
         self.assertIn("not past", self.hang([14000], 15004, 400, receipt={"suspended_ms": 9000})["reason"])
-        reconnect = "[net-match] rejoin phase Active -> Connecting\n"
-        self.assertIn("before it asked", self.hang([14000], 15004, 400, after=reconnect)["reason"])
-        asked = "[menu-script] activate ButtonMultiplayerReconnect click ButtonMultiplayerReconnect PASS\n"
-        self.assertTrue(self.hang([14000], 15004, 400, after=asked + reconnect)["pass"])
+        self.assertIn("before it asked", self.hang([14000], 15004, 400, services=("Failed", "Starting"))["reason"])
+        self.assertTrue(self.hang([14000], 15004, 400, services=("Failed", "Failed", "Failed"))["pass"])
 
 
 if __name__ == "__main__":

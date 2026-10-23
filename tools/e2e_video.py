@@ -752,7 +752,7 @@ def freeze_scan(ffmpeg, video, rows, video_dir=None, allowed=None, named=None):
     return stills
 
 
-def recording_health(video_dir, minimum_share=0.9, minimum_duration_s=None):
+def recording_health(video_dir, minimum_share=0.9, minimum_duration_s=None, quiet=()):
     """The recorder's own account of a capture, judged against what it was given: of the frames the engine presented at the
     capture rate (saved, failed to write, or turned away by a full queue), the share it saved, and the longest wait between two
     saved frames that holds a frame it turned away. The engine's own presented rate is reported beside it, never judged here:
@@ -785,6 +785,9 @@ def recording_health(video_dir, minimum_share=0.9, minimum_duration_s=None):
     if drops is not None:
         recorder_gap_ms = 0
         for earlier, later in zip(saved, saved[1:]):
+            # A gap inside a window the scene stopped this engine in is the stop, not the recorder's queue.
+            if any(begin <= earlier and later <= end for begin, end in quiet):
+                continue
             if later - earlier > recorder_gap_ms and bisect.bisect_right(drops, earlier) < bisect.bisect_left(drops, later):
                 recorder_gap_ms = later - earlier
     # More than two slots in a row lost to the queue shows as a still of the recorder's own making.
@@ -1258,12 +1261,14 @@ def capture_evidence_items(scenario, capture, peer):
                     **details, **(dict(finding=dict(class_='harness', reason=error, launch=None, errors=[])) if error else {}))
     output = []
     from feel.harness_cost import reduce_costs
-    cost = reduce_costs([Path(peer['root']) / 'stdout.log'])
+    stopped = stopped_by_scene(peer)
+    cost = reduce_costs([Path(peer['root']) / 'stdout.log'], stopped=(stopped['tick'], stopped['to_ms'] - stopped['from_ms']) if stopped else None)
     output.append(item(f'harness-cost-{name}', cost['rule'], cost['reason'] if cost['status'] != 'PASS' else '',
                        incomplete=cost['status'] == 'INCOMPLETE', instrumentation=cost))
     health, error = None, ''
     try:
-        health = recording_health(peer['video_dir'], minimum_duration_s=minimum) if peer.get('video_dir') else None
+        health = recording_health(peer['video_dir'], minimum_duration_s=minimum,
+                                  quiet=[(stopped['from_ms'] - 1000, stopped['to_ms'] + 2000)] if stopped else ()) if peer.get('video_dir') else None
     except (OSError, ValueError, TypeError) as failed:
         error = f'recording metadata: {type(failed).__name__}: {failed}'
     if health is None: error = error or 'recorder manifest is absent'
@@ -1277,7 +1282,6 @@ def capture_evidence_items(scenario, capture, peer):
     text = log.read_text(encoding='utf-8', errors='replace') if log.is_file() else ''
     # A scene's own lever may freeze a peer's screen on purpose (its stalled host); those windows are named, with the reason, not judged.
     excluded = [spec for spec in scenario.get('drawn_frames_exclude', []) if spec.get('peer') == name]
-    stopped = stopped_by_scene(peer)
     if stopped:
         excluded.append(dict(peer=name, first_tick=stopped['tick'], last_tick=stopped['tick'] + 1, reason=stopped['reason']))
     exclude = [(spec['first_tick'], spec['last_tick']) for spec in excluded]
@@ -1473,6 +1477,22 @@ def drop_evidence(record, tick):
     return {"path": str(path), "receipt": receipt, "pass": passed}
 
 
+def probe_rejoin_steps(record):
+    """The player's probe from the step that saw its landing's reason to its Rejoin Match press: each step's service, and the press."""
+    try:
+        result = json.loads((Path(record.get("probe_dir") or "") / "net-ui-result.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return [], None
+    script = result.get("script", {}).get("steps", [])
+    observed = {step.get("index"): step.get("observed", {}) for step in result.get("steps", [])}
+    reason = next((index for index, step in enumerate(script) if step.get("control") == "LabelMultiplayerLandingStatus" and step.get("op") == "wait"), None)
+    press = next((index for index, step in enumerate(script) if step.get("command") == "activate ButtonMultiplayerReconnect"), None)
+    if reason is None or press is None:
+        return [], None
+    landed = [{"step": index, "service": observed[index].get("service")} for index in range(reason, press) if index in observed]
+    return landed, press if press in observed else None
+
+
 HOST_UNRESPONSIVE = re.compile(r"(?m)^\[net-lockstep\] host unresponsive (\d+)ms: the round ends at frame (\d+)")
 HOST_SILENT = re.compile(r"(?m)^\[net-lockstep\] host silent (\d+)ms against ")
 
@@ -1498,10 +1518,10 @@ def host_hang_evidence(record, host, spec):
     last_game = max((index for index in range(menu or 0) if rows[index].get("screen") == "game"), default=None) if menu else None
     menu_ms = rows[menu]["wall_ms"] - rows[last_game]["wall_ms"] if menu is not None and last_game is not None else None
     ended_ms = int(ended[1]) if ended else None
-    # From the round's end until the player presses Rejoin Match, nothing reconnects to the host that stopped answering.
-    after = text[ended.end():] if ended else ""
-    asked = after.find("activate ButtonMultiplayerReconnect")
-    reconnect = re.search(r"(?m)^\[net-match\] rejoin phase \w+ -> Connecting", after[:asked] if asked >= 0 else after)
+    # From the reason on its landing until it presses Rejoin Match, the player's service makes no attempt at the silent host.
+    landed, asked = probe_rejoin_steps(record)
+    attempts = [step for step in landed if step["service"] in ("Starting", "ReadyToLaunch", "Running")]
+    reconnect = attempts[0] if attempts else None
     return_ms = ended_ms + menu_ms if ended_ms is not None and menu_ms is not None else None
     limit = int(spec.get("return_ms", window + 2 * grace))
     reasons = [text for failed, text in (
@@ -1511,18 +1531,19 @@ def host_hang_evidence(record, host, spec):
         (ended_ms is not None and not window <= ended_ms <= window + grace, f"the round ended {ended_ms} ms into the host's silence"),
         (silent and max(silent) >= window + grace, f"the player sat through {max(silent or [0])} ms of the host's silence"),
         (spec.get("line") and "NETWORK: " + spec["line"] not in console, "the reason is not in the player's console word for word"),
+        (not landed or asked is None, "the probe never reached the landing's reason and the player's Rejoin Match"),
         (reconnect is not None, "the player was put back to waiting on the silent host before it asked to rejoin"),
         (return_ms is None, "no multiplayer-menu frame after the player's last game frame"),
         (return_ms is not None and return_ms > limit, f"the player was back on the multiplayer menu {return_ms} ms into the host's silence")) if failed]
     return {"receipt": receipt, "receipt_path": str(path) if path else None, "round_ended_ms": ended_ms,
             "round_end_frame": int(ended[2]) if ended else None, "longest_silence_reported_ms": max(silent) if silent else None,
             "menu_after_last_game_frame_ms": menu_ms, "return_ms": return_ms, "return_limit_ms": limit, "window_ms": window,
-            "reconnected_before_asked": reconnect is not None,
+            "reconnected_before_asked": reconnect is not None, "landing_services": [step["service"] for step in landed],
             "pass": not reasons, "reason": "; ".join(reasons) or None}
 
 
 HOST_AUTOSAVE = re.compile(r"(?m)^\[autosave\] tick=(\d+) capture_ms=")
-CATCH_UP = re.compile(r"(?m)^\[net-world\] catch-up complete peer=\d+ at=(\d+) ")
+CATCH_UP = re.compile(r"(?m)^(?:\[net-world\] catch-up complete peer=\d+ at=|\[net-match\] private catch-up complete frame=)(\d+) ")
 
 
 def world_return_evidence(record, host):
@@ -1538,13 +1559,16 @@ def world_return_evidence(record, host):
     saves = [int(tick) for tick in HOST_AUTOSAVE.findall(host_log.read_text(encoding="utf-8", errors="replace"))] if host_log and host_log.is_file() else []
     before = max((tick for tick in saves if hung_at is not None and tick <= hung_at), default=None)
     text = (Path(record["root"]) / "stdout.log").read_text(encoding="utf-8", errors="replace") if (Path(record["root"]) / "stdout.log").is_file() else ""
-    asked = text.find("activate ButtonMultiplayerReconnect")
-    returns = [int(tick) for tick in CATCH_UP.findall(text[asked:])] if asked >= 0 else []
+    # Nothing reconnected before the press (the hang's own check), so the first return after the round's end is the pressed one.
+    ended = HOST_UNRESPONSIVE.search(text)
+    _, asked = probe_rejoin_steps(record)
+    returns = [int(tick) for tick in CATCH_UP.findall(text[ended.end():])] if ended else []
     back_at = returns[0] if returns else None
     reasons = [text for failed, text in (
         (hung_at is None, f"the host's box recorded no stop with its last frame ({path})"),
         (before is None, "the host saved nothing before it stopped answering"),
-        (asked < 0, "the player never pressed Rejoin Match"),
+        (ended is None, "the player's round never ended on the host's silence"),
+        (asked is None, "the player never pressed Rejoin Match"),
         (back_at is None, "the player's return never caught up with the world"),
         (back_at is not None and before is not None and back_at < before, f"the player came back at tick {back_at}, before the host's last save at {before}")) if failed]
     return {"host_stopped_at_tick": hung_at, "host_saves": saves[:50], "last_save_before_stop": before, "player_back_at_tick": back_at,
