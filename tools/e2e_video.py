@@ -1521,6 +1521,36 @@ def host_hang_evidence(record, host, spec):
             "pass": not reasons, "reason": "; ".join(reasons) or None}
 
 
+HOST_AUTOSAVE = re.compile(r"(?m)^\[autosave\] tick=(\d+) capture_ms=")
+CATCH_UP = re.compile(r"(?m)^\[net-world\] catch-up complete peer=\d+ at=(\d+) ")
+
+
+def world_return_evidence(record, host):
+    """A player back in its host's world after the host stopped answering: the host's last save before it stopped (its own
+    log and stop receipt), and the tick the player's return stands on (its own log, after it pressed Rejoin Match)."""
+    path = Path(host["probe_dir"]) / SUSPEND_RECEIPT if host else None
+    try:
+        receipt = json.loads(path.read_text(encoding="utf-8")) if path else {}
+    except (OSError, ValueError):
+        receipt = {}
+    hung_at = (receipt.get("last_recorded_frame") or {}).get("sim_tick")
+    host_log = Path(host["root"]) / "stdout.log" if host else None
+    saves = [int(tick) for tick in HOST_AUTOSAVE.findall(host_log.read_text(encoding="utf-8", errors="replace"))] if host_log and host_log.is_file() else []
+    before = max((tick for tick in saves if hung_at is not None and tick <= hung_at), default=None)
+    text = (Path(record["root"]) / "stdout.log").read_text(encoding="utf-8", errors="replace") if (Path(record["root"]) / "stdout.log").is_file() else ""
+    asked = text.find("activate ButtonMultiplayerReconnect")
+    returns = [int(tick) for tick in CATCH_UP.findall(text[asked:])] if asked >= 0 else []
+    back_at = returns[0] if returns else None
+    reasons = [text for failed, text in (
+        (hung_at is None, f"the host's box recorded no stop with its last frame ({path})"),
+        (before is None, "the host saved nothing before it stopped answering"),
+        (asked < 0, "the player never pressed Rejoin Match"),
+        (back_at is None, "the player's return never caught up with the world"),
+        (back_at is not None and before is not None and back_at < before, f"the player came back at tick {back_at}, before the host's last save at {before}")) if failed]
+    return {"host_stopped_at_tick": hung_at, "host_saves": saves[:50], "last_save_before_stop": before, "player_back_at_tick": back_at,
+            "pass": not reasons, "reason": "; ".join(reasons) or None}
+
+
 def completed_probe(path):
     try:
         result = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -1975,6 +2005,11 @@ def review(scenario, capture, out):
                 assertions["peer_drop"] = {"peer": required["peer"], **drop_evidence(witness, required["tick"])}
                 if not assertions["peer_drop"]["pass"]:
                     assertions.update(probe="fail", reason="The other peer has no matching recorded process drop")
+            if item.get("world_return"):
+                host = next((row for row in capture["peers"] if row["peer"] == item["world_return"]["host"]), None)
+                assertions["world_return"] = {"host": item["world_return"]["host"], **world_return_evidence(record, host)}
+                if not assertions["world_return"]["pass"]:
+                    assertions.update(probe="fail", reason=assertions["world_return"]["reason"])
             if item.get("host_hang"):
                 required = item["host_hang"]
                 host = next((row for row in capture["peers"] if row["peer"] == required["host"]), None)

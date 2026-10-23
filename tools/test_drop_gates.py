@@ -88,6 +88,28 @@ class HangGateTests(unittest.TestCase):
         (probe / e2e_video.SUSPEND_RECEIPT).write_text(json.dumps({"error": "ProcessLookupError", "last_recorded_frame": {"sim_tick": 1, "wall_ms": 1}}))
         self.assertIsNone(e2e_video.stopped_by_scene({"probe_dir": str(probe)}))
 
+    def test_a_returning_player_stands_on_the_hosts_last_save_or_later(self):
+        import tempfile
+        folder = Path(tempfile.mkdtemp())
+        host, player, probe = folder / "host", folder / "joiner", folder / "host-stage" / "probe"
+        for path in (host, player, probe):
+            path.mkdir(parents=True)
+        (probe / e2e_video.SUSPEND_RECEIPT).write_text(json.dumps({"seconds": 25.0, "suspended_ms": 25003,
+                                                                   "last_recorded_frame": {"sim_tick": 1700, "wall_ms": 1000}}))
+        (host / "stdout.log").write_text("[autosave] tick=1201 capture_ms=8.2 bytes=1\n[autosave] tick=2401 capture_ms=8.1 bytes=1\n")
+
+        def back(at):
+            (player / "stdout.log").write_text("[menu-script] activate ButtonMultiplayerReconnect click ButtonMultiplayerReconnect PASS\n"
+                                               f"[net-world] catch-up complete peer=2 at={at} input_horizon={at}\n")
+            return e2e_video.world_return_evidence({"root": str(player)}, {"root": str(host), "probe_dir": str(probe)})
+
+        evidence = back(2210)
+        self.assertTrue(evidence["pass"], evidence["reason"])
+        self.assertEqual((evidence["last_save_before_stop"], evidence["player_back_at_tick"]), (1201, 2210))
+        self.assertIn("before the host's last save", back(1100)["reason"])
+        (player / "stdout.log").write_text("[net-world] catch-up complete peer=2 at=2210 input_horizon=2210\n")
+        self.assertIn("never pressed Rejoin Match", e2e_video.world_return_evidence({"root": str(player)}, {"root": str(host), "probe_dir": str(probe)})["reason"])
+
     def test_a_capture_that_stops_lets_its_hung_peer_run_on_at_once(self):
         calls = []
         handle = SimpleNamespace(suspend=lambda: calls.append("suspend"), resume=lambda: calls.append("resume"))
