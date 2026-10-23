@@ -1015,11 +1015,12 @@ def encode(ffmpeg, video_dir, fps, destination):
             "stderr": result.stderr[-2000:], "path": str(destination)}
 
 
-def extract_frames(ffmpeg, video, rows, frames):
-    """The picked rows' pictures out of a streamed capture's MP4, named as the PNG path would have named them."""
+def extract_frames(ffmpeg, video, rows, frames, partial=False):
+    """The picked rows' pictures out of a streamed capture's MP4, named as the PNG path would have named them. A partial
+    recording (its engine killed by the scene) yields the pictures it holds: only its end may be missing."""
     wanted = [row for row in rows if "video_frame" in row and not (frames / f"frame-{row['frame']:06d}.png").is_file()]
     if not wanted or not ffmpeg or not Path(video).is_file():
-        return
+        return {"wanted": len(wanted), "extracted": 0}
     frames.mkdir(parents=True, exist_ok=True)
     terms = [f"eq(n,{row['video_frame']})" for row in wanted]
     # FFmpeg limits expression depth, so long selections need a balanced sum.
@@ -1032,30 +1033,38 @@ def extract_frames(ffmpeg, video, rows, frames):
     selection.write_text(f"select='{select}'\n", encoding="utf-8")
     result = subprocess.run([ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "error", "-y", "-i", str(video), "-filter_script:v", str(selection),
                             "-fps_mode", "passthrough", str(scratch / "pick-%06d.png")], capture_output=True, text=True)
+    ordered = sorted(wanted, key=lambda row: row["video_frame"])
+    present = [(scratch / f"pick-{index:06d}.png").is_file() for index in range(1, len(ordered) + 1)]
+    held = present.index(False) if False in present else len(present)
+    reason = ""
     if result.returncode != 0:
-        raise RuntimeError(f"ffmpeg frame extraction exited {result.returncode}: {result.stderr[-2000:]}")
-    missing = [row["frame"] for index, row in enumerate(sorted(wanted, key=lambda row: row["video_frame"]), 1)
-               if not (scratch / f"pick-{index:06d}.png").is_file()]
-    if missing:
-        raise RuntimeError(f"ffmpeg frame extraction missing indexed pictures: {missing[:10]}")
-    for index, row in enumerate(sorted(wanted, key=lambda row: row["video_frame"]), 1):
-        picture = scratch / f"pick-{index:06d}.png"
-        if picture.is_file():
-            os.replace(picture, frames / f"frame-{row['frame']:06d}.png")
+        if not partial:
+            raise RuntimeError(f"ffmpeg frame extraction exited {result.returncode}: {result.stderr[-2000:]}")
+        reason = f"ffmpeg read the partial recording up to its damage (exit {result.returncode}): {result.stderr.strip()[-300:]}"
+    # A killed recording ends early; a picture missing before one that exists is damage either way.
+    if any(present[held:]) or (held < len(ordered) and not partial):
+        raise RuntimeError(f"ffmpeg frame extraction missing indexed pictures: {[row['frame'] for row, there in zip(ordered, present) if not there][:10]}")
+    if held < len(ordered):
+        reason = reason or f"the recording ends before frame {ordered[held]['frame']}"
+    for index, row in enumerate(ordered[:held], 1):
+        os.replace(scratch / f"pick-{index:06d}.png", frames / f"frame-{row['frame']:06d}.png")
     for leftover in scratch.glob("*.png"):
         leftover.unlink()
     selection.unlink()
     scratch.rmdir()
+    return {"wanted": len(ordered), "extracted": held, **({"reason": reason} if reason else {})}
 
 
-def contact_sheet(video_dir, rows, destination, every, ffmpeg, video=None):
-    """Every `every`-th frame tiled SHEET_COLUMNS wide, each thumbnail labelled with what it is."""
+def contact_sheet(video_dir, rows, destination, every, ffmpeg, video=None, partial=False):
+    """Every `every`-th frame tiled SHEET_COLUMNS wide, each thumbnail labelled with what it is. A partial recording tiles the
+    pictures it holds and says how many."""
     frames = Path(video_dir) / "frames"
     picked = rows[::every] if rows else []
     if not picked:
         return {"written": False, "reason": "no frames to tile"}
-    if video:
-        extract_frames(ffmpeg, video, picked, frames)
+    held = extract_frames(ffmpeg, video, picked, frames, partial) if video else None
+    if partial and held:
+        return {**contact_sheet(video_dir, rows, destination, every, ffmpeg), "partial": held}
     try:
         from PIL import Image, ImageDraw  # noqa: PLC0415
     except ImportError:
@@ -2544,7 +2553,8 @@ def render(capture_run, fps, every):
             video = encode(ffmpeg, peer["video_dir"], fps, root.parent / f"{peer['peer']}.mp4")
             peer["video"] = video.get("path") if video.get("encoded") else None
             peer["encode"] = video
-        sheet = contact_sheet(peer["video_dir"], peer["index"], root.parent / f"{peer['peer']}-sheet.png", every, ffmpeg, peer["video"])
+        sheet = contact_sheet(peer["video_dir"], peer["index"], root.parent / f"{peer['peer']}-sheet.png", every, ffmpeg, peer["video"],
+                              partial=bool(peer.get("expected_termination")))
         peer["contact_sheet"] = sheet.get("path") if sheet.get("written") else None
         peer["sheet"] = sheet
     capture_run["ffmpeg"] = ffmpeg
