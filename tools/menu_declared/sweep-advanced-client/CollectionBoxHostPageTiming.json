@@ -16,11 +16,6 @@
    "reason": "A joined player reads the host's setup; only the host changes it."
   },
   {
-   "name": "ButtonHostNetRecalc",
-   "enabled": false,
-   "reason": "Only the host measures the lobby's delays."
-  },
-  {
    "name": "TextHostNetSlowBound",
    "enabled": false,
    "reason": "A joined player reads the host's setup; only the host changes it."

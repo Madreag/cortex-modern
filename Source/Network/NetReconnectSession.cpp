@@ -712,7 +712,15 @@ namespace RTE {
 			DiagnosticLine() << "[roster] refused " << NetRosterEventName(kind) << " seat=" << static_cast<int>(event.seat) << ": " << result.reason << std::endl;
 			return;
 		}
-		if (!result.changed) return;
+		if (!result.changed) {
+			// An event the roster keeps says why once, so a hold that never lands is in the log.
+			static std::map<std::pair<int, int>, std::string> s_Kept;
+			if (std::string& last = s_Kept[{static_cast<int>(kind), static_cast<int>(event.seat)}]; last != result.reason) {
+				last = result.reason;
+				DiagnosticLine() << "[roster] kept " << NetRosterEventName(kind) << " seat=" << static_cast<int>(event.seat) << ": " << result.reason << std::endl;
+			}
+			return;
+		}
 		const NetRosterSeat* before = held;
 		const NetRosterSeat* after = result.roster.Find(event.seat);
 		DiagnosticLine() << "[roster] rev=" << result.roster.revision << " seat=" << static_cast<int>(event.seat) << ' ' << NetRosterEventName(kind) << ' '
@@ -2331,6 +2339,7 @@ namespace RTE {
 				entry.holdCause = row->holdCause;
 				entry.slowMachine = row->owner != 0 && row->phase == NetSeatPhase::Held && row->holdCause == NetSeatHoldCause::Capacity;
 				returning = row->owner != 0 && (row->phase == NetSeatPhase::RejoinImage || row->phase == NetSeatPhase::RejoinCatchUp);
+				entry.joining = row->owner != 0 && row->joining && row->phase == NetSeatPhase::Held;
 			}
 			entry.closed = IsHostOpened(seat);
 			entry.heldForReclaim = IsSeated(seat) && !IsHostOpened(seat);

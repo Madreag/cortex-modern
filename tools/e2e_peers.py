@@ -142,6 +142,14 @@ def run_directory(document, run):
     return urllib.parse.urlsplit(url if "://" in url else "https://" + url).netloc
 
 
+def relay_by_hand(menu):
+    """Whether a menu script picks Relay only on Settings > Network before it enters Multiplayer."""
+    lines = menu.splitlines()
+    picked = [index for index, line in enumerate(lines) if line.strip() == "combo_select ComboNetworkConnection Relay only"]
+    entered = [index for index, line in enumerate(lines) if line.strip() == "activate ButtonMainToMultiplayer"]
+    return bool(picked) and (not entered or picked[0] < entered[0])
+
+
 def check_scene(document):
     if not document.get("public_directory"):
         raise ValueError("scene must use its public directory")
@@ -157,13 +165,15 @@ def check_scene(document):
         roles = set(names)
         for peer in peers:
             settings = peer.get("settings", {})
-            if settings.get("NetworkConnectionMode") != "RelayOnly" or settings.get("NetworkPortMapEnable") != 0:
+            scripts = [video.scenario_text(document, peer[key]) for key in ("menu_script", "probe", "input_script") if peer.get(key)]
+            # A newcomer's scene starts on the shipped Automatic and picks Relay only on Settings > Network by hand.
+            by_hand = "NetworkConnectionMode" not in settings and relay_by_hand(video.scenario_text(document, peer["menu_script"]) if peer.get("menu_script") else "")
+            if (settings.get("NetworkConnectionMode") != "RelayOnly" and not by_hand) or settings.get("NetworkPortMapEnable") != 0:
                 raise ValueError("scene must select RelayOnly and disable router mapping")
             if settings.get("NetworkHostRelayMode") != "Directory" or not settings.get("SessionDirectoryUrl"):
                 raise ValueError("scene must get its relay from the directory")
             if any(peer.get(key) for key in ("start_when", "retain_runtime_from", "kill_when", "kill_after_s", "kill_at_tick")):
                 raise ValueError("scene needs another peer's process control; this launcher cannot run it")
-            scripts = [video.scenario_text(document, peer[key]) for key in ("menu_script", "probe", "input_script") if peer.get(key)]
             if any(re.search(r"\{(?:STAGE|VIDEO)_" + PLAYER_NAME + r"\}", text) for text in scripts):
                 raise ValueError("scene needs another player's runtime files; this launcher cannot run it")
             for text in scripts:

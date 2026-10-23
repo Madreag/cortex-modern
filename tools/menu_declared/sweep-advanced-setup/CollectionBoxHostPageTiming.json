@@ -19,11 +19,6 @@
   {
    "name": "ComboHostNetSlowPolicy",
    "enabled": true
-  },
-  {
-   "name": "ButtonHostNetRecalc",
-   "enabled": false,
-   "reason": "No lobby is open yet to measure."
   }
  ]
 }

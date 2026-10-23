@@ -18,7 +18,9 @@
 #include "ActivityMan.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <cstdint>
 #include <optional>
 #include <utility>
 
@@ -108,8 +110,63 @@ SoundContainer& SoundContainer::operator=(const SoundContainer& reference) {
 	return *this;
 }
 
+namespace {
+	// A handle's note, its release and the deletion of the container it names take the same lock, so none of them meets a freed record.
+	std::array<std::mutex, 64> s_LuaNameLocks;
+	std::mutex& LuaNameLock(const void* container) { return s_LuaNameLocks[(reinterpret_cast<uintptr_t>(container) >> 6) % s_LuaNameLocks.size()]; }
+}
+
+SoundContainer::LuaNames* SoundContainer::NoteLuaHandle() {
+	std::lock_guard<std::mutex> lock(LuaNameLock(this));
+	LuaNames* names = m_LuaNames.load(std::memory_order_relaxed);
+	if (!names) {
+		names = new LuaNames();
+		names->container = this;
+		names->address = this;
+		m_LuaNames.store(names, std::memory_order_relaxed);
+	}
+	++names->count;
+	return names;
+}
+
+void SoundContainer::ReleaseLuaHandle(void* record) {
+	auto* names = static_cast<LuaNames*>(record);
+	std::unique_lock<std::mutex> lock(LuaNameLock(names->address));
+	if (--names->count > 0) {
+		return;
+	}
+	SoundContainer* container = names->container;
+	const bool released = names->released;
+	if (container) container->m_LuaNames.store(nullptr, std::memory_order_relaxed);
+	delete names;
+	lock.unlock();
+	if (container && released) g_AudioMan.DeleteReleasedSoundContainer(container);
+}
+
+void SoundContainer::ReleaseUnowned(SoundContainer* container) {
+	if (!container) {
+		return;
+	}
+	{
+		std::lock_guard<std::mutex> lock(LuaNameLock(container));
+		// A script that kept a handle keeps the container, exactly as when nothing ever let it go.
+		if (LuaNames* names = container->m_LuaNames.load(std::memory_order_relaxed)) {
+			names->released = true;
+			return;
+		}
+	}
+	g_AudioMan.DeleteReleasedSoundContainer(container);
+}
+
 SoundContainer::~SoundContainer() {
 	if (IsFrozenCheckpointNative()) return;
+	if (m_LuaNames.load(std::memory_order_relaxed)) {
+		std::lock_guard<std::mutex> lock(LuaNameLock(this));
+		if (LuaNames* names = m_LuaNames.load(std::memory_order_relaxed)) {
+			names->container = nullptr;
+			m_LuaNames.store(nullptr, std::memory_order_relaxed);
+		}
+	}
 	m_IsDestroying = true;
 	g_AudioMan.DisownSoundContainerPlayingChannels(this);
 	Destroy(true);

@@ -184,7 +184,7 @@ void SettingsMan::Clear() {
 	m_PathFinderGridNodeSize = SCENEGRIDSIZE;
 	m_AIUpdateInterval = 2;
 	m_NetworkInputDelayFrames = 0;
-	SetAutosaveSeconds(0);
+	SetAutosaveSeconds(NetMatchConfigUtil::c_DefaultAutosaveIntervalSeconds);
 	m_SessionDirectoryUrl = c_DefaultSessionDirectoryUrl;
 	m_SessionDirectoryInstallKey.clear();
 	m_SessionDirectoryCertSha256.clear();
@@ -827,6 +827,10 @@ int SettingsMan::RunNetworkPreferencesSelfTest() {
 	settings.Clear();
 	if (settings.GetNetworkHostJoinHistorySeconds() != 360 || settings.GetNetworkHostJoinLagSeconds() != 120) {
 		std::cout << Tag << " FAIL join-history defaults" << std::endl;
+		return 1;
+	}
+	if (settings.GetAutosaveSeconds() != 300) {
+		std::cout << Tag << " FAIL hosted autosave default is " << settings.GetAutosaveSeconds() << " s" << std::endl;
 		return 1;
 	}
 	settings.SetNetworkDisplayName("AlphaPilot");

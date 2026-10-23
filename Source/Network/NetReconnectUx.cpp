@@ -182,8 +182,9 @@ namespace RTE {
 	std::string NetReconnectUx::GetOfferText() const {
 		switch (m_Offer) {
 			case NetReconnectOffer::Available:
-				if (!m_OfferName.empty()) return "Rejoin " + m_OfferName + "?";
-				return "Rejoin your match?";
+				// The seat waits for its player with no deadline: only the host gives it away.
+				if (!m_OfferName.empty()) return "Rejoin " + m_OfferName + "? Your seat is held until the host gives it away.";
+				return "Rejoin your match? Your seat is held until the host gives it away.";
 			case NetReconnectOffer::Corrupt: return "The saved rejoin information is damaged and cannot be used.";
 			case NetReconnectOffer::Stale: return "The saved rejoin information is too old to use.";
 			case NetReconnectOffer::Missing: return "No reconnect record for that match.";
@@ -256,6 +257,9 @@ namespace RTE {
 			return seconds < 60 ? std::to_string(seconds) + " s ago" : std::to_string(seconds / 60) + " min ago";
 		};
 		if (seat.closed) return {};
+		// A newcomer on its way to the seat has lost nothing; a player on its way back is rejoining, its old reason no longer counting.
+		if (seat.joining) return "Joining";
+		if (seat.reclaiming) return "Rejoining";
 		switch (seat.holdCause) {
 			case NetSeatHoldCause::Capacity: return "Machine too slow";
 			case NetSeatHoldCause::LateStream: return "Inputs arrived too late";
@@ -317,6 +321,13 @@ namespace RTE {
 					index = i;
 					break;
 				}
+			}
+			// The first request to a seat nobody was chosen on is chosen; one that replaces a chosen player is the host's to pick, never retargeted.
+			if (seat.applicants.empty()) {
+				m_Chosen[seat.stableSeat] = identity;
+			} else if (index == seat.applicants.size() && chosen->second.applicant == c_InvalidNetPeerId) {
+				m_Chosen[seat.stableSeat] = NetSelectModerationSeat(seat, seat.applicants.front().connection);
+				index = 0;
 			}
 			if (index == seat.applicants.size()) {
 				row.applicantText = seat.applicants.empty() ? "No requests" : "Choose a player";

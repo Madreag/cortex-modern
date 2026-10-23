@@ -4519,6 +4519,53 @@ namespace RTE {
 		return 0;
 	}
 
+	/// A returner far behind the round is served from the journal: a datagram it lost goes again once the journal has read it back,
+	/// never dropped from the resend queue while that read is on its way.
+	int TestALostJournalDatagramIsSentAgain() {
+		ResumeScratchDirectory scratch;
+		NetWorldJoinHost host;
+		auto config = NetMatchConfigUtil::MakeDefault(0x9A23);
+		std::string error;
+		if (!host.ConfigureMatchRejoins(config, 1, 1000.0 / 60.0, &error)) return Fail("journal resend fixture: " + error);
+		NetWorldFrameLog& tail = host.Tail();
+		tail.Configure(4, 1 << 20);
+		for (uint64_t tick = 1; tick <= 400; ++tick) {
+			if (!tail.Append(MakeCommittedFrame(tick), &error)) return Fail(error);
+			if (tick == 1) tail.EnableJournal((scratch.path / "match.inputs").string());
+		}
+		(void)SettledJournalStats(tail);
+		if (!host.BeginInPlaceRejoin(42, 2, 2, 3, "returning", 1, 282, &error)) return Fail("journal resend fixture: " + error);
+		host.NoteRejoinLinkFit(42, true);
+		std::vector<uint8_t> packed;
+		const auto carries = [&](uint64_t wanted) {
+			for (size_t offset = 0; offset + 4 <= packed.size();) {
+				const uint32_t bytes = static_cast<uint32_t>(packed[offset]) | (static_cast<uint32_t>(packed[offset + 1]) << 8) |
+					(static_cast<uint32_t>(packed[offset + 2]) << 16) | (static_cast<uint32_t>(packed[offset + 3]) << 24);
+				offset += 4;
+				NetLockstepFrame frame;
+				if (bytes > packed.size() - offset || !DecodeCommittedJoinFrame(std::vector<uint8_t>(packed.begin() + offset, packed.begin() + offset + bytes), frame, &error)) return false;
+				if (frame.targetFrame == wanted) return true;
+				offset += bytes;
+			}
+			return false;
+		};
+		// Each call is one pump of the link at the given time; the journal reads on its own thread meanwhile.
+		const auto pumpUntilSent = [&](uint64_t nowMs, uint64_t wanted) {
+			const auto deadline = RTE::SteadyClock::now() + std::chrono::seconds(2);
+			while (RTE::SteadyClock::now() < deadline) {
+				if (host.NextTailDatagram(42, nowMs, packed) && carries(wanted)) return true;
+				std::this_thread::sleep_for(std::chrono::milliseconds(1));
+			}
+			return false;
+		};
+		if (!pumpUntilSent(1000, 283)) return Fail("a returner served from the journal got no first datagram");
+		// The returner never receives it; the copy due a moment later is read back from the journal too.
+		if (!pumpUntilSent(1000 + c_NetWorldTailRepeatMs, 283))
+			return Fail("lost-journal-datagram-dropped: the datagram from frame 283 left the resend queue while the journal read it back, so the returner waits on frame 283 forever");
+		std::cout << "[net-world-join-selftest] PASS a_lost_journal_datagram_is_sent_again from=283" << std::endl;
+		return 0;
+	}
+
 	/// A returning seat is activated where it will have caught up: at its measured replay rate it closes on the round
 	/// only by the difference of the two rates, and an activation the round reaches first leaves every peer waiting.
 	int TestPrivateActivationWaitsForTheCatchUp() {
@@ -8110,11 +8157,15 @@ namespace RTE {
 		return true;
 	}
 
-	// A periodic capture named past its deadline is the host's own late save exactly when the host's own writer was busy
-	// while it waited: one that waited only for another peer's report, or for the host's own report on its way, costs the
-	// host nothing.
+	// A periodic capture named past its deadline is the host's own late save exactly when the host's own writer held it on the
+	// wait's last tick: one that waited last for another peer's report costs the host nothing, however long its own writer was
+	// busy before that.
 	bool TestALateCaptureNamesTheWriterThatMadeItLate(std::string* error) {
-		for (const bool ownSlow: {true, false}) {
+		struct Pace { const char* name; uint64_t own; uint64_t other; bool hostsOwn; };
+		// Against the 60-tick schedule: the host's writer slow, the other peer slow, and the host's writer busy first while the
+		// other peer's report comes last.
+		for (const Pace pace: {Pace{"the host's writer slow", 90, 10, true}, Pace{"the other peer slow", 10, 90, false},
+		                       Pace{"the host's writer busy first, the other peer's report last", 65, 90, false}}) {
 			NetMatchService service;
 			service.m_IsHost = true;
 			service.m_AutosaveMatchId = "00000000deadbeef-000000000000000a";
@@ -8136,28 +8187,157 @@ namespace RTE {
 				if (output.periodicLateTicks > 0) {
 					++late;
 					if (output.periodicOwnLate) ++ownLate;
-					// The capture's deadline was its late ticks before this one; its own writer was busy at some tick since.
-					const auto since = busy.lower_bound(tick - static_cast<uint64_t>(output.periodicLateTicks));
-					if (output.periodicOwnLate != (since != busy.end() && *since <= tick)) ++misnamed;
+					// The wait's last tick was the one before this one.
+					if (output.periodicOwnLate != busy.contains(tick - 1)) ++misnamed;
 				}
 				if (output.capture) {
-					// One writer takes 90 ticks against the 60-tick schedule; the other reports 10 ticks after the capture.
-					writer.emplace_back(tick, tick + (ownSlow ? 90 : 10));
-					stream[tick + (ownSlow ? 10 : 90)].push_back({2, NetGameCheckpoint::Written, tick});
+					writer.emplace_back(tick, tick + pace.own);
+					stream[tick + pace.other].push_back({2, NetGameCheckpoint::Written, tick});
 				}
 				for (NetMatchService::CheckpointNote note: output.send) {
 					note.sender = 1;
 					stream[tick + 4].push_back(note);
 				}
 			}
-			if (late < 3 || misnamed != 0 || (ownSlow ? ownLate < 3 : ownLate != 0)) {
-				*error = std::string("a-late-capture-names-the-writer-that-made-it-late: with the ") + (ownSlow ? "host's" : "other peer's") +
-				         " writer slow, " + std::to_string(ownLate) + " of " + std::to_string(late) + " late captures were the host's own late saves, " +
-				         std::to_string(misnamed) + " named against what its writer did";
+			if (late < 3 || misnamed != 0 || (pace.hostsOwn ? ownLate < 3 : ownLate != 0)) {
+				*error = std::string("a-late-capture-names-the-writer-that-made-it-late: with ") + pace.name + ", " + std::to_string(ownLate) + " of " +
+				         std::to_string(late) + " late captures were the host's own late saves, " + std::to_string(misnamed) +
+				         " named against what held the wait's last tick";
 				return false;
 			}
 		}
 		std::cout << "[net-world-join-selftest] PASS a_late_capture_names_the_writer_that_made_it_late" << std::endl;
+		return true;
+	}
+
+	// A returner's or joiner's base is a save every writer takes, so the next periodic save comes an interval after it: a base
+	// whose write runs past the deadline the save before it left makes no periodic save due while it is written, and the save
+	// after it is neither late nor the host's own. A base written for longer than a whole interval still never raises the
+	// saver, and the periodic save it held back is not the host's own late save either.
+	bool TestAReturnersBaseIsTheMatchsSave(std::string* error) {
+		for (const uint64_t baseTicks: {uint64_t{40}, uint64_t{80}}) {
+			NetMatchService service;
+			service.m_IsHost = true;
+			service.m_AutosaveMatchId = "00000000deadbeef-000000000000000b";
+			service.m_MatchAutosaveSeconds = 1;
+			service.m_CaptureAnchorSimTime = 0;
+			std::string configureError;
+			if (!service.m_WorldJoin.Configure(MakeWorldConfig(), MakeIdentity(), &configureError)) {
+				*error = "a-returners-base-is-the-matchs-save: " + configureError;
+				return false;
+			}
+			const int64_t tickLength = g_TimerMan.GetTicksPerSecond() / 60;
+			std::map<uint64_t, std::vector<NetMatchService::CheckpointNote>> stream;
+			std::vector<std::pair<uint64_t, uint64_t>> writer;
+			uint64_t baseTick = 0, baseDone = 0, dueDuringBase = 0, raisedDuringBase = 0, namedAfter = 0;
+			// The periodic save before the base is named on time; the save after it may be no later than that.
+			int64_t onTime = -1, lateAfter = -1;
+			bool ownLateAfter = false;
+			for (uint64_t tick = 1; tick <= 300; ++tick) {
+				NetMatchService::AutosaveTickInput input;
+				input.tick = tick; input.now = static_cast<int64_t>(tick) * tickLength;
+				if (const auto due = stream.find(tick); due != stream.end()) input.applied = due->second;
+				input.writers = {1}; input.lead = 5; input.localPeer = 1;
+				while (!writer.empty() && writer.front().second <= tick) {
+					service.ResolveAwaitedAutosave(writer.front().first, true);
+					input.finished.push_back(writer.front().first);
+					writer.erase(writer.begin());
+				}
+				input.unwritten = writer.size();
+				input.writerBusy = !writer.empty();
+				input.writerJoinWork = service.WriterHoldsOnlyJoinCaptures();
+				// A returner arrives between two periodic saves.
+				if (tick == 100) service.m_WorldCapturePending = true;
+				const NetMatchService::AutosaveTickOutput output = service.StepAutosaveSchedule(input);
+				const bool onlyBase = baseTick != 0 && tick > baseTick && tick < baseDone;
+				if (onlyBase && dueDuringBase == 0 && input.now >= service.m_NextAutosaveSimTime) dueDuringBase = tick;
+				if (onlyBase && raisedDuringBase == 0 && service.SaverOverdue(input, output)) raisedDuringBase = tick;
+				if (baseTick == 0 && onTime < 0 && output.periodicLateTicks >= 0) onTime = output.periodicLateTicks;
+				if (baseTick != 0 && tick > baseTick && namedAfter == 0 && output.periodicLateTicks >= 0) {
+					namedAfter = tick;
+					lateAfter = output.periodicLateTicks;
+					ownLateAfter = output.periodicOwnLate;
+				}
+				for (NetMatchService::CheckpointNote note: output.send) {
+					note.sender = 1;
+					stream[tick + 4].push_back(note);
+				}
+				if (output.capture) {
+					const bool join = service.IsJoinCaptureTick(tick);
+					// As AutosaveAtTickBoundary keeps a capture the writer took.
+					service.m_AwaitedAutosaves.push_back(NetMatchService::AwaitedAutosave{tick, join});
+					service.m_WriterOnJoinCapture = join;
+					service.m_CaptureAnchorSimTime = input.now;
+					// A periodic save writes for 10 ticks; the base past the deadline the periodic save before it left, or past a whole interval.
+					writer.emplace_back(tick, tick + (join ? baseTicks : 10));
+					if (join && baseTick == 0) {
+						baseTick = tick;
+						baseDone = tick + baseTicks;
+					}
+				}
+			}
+			const bool withinInterval = baseTicks < 60;
+			if (baseTick == 0 || raisedDuringBase != 0 || namedAfter == 0 || ownLateAfter || (withinInterval && (dueDuringBase != 0 || lateAfter > onTime))) {
+				*error = "a-returners-base-is-the-matchs-save: the base taken at " + std::to_string(baseTick) + " was written by " + std::to_string(baseDone) +
+				         (dueDuringBase != 0 ? "; a periodic save fell due at " + std::to_string(dueDuringBase) + " while only the base was written" : std::string()) +
+				         (raisedDuringBase != 0 ? "; the saver was raised at " + std::to_string(raisedDuringBase) + " for the base alone" : std::string()) +
+				         "; the next periodic save was named at " + std::to_string(namedAfter) + " late by " + std::to_string(lateAfter) + " ticks (on time: " +
+				         std::to_string(onTime) + ")" +
+				         (ownLateAfter ? " as the host's own late save" : "");
+				return false;
+			}
+		}
+		std::cout << "[net-world-join-selftest] PASS a_returners_base_is_the_matchs_save" << std::endl;
+		return true;
+	}
+
+	// The host's own late save stays its own however its command reaches the stream: carried for its held seat by the playing
+	// voters' agreed note, or landing a tick after the tick it named; the capture then taken is the one its writer hurries.
+	bool TestAHostsOwnLateSaveFollowsItsCommand(std::string* error) {
+		for (const bool held: {true, false}) {
+			NetMatchService service;
+			service.m_IsHost = true;
+			service.m_AutosaveMatchId = "00000000deadbeef-000000000000000c";
+			service.m_MatchAutosaveSeconds = 1;
+			const int64_t tickLength = g_TimerMan.GetTicksPerSecond() / 60;
+			std::map<uint64_t, std::vector<NetMatchService::CheckpointNote>> stream;
+			std::vector<std::pair<uint64_t, uint64_t>> writer;
+			bool requested = false;
+			size_t ownLateNamed = 0, ownLateTaken = 0;
+			for (uint64_t tick = 1; tick <= 600; ++tick) {
+				NetMatchService::AutosaveTickInput input;
+				input.tick = tick; input.now = static_cast<int64_t>(tick) * tickLength;
+				if (const auto due = stream.find(tick); due != stream.end()) input.applied = due->second;
+				input.writers = {1, 2}; input.lead = 5; input.localPeer = 1; input.ownSeatHeld = held;
+				while (!writer.empty() && writer.front().second <= tick) { input.finished.push_back(writer.front().first); writer.erase(writer.begin()); }
+				input.unwritten = writer.size();
+				const NetMatchService::AutosaveTickOutput output = service.StepAutosaveSchedule(input);
+				if (output.periodicOwnLate) ++ownLateNamed;
+				if (held && output.requestPrivateBase && !requested) {
+					requested = true;
+					// The playing voters agree the command three frames on; its capture is two frames later.
+					stream[tick + 3].push_back({1, NetGameCheckpoint::Capture, tick + 5});
+				}
+				for (NetMatchService::CheckpointNote note: output.send) {
+					note.sender = 1;
+					// The host's own command lands a tick after the tick it named.
+					stream[tick + (note.kind == NetGameCheckpoint::Capture ? 6 : 4)].push_back(note);
+				}
+				if (output.capture) {
+					requested = false;
+					if (service.m_OwnLateCaptureTick == tick) ++ownLateTaken;
+					// The host's writer takes 90 ticks against the 60-tick schedule; the other writer reports 10 ticks after the capture.
+					writer.emplace_back(tick, tick + 90);
+					stream[tick + 10].push_back({2, NetGameCheckpoint::Written, tick});
+				}
+			}
+			if (ownLateNamed < 3 || ownLateTaken != ownLateNamed) {
+				*error = std::string("a-hosts-own-late-save-follows-its-command: ") + (held ? "held, the voters carrying it" : "unheld, the command landing late") +
+				         ": " + std::to_string(ownLateNamed) + " late saves named as the host's own, " + std::to_string(ownLateTaken) + " taken as its own";
+				return false;
+			}
+		}
+		std::cout << "[net-world-join-selftest] PASS a_hosts_own_late_save_follows_its_command" << std::endl;
 		return true;
 	}
 
@@ -10422,6 +10602,7 @@ namespace RTE {
 		if (const int result = TestPrivateActivationWaitsForTheCatchUp(); result != 0) return result;
 		if (const int result = TestAHeldSeatCatchesUpInPlaceWithoutAnImage(); result != 0) return result;
 		if (const int result = TestAStalledReplayGetsItsNextIntervalAgain(); result != 0) return result;
+		if (const int result = TestALostJournalDatagramIsSentAgain(); result != 0) return result;
 		if (const int result = TestAReturnedSeatTakesNoBaseThatStallsTheRound(); result != 0) return result;
 		if (const int result = TestTheColdFirstCaptureNeverDecidesAHeldSeatsRefresh(); result != 0) return result;
 		if (const int result = TestAHeldWorldSeatWaitsForItsReturner(); result != 0) return result;
@@ -10467,7 +10648,14 @@ namespace RTE {
 			if (!TestALostCaptureIsNamedAgain(&error)) return Fail(error);
 			if (!TestAHeldHostKeepsTheAutosaveCadence(&error)) return Fail(error);
 			if (!TestAHostsLostOwnReportDoesNotStopTheSchedule(&error)) return Fail(error);
-			if (!TestALateCaptureNamesTheWriterThatMadeItLate(&error)) return Fail(error);
+			{
+				// Both rows of what makes a capture late report together.
+				std::string lateError, baseError;
+				const bool late = TestALateCaptureNamesTheWriterThatMadeItLate(&lateError);
+				const bool base = TestAReturnersBaseIsTheMatchsSave(&baseError);
+				if (!late || !base) return Fail(lateError + (late || base ? "" : " | ") + baseError);
+				if (!TestAHostsOwnLateSaveFollowsItsCommand(&lateError)) return Fail(lateError);
+			}
 			if (!TestAProvisionalHostWritesNothing(&error)) return Fail(error);
 			if (!TestNoCaptureIsNamedOverAPendingActivation(&error)) return Fail(error);
 			if (!TestNoCaptureIsNamedBeforeTheAgreedFirstFrame(&error)) return Fail(error);

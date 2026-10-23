@@ -269,7 +269,9 @@ def remote_mkdir(path):
 
 
 def exe_hashes(repo, remote_repo=None):
-    local = hashlib.sha256((Path(repo) / 'Cortex Command.exe').read_bytes()).hexdigest()
+    run = harness(HERE).run
+    local = run.file_sha256(run.engine_executable(repo))
+    # The remote side is a Windows box's session task, whose runner launches the tree's executable.
     return local, box().sha256(Path(remote_repo or repo) / 'Cortex Command.exe')
 
 

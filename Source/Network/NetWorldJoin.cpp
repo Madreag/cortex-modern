@@ -2225,8 +2225,9 @@ namespace RTE {
 				continue;
 			}
 			std::vector<std::vector<uint8_t>> frames;
-			// Frames the record no longer keeps cannot go again; the returner's reports say what it lacks.
+			// A read the journal has not finished is waited for, lowest first; frames the record no longer keeps cannot go again.
 			if (m_Tail.CopyFrom(sent->first, static_cast<size_t>(sent->last - sent->first + 1), UINT64_MAX, frames) == 0) {
+				if (m_Tail.Covers(sent->first) && m_Tail.Covers(sent->last)) break;
 				sent = session->tailInFlight.erase(sent);
 				continue;
 			}

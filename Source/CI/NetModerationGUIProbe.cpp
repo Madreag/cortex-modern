@@ -5,6 +5,7 @@
 #include "BuyMenuGUI.h"
 #include "PieMenu.h"
 #include "SceneEditorGUI.h"
+#include "ObjectPickerGUI.h"
 #include "PresetMan.h"
 #include "MovableMan.h"
 #include "AHuman.h"
@@ -116,6 +117,7 @@ namespace {
 		std::vector<std::string> roundEndSignals;
 		bool pageDown = false; //!< show_row holds the More players press it made.
 		bool shopHeader = false; //!< The pending shop click expands a module before choosing its item.
+		bool pickerGroupDone = false; //!< The pending picker step has opened its group and picks the object next.
 		size_t minuteIndex = SIZE_MAX;
 		size_t minuteObservedIndex = SIZE_MAX;
 		uint64_t minuteObservedFrame = UINT64_MAX;
@@ -873,10 +875,14 @@ namespace {
 			Vector motion(step.value("dx", 0.0F), step.value("dy", 0.0F));
 			if (op == "aim_brain") {
 				const bool untilEnd = step.value("until_end", false);
+				const bool untilLost = step.value("until_brain_lost", false);
 				if (untilEnd && RoundEnded()) return observed["screen"] == "MultiplayerScreen";
+				// A brain lost under the keep-playing rule leaves the round running.
+				if (untilLost) Require(!RoundEnded(), "the round ended when the brain was lost");
 				auto* game = g_ActivityMan.GetActivity();
 				auto* actor = game ? dynamic_cast<AHuman*>(game->GetControlledActor(LocalPlayer(step))) : nullptr;
 				auto* brain = game ? game->GetPlayerBrain(step.value("target_player", 1)) : nullptr;
+				if (untilLost && (!brain || !g_MovableMan.ValidMO(brain) || brain->IsDead())) return true;
 				if (untilEnd && (!brain || !g_MovableMan.ValidMO(brain))) return false;
 				Require(actor && brain && g_MovableMan.ValidMO(brain), "aiming needs a living soldier and target brain");
 				const auto* gun = dynamic_cast<const HDFirearm*>(actor->GetEquippedItem());
@@ -891,7 +897,7 @@ namespace {
 				observed["aim"] = {{"device", {input.m_X, input.m_Y}}, {"target", {target.m_X, target.m_Y}},
 				    {"muzzle", {gun->GetMuzzlePos().m_X, gun->GetMuzzlePos().m_Y}}, {"ray", {ray.m_X, ray.m_Y}}, {"miss_pixels", miss},
 				    {"brain_health", brain->GetHealth()}, {"rounds", gun->GetRoundInMagCount()}};
-				if (!untilEnd && tick >= probe.aimTick + ScenarioRunner::GetLockstepLocalInputDelay() + 4 &&
+				if (!untilEnd && !untilLost && tick >= probe.aimTick + ScenarioRunner::GetLockstepLocalInputDelay() + 4 &&
 				    (target - input).GetMagnitude() < 0.01F && miss <= 2.0F && ray.m_X * distance.m_X + ray.m_Y * distance.m_Y > 0) return true;
 				// UpdateMouseInput adds three times the device motion to its analog aim.
 				motion = (target - input) * g_UInputMan.GetMouseTrapRadius() / (3.0F * g_UInputMan.GetMouseSensitivity());
@@ -1241,6 +1247,54 @@ namespace {
 			Require(MenuAutomation::HandRow(buy->AutomationManager(), "CatalogLB", index, 1, nullptr, detail, taken), "the shop row cannot be reached: " + detail);
 			probe.handIndex = probe.index;
 			return false;
+		} else if (op == "picker_pick") {
+			// The editor's own picker, opened from its pie: the group's row, then the object's row, each a held click.
+			auto* game = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity());
+			auto* editor = game ? game->GetEditorGUI(LocalPlayer(step)) : nullptr;
+			ObjectPickerGUI* picker = editor ? editor->GetCheckpointPicker() : nullptr;
+			Require(editor != nullptr, "the editor's picker is not open");
+			const std::string preset = step.at("preset");
+			const auto picked = [editor, preset] { return editor->GetCurrentObject() && editor->GetCurrentObject()->GetModuleAndPresetName() == preset; };
+			bool passed = false; std::string detail;
+			// A finished press is read first: the pick itself closes the picker.
+			if (probe.handIndex == probe.index) {
+				if (!MenuAutomation::HandFinished(passed, detail)) return false;
+				Require(passed, "the picker row refused its held click: " + detail);
+				probe.handIndex = SIZE_MAX;
+				if (!probe.pickerGroupDone && step.contains("group")) {
+					probe.pickerGroupDone = true;
+					return false;
+				}
+				probe.pickerGroupDone = false;
+				return picked();
+			}
+			Require(picker && picker->IsVisible(), "the editor's picker is not open");
+			if (MenuAutomation::HandBusy() || !picker->IsOpen()) return false;
+			GUIControlManager* manager = picker->AutomationManager();
+			if (step.contains("group") && !probe.pickerGroupDone) {
+				auto* groups = dynamic_cast<GUIListBox*>(manager->GetControl("GroupsLB"));
+				Require(groups != nullptr, "the picker has no group list");
+				const std::string group = step.at("group");
+				int index = -1;
+				const auto* items = groups->GetItemList();
+				for (size_t row = 0; row < items->size(); ++row) if ((*items)[row]->m_Name == group) { index = static_cast<int>(row); break; }
+				Require(index >= 0, "the picker lists no group " + group);
+				Require(MenuAutomation::HandRow(manager, "GroupsLB", index, 1, nullptr, detail, [groups, index] { return groups->GetSelectedIndex() == index; }),
+				    "the picker's group row cannot be reached: " + detail);
+				probe.handIndex = probe.index;
+				return false;
+			}
+			auto* objects = dynamic_cast<GUIListBox*>(manager->GetControl("ObjectsLB"));
+			Require(objects != nullptr, "the picker has no object list");
+			int index = -1;
+			const auto* items = objects->GetItemList();
+			for (size_t row = 0; row < items->size(); ++row) {
+				if ((*items)[row]->m_pEntity && (*items)[row]->m_pEntity->GetModuleAndPresetName() == preset) { index = static_cast<int>(row); break; }
+			}
+			Require(index >= 0, "the picker's open group lists no " + preset);
+			Require(MenuAutomation::HandRow(manager, "ObjectsLB", index, 1, nullptr, detail, picked), "the picker's object row cannot be reached: " + detail);
+			probe.handIndex = probe.index;
+			return false;
 		} else if (op == "show_row") {
 			// A player's row on the open host panel, reached as a hand reaches it: More players, its press and its release on
 			// separate frames, until the row shows or every page has been seen.
@@ -1367,6 +1421,13 @@ namespace {
 				const std::string text = value.at("text").get<std::string>();
 				const std::string needle = step["text_contains"].get<std::string>();
 				Require(text.find(needle) != std::string::npos, "control text '" + text + "' does not contain '" + needle + "'");
+			}
+			if (step.contains("text_lacks")) {
+				const std::string text = value.at("text").get<std::string>();
+				const Json& needles = step["text_lacks"];
+				for (const Json& needle: needles.is_array() ? needles : Json::array({needles})) {
+					Require(text.find(needle.get<std::string>()) == std::string::npos, "control text '" + text + "' carries '" + needle.get<std::string>() + "'");
+				}
 			}
 			if (step.value("fits", false)) {
 				const auto& rect = value["rect"];

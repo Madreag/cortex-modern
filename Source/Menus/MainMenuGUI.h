@@ -435,7 +435,6 @@ namespace RTE {
 		GUILabel* m_HostNetEffectiveLabel = nullptr;
 		std::array<GUILabel*, 4> m_HostNetPeerLabels{};
 		std::array<GUITextBox*, 4> m_HostNetPeerDelayBoxes{};
-		GUIButton* m_HostNetRecalcButton = nullptr;
 		GUILabel* m_HostNetPingLabel = nullptr;
 		GUILabel* m_HostNetModeLabel = nullptr;          //!< H34: "Host mode: <Dedicated|Playing> - capacity N - humans seated M".
 		GUIComboBox* m_HostNetVisibilityCombo = nullptr; //!< H34: LAN only / Internet: Unlisted / Internet: Listed.
@@ -448,7 +447,7 @@ namespace RTE {
 		GUITextBox* m_HostNetPortBox = nullptr;          //!< H34: the next hosted session's game port (the setup draft's).
 		GUICheckbox* m_HostRecRepairCheck = nullptr;
 		GUICheckbox* m_HostRecAutosaveCheck = nullptr;
-		GUITextBox* m_HostRecAutosaveIntervalBox = nullptr;
+		GUIComboBox* m_HostRecAutosaveIntervalCombo = nullptr;
 		GUILabel* m_HostRecLastSaveLabel = nullptr;
 		GUIComboBox* m_HostRecReturnWindowCombo = nullptr; //!< How long a held seat may come back in place.
 		GUIComboBox* m_HostRecJoinHistoryCombo = nullptr; //!< How long this host keeps a world's round history for joiners and returns.
@@ -456,6 +455,9 @@ namespace RTE {
 		GUILabel* m_HostRecOptionHintLabel = nullptr;     //!< The consequence of the window or history row the player points at or has focused.
 		std::array<GUIControl*, 6> m_HostRecHintRowControls{}; //!< Each of those rows' label and combo, in row order.
 		int m_HostRecHintRow = 0;                         //!< The row the hint names: the last one pointed at or focused; the Return window first.
+		GUILabel* m_HostNetOptionHintLabel = nullptr;     //!< What the Timing row the player points at or has focused costs.
+		std::array<GUIControl*, 8> m_HostNetHintRowControls{}; //!< Each Timing row's label and control, in row order.
+		int m_HostNetHintRow = 0;                         //!< The Timing row the hint names; Input delay first.
 		/// Logs the history policy this host would run under the drafted return window and its own history options.
 		void LogHostHistoryPolicy() const;
 		GUILabel* m_HostRecWaitingLabel = nullptr;
@@ -496,6 +498,11 @@ namespace RTE {
 		uint64_t m_HostOptionsBaseRevision = 0;         //!< The adopted revision the draft was seeded from.
 		bool m_HostOptionsSetupDraft = false;           //!< True while the draft feeds a new lobby's request.
 		bool m_HostOptionsReadOnly = false;             //!< A client reads the adopted config; it cannot edit it.
+		bool m_HostOptionsSetupOnly = false;            //!< The lobby's Edit setup: the game's setup pages alone, without Advanced's.
+		enum class SeatDialogArm { None, Kick, Ban };
+		SeatDialogArm m_HostSeatDlgArmed = SeatDialogArm::None; //!< A removal the dialog waits to have confirmed.
+		bool m_HostSessEndArmed = false;                //!< End session waits to have its second press.
+		GUILabel* m_HostSessEndHint = nullptr;
 		GUICollectionBox* m_JoinAddressDialog = nullptr; //!< Join by address: the address and port boxes.
 		GUILabel* m_JoinSelectedLabel = nullptr;         //!< The selected game's details, or why it cannot be joined.
 		bool m_JoinAttemptActive = false;                //!< A join started from this screen and not yet in its lobby.
@@ -515,6 +522,7 @@ namespace RTE {
 		int m_HostSeatDlgModerationRow = -1;            //!< The dialog's row in m_ModerationUx, or -1 when the seat has none.
 		std::optional<NetH4ModerationSeat> m_HostSeatDlgRemovalSeat; //!< The seat's admission row a Kick/Ban selection rides, when published.
 		bool m_HostKickBanWatch = false;                //!< A Queued removal's applied result lands in GetLastKickBanResult.
+		bool m_HostUnbanWatch = false;                  //!< A Queued Remove ban's applied result lands there too.
 		std::string m_HostKickBanVerb;                  //!< "Kick"/"Ban" - the action the watch is reporting.
 		std::vector<NetHostActivityChoice> m_HostOptionsActivities; //!< The activities the Rules page offers: the host screen's census.
 		std::vector<NetHostSceneChoice> m_HostOptionsScenes;        //!< The scenes the Rules page offers: those the drafted activity runs.

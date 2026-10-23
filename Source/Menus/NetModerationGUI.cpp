@@ -1070,7 +1070,8 @@ int NetModerationGUI::FillRow(Controls& controls, const PanelRow& row, size_t sl
 	if (row.decision) {
 		const NetH4ModerationSeat& view = row.decision->view;
 		const std::string cause = NetModerationUx::HoldCause(view);
-		detail = "Team " + std::to_string(view.team + 1) + "  /  " + NetPlayerPresentation::State(row.peer, false, view.dropped, view.reclaiming) + (cause.empty() ? "" : "  /  " + cause) +
+		// The state already says a returning player is rejoining.
+		detail = "Team " + std::to_string(view.team + 1) + "  /  " + NetPlayerPresentation::State(row.peer, false, view.dropped, view.reclaiming) + (cause.empty() || view.reclaiming ? "" : "  /  " + cause) +
 		         (view.joinProgress.empty() ? "" : "  /  " + view.joinProgress);
 	}
 	if (!removable && running && !row.opened && !row.cpu) detail += "  /  changes are paused for a moment";
@@ -1096,9 +1097,11 @@ int NetModerationGUI::FillRow(Controls& controls, const PanelRow& row, size_t sl
 	const int listWidth = std::min(220, inner / 3);
 	const int buttonRoom = inner - listWidth - 12;
 	Caption(controls.actions[0], m_LabelFont, "Keep for ", row.name, "", buttonRoom / 3);
-	const bool letArmed = armed && m_Armed->kind == Armed::Kind::Let;
-	Caption(controls.actions[1], m_LabelFont, letArmed ? "Confirm: let " : "Let ", chosen ? applicant : std::string("someone"), " join", buttonRoom / 3);
 	Caption(controls.actions[2], m_LabelFont, "Cancel this approval", "", "", buttonRoom / 3);
+	const bool letArmed = armed && m_Armed->kind == Armed::Kind::Let;
+	// Let takes the room the other shown actions leave: the host reads whom the press lets in.
+	const int letRoom = buttonRoom - (row.opened ? 0 : controls.actions[0]->GetWidth() + 6) - (view.substituting ? controls.actions[2]->GetWidth() + 6 : 0);
+	Caption(controls.actions[1], m_LabelFont, letArmed ? "Confirm: let " : "Let ", chosen ? applicant : std::string("someone"), " join", std::max(buttonRoom / 3, letRoom));
 	int x = 10;
 	for (size_t action = 0; action < controls.actions.size(); ++action) {
 		// Cancel is there while an approval is on its way, and only then; an opened place has nobody to keep it for.
@@ -1248,8 +1251,9 @@ void NetModerationGUI::Refresh() {
 			requests += row.decision->applicants;
 		}
 	}
+	// The status box says this player's own held seat; the panel's line says how everyone else is.
 	const bool ownHeld = OwnRosterSeatHeld() || ScenarioRunner::IsLockstepOwnSeatHeld();
-	std::string summary = NetPlayerPresentation::PlayingSummary(ownHeld, away, awayRow ? awayRow->name : std::string());
+	std::string summary = ownHeld && away == 0 ? "Everyone else is playing" : NetPlayerPresentation::PlayingSummary(false, away, awayRow ? awayRow->name : std::string());
 	if (requests) summary += requests == 1 ? " - 1 request to join" : " - " + std::to_string(requests) + " requests to join";
 	m_Summary->SetText(FitLine(m_LabelFont, summary, m_Summary->GetWidth()));
 	// The host's own line leads, then a page of the other players' rows, above the status line that says what an action will do
@@ -1897,6 +1901,18 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 		if (m_ToastRect.visible) area.occupiers.push_back({m_ToastRect.x, m_ToastRect.y, m_ToastRect.width, m_ToastRect.height});
 		const auto composeMetrics = [&](int width) {
 			std::string text = FitLine(font, headline(0), width - 12);
+			if (!diagnostics) {
+				// The words a player reads: what is happening, why, and the key to the players panel.
+				for (const std::string& line: details(width - 12)) text += "\n" + line;
+				text += "\nF6: Players";
+				if (!m_StatusProbeLine.empty()) text += "\n" + m_StatusProbeLine;
+				return WrapText(font, FitTokens(font, text, width - 12), width - 12);
+			}
+			// The reason a seat is held reads before any number.
+			if (!ownHeldCause.empty()) text += "\nYour seat: " + ownHeldCause;
+			if (!resyncing && !placing && !hostLost) {
+				for (const std::string& cause: heldCauses) text += "\n" + cause;
+			}
 			if (placing) text += "\n" + countOnly + " brains placed";
 			text += "\n" + std::string(metrics);
 			char pace[64];
@@ -2544,6 +2560,9 @@ void NetModerationGUI::DrawMatchToasts(const std::string& screenLine) {
 	const uint8_t localPeer = ScenarioRunner::GetLockstepLocalPeerId();
 	const PauseMenuGUI* pauseMenu = g_MenuMan.GetActivePauseMenu();
 	const std::string menuSaveLine = pauseMenu ? pauseMenu->GetShownSaveLine() : std::string();
+	// The status box drew this frame before the band; what it already says, the band does not say again.
+	std::string statusShown = m_StatusRect.visible && m_NetStatus ? m_NetStatus->GetText() : std::string();
+	std::replace(statusShown.begin(), statusShown.end(), '\n', ' ');
 	for (size_t index = 0; index < queued.size(); ++index) {
 		if (!ToastStillApplies(queued[index])) continue;
 		// A seat's toast reads its current state, so two events about one seat can read alike: the band shows that line once.
@@ -2551,6 +2570,7 @@ void NetModerationGUI::DrawMatchToasts(const std::string& screenLine) {
 		if (std::find(lines.begin(), lines.end(), line) != lines.end()) continue;
 		// The status box was drawn this frame. Its full sentences need only one visible copy, even when they wrap.
 		if (std::find(statusLines.begin(), statusLines.end(), sentence(line)) != statusLines.end()) continue;
+		if (!statusShown.empty() && statusShown.find(sentence(line)) != std::string::npos) continue;
 		// The screen beneath shows its own line; the band does not read it out again, nor this seat's own state when that is the line.
 		const bool ownSeat = queued[index].senderPeerId == 0 || queued[index].senderPeerId == localPeer;
 		// The wait's own screen already says this seat is on its way back.

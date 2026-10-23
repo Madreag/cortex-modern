@@ -4,6 +4,7 @@
 #include "NetMatchService.h"
 #include "ScenarioRunner.h"
 
+#include <cctype>
 #include <map>
 #include <set>
 #include <string>
@@ -28,6 +29,44 @@ namespace RTE::NetPlayerPresentation {
 	inline std::string PlayingSummary(bool ownHeld, size_t away, const std::string& awayName) {
 		if (ownHeld) return "The AI is playing for you until you are back";
 		return away == 0 ? "Everyone is playing" : away == 1 ? awayName + " is away" : std::to_string(away) + " players are away";
+	}
+
+	/// A status or error line from the session, in the words its player reads.
+	inline std::string StatusWords(const std::string& text) {
+		const bool wireReason = text.find("ParticipantBanned") != std::string::npos || text.find("participant_identity: admitted vs banned") != std::string::npos;
+		const std::string refusalPrefix = "A player could not join: ";
+		const bool refusal = text.starts_with("A player could not join:");
+		// The host's notice names the refused player ahead of the sentence it quotes: "<name> is banned from this session".
+		const auto refusedName = [&](const std::string& sentence) {
+			const size_t at = text.find(sentence);
+			return at != std::string::npos && at > refusalPrefix.size() && text.starts_with(refusalPrefix) ? text.substr(refusalPrefix.size(), at - refusalPrefix.size()) : std::string();
+		};
+		if (text.find("removed from this session") != std::string::npos) {
+			// The host's notice never speaks to the player it removed, and the player reads a whole sentence.
+			if (refusal) {
+				const std::string name = refusedName(" was removed from this session");
+				return name.empty() ? "A removed player was refused." : name + " was refused: removed from this session.";
+			}
+			return "The host removed you from this session";
+		}
+		if (wireReason || text.find("banned") != std::string::npos) {
+			// The host's notice wraps the refused player's own sentence, which is written to that player.
+			if (refusal) {
+				const std::string name = refusedName(" is banned from this session");
+				return name.empty() ? "A banned player was refused." : name + " was refused: banned from this session.";
+			}
+			if (wireReason) return "You are banned from this session";
+			return text.find("banned from this session") != std::string::npos ? "The host banned you from this session" : text;
+		}
+		if (text.find("transport stopped") != std::string::npos || text == "Connection dropped") return "The host's connection was lost.";
+		// The session's own error text starts in lower case; the player reads what happened and what to do, the log keeps the rest.
+		if (!text.empty() && std::islower(static_cast<unsigned char>(text.front()))) {
+			if (text.starts_with("match over")) return "The host ended the match";
+			if (text.starts_with("rematch roster")) return "The match could not return to the lobby";
+			if (text.find("timed out") != std::string::npos) return "The other players did not answer in time - try again";
+			return "The connection to the match failed - try again, or save a support report";
+		}
+		return text;
 	}
 
 	inline bool Placeholder(uint8_t peer, const std::string& name) {

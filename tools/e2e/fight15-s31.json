@@ -1,0 +1,125 @@
+{
+  "schema": 1,
+  "name": "fight15-s31",
+  "title": "Ban in the lobby seat dialog asks first; Banned players lists it and Remove ban lifts it, the player let in again",
+  "port_base": 49472,
+  "size": "960x540",
+  "timeout_s": 420,
+  "public_directory": true,
+  "peers": [
+    {
+      "name": "host",
+      "menu_script": "host.menu",
+      "probe": "host.probe",
+      "env": {
+        "CCCP_TEST_READBACK_TIMING": "1"
+      },
+      "settings": {
+        "SessionDirectoryUrl": "directory.broserver.com",
+        "NetworkHostRelayMode": "Directory",
+        "NetworkConnectionMode": "RelayOnly",
+        "NetworkIceEnable": 1,
+        "NetworkPortMapEnable": 0,
+        "NetworkMatchStatusMode": "Always",
+        "NetworkDisplayName": "Captain"
+      }
+    },
+    {
+      "name": "joiner",
+      "menu_script": "joiner.menu",
+      "probe": "joiner.probe",
+      "env": {
+        "CCCP_TEST_READBACK_TIMING": "1"
+      },
+      "settings": {
+        "SessionDirectoryUrl": "directory.broserver.com",
+        "NetworkHostRelayMode": "Directory",
+        "NetworkConnectionMode": "RelayOnly",
+        "NetworkIceEnable": 1,
+        "NetworkPortMapEnable": 0,
+        "NetworkMatchStatusMode": "Always",
+        "NetworkDisplayName": "Joiner"
+      }
+    }
+  ],
+  "scripts": {
+    "host.menu": "wait_ms 1800\nactivate ButtonMainToMultiplayer\nwait_ms 600\nassert_substate Landing\nsettext TextMultiplayerName Captain\nactivate ButtonMultiplayerHostGame\nwait_ms 500\nassert_substate HostSetup\ncombo_select ComboHostActivity Skirmish Defense\nwait_combo ComboHostScene Grasslands\ncombo_select ComboHostScene Grasslands\nsetup_host_port {PORT}\ncombo_select ComboHostPlayers 2\nactivate ButtonHostOptions\nwait_ms 500\nassert_substate HostOptions\nactivate TabHostPageConnection\ncombo_select ComboHostNetVisibility Public (default)\ncombo_select ComboHostNetRelay Game service (default)\nassert_label ComboHostNetVisibility Public (default)\nassert_label ComboHostNetRelay Game service (default)\nactivate ButtonHostOptBack\nwait_ms 500\nactivate ButtonMultiplayerCreate\nwait_substate Lobby 90\nwrite_lobby {PROBE_DIR}/lobby.json 90\nvideo_mark fight15-host-listening\nwait_connected 2 90\nwait_ms 1200\ntouch_file {PROBE_DIR}/relay-check.json\nwait_file {PROBE_DIR}/relay-ok.json 60\nwait_file {PROBE_DIR_joiner}/relay-ok.json 60\nactivate ButtonLobbyOptions\nwait_ms 600\nassert_substate HostOptions\nactivate TabHostPageSeats\nwait_ms 600\nactivate ButtonHostSeatDetails1\nwait_ms 900\nassert_visible HostSeatDialog 1\nassert_label LabelHostSeatDlgName Joiner\nvideo_mark seat-dialog-host\nassert_enabled ButtonHostSeatDlgKick 1\nassert_enabled ButtonHostSeatDlgBan 1\nactivate ButtonHostSeatDlgBan\nwait_ms 600\nvideo_mark ban-confirm-host\nassert_visible HostSeatDialog 1\nassert_label ButtonHostSeatDlgBan Confirm ban\nassert_label LabelHostSeatDlgActionHint Press Confirm ban to ban Joiner from this session\nassert_text_fits LabelHostSeatDlgActionHint\nactivate ButtonHostSeatDlgBan\nwait_ms 1200\nassert_visible HostSeatDialog 0\nactivate TabHostPageSession\nwait_ms 600\nactivate ButtonHostSessBanned\nwait_ms 900\nvideo_mark banned-list-host\nassert_visible HostBannedDialog 1\nassert_label LabelHostBannedList Joiner\nassert_label LabelHostBannedList session\nwait_file {PROBE_DIR_joiner}/refused.json 120\nactivate ButtonHostBannedRemove\nwait_ms 300\nvideo_mark ban-lifted-host\nwait_label LabelHostBannedStatus Remove ban: Done. They may ask to join again, this match included.\nassert_text_fits LabelHostBannedStatus\nassert_label_absent LabelHostBannedList Joiner\ntouch_file {PROBE_DIR}/unbanned.json\nactivate ButtonHostBannedClose\nwait_ms 600\nactivate ButtonHostOptBack\nwait_substate Lobby 30\nwait_file {PROBE_DIR_joiner}/readmitted.json 120\ntouch_file {PROBE_DIR}/scene-end.json\nwait_file {PROBE_DIR}/done.json 360\nwait_ms 1400\nexit\n",
+    "joiner.menu": "wait_ms 1800\nactivate ButtonMainToMultiplayer\nwait_ms 600\nassert_substate Landing\nsettext TextMultiplayerName Joiner\nactivate ButtonMultiplayerJoinGame\nwait_ms 600\nassert_substate JoinSetup\nwait_file {PROBE_DIR_host}/lobby.json 90\nwait_row PublicGameRowLobby:{PROBE_DIR_host}/lobby.json 90\nclick_row PublicGameRowLobby:{PROBE_DIR_host}/lobby.json\nassert_label LabelJoinSelected internet\nassert_enabled ButtonMultiplayerConnect 1\nactivate ButtonMultiplayerConnect\nwait_connected 2 90\nwait_substate Lobby 90\nwait_ms 1200\ntouch_file {PROBE_DIR}/relay-check.json\nvideo_mark seated-joiner\nwait_label LabelMultiplayerLandingStatus The host banned you from this session\nvideo_mark banned-joiner\nassert_text_fits LabelMultiplayerLandingStatus\nactivate ButtonMultiplayerJoinGame\nwait_ms 600\nassert_substate JoinSetup\nwait_file {PROBE_DIR_host}/lobby.json 90\nwait_row PublicGameRowLobby:{PROBE_DIR_host}/lobby.json 90\nclick_row PublicGameRowLobby:{PROBE_DIR_host}/lobby.json\nwait_label LabelJoinSelected 1/2 players\nactivate ButtonMultiplayerConnect\nwait_label LabelJoinSelected The host banned you from this session\nvideo_mark ban-refused-joiner\ntouch_file {PROBE_DIR}/refused.json\nwait_file {PROBE_DIR_host}/unbanned.json 120\nactivate ButtonMultiplayerConnect\nwait_connected 2 90\nwait_substate Lobby 90\nvideo_mark readmitted-joiner\ntouch_file {PROBE_DIR}/readmitted.json\ntouch_file {PROBE_DIR}/scene-end.json\nwait_file {PROBE_DIR}/done.json 360\nwait_ms 1400\nexit\n",
+    "host.probe": "{\n  \"schema\": 1,\n  \"timeout_ms\": 400000,\n  \"step_timeout_ms\": 60000,\n  \"label_dump\": {\n    \"every_ms\": 5000\n  },\n  \"steps\": [\n    {\n      \"op\": \"wait_file\",\n      \"path\": \"{PROBE_DIR}/relay-check.json\",\n      \"scope\": \"menu\",\n      \"within_ms\": 300000\n    },\n    {\n      \"op\": \"assert_relay\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"signal\",\n      \"name\": \"relay-ok\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"wait_file\",\n      \"path\": \"{PROBE_DIR}/scene-end.json\",\n      \"scope\": \"menu\",\n      \"within_ms\": 400000\n    },\n    {\n      \"op\": \"signal\",\n      \"name\": \"done\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"finish\"\n    }\n  ]\n}\n",
+    "joiner.probe": "{\n  \"schema\": 1,\n  \"timeout_ms\": 400000,\n  \"step_timeout_ms\": 60000,\n  \"label_dump\": {\n    \"every_ms\": 5000\n  },\n  \"steps\": [\n    {\n      \"op\": \"wait_file\",\n      \"path\": \"{PROBE_DIR}/relay-check.json\",\n      \"scope\": \"menu\",\n      \"within_ms\": 300000\n    },\n    {\n      \"op\": \"assert_relay\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"signal\",\n      \"name\": \"relay-ok\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"wait_file\",\n      \"path\": \"{PROBE_DIR}/scene-end.json\",\n      \"scope\": \"menu\",\n      \"within_ms\": 400000\n    },\n    {\n      \"op\": \"signal\",\n      \"name\": \"done\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"finish\"\n    }\n  ]\n}\n"
+  },
+  "checklist": [
+    {
+      "id": "seat-dialog-host",
+      "peer": "host",
+      "mark": "seat-dialog-host",
+      "screen": "MultiplayerScreen",
+      "what": "The lobby seat dialog's removal reached the player, who stays out of the match.",
+      "events": [
+        "^video_mark seat-dialog-host",
+        "^assert_enabled ButtonHostSeatDlgKick .*PASS",
+        "^assert_enabled ButtonHostSeatDlgBan .*PASS"
+      ]
+    },
+    {
+      "id": "ban-confirm-host",
+      "peer": "host",
+      "mark": "ban-confirm-host",
+      "screen": "MultiplayerScreen",
+      "what": "The lobby seat dialog's removal reached the player, who stays out of the match.",
+      "events": [
+        "^video_mark ban-confirm-host"
+      ]
+    },
+    {
+      "id": "banned-list-host",
+      "peer": "host",
+      "mark": "banned-list-host",
+      "screen": "MultiplayerScreen",
+      "what": "The lobby seat dialog's removal reached the player, who stays out of the match.",
+      "events": [
+        "^video_mark banned-list-host"
+      ]
+    },
+    {
+      "id": "ban-lifted-host",
+      "peer": "host",
+      "mark": "ban-lifted-host",
+      "screen": "MultiplayerScreen",
+      "what": "The lobby seat dialog's removal reached the player, who stays out of the match.",
+      "events": [
+        "^video_mark ban-lifted-host"
+      ]
+    },
+    {
+      "id": "banned-joiner",
+      "peer": "joiner",
+      "mark": "banned-joiner",
+      "screen": "MultiplayerScreen",
+      "what": "The lobby seat dialog's removal reached the player, who stays out of the match.",
+      "events": [
+        "^video_mark banned-joiner"
+      ]
+    },
+    {
+      "id": "ban-refused-joiner",
+      "peer": "joiner",
+      "mark": "ban-refused-joiner",
+      "screen": "MultiplayerScreen",
+      "what": "The lobby seat dialog's removal reached the player, who stays out of the match.",
+      "events": [
+        "^video_mark ban-refused-joiner"
+      ]
+    },
+    {
+      "id": "readmitted-joiner",
+      "peer": "joiner",
+      "mark": "readmitted-joiner",
+      "screen": "MultiplayerScreen",
+      "what": "The lobby seat dialog's removal reached the player, who stays out of the match.",
+      "events": [
+        "^video_mark readmitted-joiner"
+      ]
+    }
+  ]
+}

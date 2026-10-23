@@ -3241,11 +3241,11 @@ namespace RTE {
 				NetReconnectUx offer;
 				offer.OfferStoredTicket(NetH4TicketLoadResult::Loaded, "10.0.0.7");
 				if (offer.GetOffer() != NetReconnectOffer::Available || offer.GetOfferAddress() != "10.0.0.7" ||
-				    offer.GetOfferText() != "Rejoin your match?") {
+				    offer.GetOfferText() != "Rejoin your match? Your seat is held until the host gives it away.") {
 					return Fail("a usable record lost its route or exposed it in the rejoin offer");
 				}
 				offer.OfferStoredTicket(NetH4TicketLoadResult::Loaded, "10.0.0.7", "Evening match");
-				if (offer.GetOfferText() != "Rejoin Evening match?" || offer.GetOfferAddress() != "10.0.0.7") {
+				if (offer.GetOfferText() != "Rejoin Evening match? Your seat is held until the host gives it away." || offer.GetOfferAddress() != "10.0.0.7") {
 					return Fail("a named rejoin offer did not preserve its private route");
 				}
 				offer.OfferStoredTicket(NetH4TicketLoadResult::Corrupt, "10.0.0.7");
@@ -5336,6 +5336,20 @@ namespace RTE {
 					current.substitutionTransaction = Ramp<16>(41);
 					if (NetModerationAvailability(current, selected, NetModerationAction::Cancel) != NetH4ModerationResult::StaleSelection) return Fail("an old cancel retargeted a new approval");
 				}
+			}
+			NetH4ModerationSeat open = pressedAlice.view;
+			open.stableSeat = 12;
+			open.applicants.clear();
+			NetModerationUx fresh;
+			fresh.Refresh({open});
+			for (const int attempt: {5, 6}) {
+				open.applicants = {{73, 4, "Erin", 0, 20000, false, Ramp<16>(static_cast<uint8_t>(attempt))}};
+				fresh.Refresh({open});
+				if (fresh.GetRow(0).applicant != 73 || !NetModerationUx::Available(fresh.GetRow(0), NetModerationAction::Substitute)) {
+					return Fail(attempt == 5 ? "the first request to a seat nobody was chosen on was not chosen" : "a request made again after every request ended was not chosen");
+				}
+				open.applicants.clear();
+				fresh.Refresh({open});
 			}
 			return 0;
 		}

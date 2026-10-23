@@ -116,8 +116,8 @@ Wrong: host match ends when the peer leaves, or the rejoined player lands in a
 fresh seat instead of the held one (no `seat-reclaimed` line).
 
 **E - Autosave on.**
-HOST: Options -> **Recovery** -> **Autosave checkpoints** on (interval
-"sim seconds, 30-3600" - Data/Base.rte/GUIs/MainMenuSubMenuGUI.ini; parsed at
+HOST: Options -> **Recovery** -> **Autosave checkpoints** is on by default, every 300
+sim seconds (60-3600; Data/Base.rte/GUIs/MainMenuSubMenuGUI.ini; parsed at
 Source/Managers/SettingsMan.cpp). Checkpoints land in `Autosaves\` of the instance
 (Source/System/AutosaveStore.cpp).
 Expect: the match keeps flowing at each checkpoint - a small hitch is OK, a stall is not.

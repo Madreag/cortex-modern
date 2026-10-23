@@ -200,7 +200,7 @@
       "what": "Recovery visibly keeps Autosave on; a typed one-second interval clamps to the shortest valid interval, sixty seconds. The one-second stress cadence is the run's test lever (-net-autosave-seconds 1).",
       "events": [
         "assert_checked CheckHostRecAutosave expected=1 actual=1 PASS",
-        "assert_label TextHostRecAutosaveInterval \"60\" text=\"60\" PASS"
+        "assert_label ComboHostRecAutosaveInterval \"1 second\" text=\"1 second\" PASS"
       ]
     },
     {

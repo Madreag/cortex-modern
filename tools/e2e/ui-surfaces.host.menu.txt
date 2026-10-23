@@ -55,13 +55,13 @@ wait_ms 500
 observe assert_label TextHostNetSlowBound 4
 observe assert_combo_items ComboHostNetSlowPolicy Give the seat to the AI (host too) until they catch up
 observe assert_enabled TextHostNetSlowBound 1
-observe assert_label LabelHostNetSlowPolicyHint A player late past 4 ticks (67 ms), host too, is held to the AI while others play on. Other policies return in a later version.
+observe assert_label LabelHostNetSlowPolicyHint A player late past 4 ticks (67 ms), host too, is held to the AI while others play on.
 focus TextHostNetSlowBound
 observe set_text TextHostNetSlowBound 3
 wait_ms 500
 observe assert_label TextHostNetSlowBound 3
 observe assert_label ComboHostNetSlowPolicy Give the seat to the AI
-observe assert_label LabelHostNetSlowPolicyHint A player late past 3 ticks (50 ms), host too, is held to the AI while others play on. Other policies return in a later version.
+observe assert_label LabelHostNetSlowPolicyHint A player late past 3 ticks (50 ms), host too, is held to the AI while others play on.
 observe assert_text_fits LabelHostNetSlowPolicyHint
 video_mark ui-visibility
 wait_ms 825
@@ -87,14 +87,13 @@ wait_ms 825
 observe assert_visible CollectionBoxHostPageRecovery 1
 observe setcheck CheckHostRecAutosave 1
 wait_ms 600
-observe assert_enabled TextHostRecAutosaveInterval 1
-focus TextHostRecAutosaveInterval
-observe set_text TextHostRecAutosaveInterval 30
+observe assert_enabled ComboHostRecAutosaveInterval 1
+observe combo_select ComboHostRecAutosaveInterval 1 minute
 wait_ms 500
-observe assert_label TextHostRecAutosaveInterval 60
+observe assert_label ComboHostRecAutosaveInterval 1 minute
 observe setcheck CheckHostRecAutosave 0
 wait_ms 500
-observe assert_enabled TextHostRecAutosaveInterval 0
+observe assert_enabled ComboHostRecAutosaveInterval 0
 observe assert_enabled ButtonHostRecRepairNow 0
 observe assert_label LabelHostRecRepairHint Repair is the host's call
 dump_host_options
@@ -168,11 +167,12 @@ observe assert_visible HostSeatDialog 1
 assert_text_fits LabelHostSeatDlgActionHint
 assert_no_overlap LabelHostSeatDlgActionHint ButtonHostSeatDlgCancel
 assert_no_overlap LabelHostSeatDlgActionHint ButtonHostSeatDlgBan
-# Before the first round, admission has not committed a holder for this seat.
+# The connected player's seat: Kick and Ban open once admission seats the player.
+wait_label LabelHostSeatDlgActionHint Seat actions apply to this player.
 observe assert_label LabelHostSeatDlgReclaim Not held
-observe assert_label LabelHostSeatDlgActionHint No player holds this seat.
-assert_enabled ButtonHostSeatDlgKick 0
-observe assert_enabled ButtonHostSeatDlgBan 0
+observe assert_label LabelHostSeatDlgActionHint Seat actions apply to this player.
+assert_enabled ButtonHostSeatDlgKick 1
+observe assert_enabled ButtonHostSeatDlgBan 1
 dump_host_options
 observe activate ButtonHostSeatDlgClose
 wait_ms 495
