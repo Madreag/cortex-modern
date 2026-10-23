@@ -3309,6 +3309,7 @@ static std::string ResyncSaveName() {
 		bool hasRecord = false;
 		bool matchWasRunning = false;
 		bool substituteCommitted = false;
+		bool hostUnresponsive = false;
 		std::string reason;
 		{
 			std::lock_guard<std::mutex> lock(m_Mutex);
@@ -3334,10 +3335,25 @@ static std::string ResyncSaveName() {
 			if (m_HeldRejoinDriving) return;
 			// A match the host ended by leaving it is over for this seat: it lands, and nothing reconnects.
 			if (m_HostEndedTheMatch || m_LeftMatch) return;
+			hostUnresponsive = state == NetMatchServiceState::Failed && !isHost && reason == c_NetHostUnresponsiveText;
 			if (m_ConnectionAuthority.Refused()) {
 				m_ReconnectUx.NoteRefused(m_ConnectionAuthority.Error());
 				return;
 			}
+		}
+		// A world or dedicated round whose host stopped answering has ended: nothing reconnects to a host that answers nothing,
+		// and the seat is offered to rejoin by hand when the host is back.
+		if (hostUnresponsive) {
+			if (m_ReconnectUx.GetOffer() == NetReconnectOffer::None) {
+				NetH4TicketRecord record;
+				NetH4TicketLoadResult load;
+				{
+					std::lock_guard<std::mutex> lock(m_Mutex);
+					load = m_TicketStore.Load(UnixNowMs(nullptr), record, nullptr);
+				}
+				if (load == NetH4TicketLoadResult::Loaded) m_ReconnectUx.OfferStoredTicket(load, record.hostAddress, "your online match");
+			}
+			return;
 		}
 		if (state == NetMatchServiceState::Running || state == NetMatchServiceState::ReadyToLaunch) {
 			m_ReconnectUx.StopWatchingForHostReturn();

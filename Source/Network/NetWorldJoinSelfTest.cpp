@@ -9499,7 +9499,7 @@ namespace RTE {
 			return true;
 		};
 		struct Outcome { bool landed = false; bool reconnecting = false; std::string errorText; };
-		const auto run = [&](bool hostLeaves, uint16_t port, Outcome& outcome, std::string& why) {
+		const auto run = [&](bool hostLeaves, uint16_t port, Outcome& outcome, std::string& why, const std::string& ownError) {
 			LoopbackTransport hostWire, clientWire;
 			NetSession hostSession;
 			NetMatchService service;
@@ -9528,7 +9528,7 @@ namespace RTE {
 				service.ReportRuntimeError("PeerDisconnected: peer 1 disconnected");
 			} else {
 				// The link is alive; the failure is this peer's own.
-				service.ReportRuntimeError("private catch-up activation: the committed state did not restore");
+				service.ReportRuntimeError(ownError);
 			}
 			service.m_TicketStore.SetPath(ticket.string());
 			service.DriveReconnectUx(1000);
@@ -9540,9 +9540,10 @@ namespace RTE {
 			outcome.reconnecting = service.m_ReconnectUx.GetState() != NetReconnectUxState::Idle;
 			return true;
 		};
-		Outcome own, departed;
+		Outcome own, departed, hung;
 		std::string why;
-		if (!run(false, 43705, own, why) || !run(true, 43707, departed, why)) {
+		const std::string ownSide = "private catch-up activation: the committed state did not restore";
+		if (!run(false, 43705, own, why, ownSide) || !run(true, 43707, departed, why, ownSide) || !run(false, 43709, hung, why, std::string(c_NetHostUnresponsiveText))) {
 			*error = "the own-side error fixture: " + why;
 			std::filesystem::remove_all(scratch, ignored);
 			return false;
@@ -9630,7 +9631,13 @@ namespace RTE {
 			*error = "a seat with nothing committed stayed on after its host left: landed=" + std::to_string(departed.landed) + " error='" + departed.errorText + "'";
 			return false;
 		}
-		std::cout << "[net-world-join-selftest] PASS an_own_side_error_keeps_the_seats_reconnect own_side=reconnect host_left=landed" << std::endl;
+		// A round its host stopped answering has ended: the seat is offered to rejoin by hand, nothing reconnects to that host.
+		if (hung.reconnecting || hung.landed || hung.errorText != c_NetHostUnresponsiveText) {
+			*error = "a round whose host stopped answering reconnected to that host: reconnecting=" + std::to_string(hung.reconnecting) +
+			         " landed=" + std::to_string(hung.landed) + " error='" + hung.errorText + "'";
+			return false;
+		}
+		std::cout << "[net-world-join-selftest] PASS an_own_side_error_keeps_the_seats_reconnect own_side=reconnect host_left=landed host_unresponsive=offered" << std::endl;
 		return true;
 	}
 
