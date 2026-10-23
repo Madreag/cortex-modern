@@ -479,6 +479,24 @@ def game_scenes():
          scene_checks("host", host) + scene_checks("joiner", joiner))
 
 
+# Stock reinforced fill over and beside the bunker, offsets from its center: the endless waves dig straight down at the
+# brain, and the chamber's own roof alone gives way to them inside twenty minutes.
+COLLAR = ((-144, -144), (-48, -144), (48, -144), (144, -144), (-144, -48), (-144, 48), (144, -48), (144, 48))
+
+
+def collar(player):
+    steps = []
+    for offset_x, offset_y in COLLAR:
+        steps += [wait(editing=True), dict(op="editor_pick", input_player=0, brain=False, **{"class": "TerrainObject"}, preset="Reinforced Concrete Fill"),
+                  dict(op="editor_move", input_player=0, relative_to="bunker", offset_x=offset_x, offset_y=offset_y), wait(picker_open=False, player=player)]
+        steps += click() + [wait(sim_advanced=30, elapsed_ms=600), dict(op="assert_editor", input_player=0, equals=dict(placement_refused=False))]
+    return steps
+
+
+def collar_lines(seats):
+    return [rf"\[net-match\] editor purchase applied: seat={seat} preset=Base.rte/Reinforced Concrete Fill funds=" for seat in seats]
+
+
 def ai_fight():
     host_menu, join_menu = host_setup(4, cpu=True), join_setup(4)
     # These are stock activity options: Infinite gold selects Skirmish Defense's endless AI mode.
@@ -507,6 +525,7 @@ def ai_fight():
         steps += [dict(op="assert_editor", input_player=0, equals=dict(screen_text="Click to ADD a new object - Drag for precision"))]
         steps += click() + [wait(sim_advanced=90, elapsed_ms=1600)] + capture(f"bunker-installed-{peer}")
         steps += [dict(op="assert_editor", input_player=0, equals=dict(placement_refused=False))]
+        steps += collar(0 if peer == "host" else 1)
         steps += place(peer, x=fraction, relative_to="bunker")
         for minute in range(1, 21):
             steps += [dict(op="measure_minute", within_ms=70000)]
@@ -521,9 +540,9 @@ def ai_fight():
         probes[peer] = game_probe(steps, timeout=1600000)
         checks += scene_checks(peer, steps)
         checks.append(dict(id=f"shared-bunkers-{peer}", peer=peer, mark=f"playing-{peer}", screen="game",
-                           what="Both ordinary editor placements reached the shared scene before the brains started playing.",
+                           what="Both bunkers and their reinforced collars reached the shared scene before the brains started playing.",
                            log_regex=[rf"\[net-match\] editor purchase applied: seat={seat} preset=Base.rte/Brain Chamber Left 2x2 - 1 funds="
-                                      for seat in (0, 1)]))
+                                      for seat in (0, 1)] + collar_lines((0, 1))))
         checks.append(dict(id=f"twenty-minutes-{peer}", peer=peer, mark=f"fight-ended-{peer}", screen="MultiplayerScreen",
                            what="Twenty full running minutes at >=58 ticks/s, living local player, AI weapon fire and named end reason.",
                             continuous_minutes=dict(count=20, minimum_tps=58.0),
