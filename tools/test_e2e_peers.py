@@ -303,7 +303,8 @@ class SpreadFightTest(unittest.TestCase):
 
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
-        self.root = Path(self.temporary.name)
+        # The collector works in real paths, as capture_scene resolves its --out; a Mac reaches its temporary folder through a link.
+        self.root = Path(self.temporary.name).resolve()
 
     def tearDown(self):
         self.temporary.cleanup()
