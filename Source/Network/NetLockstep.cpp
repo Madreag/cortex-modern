@@ -14048,6 +14048,13 @@ namespace RTE {
 			DiagnosticLine() << "[net-lockstep] host silent " << hostQuietMs << "ms against " << NetHostLossBoundMs(hostRttMs) << "ms (rtt " << hostRttMs
 			                 << ") heard=" << m_AuthorityLastHeardMs << " wait_start=" << m_WaitStartMs << " next=" << m_Stats.nextFrame << std::endl;
 		}
+		// Where a direct round would migrate, a world or dedicated round ends for its players instead of waiting on the hung host.
+		if (hostSilent && !UsesPeerFrameGroups() && (m_Config.matchConfig.dedicated || m_Config.matchConfig.persistentWorld)) {
+			DiagnosticLine() << "[net-lockstep] host unresponsive " << hostQuietMs << "ms: the round ends at frame " << m_Stats.nextFrame << std::endl;
+			m_State = NetLockstepState::Stopped;
+			m_Stats.timeoutReason = std::string(c_NetHostUnresponsiveStop) + std::string(c_NetHostUnresponsiveText);
+			return;
+		}
 		if (hostSilent && BeginHostMigration(nowMs)) return;
 
 	}

@@ -2610,6 +2610,9 @@ static std::string ResyncSaveName() {
 			// pump error would demote it back to a generic fault.
 			if (m_ErrorText == "Could not reach the host - the match can be rejoined") {
 				m_StatusText = m_ErrorText;
+			} else if (error == c_NetHostUnresponsiveText) {
+				// The round's end names its cause in one line.
+				m_StatusText = m_ErrorText = error;
 			} else {
 				m_StatusText = "Match stopped";
 				m_ErrorText = error;

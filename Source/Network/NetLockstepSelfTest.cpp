@@ -1169,6 +1169,30 @@ namespace RTE {
 			return true;
 		}
 
+		static bool AHungHostEndsAHostRoutedRound(std::string* error) {
+			// A world or a dedicated round cannot move its host. When the host stops responding, each player ends the round where a direct
+			// round would migrate, with one plain line, and never waits on the hung host past that point.
+			for (const bool world: {true, false}) {
+				Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
+				peer.m_Config.peerFrameGroups = false;
+				peer.m_MigrationPhase = NetHostMigrationPhase::None;
+				peer.m_Config.matchConfig.persistentWorld = world; peer.m_Config.matchConfig.dedicated = !world;
+				peer.m_RoundConfigHash = NetMatchConfigUtil::HashConfig(peer.m_Config.matchConfig);
+				peer.m_AuthorityLastHeardMs = 1000;
+				const std::string name = world ? "persistent world" : "dedicated";
+				peer.CheckHostSilence(1000 + c_NetHostLossSilenceMs - 1);
+				const bool waitedInside = peer.IsRunning();
+				peer.CheckHostSilence(1000 + c_NetHostLossSilenceMs);
+				const std::string reason = peer.GetStats().timeoutReason;
+				std::cout << "[hung-host] " << name << " running_inside_window=" << waitedInside << " stopped_at_window=" << peer.IsStopped() << " reason=" << reason << std::endl;
+				if (!waitedInside) { *error = "a " + name + " round ended before its host's silence reached the hold window"; return false; }
+				if (!peer.IsStopped() || reason != std::string(c_NetHostUnresponsiveStop) + std::string(c_NetHostUnresponsiveText)) {
+					*error = "a player of a " + name + " round still waited on its hung host past the hold window: " + reason; return false;
+				}
+			}
+			return true;
+		}
+
 		static bool OnlyASeatCountingThisOneIsAnotherContinuation(std::string* error) {
 			// Arms: the host's records differ on three frames after it held this seat - a split, which the heal decides, so the seats
 			// still playing its input keep it; a member that counts this seat in its group differs on three frames that arrive out of
@@ -33602,6 +33626,12 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS a_lost_witness_still_decides_the_hash\n[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "hung-host") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::AHungHostEndsAHostRoutedRound(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS a_hung_host_ends_a_host_routed_round\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "losing-group") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::ALosingGroupActsAsOneOnARuling(&error)) return fail(error);
@@ -33946,6 +33976,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::ADirectMigrationNeedsThisSeatsGroup, "a_direct_migration_needs_this_seats_group");
 		row(&SessionPlaneRecoveryTest::OnlyASeatCountingThisOneIsAnotherContinuation, "only_a_seat_counting_this_one_is_another_continuation");
 		row(&SessionPlaneRecoveryTest::ALosingGroupActsAsOneOnARuling, "a_losing_group_acts_as_one_on_a_ruling");
+		row(&SessionPlaneRecoveryTest::AHungHostEndsAHostRoutedRound, "a_hung_host_ends_a_host_routed_round");
 		row(&SessionPlaneRecoveryTest::AStraddlingRulingIsTheOtherHalfsQuestion, "a_straddling_ruling_is_the_other_halfs_question");
 		row(&SessionPlaneRecoveryTest::AMinorityGroupOnlyQueriesTheReferee, "a_minority_group_only_queries_the_referee");
 		row(&SessionPlaneRecoveryTest::AReturningSeatTakesItsMembersTermsAsTheirStarts, "a_returning_seat_takes_its_members_terms_as_their_starts");

@@ -511,6 +511,9 @@ namespace RTE {
 	/// One reading of host loss for every path that judges it: the round's own check, the roll call and a held seat's catch-up.
 	inline uint64_t NetHostLossBoundMs(uint64_t rttMs) { (void)rttMs; return c_NetHostLossSilenceMs; }
 	inline bool NetHostLinkLost(bool linkClosed, uint64_t silentMs, uint64_t rttMs) { (void)linkClosed; return silentMs >= NetHostLossBoundMs(rttMs); }
+	/// A host-routed round cannot pass its authority on: when its host stops responding, its players end it with this line.
+	constexpr std::string_view c_NetHostUnresponsiveStop = "HostUnresponsive:";
+	constexpr std::string_view c_NetHostUnresponsiveText = "The host stopped responding. The round has ended; the world continues from its last save when the host is back.";
 
 	/// Progress toward the same boundary for every survivor named by the authority decision.
 	struct NetHostMigrationReach {

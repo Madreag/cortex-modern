@@ -2959,6 +2959,13 @@ namespace RTE {
 				*error = "runtime error was not visible through match service state";
 				return false;
 			}
+			// A round its hung host can no longer carry ends on one plain line.
+			NetMatchService ended;
+			ended.ReportRuntimeError(std::string(c_NetHostUnresponsiveText));
+			if (ended.GetState() != NetMatchServiceState::Failed || ended.GetStatusText() != c_NetHostUnresponsiveText || ended.GetErrorText() != c_NetHostUnresponsiveText) {
+				*error = "a round its host stopped responding in did not end on its one line: status=" + ended.GetStatusText() + " error=" + ended.GetErrorText();
+				return false;
+			}
 			return true;
 		}
 
