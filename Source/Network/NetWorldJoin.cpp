@@ -2457,14 +2457,14 @@ namespace RTE {
 			// for would reach the survivors late. At the head the tail's arrival paces it, and standing there shows it keeps up.
 			if (provesHeadroom && behind > c_NetWorldActivationLeadFrames && session->headroom.Ratio() > 0 && session->headroom.Ratio() < 1.0)
 				return {0, 0, "replay-slow", "its replay runs slower than the round"};
-			// A returner outside the lead replays flat out, so its own work per tick is its capacity: it closes only once that ran above
+			// A returner outside the activation lead replays flat out, so its own work per tick is its capacity: it closes only once that ran above
 			// the round's rate for a full second, and a machine at the edge of the rate is not handed its seat back to lose it again.
 			// At the head of its tail the tail's arrival paces it, and keeping that pace is the proof.
 			if (provesHeadroom && behind > c_NetWorldActivationLeadFrames && !session->headroom.AboveRateOver(static_cast<uint64_t>(std::ceil(1000.0 / m_SimTickMs))))
 				return {0, 0, "capacity-unproven", "its replay has not run above the round's rate for a second"};
-			// At the round's pace a returner trails by its link, which can be longer than the lead: its return leaves it that trail.
+			// At the round's pace a returner trails by its link, which can be longer than the activation lead: its return leaves it that trail.
 			const bool roundPace = provesHeadroom && session->closingMeasured && closingRate <= 0.1;
-			// The world keeps producing while the joiner replays, so activation waits until the joiner is inside the lead, or at the round's
+			// The world keeps producing while the joiner replays, so activation waits until the joiner is inside the activation lead, or at the round's
 			// pace no more than a lead past it, and can have its pipeline primed before its first required frame.
 			if (appliedThrough + c_NetWorldActivationLeadFrames < nowFrame && !(roundPace && behind <= 2 * c_NetWorldActivationLeadFrames)) return {0, 0, "outside-lead", nullptr};
 			// Without proven spare work, a neutral gap primes the pipeline but cannot remove persistent producer lag.
@@ -2479,7 +2479,7 @@ namespace RTE {
 			// Its spare work could close the trail, but its replay still falls behind: the tail starves it.
 			if (provesHeadroom && behind > c_NetWorldActivationLeadFrames / 4 && session->closingMeasured && session->closingRate < -0.1)
 				return {0, 0, "closing-losing", "its replay falls behind the round"};
-			// A returner inside the lead has closed on the round by its own replay: the lead primes its pipeline. One still closing
+			// A returner inside the activation lead has closed on the round by its own replay: the activation lead primes its pipeline. One still closing
 			// is given the frames its measured rate needs to reach the horizon too, so it is at its activation before the round is.
 			uint64_t activation = std::max(ChooseActivationTick(nowFrame), session->priorInputThrough + 1);
 			uint64_t trail = 0;
@@ -2498,9 +2498,9 @@ namespace RTE {
 		};
 		if (session->activationTick != 0) {
 			// A returner still closing at its measured rate keeps the activation that rate reaches; one that slowed is told the frame its rate
-			// reaches now, never a fixed lead that would undo it. Inside a quarter lead the activation is the lead itself, as when it was chosen.
+			// reaches now, never a fixed lead that would undo it. Inside a quarter lead the activation is the activation lead itself, as when it was chosen.
 			// A rate measured over one window moves by more than the bound from window to window, so the frame it reaches moves the
-			// activation either way only past a window's worth of frames: within that the lead still primes the pipeline in time.
+			// activation either way only past a window's worth of frames: within that the activation lead still primes the pipeline in time.
 			const bool closingOutside = closing && behind > c_NetWorldActivationLeadFrames / 4;
 			const uint64_t reaches = closingOutside ? nowFrame + static_cast<uint64_t>(std::ceil(behind / closingRate)) : nowFrame;
 			const bool late = closingOutside ? reaches + c_NetWorldActivationLeadFrames > session->activationTick + c_NetWorldClosingWindowFrames
