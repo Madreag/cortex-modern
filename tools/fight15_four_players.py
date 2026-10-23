@@ -8,7 +8,7 @@ chats; after the twenty minutes the host ends the match.
 """
 import json
 
-from fight15_scenes import ROOT, SETTINGS, buy, capture, click, collar, collar_lines, game_probe, join_own_lobby, key, menu, pause_end, say, scene_checks, wait
+from fight15_scenes import ROOT, SETTINGS, buy, capture, click, defenses, defense_lines, game_probe, join_own_lobby, key, menu, pause_end, say, scene_checks, wait
 
 NAMES = {"host": "Captain", "joiner1": "Joiner1", "joiner2": "Joiner2", "joiner3": "Joiner3"}
 BUNKER_X = {"host": 0.3, "joiner1": 0.7, "joiner2": 0.1, "joiner3": 0.5}
@@ -88,7 +88,7 @@ def setup(peer):
     steps += [dict(op="assert_editor", input_player=0, equals=dict(screen_text="Click to ADD a new object - Drag for precision"))]
     steps += click() + [wait(sim_advanced=90, elapsed_ms=1600)] + capture(f"bunker-installed-{peer}")
     steps += [dict(op="assert_editor", input_player=0, equals=dict(placement_refused=False))]
-    steps += collar("local")
+    steps += defenses("local")
     # The cursor is the prefab's center (96, 96); its brain chamber is at (48, 48).
     steps += [wait(editing=True), relay(), dict(op="editor_pick", input_player=0),
               dict(op="editor_move", input_player=0, x_fraction=fraction, relative_to="bunker", offset_x=-48, offset_y=-48),
@@ -179,8 +179,8 @@ def checklist_items(peer, steps, minutes=True):
     checks = scene_checks(peer, steps)
     bunkers = [rf"\[net-match\] editor purchase applied: seat={SEAT[owner]} preset=Base.rte/Brain Chamber Left 2x2 - 1 funds=" for owner in PLAYERS]
     checks.append(dict(id=f"shared-bunkers-{peer}", peer=peer, mark=f"playing-{peer}", screen="game",
-                       what="Every bunker and its reinforced collar reached the shared scene before the brains started playing.",
-                       log_regex=bunkers + collar_lines(SEAT[owner] for owner in PLAYERS)))
+                       what="Every bunker with its reinforced fill and turret reached the shared scene before the brains started playing.",
+                       log_regex=bunkers + defense_lines(SEAT[owner] for owner in PLAYERS)))
     if minutes:
         checks.append(dict(id=f"twenty-minutes-{peer}", peer=peer, mark=f"fight-ended-{peer}", screen="MultiplayerScreen",
                            what="Twenty full running minutes at >=58 ticks/s, living local player, AI weapon fire and named end reason.",

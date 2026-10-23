@@ -1101,14 +1101,15 @@
    "op": "editor_pick",
    "input_player": 0,
    "brain": false,
-   "class": "TerrainObject",
-   "preset": "Reinforced Concrete Fill"
+   "class": "ACrab",
+   "preset": "Gatling Turret",
+   "module": "Coalition.rte"
   },
   {
    "op": "editor_move",
    "input_player": 0,
    "relative_to": "bunker",
-   "offset_x": 240,
+   "offset_x": -48,
    "offset_y": 48
   },
   {
