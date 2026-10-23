@@ -383,7 +383,7 @@ if ($Headless) {
         if (-not $ok) { $fail = $true }
     }
     # Only engines this run started (same exe, spawned after t0) count as leftovers -
-    # engines other lanes/users run are not ours to report or kill.
+    # engines other runs or users start are not ours to report or kill.
     $leftover = Get-Process -Name 'Cortex Command' -ErrorAction SilentlyContinue |
         Where-Object { $_.Path -eq $exe -and $_.StartTime -ge $t0 }
     if ($leftover) { Write-Host "[handtest] WARNING: engine still running: $($leftover.Id -join ', ')"; $fail = $true }

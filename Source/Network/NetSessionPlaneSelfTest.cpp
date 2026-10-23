@@ -4368,7 +4368,7 @@ namespace RTE {
 				// #5: three seats, the host held: every tail frame waits for both members' witnesses.
 				{"three_seats_host_held_catches_up_at_105_percent_over_100ms", "seed=0 seats=3 internet=1 exchange=100 rtt=100,100,100 jitter=0,0,0 recover=105,300,300 phase=1700,3400,0 spell=1:stopped:6000:800"},
 				{"three_seats_host_held_catches_up_at_105_percent_over_250ms", "seed=0 seats=3 internet=1 exchange=100 rtt=250,250,250 jitter=0,0,0 recover=105,300,300 phase=1700,3400,0 spell=1:stopped:6000:800"},
-				// #6, #7 and the brief's four-seat return: one joiner held, the donor waiting for a second voter's witness.
+				// #6, #7 and the four-seat return: one joiner held, the donor waiting for a second voter's witness.
 				{"four_seats_joiner_held_catches_up_at_105_percent_over_100ms", "seed=0 seats=4 internet=1 exchange=100 rtt=100,100,100,100,100,100 jitter=0,0,0,0,0,0 recover=300,300,105,300 phase=1700,3400,0,1700 spell=3:stopped:6000:800"},
 				{"four_seats_joiner_held_catches_up_at_105_percent_over_150ms", "seed=0 seats=4 internet=1 exchange=100 rtt=150,150,150,150,150,150 jitter=0,0,0,0,0,0 recover=300,300,105,300 phase=1700,3400,0,1700 spell=3:stopped:6000:800"},
 				{"four_seats_joiner_held_catches_up_at_105_percent_over_200ms", "seed=0 seats=4 internet=1 exchange=100 rtt=200,200,200,200,200,200 jitter=0,0,0,0,0,0 recover=300,300,105,300 phase=1700,3400,0,1700 spell=3:stopped:6000:800"},
@@ -4385,7 +4385,7 @@ namespace RTE {
 				{"three_seats_joiner_slow_80_percent_6s_back_at_120_percent_stays_returned", "seed=0 seats=3 internet=1 exchange=100 rtt=100,100,100 jitter=0,0,0 recover=300,120,300 phase=1700,3400,0 spell=2:slow:6000:6000:80"},
 				// #18: two seats held at once return one after the other.
 				{"four_seats_two_joiners_held_at_once_catch_up_at_105_percent_over_100ms", "seed=0 seats=4 internet=1 exchange=100 rtt=100,100,100,100,100,100 jitter=0,0,0,0,0,0 recover=300,300,105,105 phase=1700,3400,0,1700 spell=3:stopped:6000:600 spell=4:stopped:6000:600"},
-				// The brief's known shapes. A seat whose inputs keep arriving, 200 ms past the bound.
+				// Known shapes. A seat whose inputs keep arriving, 200 ms past the bound.
 				{"three_seats_joiner_inputs_200ms_late_for_5s_over_100ms", "seed=0 seats=3 internet=1 exchange=100 rtt=100,100,100 jitter=0,0,0 recover=300,300,300 phase=1700,3400,0 spell=2:late:6000:5000:200"},
 				// ADDENDUM 9: the host's own loop stops 2 s; the joiners hold the host's seat within the bound and it returns.
 				{"two_internet_seats_host_loop_stopped_2s", "seed=0 seats=2 internet=1 exchange=100 rtt=100 jitter=0 recover=300,300 phase=1700,3400 spell=1:stopped:6000:2000"},

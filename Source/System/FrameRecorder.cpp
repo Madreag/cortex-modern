@@ -535,8 +535,10 @@ namespace RTE {
 	void FrameRecorder::LaunchEncoder() {
 		const std::string preset = m_EncoderCodec == "h264_videotoolbox" ? "-q:v 100"
 		                        : m_EncoderCodec.find("nvenc") != std::string::npos ? "-preset p1 -cq 23" : "-preset ultrafast -crf 20";
+		// Fragments, so a recording whose process a scene kills keeps every half second it finished.
 		const std::string command = "\"" + m_EncoderPath + "\" -hide_banner -loglevel warning -y -f matroska -i - -vf \"fps=" +
-		    std::to_string(m_Fps) + ":round=near,pad=ceil(iw/2)*2:ceil(ih/2)*2\" -c:v " + m_EncoderCodec + " " + preset + " -pix_fmt yuv420p \"" +
+		    std::to_string(m_Fps) + ":round=near,pad=ceil(iw/2)*2:ceil(ih/2)*2\" -c:v " + m_EncoderCodec + " " + preset +
+		    " -pix_fmt yuv420p -movflags +empty_moov+default_base_moof -frag_duration 500000 \"" +
 		    (std::filesystem::path(m_Directory) / "capture.mp4").string() + "\"";
 		auto encoder = std::make_unique<EncoderPipe>();
 		if (encoder->Open(command, (std::filesystem::path(m_Directory) / "encoder.log").string(), m_EncoderError)) m_Encoder = std::move(encoder);

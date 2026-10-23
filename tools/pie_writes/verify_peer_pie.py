@@ -90,7 +90,7 @@ def successful_launches(run, case):
                 or (peer == 'client' and argument('-net-join') != '127.0.0.1')):
             failures.append(f'{peer} launch is not the specified lockstep arm')
         if argument('-test-script') != 'UserScenes.rte/PieWriteObserver.lua':
-            failures.append(f'{peer} launch does not carry the lane observer')
+            failures.append(f'{peer} launch does not carry the pie-write observer')
         if (peer == 'host') != ('-input-script' in argv):
             failures.append(f'{peer} launch input-script placement differs')
         if peer == 'host' and normalized_path(argument('-input-script') or '') != normalized_path(Path(__file__).resolve().parent / 'fixtures' / (case + '.txt')):

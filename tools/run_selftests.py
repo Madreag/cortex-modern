@@ -24,6 +24,8 @@ import time
 
 # Directory checks can use an OpenSSL-backed interpreter independently of the engine runner.
 DIRECTORY_TEST_PYTHON = os.environ.get("CCCP_DIRECTORY_TEST_PYTHON") or sys.executable
+# The directory's test file takes 110-180 s on the slowest box and 400 s with its CPUs oversubscribed twice.
+DIRECTORY_TEST_TIMEOUT_S = 900
 
 SELFTEST_FIXTURES = {
     "mod-api-shims": ["mod-api-shims.lua"],
@@ -273,7 +275,7 @@ def box_state():
 
 
 def wait_for_quiet_box(limit_s=QUIET_WAIT_S, poll_s=5.0):
-    """Waits until no engine and no build runs on the box (other lanes' included), up to limit_s; the rerun starts either way."""
+    """Waits until no engine and no build runs on the box (other runs' included), up to limit_s; the rerun starts either way."""
     start = time.monotonic()
     while True:
         state = box_state()
@@ -612,12 +614,14 @@ def run_row_in_mode(options, make_run, name, case, sanitizer):
             scored.update(budget_s=budget, elapsed_s=record.get("elapsed_seconds"), walked_classes=len(BINDING_WALK_CLASS.findall(stdout)))
     if name == "net-directory":
         service_log = case / "service-tests.log"
+        service_budget = max(options.timeout, DIRECTORY_TEST_TIMEOUT_S)
         with service_log.open("w", encoding="utf-8") as stream:
             stream.write(f"Directory test interpreter: {DIRECTORY_TEST_PYTHON}\n")
             stream.flush()
             service = subprocess.run([DIRECTORY_TEST_PYTHON, str(options.repo / "tools/session_directory/test_session_directory.py")],
-                                     cwd=options.repo, stdout=stream, stderr=subprocess.STDOUT, timeout=options.timeout,
+                                     cwd=options.repo, stdout=stream, stderr=subprocess.STDOUT, timeout=service_budget,
                                      creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        scored["service_timeout_s"] = service_budget
         scored["service_python"] = DIRECTORY_TEST_PYTHON
         scored["service_exit_code"] = service.returncode
         scored["service_log"] = str(service_log)

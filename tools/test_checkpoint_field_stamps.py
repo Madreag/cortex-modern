@@ -17,8 +17,8 @@ The scan is static and bounded: it reads headers and sources and never launches 
 
 ENFORCED SCOPE: the classes this tree has finished stamping (see ENFORCED below) fail the suite on
 an unstamped setter of an archived field. Every other class is printed as an inventory - the fix
-column for the lanes that finish them - and does not fail the run. Widening ENFORCED is the point
-of those lanes; nothing here may be narrowed to make a failure go away.
+column for the work that finishes them - and does not fail the run. Widening ENFORCED is the point
+of that work; nothing here may be narrowed to make a failure go away.
 
 Run: python tools/test_checkpoint_field_stamps.py --repo <tree> [--out result.json]
 """
@@ -36,8 +36,8 @@ import sys
 HEADER_GLOBS = ("Source/Entities/*.h", "Source/System/Atom.h", "Source/System/Controller.h")
 SOURCE_GLOBS = ("Source/Entities/*.cpp", "Source/System/Atom.cpp", "Source/System/Controller.cpp")
 
-# Classes whose archived-field setters are all stamped today. A class joins this list when its lane
-# has stamped it, never to silence a failure.
+# Classes whose archived-field setters are all stamped today. A class joins this list when its setters
+# are stamped, never to silence a failure.
 ENFORCED = ("ACDropShip", "ACRocket", "ACrab", "ACraft", "ADoor", "ADSensor", "AEJetpack", "AEmitter",
             "AHuman", "Activity", "Actor", "Area", "Arm", "Atom", "AtomGroup", "Attachable", "BunkerAssembly",
             "BunkerAssemblyScheme", "Controller", "Deployment", "DynamicSong", "DynamicSongSection", "Emission",
@@ -162,7 +162,7 @@ def main() -> int:
 
     passed = not enforced
     print(f"[checkpoint-field-stamps] {'PASS' if passed else 'FAIL'} archived_setters_stamp_their_object "
-          f"enforced={len(ENFORCED)} classes, {len(enforced)} unstamped in them, {len(inventory)} awaiting a lane")
+          f"enforced={len(ENFORCED)} classes, {len(enforced)} unstamped in them, {len(inventory)} awaiting their stamps")
     if args.out:
         args.out.write_text(json.dumps({
             "archived_fields": sorted(fields),

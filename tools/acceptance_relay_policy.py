@@ -85,8 +85,8 @@ def declaration():
         cross_arms=[dict(path='directory-relay', backend='cloudflare', primary=True),
                     dict(path='relay', backend='coturn', primary=False)],
         hotspot=dict(scenario='mp-relay-hotspot', rows=list('abcdef'), state='AWAITING',
-                     reason='awaiting until the user approves a hotspot session',
-                     operator='lead-tools/hotspot_relay.sh <row> [--network lte|5g]',
+                     reason='awaiting an approved hotspot session',
+                     operator='hotspot_relay.sh <row> [--network lte|5g]',
                      fixed_directory_rows=list('abc'), lane_directory_rows=list('def'),
                      prerequisite='rows a-c require the Cloudflare key deployed on the Mac fixed directory',
                      secret_check=dict(required=True,per_row=True,empty_book='FAIL',
@@ -251,7 +251,7 @@ def native_book(book):
 
 
 def sweep_retained(root,book,previous=None):
-    """The relay lane's sanitizer is a mandatory gate before any copy, archive or final verdict."""
+    """The relay rows' sanitizer is a mandatory gate before any copy, archive or final verdict."""
     first=scan_retained(root,book,previous)
     try:
         from relay_scrub import scrub

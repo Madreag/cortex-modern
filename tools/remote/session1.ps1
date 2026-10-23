@@ -1,4 +1,4 @@
-# One payload in the owner's interactive session on REMOTE, started by the cortex-session1 task.
+# One payload in the signed-in user's interactive session on REMOTE, started by the cortex-session1 task.
 # tools/two_box_match.py fills the {{...}} fields and copies the result to the configured session script.
 # The engine starts only through the runner (tools/win32_test_runner.py via make_run) on a private hidden desktop.
 $ErrorActionPreference = 'Continue'

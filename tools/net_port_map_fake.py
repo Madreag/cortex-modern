@@ -1,9 +1,9 @@
 """Loopback fakes: a NAT-PMP/PCP responder and a fake UPnP IGD.
 
 Two listeners, all on 127.0.0.1 and nowhere else:
-  * UDP --natpmp-port (lane default 47601) answers NAT-PMP external-address and UDP map
+  * UDP --natpmp-port (default 47601) answers NAT-PMP external-address and UDP map
     requests plus PCP MAP requests, and deletes on a zero-lifetime request.
-  * HTTP --igd-port (lane default 8467) serves a one-device description document and the
+  * HTTP --igd-port (default 8467) serves a one-device description document and the
     WANIPConnection:1 control endpoint (AddPortMapping / GetExternalIPAddress /
     DeletePortMapping).
 
@@ -12,7 +12,7 @@ Two listeners, all on 127.0.0.1 and nowhere else:
   refuse  answer with result code 2 so the engine falls through to the next method
   silent  drop the datagram so the engine times out
 
-Every received packet/request is logged to stdout and --log-file so the lane report can
+Every received packet/request is logged to stdout and --log-file so a report can
 quote the wire verbatim; on exit a summary lists every mapping added and removed.
 """
 from __future__ import annotations

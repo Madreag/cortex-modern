@@ -180,11 +180,11 @@ TIMING_CASES = (
 )
 ONE_ARM_CASES = (('100ms-60hz', 100, 0, None),)
 
-# Jittery links on both peers (the user, 2026-09-30: 'add jitter to V1'): judged by the same item9a bars as the loss arms.
+# Jittery links on both peers: judged by the same item9a bars as the loss arms.
 JITTER_CASES = (
     ('100ms-jitter40-loss5', 100, 5, None, 40),
     ('200ms-jitter60-loss5', 200, 5, None, 60),
-    # Reordered and duplicated packets on both peers (RD1, the user 2026-10-01): the reliable lanes should make it a no-op.
+    # Reordered and duplicated packets on both peers: the reliable lanes should make it a no-op.
     ('100ms-reorder10-dup5', 100, 0, None, 0, 10, 5),
 )
 
@@ -479,7 +479,7 @@ def finish_case_replays(out, final_tick, timeout):
 
 
 def launch_case(*args, **kwargs):
-    """All original levers and assertions, with native peers named by the lead."""
+    """All original levers and assertions, with native peers named by the caller."""
     bound = inspect.signature(_launch_case).bind(*args, **kwargs)
     bound.apply_defaults()
     values = bound.arguments
@@ -1195,7 +1195,7 @@ def parse_args(argv=None):
                         help='complete matrix, or its one/two-engine and three-engine arms with their own baselines')
     parser.add_argument('--out', type=Path, required=True)
     parser.add_argument('--port', type=int, default=48231)
-    parser.add_argument('--port-block', default='48231-48240', help="the calling lane's own port block, LO-HI; --port stays inside it")
+    parser.add_argument('--port-block', default='48231-48240', help="the caller's own port block, LO-HI; --port stays inside it")
     parser.add_argument('--timeout', type=float, default=600)
     parser.add_argument('--analyze-only', action='store_true')
     parser.add_argument('--skip-gates', action='store_true', help='retain gates as unverified')

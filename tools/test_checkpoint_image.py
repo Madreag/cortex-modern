@@ -1,6 +1,5 @@
 """Detecting checks for the copy-on-write checkpoint image.
 
-WRITE-ONLY until the completion pass: this file is not executed by the lane.
 GREEN is freeze_us < 16700 at a 240-actor scene, hash identity with capture on/off,
 an image that ignores writes during worker traversal, and a capture that matches the
 synchronous save of the same tick.

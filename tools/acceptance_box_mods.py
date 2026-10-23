@@ -1,4 +1,4 @@
-"""Install the same packaged module on three remote lane trees, then compare all four hashes."""
+"""Install the same packaged module on three remote engine trees, then compare all four hashes."""
 from __future__ import annotations
 
 import argparse
@@ -28,16 +28,16 @@ def checked(argv, **kwargs):
     return result
 
 
-def validate_target(box, lane):
+def validate_target(box, scratch_name):
     if box.get("name") not in ALIASES or box.get("ssh") != ALIASES[box["name"]]:
         raise ValueError("target must use its saved box alias")
     root = box.get("scratch", "")
     prefix = str(box["scratch_root"]).rstrip("/")+"/"
-    if root != prefix+lane or any(c in lane for c in "/\\\r\n'\""):
-        raise ValueError("remote scratch must be this lane's own root")
+    if root != prefix+scratch_name or any(c in scratch_name for c in "/\\\r\n'\""):
+        raise ValueError("remote scratch must be this run's own root")
     destination = box.get("destination", "")
     if not destination.startswith(root+"/") or not destination.endswith("/Data/VoidWanderers.rte") or "/../" in destination:
-        raise ValueError("mod destination must be inside the lane's engine tree")
+        raise ValueError("mod destination must be inside the run's engine tree")
     if not box.get("python"):
         raise ValueError("remote Python is not named")
 
@@ -65,11 +65,11 @@ def fetch_receipt(box, remote, local):
     return json.loads(value)
 
 
-def install_boxes(targets, lane, archive, receipt, out, dry_run=False):
+def install_boxes(targets, scratch_name, archive, receipt, out, dry_run=False):
     if {b.get("name") for b in targets} != set(ALIASES) or len(targets) != 3:
         raise ValueError("exactly REMOTE, Mac and Linux are required")
     for box in targets:
-        validate_target(box, lane)
+        validate_target(box, scratch_name)
     source = Path(__file__).with_name("acceptance_mod.py")
     reference = json.loads(Path(receipt).read_text(encoding="utf-8-sig"))
     values, plans = {"pc": reference}, []

@@ -394,14 +394,22 @@ def checkpoint_tokens(peer):
     return {"RESUME_MATCH": match, "RESUME_TICK": tick}, evidence
 
 
+def gate_parts(gate):
+    """The single gates a gate waits for: an "all" gate is met only when every one of its parts is."""
+    return gate["all"] if "all" in gate else [gate]
+
+
 def run_preflight(scenario, run, captures, tokens):
     peers = run.get("peers") or scenario.get("peers", [])
     for node in [run, *peers]:
         kill_gate = node.get("kill_when")
         # A list of gates drops the peer at the first one met.
         for gate in (kill_gate if isinstance(kill_gate, list) else [kill_gate] if kill_gate else []):
-            if gate.get("peer") not in {peer["name"] for peer in peers} or \
-                    [bool(gate.get("event")), gate.get("probe_complete") is True, bool(gate.get("log")), "sim_tick" in gate].count(True) != 1:
+            parts = gate_parts(gate)
+            if not isinstance(parts, list) or not parts or any(
+                    not isinstance(part, dict) or part.get("peer") not in {peer["name"] for peer in peers} or
+                    [bool(part.get("event")), part.get("probe_complete") is True, bool(part.get("log")), "sim_tick" in part].count(True) != 1
+                    for part in parts):
                 return {"class": "harness", "reason": "A process-drop gate must name a peer and one of an event, a completed probe, a log line or a sim tick"}
         condition = node.get("start_when", {})
         if condition.get("run") and not cross_run_ready(captures, condition):
@@ -547,7 +555,7 @@ class PortClaim:
 
 
 def directory_port_for(scenario, run, base):
-    """The run's session directory port: the scenario's place below the top of the driver's block, so a lane's own block
+    """The run's session directory port: the scenario's place below the top of the driver's block, so a caller's own block
     carries it with the runs. None when the scenario serves no directory."""
     named = run.get("directory_port", scenario.get("directory_port"))
     if not named:
@@ -1015,11 +1023,12 @@ def encode(ffmpeg, video_dir, fps, destination):
             "stderr": result.stderr[-2000:], "path": str(destination)}
 
 
-def extract_frames(ffmpeg, video, rows, frames):
-    """The picked rows' pictures out of a streamed capture's MP4, named as the PNG path would have named them."""
+def extract_frames(ffmpeg, video, rows, frames, partial=False):
+    """The picked rows' pictures out of a streamed capture's MP4, named as the PNG path would have named them. A partial
+    recording (its engine killed by the scene) yields the pictures it holds: only its end may be missing."""
     wanted = [row for row in rows if "video_frame" in row and not (frames / f"frame-{row['frame']:06d}.png").is_file()]
     if not wanted or not ffmpeg or not Path(video).is_file():
-        return
+        return {"wanted": len(wanted), "extracted": 0}
     frames.mkdir(parents=True, exist_ok=True)
     terms = [f"eq(n,{row['video_frame']})" for row in wanted]
     # FFmpeg limits expression depth, so long selections need a balanced sum.
@@ -1032,30 +1041,38 @@ def extract_frames(ffmpeg, video, rows, frames):
     selection.write_text(f"select='{select}'\n", encoding="utf-8")
     result = subprocess.run([ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "error", "-y", "-i", str(video), "-filter_script:v", str(selection),
                             "-fps_mode", "passthrough", str(scratch / "pick-%06d.png")], capture_output=True, text=True)
+    ordered = sorted(wanted, key=lambda row: row["video_frame"])
+    present = [(scratch / f"pick-{index:06d}.png").is_file() for index in range(1, len(ordered) + 1)]
+    held = present.index(False) if False in present else len(present)
+    reason = ""
     if result.returncode != 0:
-        raise RuntimeError(f"ffmpeg frame extraction exited {result.returncode}: {result.stderr[-2000:]}")
-    missing = [row["frame"] for index, row in enumerate(sorted(wanted, key=lambda row: row["video_frame"]), 1)
-               if not (scratch / f"pick-{index:06d}.png").is_file()]
-    if missing:
-        raise RuntimeError(f"ffmpeg frame extraction missing indexed pictures: {missing[:10]}")
-    for index, row in enumerate(sorted(wanted, key=lambda row: row["video_frame"]), 1):
-        picture = scratch / f"pick-{index:06d}.png"
-        if picture.is_file():
-            os.replace(picture, frames / f"frame-{row['frame']:06d}.png")
+        if not partial:
+            raise RuntimeError(f"ffmpeg frame extraction exited {result.returncode}: {result.stderr[-2000:]}")
+        reason = f"ffmpeg read the partial recording up to its damage (exit {result.returncode}): {result.stderr.strip()[-300:]}"
+    # A killed recording ends early; a picture missing before one that exists is damage either way.
+    if any(present[held:]) or (held < len(ordered) and not partial):
+        raise RuntimeError(f"ffmpeg frame extraction missing indexed pictures: {[row['frame'] for row, there in zip(ordered, present) if not there][:10]}")
+    if held < len(ordered):
+        reason = reason or f"the recording ends before frame {ordered[held]['frame']}"
+    for index, row in enumerate(ordered[:held], 1):
+        os.replace(scratch / f"pick-{index:06d}.png", frames / f"frame-{row['frame']:06d}.png")
     for leftover in scratch.glob("*.png"):
         leftover.unlink()
     selection.unlink()
     scratch.rmdir()
+    return {"wanted": len(ordered), "extracted": held, **({"reason": reason} if reason else {})}
 
 
-def contact_sheet(video_dir, rows, destination, every, ffmpeg, video=None):
-    """Every `every`-th frame tiled SHEET_COLUMNS wide, each thumbnail labelled with what it is."""
+def contact_sheet(video_dir, rows, destination, every, ffmpeg, video=None, partial=False):
+    """Every `every`-th frame tiled SHEET_COLUMNS wide, each thumbnail labelled with what it is. A partial recording tiles the
+    pictures it holds and says how many."""
     frames = Path(video_dir) / "frames"
     picked = rows[::every] if rows else []
     if not picked:
         return {"written": False, "reason": "no frames to tile"}
-    if video:
-        extract_frames(ffmpeg, video, picked, frames)
+    held = extract_frames(ffmpeg, video, picked, frames, partial) if video else None
+    if partial and held:
+        return {**contact_sheet(video_dir, rows, destination, every, ffmpeg), "partial": held}
     try:
         from PIL import Image, ImageDraw  # noqa: PLC0415
     except ImportError:
@@ -2284,6 +2301,8 @@ def _run_one(options, scenario, run, run_index, out, case_root=None):
 
     threads, killers = [], []
     def gate_met(gate):
+        if "all" in gate:
+            return all(gate_met(part) for part in gate["all"])
         if gate.get("run"):
             return cross_run_ready(getattr(options, "completed_runs", []), gate)
         if gate.get("directory_listed") and not directory_session(shared.get("DIRECTORY_ROOT"), port):
@@ -2320,16 +2339,22 @@ def _run_one(options, scenario, run, run_index, out, case_root=None):
                 return
             gate = next((candidate for candidate in gates if gate_met(candidate)), None)
             if gate:
+                probe = next((part for part in gate_parts(gate) if part.get("probe_complete")), None)
                 # A peer dropped because a probe finished ends a scenario, not a fault: its recorder writes the
                 # frames it already took first, so the probe's last marked window keeps its video.
-                flushed = await_recorder(shared[f"VIDEO_{gate['peer']}"], stop_watchers) if gate.get("probe_complete") else None
+                flushed = await_recorder(shared[f"VIDEO_{probe['peer']}"], stop_watchers) if probe else None
                 rows = read_index(shared[f"VIDEO_{name}"])
-                write_json(Path(shared[f"VIDEO_{name}"]) / "injected-drop.json", {"requested_event": gate, "last_recorded_frame": rows[-1] if rows else None,
-                                                                                  "recorder_flush": flushed})
-                description = ("completed peer probe" if gate.get("probe_complete") else "peer log line " + gate["log"] if gate.get("log")
-                               else f"{gate['peer']} sim tick {gate['sim_tick']}" if "sim_tick" in gate else "peer event " + gate["event"])
+                receipt = {"requested_event": gate, "last_recorded_frame": rows[-1] if rows else None, "recorder_flush": flushed}
+                # A gate on the peer's own tick is a drop after that recorded tick, as kill_at_tick receipts it.
+                own_tick = next((part["sim_tick"] for part in gate_parts(gate) if "sim_tick" in part and part["peer"] == name), None)
+                if own_tick is not None:
+                    receipt["requested_tick"] = own_tick
+                write_json(Path(shared[f"VIDEO_{name}"]) / "injected-drop.json", receipt)
+                description = " and ".join("completed peer probe" if part.get("probe_complete") else "peer log line " + part["log"] if part.get("log")
+                                           else f"{part['peer']} sim tick {part['sim_tick']}" if "sim_tick" in part else "peer event " + part["event"]
+                                           for part in gate_parts(gate))
                 # The scenario is over: the peer prints its screen watches' summaries before it goes.
-                if gate.get("probe_complete"):
+                if probe:
                     await_watch_flush(root / name / "stdout.log", stop_watchers)
                 drop_peer(runs[name], "scenario drop after " + description)
                 return
@@ -2501,7 +2526,7 @@ def run_one(options, scenario, run, run_index, out):
     if capture_peer not in {peer["name"] for peer in definitions}:
         raise ValueError("--capture-peer must name a peer of this run")
     # The engine records its rendered texture on every platform. The capture
-    # peer and every recorder are isolated on the lead's explicitly named boxes.
+    # peer and every recorder are isolated on the explicitly named boxes.
     detector = getattr(options, "layout_detector", False)
     peers = [spread.Peer(peer["name"], os="any", size=size,
                          reviewed=not detector and peer["name"] == capture_peer, readback=True, share_ok=detector,
@@ -2545,7 +2570,8 @@ def render(capture_run, fps, every):
             video = encode(ffmpeg, peer["video_dir"], fps, root.parent / f"{peer['peer']}.mp4")
             peer["video"] = video.get("path") if video.get("encoded") else None
             peer["encode"] = video
-        sheet = contact_sheet(peer["video_dir"], peer["index"], root.parent / f"{peer['peer']}-sheet.png", every, ffmpeg, peer["video"])
+        sheet = contact_sheet(peer["video_dir"], peer["index"], root.parent / f"{peer['peer']}-sheet.png", every, ffmpeg, peer["video"],
+                              partial=bool(peer.get("expected_termination")))
         peer["contact_sheet"] = sheet.get("path") if sheet.get("written") else None
         peer["sheet"] = sheet
     capture_run["ffmpeg"] = ffmpeg
@@ -3142,7 +3168,7 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="print planned settings and engine arguments without creating files or starting services")
     parser.add_argument("--fps", type=int, default=DEFAULT_FPS)
     parser.add_argument("--port", type=int, help=f"the run block base; defaults to the scenario's port_base inside {PORT_LO}-{PORT_HI}")
-    parser.add_argument("--port-block", help=f"the calling lane's own port block LO-HI, used instead of {PORT_LO}-{PORT_HI}; --port is then required")
+    parser.add_argument("--port-block", help=f"the caller's own port block LO-HI, used instead of {PORT_LO}-{PORT_HI}; --port is then required")
     parser.add_argument("--sheet-every", type=int, default=15)
     parser.add_argument("--review-only", type=Path)
     parser.add_argument("--finalize-only", type=Path)

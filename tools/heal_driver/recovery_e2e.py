@@ -88,7 +88,7 @@ def verify_recording(replay: Path, out: Path):
     return vrec, data
 
 
-# Every lane: name, port, input delay, host/client extra args, ticks, traced?, mode, notes.
+# Every arm: name, port, input delay, host/client extra args, ticks, traced?, mode, notes.
 LANES = {
     "d0_baseline": dict(
         port=43300,
@@ -311,7 +311,7 @@ def lane(name: str, spec: dict):
         timeout,
         [client_report] + ([client_trace] if traced else []),
     )
-    # A lane that needs the peers to disagree seeds the difference in the client's own settings file.
+    # An arm that needs the peers to disagree seeds the difference in the client's own settings file.
     if spec.get("client_settings"):
         seed_settings(client, spec["client_settings"])
     records = {}

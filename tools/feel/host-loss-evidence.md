@@ -23,8 +23,8 @@ emit this complete snapshot: engine instrumentation and HL4 are requested.
 The optional preparation is exactly one `silence` on a non-host seat and one
 `moderation-ban` by the host targeting a different non-host seat, both before the
 kill. No other combined faults are accepted. The silence uses the native
-`outage` lever, preserving its schedule id. The engineer must add the scripted
-Ban lever to the native cross schedule; it must call the real participant-removal
+`outage` lever, preserving its schedule id. The scripted
+Ban lever still has to be added to the native cross schedule; it must call the real participant-removal
 path and emit the receipts below. Queueing a request does not prove it applied.
 
 The host emits `scheduled_hold` with the silence id, numeric peer, `cause=silent`,
