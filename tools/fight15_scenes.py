@@ -479,9 +479,11 @@ def game_scenes():
          scene_checks("host", host) + scene_checks("joiner", joiner))
 
 
-# Stock reinforced fill over and beside the bunker, offsets from its center: the endless waves dig straight down at the
-# brain, and the chamber's own roof alone gives way to them inside twenty minutes.
-COLLAR = ((-144, -144), (-48, -144), (48, -144), (144, -144), (-144, -48), (-144, 48), (144, -48), (144, 48))
+# Two rings of stock reinforced fill over and beside the bunker, offsets from its center: the endless waves wear through
+# the chamber's roof, and on their heavier runs through one ring of fill, inside twenty minutes.
+COLLAR = ((-144, -144), (-48, -144), (48, -144), (144, -144), (-144, -48), (-144, 48), (144, -48), (144, 48),
+          (-240, -240), (-144, -240), (-48, -240), (48, -240), (144, -240), (240, -240),
+          (-240, -144), (-240, -48), (-240, 48), (240, -144), (240, -48), (240, 48))
 
 
 def collar(player):
