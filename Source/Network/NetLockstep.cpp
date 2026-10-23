@@ -5534,6 +5534,7 @@ namespace RTE {
 		m_RemoteChecksums.clear();
 		m_VerifiedAppliedFrames.clear();
 		m_PeerRecordMatches.clear(); m_DeferredChecksumFrames.clear();
+		m_PeerRecordRequestAtMs.clear(); m_PeerRecordFloors.clear(); m_PeerRecordRequests = 0;
 		m_LocalChecksums.clear();
 		m_PendingObservations.clear();
 		m_DroppedObservations.clear();

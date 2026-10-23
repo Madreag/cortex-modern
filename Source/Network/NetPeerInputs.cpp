@@ -362,7 +362,28 @@ namespace RTE {
 			if (message.senderPeerId == GetHostPeerId()) NoteAuthorityHeard(nowMs);
 		};
 		if (message.type == NetHostMigrationMessageType::PeerReceipt) {
-			if (message.successorPeerId == message.senderPeerId && message.preparedFrame == UINT64_MAX && message.bytes.size() == 2 * NetHash32{}.size() && message.appliedFrame == message.frame &&
+			if (message.successorPeerId == message.senderPeerId && message.preparedFrame == UINT64_MAX && message.boundary == c_NetPeerRecordRequest) {
+				heard();
+				AnswerPeerRecordRequest(message);
+				return true;
+			}
+			if (message.successorPeerId == message.senderPeerId && message.preparedFrame == UINT64_MAX && message.boundary == c_NetPeerRecordAnswer &&
+			    message.bytes.size() % (8 + NetHash32{}.size()) == 0 && message.bytes.size() / (8 + NetHash32{}.size()) <= c_NetPeerRecordBatch) {
+				heard();
+				// Frames before the member's first held record are not its records: it played them before its image.
+				auto& floor = m_PeerRecordFloors[message.senderPeerId];
+				floor = std::max(floor, std::min(message.completeFrom, message.appliedFrame + 1));
+				size_t offset = 0;
+				for (uint64_t frame = 0; TakeFrame(message.bytes, offset, frame);) {
+					NetHash32 prefix{};
+					std::copy_n(message.bytes.begin() + offset, prefix.size(), prefix.begin());
+					offset += prefix.size();
+					NotePeerRecord(message.senderPeerId, frame, prefix);
+				}
+				if (!m_DeferredChecksumFrames.empty()) RecheckDeferredChecksums();
+				return true;
+			}
+			if (message.successorPeerId == message.senderPeerId && message.preparedFrame == UINT64_MAX && message.boundary == 0 && message.bytes.size() == 2 * NetHash32{}.size() && message.appliedFrame == message.frame &&
 			    message.frame >= m_Config.startFrame && message.frame <= m_Stats.nextFrame + NetLockstepCodec::c_MaxFutureFrameSkew &&
 			    (message.voterMask & SeatBit(message.senderPeerId)) != 0 && (message.voterMask >> m_Config.peerCount) == 0) {
 				heard();

@@ -503,6 +503,9 @@ namespace RTE {
 	/// How often a frame-group peer sends its undecided votes and recent certificates again, and its progress at the least.
 	constexpr uint64_t c_NetPeerVoteResendMs = 100;
 	constexpr uint64_t c_NetPeerHeartbeatMs = 250;
+	/// A receipt whose boundary is one of these asks a member for its applied records of named frames, or answers with them.
+	constexpr uint64_t c_NetPeerRecordRequest = 1, c_NetPeerRecordAnswer = 2;
+	constexpr size_t c_NetPeerRecordBatch = 64;
 	constexpr uint64_t c_NetFrameTieBoundMs = 1000;
 	/// One reading of host loss for every path that judges it: the round's own check, the roll call and a held seat's catch-up.
 	inline uint64_t NetHostLossBoundMs(uint64_t rttMs) { (void)rttMs; return c_NetHostLossSilenceMs; }
@@ -1726,6 +1729,12 @@ namespace RTE {
 		enum class ChecksumCause { Desync, Continuation, Undecided };
 		/// Why a member's hash of a frame differs from this peer's: records that differed since the last match, the same records, or not yet known.
 		ChecksumCause PeerChecksumCause(uint8_t peer, uint64_t frame, uint64_t& firstDiffering) const;
+		/// The frames up to frame whose record from this member the last match still leaves unknown, oldest first, at most limit.
+		std::vector<uint64_t> MissingPeerRecords(uint8_t peer, uint64_t frame, size_t limit) const;
+		/// Asks each member whose differing hash waits on its records for them again, until they arrive.
+		void RequestPeerRecords(uint64_t nowMs);
+		/// Answers a member with this peer's applied records of the frames it named, and the first frame it still holds one of.
+		void AnswerPeerRecordRequest(const NetHostMigrationMessage& request);
 		void RecheckDeferredChecksums();
 		bool HoldsOtherContinuation(uint64_t frame) const;
 		/// Whether these seats confirm a frame the given group of members played: a majority of them, or on a tie the half the round's tie
@@ -2556,6 +2565,9 @@ namespace RTE {
 		std::map<uint8_t, uint64_t> m_VerifiedAppliedFrames; //!< Matching hashes keep their applied prefix after the hash buffers are pruned.
 		std::map<uint8_t, std::map<uint64_t, bool>> m_PeerRecordMatches; //!< Each member's witnessed record of a frame applied here: whether it was this peer's.
 		std::set<uint64_t> m_DeferredChecksumFrames; //!< Frames whose differing hash waits on the records that decide it.
+		std::map<uint8_t, uint64_t> m_PeerRecordRequestAtMs; //!< When this peer next asks a member for the records a differing hash waits on.
+		std::map<uint8_t, uint64_t> m_PeerRecordFloors; //!< The first frame each member holds a record of: what it played before came with an image.
+		uint64_t m_PeerRecordRequests = 0;
 		std::deque<NetLockstepReadyFrame> m_ReadyFrames;
 		/// Command counts before the coordinator adds boundary events, by frame and sender.
 		std::map<uint64_t, std::map<uint8_t, size_t>> m_PendingSourceCommandCounts;

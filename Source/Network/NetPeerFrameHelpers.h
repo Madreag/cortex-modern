@@ -35,6 +35,15 @@ namespace RTE::NetPeerFrameDetail {
 			for (unsigned int shift = 0; shift < 32; shift += 8) size |= static_cast<uint32_t>(bytes[offset++]) << shift;
 			return true;
 		}
+		inline void PutFrame(std::vector<uint8_t>& bytes, uint64_t frame) {
+			for (unsigned int shift = 0; shift < 64; shift += 8) bytes.push_back(static_cast<uint8_t>(frame >> shift));
+		}
+		inline bool TakeFrame(const std::vector<uint8_t>& bytes, size_t& offset, uint64_t& frame) {
+			if (offset > bytes.size() || bytes.size() - offset < 8) return false;
+			frame = 0;
+			for (unsigned int shift = 0; shift < 64; shift += 8) frame |= static_cast<uint64_t>(bytes[offset++]) << shift;
+			return true;
+		}
 		inline bool SameBridge(const NetHostMigrationMessage& a, const NetHostMigrationMessage& b) {
 			return a.sessionId == b.sessionId && a.roundId == b.roundId && a.generation == b.generation && a.frame == b.frame &&
 			       a.connectedMask == b.connectedMask && a.preparedFrame == b.preparedFrame && a.boundary == b.boundary && a.completeFrom == b.completeFrom &&

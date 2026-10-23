@@ -1719,6 +1719,64 @@ namespace RTE {
 			return true;
 		}
 
+		static bool ALostWitnessStillDecidesTheHash(std::string* error) {
+			// A witness crosses the frame lane once. A member's differing hash is still judged when one of the records since the last match
+			// was lost on the way, or when the member's records start at an image: on the same records it is a desync, on a differing one
+			// another continuation. Only receipts pass between the two seats here, every one but the lost witness.
+			enum class Arm { Delivered, Lost, LostDiffering, FromImage };
+			for (const Arm arm: {Arm::Delivered, Arm::Lost, Arm::LostDiffering, Arm::FromImage}) {
+				Wire wireA, wireB; NetLockstepCoordinator a, b; Configure(a, wireA); Configure(b, wireB);
+				b.m_Config.localPeerId = 1; b.m_RemotePeerIds = {2, 3}; b.m_RemoteTransports = {{2, 42}};
+				a.m_RemoteTransports = {{1, 41}};
+				for (auto* peer: {&a, &b}) {
+					peer->m_Config.peerFrameGroups = peer->m_Config.substituteSlowPeers = true;
+					peer->m_Config.frameLane = NetTransportLane::InputUnreliable;
+					peer->m_MigrationPhase = NetHostMigrationPhase::None;
+					peer->m_FrameGroupMembers = 7; peer->m_FrameGroupChanges = {{1, 7}};
+					for (uint64_t frame = 4390; frame <= 4422; ++frame)
+						if (peer == &a || arm != Arm::FromImage || frame >= 4405) peer->m_MigrationHistory[frame] = {static_cast<uint8_t>(frame), 7};
+				}
+				if (arm == Arm::LostDiffering) b.m_MigrationHistory[4405] = {0x05, 9};
+				a.m_VerifiedAppliedFrames[1] = 4400; a.m_RemoteStartsReceived = {1, 3};
+				const auto pass = [&](Wire& from, NetLockstepCoordinator& to, uint64_t now) {
+					for (const auto& bytes: from.sent) {
+						NetHostMigrationMessage message;
+						if (!NetHostMigrationCodec::Decode(bytes, to.m_Config.migrationKey, message) || message.type != NetHostMigrationMessageType::PeerReceipt) continue;
+						if (arm != Arm::Delivered && arm != Arm::FromImage && message.frame == 4405 && message.bytes.size() == 64 && message.boundary == 0) continue;
+						to.HandlePeerFrameMessage(message, now);
+					}
+					from.sent.clear();
+				};
+				for (uint64_t frame = arm == Arm::FromImage ? 4405 : 4401; frame <= 4410; ++frame) b.SendPeerFrameWitness(frame);
+				pass(wireB, a, 1000);
+				std::array<uint8_t, 32> ours{}, theirs{};
+				ours.fill(0x11); theirs.fill(0x22);
+				if (!a.SubmitLocalChecksum(4410, ours, error)) return false;
+				NetLockstepChecksum member; member.senderPeerId = 1; member.frame = 4410; member.hash = theirs; member.roundId = 77;
+				a.HandleChecksum(member, 41);
+				const auto stopped = [&] { return a.m_PendingRecoveryStop && a.m_PendingRecoveryStop->reason == NetLockstepStopReason::Desync; };
+				const bool deferredFirst = a.m_DeferredChecksumFrames.contains(4410);
+				uint64_t decidedAt = 0;
+				for (uint64_t now = 1000; now <= 1600 && !decidedAt; now += 20) {
+					a.TickPeerFrameGroups(now); b.TickPeerFrameGroups(now);
+					pass(wireA, b, now); pass(wireB, a, now);
+					if (stopped() || a.m_PeerOtherContinuations.contains(1)) decidedAt = now;
+				}
+				const std::string name = arm == Arm::Delivered ? "every witness delivered" : arm == Arm::Lost ? "one witness lost" :
+				    arm == Arm::LostDiffering ? "the lost witness's record differed" : "the member's records start at an image";
+				std::cout << "[lost-witness] " << name << " deferred_first=" << deferredFirst << " decided_ms=" << decidedAt << " desync_stop=" << stopped()
+				          << " continuation=" << a.m_PeerOtherContinuations.contains(1) << " mismatches=" << a.m_Stats.checksumMismatches << std::endl;
+				if (arm == Arm::Delivered && (deferredFirst || !stopped())) { *error = "a hash whose records all arrived was not judged at once (" + name + ")"; return false; }
+				if (arm != Arm::Delivered && !deferredFirst) { *error = "a hash was judged before the records that decide it (" + name + ")"; return false; }
+				if (arm == Arm::LostDiffering) {
+					if (stopped() || !a.m_PeerOtherContinuations.contains(1)) { *error = "a member whose lost record differed was never taken as another continuation (" + name + ")"; return false; }
+				} else if (!stopped() || a.m_Stats.checksumMismatches != 1) {
+					*error = "a desync on the same records stayed undecided (" + name + ")"; return false;
+				}
+			}
+			return true;
+		}
+
 		static bool FixedDelayReturnFollowsTheMeasuredLink(std::string* error) {
 			// A Fixed match admits a returner whose measured link fits its delay and refuses one that does not, naming both; the
 			// returner's published restart is not link time.
@@ -33458,6 +33516,12 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS held_host_hashes_stay_private_in_frame_groups\n[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "lost-witness") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::ALostWitnessStillDecidesTheHash(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS a_lost_witness_still_decides_the_hash\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "fixed-return-link") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::FixedDelayReturnFollowsTheMeasuredLink(&error)) return fail(error);
@@ -33791,6 +33855,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::LinkSizingInEveryMode, "every_mode_sizes_live_and_return_from_the_link");
 		row(&SessionPlaneRecoveryTest::FixedDelayReturnFollowsTheMeasuredLink, "a_fixed_return_follows_the_measured_link");
 		row(&SessionPlaneRecoveryTest::HeldHostHashesStayPrivateInFrameGroups, "held_host_hashes_stay_private_in_frame_groups");
+		row(&SessionPlaneRecoveryTest::ALostWitnessStillDecidesTheHash, "a_lost_witness_still_decides_the_hash");
 		row(&SessionPlaneRecoveryTest::AnOpenVoteAsksForItsFramesRecordAtOnce, "an_open_vote_asks_for_its_frames_record_at_once");
 		row(&SessionPlaneRecoveryTest::ADirectMigrationNeedsThisSeatsGroup, "a_direct_migration_needs_this_seats_group");
 		row(&SessionPlaneRecoveryTest::OnlyASeatCountingThisOneIsAnotherContinuation, "only_a_seat_counting_this_one_is_another_continuation");

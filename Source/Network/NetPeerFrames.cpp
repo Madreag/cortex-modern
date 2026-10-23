@@ -268,10 +268,67 @@ namespace RTE {
 			for (auto record = records->second.upper_bound(verified); record != records->second.end() && record->first <= frame; ++record)
 				if (!record->second) { firstDiffering = record->first; return ChecksumCause::Continuation; }
 		// Every frame still kept since the last match is known to be the same record before the hash is called a desync.
+		return MissingPeerRecords(peer, frame, 1).empty() ? ChecksumCause::Desync : ChecksumCause::Undecided;
+	}
+
+	std::vector<uint64_t> NetLockstepCoordinator::MissingPeerRecords(uint8_t peer, uint64_t frame, size_t limit) const {
+		std::vector<uint64_t> missing;
+		const uint64_t verified = m_VerifiedAppliedFrames.contains(peer) ? m_VerifiedAppliedFrames.at(peer) : 0;
+		const auto records = m_PeerRecordMatches.find(peer);
 		const uint64_t kept = m_Stats.nextFrame > NetHostMigrationCodec::c_PeerHistoryFrames ? m_Stats.nextFrame - NetHostMigrationCodec::c_PeerHistoryFrames : 0;
-		for (uint64_t at = std::max({verified + 1, kept, m_Config.startFrame}); at <= frame; ++at)
-			if (records == m_PeerRecordMatches.end() || !records->second.contains(at)) return ChecksumCause::Undecided;
-		return ChecksumCause::Desync;
+		// A side's state at the first frame it holds a record of came with an image, so the records from there on decide.
+		const uint64_t own = m_MigrationHistory.empty() ? 0 : m_MigrationHistory.begin()->first;
+		const auto theirs = m_PeerRecordFloors.find(peer);
+		for (uint64_t at = std::max({verified + 1, kept, m_Config.startFrame, own, theirs == m_PeerRecordFloors.end() ? 0 : theirs->second}); at <= frame && missing.size() < limit; ++at)
+			if (records == m_PeerRecordMatches.end() || !records->second.contains(at)) missing.push_back(at);
+		return missing;
+	}
+
+	void NetLockstepCoordinator::RequestPeerRecords(uint64_t nowMs) {
+		// A witness travels once on the frame lane: a differing hash whose records were lost asks the member for them until they arrive.
+		std::map<uint8_t, std::vector<uint64_t>> wanted;
+		for (const uint64_t frame: m_DeferredChecksumFrames) {
+			const auto local = m_LocalChecksums.find(frame);
+			const auto remote = m_RemoteChecksums.find(frame);
+			if (local == m_LocalChecksums.end() || remote == m_RemoteChecksums.end()) continue;
+			for (const auto& [peer, hash]: remote->second) {
+				if (hash == local->second || wanted.contains(peer) || IsSeatUnderAI(peer, frame)) continue;
+				if (auto missing = MissingPeerRecords(peer, frame, c_NetPeerRecordBatch); !missing.empty()) wanted[peer] = std::move(missing);
+			}
+		}
+		std::erase_if(m_PeerRecordRequestAtMs, [&](const auto& entry) { return !wanted.contains(entry.first); });
+		for (const auto& [peer, frames]: wanted) {
+			// A record still in flight gets one resend interval to land before it is asked for.
+			auto& askAt = m_PeerRecordRequestAtMs.try_emplace(peer, nowMs + c_NetPeerVoteResendMs).first->second;
+			if (nowMs < askAt) continue;
+			auto request = PeerFrameMessage(NetHostMigrationMessageType::PeerReceipt);
+			request.preparedFrame = UINT64_MAX; request.boundary = c_NetPeerRecordRequest; request.frame = frames.front();
+			for (const uint64_t frame: frames) PutFrame(request.bytes, frame);
+			SendPeerFrameMessage(std::move(request), NetTransportLane::ControlReliable, peer);
+			++m_PeerRecordRequests;
+			const auto stats = m_Stats.peers.find(peer);
+			askAt = nowMs + c_NetPeerVoteResendMs + (stats == m_Stats.peers.end() ? 0 : stats->second.pingMs);
+			DiagnosticLine() << "[net-peer-record-request] local=" << static_cast<int>(m_Config.localPeerId) << " peer=" << static_cast<int>(peer)
+			    << " first=" << frames.front() << " last=" << frames.back() << " frames=" << frames.size() << " now_ms=" << nowMs << std::endl;
+		}
+	}
+
+	void NetLockstepCoordinator::AnswerPeerRecordRequest(const NetHostMigrationMessage& request) {
+		if (request.bytes.empty() || request.bytes.size() % 8 != 0 || request.bytes.size() / 8 > c_NetPeerRecordBatch) return;
+		auto answer = PeerFrameMessage(NetHostMigrationMessageType::PeerReceipt);
+		answer.preparedFrame = UINT64_MAX; answer.boundary = c_NetPeerRecordAnswer; answer.frame = request.frame;
+		uint64_t floor = m_MigrationHistory.empty() ? m_Stats.nextFrame : m_MigrationHistory.begin()->first;
+		if (!m_PeerReplayAppliedPrefixes.empty() && m_PeerReplayAppliedPrefixes.begin()->first < m_Config.startFrame) floor = std::min(floor, m_PeerReplayAppliedPrefixes.begin()->first);
+		answer.completeFrom = floor;
+		size_t offset = 0;
+		for (uint64_t frame = 0; TakeFrame(request.bytes, offset, frame);) {
+			if (!m_LastCompletedSimulationTick || frame > *m_LastCompletedSimulationTick) continue;
+			const auto applied = PeerAppliedFramePrefix(frame);
+			if (applied == NetHash32{}) continue;
+			PutFrame(answer.bytes, frame);
+			answer.bytes.insert(answer.bytes.end(), applied.begin(), applied.end());
+		}
+		SendPeerFrameMessage(std::move(answer), NetTransportLane::ControlReliable, request.senderPeerId);
 	}
 
 	void NetLockstepCoordinator::RecheckDeferredChecksums() {
@@ -782,6 +839,7 @@ namespace RTE {
 			}
 		}
 		RepairPeerReceiptGaps(nowMs);
+		RequestPeerRecords(nowMs);
 		RenewSettledPeerSplit(nowMs);
 		TickPeerInputDelay(nowMs);
 		TickPeerAdmin(nowMs);
