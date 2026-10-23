@@ -484,6 +484,13 @@ namespace RTE {
 			// Later local holds can shrink this continuation before the heal. Its first hold's membership may still name a
 			// peer that never joined its history; judge the actual completed continuation, as the history exchange does.
 			const uint32_t playing = PeerFrameMembersAt(m_LastCompletedSimulationTick.value_or(*arbitration.holdFrame)) & owners;
+			// A ruling every winner of which plays in this seat's group past the split's hold is taken; a later split here asks a question
+			// of its own. A ruling that names other winners is judged afresh.
+			if (const auto settled = m_PeerSplitsSettled.find(split); settled != m_PeerSplitsSettled.end() && settled->second == winner) continue;
+			if (m_LastCompletedSimulationTick && *m_LastCompletedSimulationTick >= *arbitration.holdFrame && (winner & ~playing) == 0) {
+				m_PeerSplitsSettled[split] = winner;
+				continue;
+			}
 			// A decision naming members of two continuations is the question one of them asked: a seat held while it still counted a
 			// seat of this group asks with that seat named. A seat whose group plays some it names and holds others, and did not ask
 			// that question itself, lost it.
@@ -907,6 +914,7 @@ namespace RTE {
 			return question.first < historyFloor && m_PeerFrameTieWinners.contains(question.first);
 		});
 		std::erase_if(m_PeerSplitDecisions, [&](const auto& decision) { return decision.first < historyFloor && !m_PeerSplitArbitrations.contains(decision.first); });
+		std::erase_if(m_PeerSplitsSettled, [&](const auto& settled) { return settled.first < historyFloor && !m_PeerSplitArbitrations.contains(settled.first); });
 		for (auto* history: {&m_PeerFrameTieWinners, &m_FrameGroupChanges, &m_PeerSplitRenewals}) {
 			const auto floor = history->lower_bound(historyFloor);
 			if (floor != history->begin()) history->erase(history->begin(), std::prev(floor));

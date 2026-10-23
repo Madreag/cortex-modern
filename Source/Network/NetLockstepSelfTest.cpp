@@ -1169,6 +1169,35 @@ namespace RTE {
 			return true;
 		}
 
+		static bool ARulingASeatPlayedUnderStaysSettled(std::string* error) {
+			// A seat that came back into the continuation a ruling chose and played there with its winners has taken that ruling. When it
+			// later holds one of those winners, the hold is a new split with its own question: the old ruling never stops it again.
+			Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
+			peer.m_Config.peerCount = peer.m_Config.matchConfig.peerCount = 3;
+			peer.m_Config.localPeerId = 1; peer.m_Config.authorityPeerId = 1;
+			peer.m_Config.peerFrameGroups = peer.m_Config.substituteSlowPeers = true;
+			peer.m_Config.frameTieReferee = [](const NetFrameTieRequest&) { NetFrameTieReply reply{NetFrameTieReply::State::Decided}; reply.members = {3}; return reply; };
+			peer.m_RoundConfigHash = NetMatchConfigUtil::HashConfig(peer.m_Config.matchConfig);
+			peer.m_MigrationPhase = NetHostMigrationPhase::None;
+			peer.m_FrameGroupMembers = 5; peer.m_FrameGroupChanges = {{1, 7}, {600, 5}};
+			NetFrameTieRequest request;
+			request.frame = 599; request.roundId = peer.m_Config.matchConfig.roundId; request.configHash = peer.m_RoundConfigHash; request.host = 1;
+			request.owners = {1, 2, 3}; request.members = {3}; request.queryOnly = true;
+			peer.m_PeerSplitArbitrations[599] = NetLockstepCoordinator::PeerSplitArbitration{request, 7, 600};
+			peer.m_LastCompletedSimulationTick = peer.m_LastDeliveredFrame = 650; peer.m_Stats.nextFrame = 651;
+			peer.PollPeerFrameTies(10000);
+			const bool playedWithWinner = peer.IsRunning();
+			// Seat 3 goes quiet and this seat holds it, alone in its group from 682.
+			peer.m_FrameGroupMembers = 1; peer.m_FrameGroupChanges[682] = 1;
+			peer.m_LastCompletedSimulationTick = peer.m_LastDeliveredFrame = 682; peer.m_Stats.nextFrame = 683;
+			peer.PollPeerFrameTies(11620);
+			std::cout << "[settled-ruling] running_with_winner=" << playedWithWinner << " running_after_holding_it=" << peer.IsRunning()
+			          << " reason=" << peer.GetStats().timeoutReason << std::endl;
+			if (!playedWithWinner) { *error = "a seat playing with a ruling's winners stopped on it"; return false; }
+			if (!peer.IsRunning()) { *error = "a seat that played under a ruling stopped on it again after holding one of its winners: " + peer.GetStats().timeoutReason; return false; }
+			return true;
+		}
+
 		static bool AHungHostEndsAHostRoutedRound(std::string* error) {
 			// A world or a dedicated round cannot move its host. When the host stops responding, each player ends the round where a direct
 			// round would migrate, with one plain line, and never waits on the hung host past that point.
@@ -33626,6 +33655,12 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS a_lost_witness_still_decides_the_hash\n[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "settled-ruling") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::ARulingASeatPlayedUnderStaysSettled(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS a_ruling_a_seat_played_under_stays_settled\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "hung-host") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::AHungHostEndsAHostRoutedRound(&error)) return fail(error);
@@ -33977,6 +34012,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::OnlyASeatCountingThisOneIsAnotherContinuation, "only_a_seat_counting_this_one_is_another_continuation");
 		row(&SessionPlaneRecoveryTest::ALosingGroupActsAsOneOnARuling, "a_losing_group_acts_as_one_on_a_ruling");
 		row(&SessionPlaneRecoveryTest::AHungHostEndsAHostRoutedRound, "a_hung_host_ends_a_host_routed_round");
+		row(&SessionPlaneRecoveryTest::ARulingASeatPlayedUnderStaysSettled, "a_ruling_a_seat_played_under_stays_settled");
 		row(&SessionPlaneRecoveryTest::AStraddlingRulingIsTheOtherHalfsQuestion, "a_straddling_ruling_is_the_other_halfs_question");
 		row(&SessionPlaneRecoveryTest::AMinorityGroupOnlyQueriesTheReferee, "a_minority_group_only_queries_the_referee");
 		row(&SessionPlaneRecoveryTest::AReturningSeatTakesItsMembersTermsAsTheirStarts, "a_returning_seat_takes_its_members_terms_as_their_starts");
