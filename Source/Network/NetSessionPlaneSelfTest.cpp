@@ -714,7 +714,7 @@ namespace RTE {
 				return nullptr;
 			}
 			bool Is(uint8_t seat, uint64_t now, Spell::Kind kind) const { const auto* spell = Active(seat, now); return spell && spell->kind == kind; }
-			bool Cut(uint8_t a, uint8_t b, uint64_t now) const { return a != b && (Is(a, now, Spell::Kind::Silent) || Is(b, now, Spell::Kind::Silent) || CutBetween(a, b, now)); }
+			bool Severed(uint8_t a, uint8_t b, uint64_t now) const { return a != b && (Is(a, now, Spell::Kind::Silent) || Is(b, now, Spell::Kind::Silent) || CutBetween(a, b, now)); }
 			bool DirectoryReachable(uint8_t seat, uint64_t now) const {
 				for (const auto& cut: cuts) if (now >= cut.atMs && now < cut.atMs + cut.ms && ((cut.directoryDark >> (seat - 1)) & 1U)) return false;
 				const auto* spell = Active(seat, now);
@@ -865,7 +865,7 @@ namespace RTE {
 				    ((row.blackout && (a == row.subject || b == row.subject)) || (row.inputHalvesLost && (a <= 2) != (b <= 2))));
 			}
 			bool Split(uint8_t a, uint8_t b) const {
-				if (schedule) return schedule->Cut(a, b, now);
+				if (schedule) return schedule->Severed(a, b, now);
 				if (row.tieBeforeAdministration && now >= 4000 && now < 4150) return (a <= 2) != (b <= 2);
 				if (row.silentVoter && a != b && (a == row.silentVoter || b == row.silentVoter) && now >= silentAt && now < silentAt + row.silentVoterMs) return true;
 				// Flagged fixture correction: Hung stops the process; incoming packets wait in its socket,
