@@ -940,7 +940,7 @@ def arm_resume(repo: Path, root: Path, port: int, client_stall: str = "", client
     """A match whose host process is killed is restarted from its own checkpoint, and the client rejoins.
 
     With client_outgrows the resumed client's world outgrows each capture's plan just before its arm
-    (CCCP_TEST_CAPTURE_OUTGROWN), as a tick that takes a new native buffer does, its round runs 1800 ticks, and
+    (CCCP_TEST_CAPTURE_OUTGROWN), as a tick that takes a new native buffer does, its round runs 3000 ticks, and
     the arm passes only when the client wrote every save the host wrote but the last, which may still be in
     flight when the round ends.
 
@@ -957,7 +957,9 @@ def arm_resume(repo: Path, root: Path, port: int, client_stall: str = "", client
     root.mkdir(parents=True, exist_ok=False)
     first, second = root / "died", root / "resumed"
     first.mkdir(parents=True, exist_ok=False)
-    kill_tick, resume_ticks = 400, 1800 if client_outgrows else 600
+    kill_tick, resume_ticks = 400, 3000 if client_outgrows else 600
+    # The fixture's duel ends with its window, which the saved world carries into the resumed round: a long one leaves room for several saves.
+    window = 6000 if client_outgrows else 1200
 
     # Round one: a two-peer match that keeps checkpoints every simulated second. The host is killed
     # once it has published a checkpoint past the kill tick; the client is left to lose it.
@@ -975,7 +977,7 @@ def arm_resume(repo: Path, root: Path, port: int, client_stall: str = "", client
             args += stall_args(client_stall)
         # The host asks to start only once its client is seated and ready, never on the client's head start alone.
         runs[who] = make_run(repo, args, first / who, 420, env={"CCCP_HEADLESS": "1", "CC_TEST_NET_MATCH_E2E_WAIT_PEERS": "1"})
-        stage_baseline(runs[who], 1200)
+        stage_baseline(runs[who], window)
 
     def drive(who: str) -> None:
         try:
@@ -1037,7 +1039,7 @@ def arm_resume(repo: Path, root: Path, port: int, client_stall: str = "", client
             args += stall_args(f'{resume_tick + stall_tick}:{stall_ms}')
         env = {"CCCP_HEADLESS": "1", "CC_TEST_NET_MATCH_E2E_WAIT_PEERS": "1", **({"CCCP_TEST_CAPTURE_OUTGROWN": "1"} if who == "client" and client_outgrows else {})}
         resumed[who] = make_run(repo, args, second / who, 420, env=env)
-        stage_baseline(resumed[who], 1200)
+        stage_baseline(resumed[who], window)
         # What a restarted process finds on its own disk: its checkpoints, its manifests, its admission
         # file and its ticket. Copied, never moved: the first round's evidence stays where it was.
         source = first / who / "runtime/Autosaves"
