@@ -179,7 +179,7 @@ def checklist_items(peer, steps, minutes=True):
     checks = scene_checks(peer, steps)
     bunkers = [rf"\[net-match\] editor purchase applied: seat={SEAT[owner]} preset=Base.rte/Brain Chamber Left 2x2 - 1 funds=" for owner in PLAYERS]
     checks.append(dict(id=f"shared-bunkers-{peer}", peer=peer, mark=f"playing-{peer}", screen="game",
-                       what="Every bunker with its reinforced fill and turret reached the shared scene before the brains started playing.",
+                       what="Every bunker and its reinforced fill reached the shared scene before the brains started playing.",
                        log_regex=bunkers + defense_lines(SEAT[owner] for owner in PLAYERS)))
     if minutes:
         checks.append(dict(id=f"twenty-minutes-{peer}", peer=peer, mark=f"fight-ended-{peer}", screen="MultiplayerScreen",

@@ -479,28 +479,23 @@ def game_scenes():
          scene_checks("host", host) + scene_checks("joiner", joiner))
 
 
-# Two rings of stock reinforced fill over and beside the bunker, offsets from its center. The endless waves tunnel through
-# fill alone to the brain inside twenty minutes; the outer ring is left open before the chamber's door, so their cheapest
-# way in is that door, and a stock turret in the chamber's own turret cell holds it.
-COLLAR = ((-144, -144), (-48, -144), (48, -144), (144, -144), (-144, -48), (-144, 48), (144, -48), (144, 48),
-          (-240, -240), (-144, -240), (-48, -240), (48, -240), (144, -240), (240, -240),
-          (-240, -144), (-240, -48), (-240, 48), (240, -144), (240, -48))
-TURRET = dict(offset=(-48, 48), pick={"class": "ACrab", "preset": "Gatling Turret", "module": "Coalition.rte"})
+# Stock reinforced fill buried around the bunker and in its lower right cell, offsets from its center: the endless waves
+# wear an undefended brain down inside twenty minutes, and get through fill above the ground or the chamber's door, which
+# the pathfinder always treats as open.
+COLLAR = ((-144, -144), (-48, -144), (48, -144), (144, -144), (-144, -48), (-144, 48), (144, -48), (144, 48), (48, 48))
 
 
 def defenses(player):
-    picks = [({"class": "TerrainObject", "preset": "Reinforced Concrete Fill"}, offset) for offset in COLLAR] + [(TURRET["pick"], TURRET["offset"])]
     steps = []
-    for pick, (offset_x, offset_y) in picks:
-        steps += [wait(editing=True), dict(op="editor_pick", input_player=0, brain=False, **pick),
+    for offset_x, offset_y in COLLAR:
+        steps += [wait(editing=True), dict(op="editor_pick", input_player=0, brain=False, **{"class": "TerrainObject"}, preset="Reinforced Concrete Fill"),
                   dict(op="editor_move", input_player=0, relative_to="bunker", offset_x=offset_x, offset_y=offset_y), wait(picker_open=False, player=player)]
         steps += click() + [wait(sim_advanced=30, elapsed_ms=600), dict(op="assert_editor", input_player=0, equals=dict(placement_refused=False))]
     return steps
 
 
 def defense_lines(seats):
-    return [rf"\[net-match\] editor purchase applied: seat={seat} preset={preset} funds=" for seat in seats
-            for preset in ("Base.rte/Reinforced Concrete Fill", f"{TURRET['pick']['module']}/{TURRET['pick']['preset']}")]
+    return [rf"\[net-match\] editor purchase applied: seat={seat} preset=Base.rte/Reinforced Concrete Fill funds=" for seat in seats]
 
 
 def ai_fight():
@@ -546,7 +541,7 @@ def ai_fight():
         probes[peer] = game_probe(steps, timeout=1600000)
         checks += scene_checks(peer, steps)
         checks.append(dict(id=f"shared-bunkers-{peer}", peer=peer, mark=f"playing-{peer}", screen="game",
-                           what="Both bunkers with their reinforced fill and turrets reached the shared scene before the brains started playing.",
+                           what="Both bunkers and their reinforced fill reached the shared scene before the brains started playing.",
                            log_regex=[rf"\[net-match\] editor purchase applied: seat={seat} preset=Base.rte/Brain Chamber Left 2x2 - 1 funds="
                                       for seat in (0, 1)] + defense_lines((0, 1))))
         checks.append(dict(id=f"twenty-minutes-{peer}", peer=peer, mark=f"fight-ended-{peer}", screen="MultiplayerScreen",
