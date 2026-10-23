@@ -176,8 +176,7 @@
           "retain_runtime_from": {
             "run": "died",
             "peer": "host"
-          },
-          "lobby_file": "{PROBE_DIR}/lobby.json"
+          }
         },
         {
           "name": "client",
@@ -356,6 +355,6 @@
   "scripts": {
     "died.host.menu": "wait_ms 1800\nactivate ButtonMainToMultiplayer\nwait_ms 600\nsettext TextMultiplayerName Host\nactivate ButtonMultiplayerHostGame\nwait_ms 600\ncombo_select ComboHostActivity P4 Alpha Duel\nsetup_host_port {PORT}\ncombo_select ComboHostPlayers 2\nactivate ButtonHostOptions\nwait_ms 600\nactivate TabHostPageRecovery\nvideo_mark resume-autosave-options\nwait_ms 900\nassert_visible CollectionBoxHostPageRecovery 1\nsetcheck CheckHostRecAutosave 1\nwait_ms 600\nobserve assert_checked CheckHostRecAutosave 1\nobserve assert_enabled ComboHostRecAutosaveInterval 1\nwait_ms 600\nobserve assert_label ComboHostRecAutosaveInterval 1 second\nobserve assert_enabled ButtonHostOptApply 0\nwait_ms 900\nactivate TabHostPageConnection\ncombo_select ComboHostNetVisibility Public (default)\ncombo_select ComboHostNetRelay Game service (default)\nassert_label ComboHostNetVisibility Public (default)\nassert_label ComboHostNetRelay Game service (default)\ndump_host_options\nactivate ButtonHostOptBack\nwait_ms 600\nactivate ButtonMultiplayerCreate\nwait_substate Lobby 90\nwrite_lobby {PROBE_DIR}/lobby.json 90\nassert_substate Lobby\nvideo_mark resume-host-listening\nwait_connected 2 90\nwait_remote_ready 90\nvideo_mark resume-ready-start\ndump_lobby\nassert_enabled ButtonMultiplayerStart 1\nactivate ButtonMultiplayerStart\nwait_file {PROBE_DIR}/ready-to-drop.json 120\nwait_ms 120000\n",
     "died.client.menu": "wait_ms 1800\nactivate ButtonMainToMultiplayer\nwait_ms 600\nsettext TextMultiplayerName Joiner\nactivate ButtonMultiplayerJoinGame\nwait_ms 600\nassert_substate JoinSetup\nwait_file {PROBE_DIR_host}/lobby.json 120\nwait_row PublicGameRowLobby:{PROBE_DIR_host}/lobby.json 120\nclick_row PublicGameRowLobby:{PROBE_DIR_host}/lobby.json\nassert_label LabelJoinSelected internet\nassert_enabled ButtonMultiplayerConnect 1\nactivate ButtonMultiplayerConnect\nwait_connected 2 120\nwait_substate Lobby 60\nwait_ms 900\nassert_substate Lobby\nvideo_mark resume-client-lobby\ndump_lobby\nactivate ButtonMultiplayerReady\nwait_file {PROBE_DIR}/ready-to-drop.json 120\nwait_ms 120000\n",
-    "resumed.client.menu": "wait_ms 1800\nactivate ButtonMainToMultiplayer\nwait_ms 600\nsettext TextMultiplayerName Joiner\nactivate ButtonMultiplayerJoinGame\nwait_ms 600\nassert_substate JoinSetup\nwait_file {PROBE_DIR_host}/lobby.json 120\nwait_row PublicGameRowLobby:{PROBE_DIR_host}/lobby.json 120\nclick_row PublicGameRowLobby:{PROBE_DIR_host}/lobby.json\nassert_label LabelJoinSelected internet\nassert_enabled ButtonMultiplayerConnect 1\nactivate ButtonMultiplayerConnect\nwait_connected 2 120\nwait_substate Lobby 60\nwait_ms 900\nassert_substate Lobby\nactivate ButtonMultiplayerReady\nwait_round_end 300\nwait_ms 1500\nexit\n"
+    "resumed.client.menu": "wait_ms 1800\nassert_substate Landing\nassert_label ButtonMultiplayerReconnect Rejoin Match\nactivate ButtonMultiplayerReconnect\nwait_connected 2 120\nwait_substate Lobby 60\nwait_ms 900\nactivate ButtonMultiplayerReady\nwait_round_end 300\nwait_ms 1500\nexit\n"
   }
 }

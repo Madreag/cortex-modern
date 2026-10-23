@@ -673,10 +673,10 @@ class LobbyIdentityTest(unittest.TestCase):
                 text.write("[net-directory] registered session_id=s-2 heartbeat_s=20\n")
             peers.video.write_listed_lobby(log, lobby)
             self.assertEqual(json.loads(lobby.read_text(encoding="utf-8")), {"session_id": "s-2"})
-        document = copy.deepcopy(peers.scene("mp-resume-from-disk-relay"))
-        resumed = document["runs"][1]["peers"][0]
+        document = copy.deepcopy(peers.scene("mp-host-hang"))
+        world = document["runs"][0]["peers"][0]
         peers.check_scene(document)
-        resumed.pop("lobby_file")
+        world.pop("lobby_file")
         with self.assertRaisesRegex(ValueError, "the host's menu never writes it"):
             peers.check_scene(document)
 
