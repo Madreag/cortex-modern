@@ -514,7 +514,7 @@
    "op": "editor_move",
    "input_player": 0,
    "relative_to": "bunker",
-   "offset_x": 48,
+   "offset_x": 240,
    "offset_y": 48
   },
   {

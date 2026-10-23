@@ -479,10 +479,10 @@ def game_scenes():
          scene_checks("host", host) + scene_checks("joiner", joiner))
 
 
-# Stock reinforced fill buried around the bunker and in its lower right cell, offsets from its center: the endless waves
-# wear an undefended brain down inside twenty minutes, and get through fill above the ground or the chamber's door, which
-# the pathfinder always treats as open.
-COLLAR = ((-144, -144), (-48, -144), (48, -144), (144, -144), (-144, -48), (-144, 48), (144, -48), (144, 48), (48, 48))
+# Stock reinforced fill buried around the bunker and again before its door, offsets from its center: the endless waves
+# wear an undefended brain down inside twenty minutes, and get through fill above the ground or by the chamber's door,
+# which the pathfinder always treats as open.
+COLLAR = ((-144, -144), (-48, -144), (48, -144), (144, -144), (-144, -48), (-144, 48), (144, -48), (144, 48), (240, 48))
 
 
 def defenses(player):
