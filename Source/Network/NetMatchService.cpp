@@ -4467,7 +4467,8 @@ static std::string ResyncSaveName() {
 				const auto captureBegan = RTE::SteadyClock::now();
 				CrossCaptureBarrierFromEnvironment("capture_announced", tick, m_AutosaveIdentity.roundId);
 				m_AutosaveIdentity.savedByHost = output.manual;
-				taken = SaveStampedAutosave(tick);
+				// A returner's base on the host is the returner's to wait for: a refused one is asked again.
+				taken = SaveStampedAutosave(tick, !joinCapture);
 				m_CaptureAnchorSimTime = input.now;
 				m_AutosaveIdentity.savedByHost = false;
 				const double captureMs = std::chrono::duration<double, std::milli>(RTE::SteadyClock::now() - captureBegan).count();
@@ -4640,7 +4641,7 @@ static std::string ResyncSaveName() {
 			ScenarioRunner::DropPendingLockstepWorldSegment("the checkpoint at tick " + std::to_string(tick) + " never validated before the round ended");
 	}
 
-	bool NetMatchService::SaveStampedAutosave(uint64_t tick) {
+	bool NetMatchService::SaveStampedAutosave(uint64_t tick, bool waitForPlan) {
 		if (tick != static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount())) {
 			System::PrintDiagnosticLine(std::format("[autosave] capture refused: requested tick={} world tick={}", tick, g_TimerMan.GetSimUpdateCount()));
 			return false;
@@ -4676,7 +4677,7 @@ static std::string ResyncSaveName() {
 				                                        !error.empty() ? error : m_Coordinator ? "its seats did not encode" : "there is no round"));
 			}
 		}
-		return g_ActivityMan.SaveAutosaveSnapshot(m_AutosaveMatchId, tick, m_AutosaveIdentity);
+		return g_ActivityMan.SaveAutosaveSnapshot(m_AutosaveMatchId, tick, m_AutosaveIdentity, waitForPlan);
 	}
 
 	NetWorldCheckpointImage NetMatchService::WorldImageFromAutosave(const ActivityMan::CompletedAutosave& entry, const NetWorldIdentity& identity,
@@ -7642,7 +7643,7 @@ static std::string ResyncSaveName() {
 		                         m_Coordinator->GetResumeFrame(), tick)) {
 			return;
 		}
-		if (!SaveStampedAutosave(tick)) {
+		if (!SaveStampedAutosave(tick, true)) {
 			{
 				std::ostringstream line;
 				line << "[net-world] final checkpoint refused at tick=" << tick;

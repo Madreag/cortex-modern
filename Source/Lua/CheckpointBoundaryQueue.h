@@ -138,6 +138,15 @@ namespace RTE::CheckpointLua {
 		/// Why the last capture's arm refused its plan, null when no plan was armed; and whether the world outgrew that plan.
 		const char* ArmRefusal() const noexcept { return m_ArmRefusal; }
 		bool ArmRefusedStale() const noexcept { return m_ArmStale; }
+		/// Waits, the game lending the saver its time at the game's priority, for the plan a capture refused at this tick needs:
+		/// one prepared again for a world that outgrew the last, or one still being prepared. False when none comes: the saver
+		/// is still writing, or has stopped or failed.
+		bool WaitForNewPlan() const {
+			const State state = m_State.load(std::memory_order_acquire);
+			if (state != State::Preparing && state != State::Rebuild && state != State::Ready) return false;
+			const SaverThreads::Await await;
+			return WaitUntilPrepared();
+		}
 
 	private:
 		enum class State { Preparing, Ready, Claimed, Armed, Working, Rebuild, Failed, Stopped };

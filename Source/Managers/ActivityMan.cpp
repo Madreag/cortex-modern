@@ -772,7 +772,7 @@ struct ActivityMan::PreparedAutosave {
 		return boundary;
 	}
 
-	bool Capture(const std::string& match, uint64_t tick, const AutosaveIdentity& identity, RTE::SteadyClock::time_point began) {
+	bool Capture(const std::string& match, uint64_t tick, const AutosaveIdentity& identity, RTE::SteadyClock::time_point began, bool waitForPlan) {
 		std::shared_ptr<CheckpointCaptureClock> clock;
 		struct Finish {
 			ActivityMan& owner; std::shared_ptr<CheckpointCaptureClock>& clock; RTE::SteadyClock::time_point began;
@@ -791,6 +791,7 @@ struct ActivityMan::PreparedAutosave {
 		if (!NetActorOwnership::CheckpointValuesReady()) { owner.NoteAutosaveRefusal(false, "the saved actor owners are not ready"); return false; }
 		if (!ContentFile::CheckpointSamplesReady()) { owner.NoteAutosaveRefusal(false, "the loaded samples are not ready"); return false; }
 		if (result.valid() && result.wait_for(std::chrono::seconds(0)) != std::future_status::ready) { owner.NoteAutosaveRefusal(false, "the previous capture is still being written"); return false; }
+		const std::string notReady = queue.NotReadyState().first;
 		const long uid = MovableObject::GetUniqueIDCounter();
 		const uint64_t simDraws = g_SimRNG.GetDrawCount(), renderDraws = g_RenderRNG.GetDrawCount(), soundCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
 		// The plan keeps the hold until it is replaced, so no frozen iterator outlives the container it describes.
@@ -812,8 +813,26 @@ struct ActivityMan::PreparedAutosave {
 		static const bool s_Outgrown = std::getenv("CCCP_TEST_CAPTURE_OUTGROWN") != nullptr;
 		const auto giveBack = [](void* buffer) { CheckpointNativeStorage::Deallocate(buffer); };
 		const std::unique_ptr<void, decltype(giveBack)> outgrown(s_Outgrown ? CheckpointNativeStorage::Allocate(size_t{1} << 20, alignof(std::max_align_t)) : nullptr, giveBack);
-		const bool accepted = queue.TryCapture(result, fill);
+		bool accepted = queue.TryCapture(result, fill);
 		const char* refusal = accepted ? nullptr : queue.ArmRefusal();
+		// The world grows in the very ticks a plan is prepared for, so a named tick can find its plan outgrown, or still being
+		// prepared for that growth, with no idle time left to prepare another. A capture this machine owes at its tick waits for
+		// the new plan instead: the game stands still meanwhile, so it fits the tick being saved.
+		if (!accepted && waitForPlan && (!refusal || queue.ArmRefusedStale())) {
+			const auto waitBegan = RTE::SteadyClock::now();
+			const std::string first = refusal ? refusal : notReady.empty() ? std::string("the plan was being prepared again") : notReady;
+			int attempts = 0;
+			while (!accepted && attempts < 3 && queue.WaitForNewPlan()) {
+				++attempts;
+				accepted = queue.TryCapture(result, fill);
+				refusal = accepted ? nullptr : queue.ArmRefusal();
+				if (refusal && !queue.ArmRefusedStale()) break;
+			}
+			// A preparation that failed meanwhile is the reason, not the arm before it.
+			if (!accepted && !queue.Ready() && !queue.Busy()) refusal = nullptr;
+			if (attempts) System::PrintDiagnosticLine(std::format("[autosave] named tick={} {} after a new plan in {} ms ({} attempts; first refused: {})", tick, accepted ? "taken" : "not taken",
+			                                                      std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - waitBegan).count(), attempts, first));
+		}
 		if (!accepted) {
 			const auto [nowNotReady, failed] = queue.NotReadyState();
 			if (refusal) owner.NoteAutosaveRefusal(true, "the capture's pages could not be armed: ", refusal);
@@ -1258,12 +1277,12 @@ bool ActivityMan::SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick
 	return SaveAutosaveSnapshot(matchId, tick, AutosaveIdentity{});
 }
 
-bool ActivityMan::SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick, const AutosaveIdentity& identity) {
+bool ActivityMan::SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick, const AutosaveIdentity& identity, bool waitForPlan) {
 	const auto captureStart = RTE::SteadyClock::now();
 	if (!AutosaveStore::ValidMatchId(matchId) || tick == 0) return false;
 	if (CheckpointNativeStorage::WorldEnabled()) {
 		if (!m_PreparedAutosave) { NoteAutosaveRefusal(true, "no checkpoint inventory was prepared"); return false; }
-		try { return m_PreparedAutosave->Capture(matchId, tick, identity, captureStart); }
+		try { return m_PreparedAutosave->Capture(matchId, tick, identity, captureStart, waitForPlan); }
 		catch (const std::bad_alloc&) { std::fputs("[autosave] failed reason=out of memory\n", stdout); NoteAutosaveRefusal(true, "out of memory"); }
 		catch (const std::exception& error) { std::fputs("[autosave] failed reason=boundary refused\n", stdout); NoteAutosaveRefusal(true, "the capture's boundary refused it: ", error.what()); }
 		return false;

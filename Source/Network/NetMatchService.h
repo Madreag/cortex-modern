@@ -516,7 +516,8 @@ namespace RTE {
 		/// The one capture of this match: the tick's agreed lockstep state is stamped onto the identity
 		/// here, so an interval checkpoint and a world's on-demand bootstrap capture carry the same
 		/// owners and applied sequences and a restart resumes on them.
-		bool SaveStampedAutosave(uint64_t tick);
+		/// @param waitForPlan The capture is this machine's own save, which waits for its saver to prepare a plan the world outgrew.
+		bool SaveStampedAutosave(uint64_t tick, bool waitForPlan);
 		/// Cuts a recording world's segment at the checkpoint just captured, and opens the held segment
 		/// as soon as that checkpoint's archive names its world-structure digest.
 		void RollWorldReplaySegment(uint64_t tick);
