@@ -678,6 +678,10 @@ namespace RTE {
 		/// players still in the round with their link up at the current frame, held ones included, since they answer it. A lone
 		/// survivor of an announced leave ends the match, so a handover takes two. LeaveMatch acts on the same answer.
 		NetHostLeaveOutcome HostLeaveOutcome() const;
+		/// The directory referees a round's splits and host changes for this peer.
+		void InstallRoundRefereesLocked(NetLockstepConfig& config);
+		/// Host: whether the directory hears every human seat of the round, which then plays under its arbitration.
+		bool EverySeatChecksIn(const NetMatchConfig& config) const;
 		/// The outcome the host's leave confirmation showed when it was pressed; the next LeaveMatch acts on it.
 		void ConfirmHostLeave(NetHostLeaveOutcome outcome);
 		/// Whether this client's leave keeps a ticket the Multiplayer screen offers back as Rejoin Match: one that loads, as the offer reads it.
@@ -1100,6 +1104,8 @@ namespace RTE {
 		/// The private rejoin driver looks at a ready connection the round no longer carries, and at one it still carries for a seat the
 		/// AI holds: a peer frame group keeps a slow seat's link in the round, and its player catches up in place on it.
 		static bool DrivesRejoinLink(bool inRound, bool heldAISeat) { return !inRound || heldAISeat; }
+		/// The frames a private return is proposed ahead of its activation: the members' trip, the returner's own and the bound.
+		uint64_t ReturnNoticeTicksLocked(const NetWorldJoinSession& session, uint64_t head) const;
 		/// A looked-at connection that is not its held seat's in-place route may take the private image when no join is open on it and
 		/// the round does not carry it.
 		static bool OffersImageOnLink(bool inRound, bool joinOpen) { return !joinOpen && !inRound; }
@@ -1410,6 +1416,7 @@ namespace RTE {
 		friend bool TestEndedWorldLateAdmission(std::string* error);
 		friend bool TestRecoveredDirectoryBinding(std::string* error);
 		friend bool TestLobbyDirectoryLeaseRecovery(std::string* error);
+		friend bool TestRoundRefereeFollowsTheAgreedRule(std::string* error);
 		friend bool TestLobbyDirectoryStatus(std::string* error);
 		friend bool TestJoiningFailureDetail(std::string* error);
 		friend bool TestLobbyPingReadout(std::string* error);

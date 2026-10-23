@@ -3,8 +3,29 @@
 #include "NetLockstep.h"
 
 namespace RTE::NetPeerFrameDetail {
-		inline uint8_t DecisionKind(const NetHostMigrationMessage& message) { return message.preparedFrame == 2 && !message.members.empty() ? static_cast<uint8_t>(8 + message.members.front()) : static_cast<uint8_t>(message.preparedFrame); }
 		inline uint32_t SeatBit(uint8_t peer) { return peer > 0 && peer <= 32 ? 1U << (peer - 1) : 0; }
+		inline bool IsHoldDecision(uint8_t kind) { return (kind & 0xF0) == 0x10; }
+		inline uint8_t DecisionKind(const NetHostMigrationMessage& message) {
+			if (message.preparedFrame == 0) {
+				// Independent owners can promise the same cutoff without sharing a decision slot.
+				static_assert(NetMatchConfigUtil::c_MaxPeerCount == 4);
+				uint8_t kind = 0x10;
+				for (uint8_t peer: message.members) kind |= static_cast<uint8_t>(SeatBit(peer));
+				return kind;
+			}
+			return message.preparedFrame == 2 && !message.members.empty() ? static_cast<uint8_t>(8 + message.members.front()) : static_cast<uint8_t>(message.preparedFrame);
+		}
+		template<class Decisions> bool HasHoldDecision(const Decisions& decisions, uint64_t frame, uint8_t owner = 0) {
+			for (auto found = decisions.lower_bound({frame, 0x10}); found != decisions.end() && found->first.first == frame && IsHoldDecision(found->first.second); ++found)
+				if (owner == 0 || (found->first.second & SeatBit(owner)) != 0) return true;
+			return false;
+		}
+		template<class Votes, class Certificates> bool OwnHoldAwaitingCertificate(const Votes& votes, const Certificates& certificates, uint64_t frame, uint8_t owner) {
+			for (auto found = votes.lower_bound({frame, 0x10}); found != votes.end() && found->first.first == frame && IsHoldDecision(found->first.second); ++found)
+				if ((found->first.second & SeatBit(owner)) != 0 && !certificates.contains(found->first))
+					if (const auto own = found->second.find(owner); own != found->second.end() && own->second.voterMask == SeatBit(owner)) return true;
+			return false;
+		}
 		inline void PutSize(std::vector<uint8_t>& bytes, uint32_t size) {
 			for (unsigned int shift = 0; shift < 32; shift += 8) bytes.push_back(static_cast<uint8_t>(size >> shift));
 		}
@@ -12,6 +33,15 @@ namespace RTE::NetPeerFrameDetail {
 			if (offset > bytes.size() || bytes.size() - offset < 4) return false;
 			size = 0;
 			for (unsigned int shift = 0; shift < 32; shift += 8) size |= static_cast<uint32_t>(bytes[offset++]) << shift;
+			return true;
+		}
+		inline void PutFrame(std::vector<uint8_t>& bytes, uint64_t frame) {
+			for (unsigned int shift = 0; shift < 64; shift += 8) bytes.push_back(static_cast<uint8_t>(frame >> shift));
+		}
+		inline bool TakeFrame(const std::vector<uint8_t>& bytes, size_t& offset, uint64_t& frame) {
+			if (offset > bytes.size() || bytes.size() - offset < 8) return false;
+			frame = 0;
+			for (unsigned int shift = 0; shift < 64; shift += 8) frame |= static_cast<uint64_t>(bytes[offset++]) << shift;
 			return true;
 		}
 		inline bool SameBridge(const NetHostMigrationMessage& a, const NetHostMigrationMessage& b) {

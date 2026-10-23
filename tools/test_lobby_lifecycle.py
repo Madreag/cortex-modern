@@ -9,7 +9,7 @@ The lobby lanes:
     --action drop --players 4                the same lobby drop with a fuller lobby
     --action drop --leave-at-frame 40        it is killed after sending frames through 39, before 40
 
-The last one sheds a seat while the round is running, which the lobby-time lanes never do. Its
+The last one sheds a seat while the round is running, which the lobby-time cases never do. Its
 expected shape, all of it in result.json and lockstep-stats.json beside the run:
 
     host_simulation / stayerN_simulation  every survivor's 180 ticks match the host's, byte for byte

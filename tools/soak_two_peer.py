@@ -461,7 +461,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--lag", type=int, default=0, help="the client's added one-way delay in ms (its -net-fake-lag is the round trip, twice this)")
     parser.add_argument("--loss", type=int, default=0, help="the client's GNS packet loss in percent (CC_TEST_GNS_LOSS_PERCENT)")
     parser.add_argument("--port", type=int, default=PORT_LO)
-    parser.add_argument("--port-block", default=f"{PORT_LO}-{PORT_HI}", help="the calling lane's own port block, LO-HI; --port stays inside it")
+    parser.add_argument("--port-block", default=f"{PORT_LO}-{PORT_HI}", help="the caller's own port block, LO-HI; --port stays inside it")
     parser.add_argument("--fullstate-every", type=int, default=0)
     parser.add_argument("--client-sim-cost-us", type=int, default=0,
                         help="the client spends this much more per sim tick (a slower machine's sim cost on this box)")

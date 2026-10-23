@@ -85,6 +85,13 @@ namespace RTE {
 					framing.migrationKey = m_PeerFrameKey;
 					framing.migrationTransportFactory = [] { return std::make_unique<GnsTransport>(); };
 				};
+				// A peer may finish its lobby first and publish authenticated mesh readiness while this lobby still
+				// owns the wire. Recognize that phase's packets as soon as its capsule supplies the key.
+				session.SetAuxiliaryPacketValidator([this, &session](const std::vector<uint8_t>& bytes) {
+					NetHostMigrationMessage message;
+					return m_PeerFrameKey != NetHash32{} && NetHostMigrationCodec::Decode(bytes, m_PeerFrameKey, message) &&
+					    message.sessionId == session.GetSessionId();
+				});
 			}
 		}
 		// A round opened on a checkpoint resumes from a snapshot exactly as a healed round does.
@@ -141,7 +148,7 @@ namespace RTE {
 			for (const auto& [peerId, transportId]: BuildRemoteTransportMap(session)) {
 				const uint32_t rttMs = transport.GetPeerPingMs(transportId);
 				NetInputDelayEstimator estimate;
-				estimate.Observe(0, rttMs);
+				estimate.Observe(0, rttMs, transport.IsPeerPingMeasured(transportId));
 				const uint16_t neededDelay = static_cast<uint16_t>(std::min<uint32_t>(UsesPeerFraming(m_MatchConfig) ? NetLockstepCodec::c_MaxPeerInputDelayFrames : NetLockstepCodec::c_MaxInputDelayFrames,
 				    estimate.SenderRequiredFrames(tickMs, m_MatchConfig.slowPlayerBoundTicks, floorDelay)));
 				delays[peerId - 1] = std::max(delays[peerId - 1], neededDelay);
@@ -194,8 +201,10 @@ namespace RTE {
 		// The draft is the lobby's published config: the lobby republishes on its own (a delay re-size, a dropped seat) and a draft from an
 		// older copy would name a revision it has already passed.
 		AdoptLobbyConfig();
-		if (admission.GetRoster().revision == m_MatchConfig.seatRosterRevision || m_Lobby.IsStarted()) return;
+		const bool arbitration = m_Config.directoryArbitration && m_Config.directoryArbitration(m_Lobby.GetMatchConfig());
+		if ((admission.GetRoster().revision == m_MatchConfig.seatRosterRevision && arbitration == m_MatchConfig.directoryArbitration) || m_Lobby.IsStarted()) return;
 		NetMatchConfig stamped = m_Lobby.GetMatchConfig();
+		stamped.directoryArbitration = arbitration;
 		stamped.configRevision = m_Lobby.GetMatchConfig().configRevision + 1;
 		stamped.seatRosterRevision = admission.GetRoster().revision;
 		stamped.seatRosterHash = HashRoster(admission.GetRoster());
@@ -215,8 +224,18 @@ namespace RTE {
 		}
 	}
 
+	std::string NetMatchRunner::DirectoryRuleRefusal(const NetMatchConfig& config, bool directorySession) {
+		return config.directoryArbitration && !directorySession ? "This match is played through the online match list. Join it from the list rather than by address." : std::string();
+	}
+
 	bool NetMatchRunner::AgreeOnSeatRoster(INetTransport& transport, NetSession& session, std::string* error) {
 		m_RosterAgreedRevision = 0;
+		// A peer the directory cannot hear would decide the round's splits by another rule than the seats it refers.
+		if (const std::string refusal = DirectoryRuleRefusal(m_MatchConfig, m_Config.directorySession && m_Config.directorySession()); !refusal.empty()) {
+			SetFailed(refusal);
+			if (error) *error = m_SetupError;
+			return false;
+		}
 		if (m_Config.host || m_MatchConfig.version < NetMatchConfigUtil::c_SeatRosterVersion || m_MatchConfig.seatRosterRevision == 0) return true;
 		// A peer that joins a running round was not at its start: it holds the host's roster whole from its admission.
 		if (m_WorldJoinImage) return true;
@@ -1116,7 +1135,7 @@ namespace RTE {
 		return snapshot;
 	}
 
-	bool NetMatchRunner::StartWorldJoinLockstep(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, uint64_t startFrame, uint64_t updateTick, std::string* error) {
+	bool NetMatchRunner::StartWorldJoinLockstep(INetTransport& transport, NetSession& session, NetLockstepCoordinator& coordinator, uint64_t startFrame, uint64_t updateTick, std::string* error, const NetLockstepCoordinator* replay) {
 		m_Lobby.SetStartFrame(startFrame);
 		m_Config.startFrame = startFrame;
 		m_State = NetMatchRuntimeState::LockstepStarting;
@@ -1127,10 +1146,11 @@ namespace RTE {
 		if (!StartLockstep(transport, session, coordinator, m_Config, error)) {
 			return false;
 		}
-		return PumpWorldJoinLockstepStart(coordinator, updateTick, error);
+		return PumpWorldJoinLockstepStart(coordinator, updateTick, error, replay);
 	}
 
-	bool NetMatchRunner::PumpWorldJoinLockstepStart(NetLockstepCoordinator& coordinator, uint64_t updateTick, std::string* error) {
+	bool NetMatchRunner::PumpWorldJoinLockstepStart(NetLockstepCoordinator& coordinator, uint64_t updateTick, std::string* error, const NetLockstepCoordinator* replay) {
+		if (replay) coordinator.AdoptReplayedSeatTransitions(*replay, updateTick);
 		if (!IsWorldJoinLockstepStarting()) {
 			return m_State == NetMatchRuntimeState::Running;
 		}

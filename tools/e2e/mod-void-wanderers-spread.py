@@ -61,7 +61,7 @@ def main():
     parser.add_argument("--boundary", choices=["single", "pair", "local", "nested", "revived"])
     parser.add_argument("--peer-boxes", required=True, help="the caller names every peer box")
     parser.add_argument("--pool-registry", type=Path, required=True, help="the named boxes' transport catalog")
-    parser.add_argument("--runner-wait", type=float, default=0, help="the lead's wait for the named local holder")
+    parser.add_argument("--runner-wait", type=float, default=0, help="the wait for the named local holder")
     parser.add_argument("--host-os", choices=["windows", "linux", "darwin", "any"], default="windows")
     parser.add_argument("--network", choices=["ice", "direct"], default="ice")
     parser.add_argument("--port", type=int, default=47650)
@@ -72,7 +72,7 @@ def main():
     sys.path.insert(0, str(repo / "tools"))
     sys.path.insert(1, str(options.shared_tools.resolve()))
     spread = load("spread_peers", options.interface.resolve())
-    parameters = {"network": options.network, "lane": "sol-void-wanderers-scenes-20261005",
+    parameters = {"network": options.network, "lane": "void-wanderers-scenes",
                   "runner_wait": options.runner_wait}
 
     if options.case or options.boundary:

@@ -5,7 +5,7 @@ macOS's Local Network consent dialog once per new binary path, and a pending dia
 traffic. A runner that finds itself in that session therefore starts the engine through
 `ssh -o BatchMode=yes localhost` (same argv, cwd and environment; never prompted), keeps the engine's streams and
 exit code through the hop and kills the far process group itself on a timeout. CCCP_POSIX_HOP=ssh|off forces it.
-Launches of desktop tools (osascript, screencapture, System Events) are refused, and so is a launch from a lane
+Launches of desktop tools (osascript, screencapture, System Events) are refused, and so is a launch from a caller's
 script that calls them. `--self-test` proves the exit, stream, timeout and kill paths with and without the hop.
 """
 
@@ -29,7 +29,7 @@ VERDICT_LINE = re.compile(
     r"^\[[^\]]+\].*\b(PASS|FAIL|FAILED|complete|completed|finished|failed|refused)\b"
 )
 
-# Tools that act on the user's desktop session: a lane never runs them.
+# Tools that act on the user's desktop session: a run never starts them.
 DESKTOP_TOOL = re.compile(r"\b(?:osascript|screencapture)\b|System Events")
 DESKTOP_TOOL_NAMES = {"osascript", "screencapture"}
 LANE_SCRIPT_SUFFIXES = {".sh", ".zsh", ".bash", ".command", ".py", ".pl", ".rb", ".js"}
@@ -283,7 +283,7 @@ def validate_argv(argv: Sequence[str | os.PathLike[str]] | None) -> list[str]:
                 f'argv[{index}] contains the literal "$args": a PowerShell automatic variable leaked instead of the test arguments.'
             )
         if Path(text).name in DESKTOP_TOOL_NAMES or "System Events" in text:
-            raise ArgumentPolicyError(f"argv[{index}] names a desktop tool ({text!r}); lanes never drive the user's session.")
+            raise ArgumentPolicyError(f"argv[{index}] names a desktop tool ({text!r}); runs never drive the user's session.")
         out.append(text)
     return out
 
@@ -340,8 +340,8 @@ def ancestor_commands(limit: int = 32) -> list[str]:
     return commands
 
 
-def lane_script_desktop_uses(commands: Sequence[str] | None = None) -> list[str]:
-    """Lines of the calling lane's scripts (the ancestors' script arguments) that run a desktop tool."""
+def caller_script_desktop_uses(commands: Sequence[str] | None = None) -> list[str]:
+    """Lines of the caller's scripts (the ancestors' script arguments) that run a desktop tool."""
     hits: list[str] = []
     seen = {Path(__file__).resolve()}
     for command in ancestor_commands() if commands is None else commands:
@@ -686,7 +686,7 @@ class IsolatedRun:
             self._check("out_dir_private_writable", False, f"{self.out}: {exc}")
         global _LANE_SCRIPT_HITS
         if _LANE_SCRIPT_HITS is None:
-            _LANE_SCRIPT_HITS = lane_script_desktop_uses()
+            _LANE_SCRIPT_HITS = caller_script_desktop_uses()
         self._check("lane_scripts_desktop_free", not _LANE_SCRIPT_HITS, "; ".join(_LANE_SCRIPT_HITS[:5]) or "no desktop tool")
         failed = [c for c in self.record["startup_checks"] if not c["ok"]]
         self._save()
@@ -786,6 +786,11 @@ class IsolatedRun:
                 self._proc.send_signal(sig)
             except ProcessLookupError:
                 return
+
+    @property
+    def engine_pid(self) -> int | None:
+        """The owned engine, including while it is running through the local SSH hop."""
+        return self._hop_record().get("engine_pid") if self.hop else self.record.get("pid")
 
     def poll(self) -> int | None:
         if self._proc is None:
@@ -966,12 +971,12 @@ def self_test(modes: Sequence[str]) -> int:
             refused = True
         expect(refused, f"refuses a launch of {argv[0]}")
     with tempfile.TemporaryDirectory() as scratch:
-        calling = Path(scratch) / "lane.zsh"
-        calling.write_text("#!/bin/zsh\n# a lane step\n" + "screen" + "capture -x shot.png\n")
+        calling = Path(scratch) / "caller.zsh"
+        calling.write_text("#!/bin/zsh\n# a run step\n" + "screen" + "capture -x shot.png\n")
         commented = Path(scratch) / "notes.zsh"
         commented.write_text("#!/bin/zsh\n# never call osa" + "script here\necho ok\n")
-        expect(bool(lane_script_desktop_uses([f"/bin/zsh {calling}"])), "refuses a lane script that runs a desktop tool")
-        expect(not lane_script_desktop_uses([f"/bin/zsh {commented}"]), "passes a lane script that only mentions one in a comment")
+        expect(bool(caller_script_desktop_uses([f"/bin/zsh {calling}"])), "refuses a caller script that runs a desktop tool")
+        expect(not caller_script_desktop_uses([f"/bin/zsh {commented}"]), "passes a caller script that only mentions one in a comment")
     saved = os.environ.get("CCCP_POSIX_HOP")
     try:
         for mode in modes:
@@ -999,6 +1004,8 @@ def self_test(modes: Sequence[str]) -> int:
                     deadline = time.monotonic() + 15
                     while not (root / "child.pid").is_file() and time.monotonic() < deadline:
                         time.sleep(0.05)
+                    expect(drop.engine_pid == int((root / "parent.pid").read_text()),
+                           f"{mode}: the running engine identity survives the launch route")
                     drop.terminate()
                     record = drop.finish()
                 finally:

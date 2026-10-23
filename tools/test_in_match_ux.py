@@ -1442,7 +1442,7 @@ def main():
     parser.add_argument("--base", action="store_true", help="drive a build from before this menu work")
     parser.add_argument("--compare", type=Path, help="an earlier sp-pause result.json to hold the single-player menu against")
     parser.add_argument("--port", type=int, required=True)
-    parser.add_argument("--port-block", help="lane-owned game ports LO-HI for spread mode")
+    parser.add_argument("--port-block", help="caller-owned game ports LO-HI for spread mode")
     parser.add_argument("--dry-run", action="store_true", help="print each probe's step count and stop")
     parser.add_argument("--spread-tools", type=Path, help="the canonical shared tools directory for an explicitly routed spread run")
     spread.add_arguments(parser)
@@ -1464,7 +1464,7 @@ def main():
         except ValueError as error:
             parser.error(str(error))
     elif not 1024 < options.port < 50000:
-        parser.error("take the port from the lane's own block below 50000")
+        parser.error("take the port from the caller's own block below 50000")
     options.repo = options.repo.resolve()
     options.out.mkdir(parents=True, exist_ok=False)
     sizes = SIZES if options.all_sizes else (options.size,)

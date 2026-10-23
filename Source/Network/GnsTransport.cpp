@@ -9,6 +9,8 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <charconv>
+#include <system_error>
 #include <limits>
 #include <map>
 #include <mutex>
@@ -19,6 +21,7 @@
 #include <iostream>
 #include <sstream>
 #include <string_view>
+#include <vector>
 #include <functional>
 #include <cmath>
 #include <cstdlib>
@@ -75,6 +78,27 @@ namespace RTE {
 #ifdef CCCP_WITH_GNS
 
 	namespace {
+		struct FeelLagStep { uint64_t frame = 0; int lagMs = 0; };
+		FeelLagStep ParseFeelLagStep(std::string_view text) {
+			const auto colon = text.find(':');
+			if (colon == std::string_view::npos) return {};
+			FeelLagStep result;
+			const auto frame = std::from_chars(text.data(), text.data() + colon, result.frame);
+			const auto lag = std::from_chars(text.data() + colon + 1, text.data() + text.size(), result.lagMs);
+			if (frame.ec != std::errc{} || frame.ptr != text.data() + colon ||
+			    lag.ec != std::errc{} || lag.ptr != text.data() + text.size() ||
+			    result.frame == 0 || result.frame > 1000000 || result.lagMs < 0 || result.lagMs > 20000) return {};
+			return result;
+		}
+		const FeelLagStep& TestFeelLagStep() {
+			static const FeelLagStep config = [] {
+				const char* feel = std::getenv("CC_TEST_FEEL_HEADED");
+				const char* runner = std::getenv("CC_RUNNER_HEADED");
+				const char* step = std::getenv("CC_TEST_FEEL_LAG_STEP");
+				return feel && runner && step && std::string_view(feel) == "1" && std::string_view(runner) == "1" ? ParseFeelLagStep(step) : FeelLagStep{};
+			}();
+			return config;
+		}
 		struct UplinkStallConfig { uint64_t frame = 0, durationMs = 0; };
 		UplinkStallConfig ParseUplinkStall(const char* frame, const char* duration) {
 			const auto number = [](const char* text, uint64_t limit) {
@@ -125,6 +149,69 @@ namespace RTE {
 			}
 		};
 		UplinkStall s_TestUplinkStall;
+		/// Test lever CC_TEST_GNS_LINK_CUT=<frame>:<ms>[:send|receive][;...]: from the first outgoing lockstep frame at or past each
+		/// <frame>, every packet this process sends, receives or both is lost for <ms>, the path gone as a relay that drops is, the
+		/// process still running. Several cuts may overlap, so one direction can fail ahead of the other.
+		struct LinkCut {
+			struct Cut { uint64_t frame = 0, durationMs = 0, untilMs = 0; bool send = true, receive = true, started = false; };
+			std::vector<Cut> cuts;
+			bool applied = false, finished = false;
+			float previousSend = 0, previousReceive = 0;
+			static LinkCut FromLever() {
+				LinkCut lever;
+				const char* text = std::getenv("CC_TEST_GNS_LINK_CUT");
+				std::string_view rest = text ? std::string_view(text) : std::string_view{};
+				while (!rest.empty()) {
+					const size_t end = rest.find(';');
+					std::string_view value = rest.substr(0, end);
+					rest = end == std::string_view::npos ? std::string_view{} : rest.substr(end + 1);
+					const size_t colon = value.find(':');
+					if (colon == std::string_view::npos) return {};
+					const size_t side = value.find(':', colon + 1);
+					const std::string_view direction = side == std::string_view::npos ? std::string_view{} : value.substr(side + 1);
+					if (side != std::string_view::npos) value = value.substr(0, side);
+					if (!direction.empty() && direction != "send" && direction != "receive") return {};
+					Cut cut;
+					const auto a = std::from_chars(value.data(), value.data() + colon, cut.frame);
+					const auto b = std::from_chars(value.data() + colon + 1, value.data() + value.size(), cut.durationMs);
+					if (a.ec != std::errc{} || a.ptr != value.data() + colon || b.ec != std::errc{} || b.ptr != value.data() + value.size() ||
+					    cut.frame == 0 || cut.durationMs == 0 || cut.durationMs > 600000) return {};
+					cut.send = direction != "receive"; cut.receive = direction != "send";
+					lever.cuts.push_back(cut);
+				}
+				return lever;
+			}
+			void NoteFrame(uint64_t outgoing, uint64_t nowMs) {
+				for (auto& cut: cuts) {
+					if (cut.started || outgoing < cut.frame) continue;
+					if (!applied) {
+						previousSend = GlobalLoss(k_ESteamNetworkingConfig_FakePacketLoss_Send);
+						previousReceive = GlobalLoss(k_ESteamNetworkingConfig_FakePacketLoss_Recv);
+						applied = true;
+					}
+					cut.started = true; cut.untilMs = nowMs + cut.durationMs;
+					DiagnosticLine() << "[test-link-cut] begin frame=" << outgoing << " duration_ms=" << cut.durationMs << " send=" << cut.send << " receive=" << cut.receive << " unix_ms="
+					                 << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << std::endl;
+				}
+				Update(nowMs);
+			}
+			void Update(uint64_t nowMs) {
+				if (!applied || finished) return;
+				bool send = false, receive = false, pending = false;
+				for (const auto& cut: cuts) {
+					if (!cut.started) { pending = true; continue; }
+					if (nowMs < cut.untilMs) { send |= cut.send; receive |= cut.receive; }
+				}
+				const bool set = SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketLoss_Send, send ? 100.0F : previousSend) &&
+				                 SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketLoss_Recv, receive ? 100.0F : previousReceive);
+				if (!set || send || receive || pending) return;
+				finished = true;
+				DiagnosticLine() << "[test-link-cut] end unix_ms="
+				                 << std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count() << std::endl;
+			}
+			bool Armed() const { return !cuts.empty(); }
+		};
+		LinkCut s_TestLinkCut = LinkCut::FromLever();
 		uint64_t UplinkStallClockMs() { return static_cast<uint64_t>(SteamNetworkingUtils()->GetLocalTimestamp() / 1000); }
 
 		struct SignalField { uint32_t number; uint8_t wire; uint64_t integer; std::string_view bytes; };
@@ -477,6 +564,7 @@ namespace RTE {
 				return false;
 			}
 			s_TestUplinkStall.Update(UplinkStallClockMs());
+			s_TestLinkCut.Update(UplinkStallClockMs());
 			auto& flow = m_PacketFlow[connectionIt->second];
 			flow.lastAttemptUs = SteamNetworkingUtils()->GetLocalTimestamp();
 			const EResult result = m_Interface->SendMessageToConnection(
@@ -641,6 +729,7 @@ namespace RTE {
 		std::vector<NetTransportEvent> PollEvents() {
 			if (m_Interface) {
 				s_TestUplinkStall.Update(UplinkStallClockMs());
+				s_TestLinkCut.Update(UplinkStallClockMs());
 				// Drain delivered messages first: a close callback forgets the connection, which would
 				// drop a reject/goodbye that GNS already delivered alongside it.
 				PollIncomingMessages();
@@ -1929,9 +2018,27 @@ namespace RTE {
 	void GnsTransport::ObserveOutgoingLockstepFrame(uint64_t targetFrame) {
 #ifdef CCCP_WITH_GNS
 		const auto& config = TestUplinkStallConfig();
-		if (config.durationMs == 0) return;
+		const auto& step = TestFeelLagStep();
+		if (config.durationMs == 0 && step.frame == 0 && !s_TestLinkCut.Armed()) return;
 		std::lock_guard<std::recursive_mutex> lock(GnsCallLock());
-		if (SteamNetworkingUtils()) s_TestUplinkStall.NoteFrame(config, targetFrame, UplinkStallClockMs());
+		if (auto* utils = SteamNetworkingUtils()) {
+			s_TestUplinkStall.NoteFrame(config, targetFrame, UplinkStallClockMs());
+			s_TestLinkCut.NoteFrame(targetFrame, UplinkStallClockMs());
+			static bool stepped = false;
+			if (!stepped && step.frame && targetFrame >= step.frame) {
+				stepped = true;
+				const bool applied = utils->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_FakePacketLag_Send, step.lagMs / 2) &&
+				                     utils->SetGlobalConfigValueInt32(k_ESteamNetworkingConfig_FakePacketLag_Recv, step.lagMs - step.lagMs / 2);
+				int32 send = -1, receive = -1;
+				size_t bytes = sizeof(send); ESteamNetworkingConfigDataType type = k_ESteamNetworkingConfig_Int32;
+				const bool sendRead = utils->GetConfigValue(k_ESteamNetworkingConfig_FakePacketLag_Send, k_ESteamNetworkingConfig_Global, 0, &type, &send, &bytes) > 0;
+				bytes = sizeof(receive);
+				const bool receiveRead = utils->GetConfigValue(k_ESteamNetworkingConfig_FakePacketLag_Recv, k_ESteamNetworkingConfig_Global, 0, &type, &receive, &bytes) > 0;
+				DiagnosticLine() << "[feel-lag-step] requested_frame=" << step.frame << " observed_target_frame=" << targetFrame
+				                 << " per_engine_lag_ms=" << step.lagMs << " applied=" << applied << " readback=" << (sendRead && receiveRead)
+				                 << " send_lag_ms=" << send << " receive_lag_ms=" << receive << std::endl;
+			}
+		}
 #else
 		(void)targetFrame;
 #endif
@@ -1954,6 +2061,9 @@ namespace RTE {
 		}
 		for (const auto& bad : {ParseUplinkStall(nullptr, "300"), ParseUplinkStall("600", nullptr), ParseUplinkStall("-1", "300"), ParseUplinkStall("600x", "300"), ParseUplinkStall("600", "10001")}) passed = passed && bad.durationMs == 0;
 		passed = passed && ParseUplinkStall("600", "300").durationMs == 300;
+		for (std::string_view bad: {"", "600", "0:100", "-1:100", "600:-1", "600:20001", "1000001:100", "600:100x", "600:100:1", ":100", "600:"})
+			passed = passed && ParseFeelLagStep(bad).frame == 0;
+		passed = passed && ParseFeelLagStep("600:100").frame == 600 && ParseFeelLagStep("600:100").lagMs == 100 && ParseFeelLagStep("600:0").frame == 600;
 		SteamNetworkingUtils()->SetGlobalConfigValueFloat(k_ESteamNetworkingConfig_FakePacketLoss_Send, send);
 		ReleaseGns();
 		if (!passed && error) *error = "the one-way stall changed receiving, failed its clock, or failed to restore sending";

@@ -98,7 +98,7 @@ def main() -> int:
     parser.add_argument("--repo", type=Path, default=REPO)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--check", choices=("reopen", "unreachable"), required=True)
-    parser.add_argument("--port", type=int, default=49832, help="the first of four lane ports: directory, proxy, two game ports")
+    parser.add_argument("--port", type=int, default=49832, help="the first of four ports: directory, proxy, two game ports")
     if spread:
         spread.add_arguments(parser)
     options = parser.parse_args()

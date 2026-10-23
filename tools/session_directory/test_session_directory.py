@@ -15,6 +15,7 @@ import re
 import select
 import shutil
 import socket
+import sqlite3
 import struct
 import ssl
 import subprocess
@@ -34,7 +35,8 @@ import session_directory
 from world_ticks import compare_world_ticks, read_world_ticks
 from session_directory import IP_REG_PER_MIN, IP_REQ_PER_MIN, REQ_PER_MIN, DualRateLimiter, LOGGER, RunningServer, spawn_server
 from unittest import mock
-from connection_authority import ConnectionErrorReply, ConnectionAuthority, REQUEST_DOMAIN, TOKEN_DOMAIN, TOKEN_FIELDS
+from connection_authority import ConnectionErrorReply, ConnectionAuthority, MAX_RECORD_BYTES, REQUEST_DOMAIN, TOKEN_DOMAIN, TOKEN_FIELDS
+from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
 
 INSTALL_KEY = "0123456789abcdef"
@@ -656,13 +658,14 @@ class DirectoryTests(unittest.TestCase):
         sockets = []
         honest = threading.Event()
         accepted = 0
-        accept_lock = threading.Lock()
+        accept_lock = threading.Condition()
         get_request = self.server.httpd.get_request
         def caller_address():
             nonlocal accepted
             connection, address = get_request()
             with accept_lock:
                 accepted += 1
+                accept_lock.notify_all()
             # Distinct callers use real local sockets without requiring a second loopback alias.
             return connection, ("127.0.0.2" if honest.is_set() else address[0], address[1])
         address_fixture = mock.patch.object(self.server.httpd, "get_request", side_effect=caller_address)
@@ -673,8 +676,9 @@ class DirectoryTests(unittest.TestCase):
                 sockets.append(connection)
                 try: connection.sendall(b"GET /v1/sessions HTTP/1.1\r\nX-Test: ")
                 except OSError: pass
-            time.sleep(0.15)
+            # The fixture waits for the directory to take every connection, never for a fixed time.
             with accept_lock:
+                accept_lock.wait_for(lambda: accepted >= 64, timeout=10)
                 self.assertEqual(accepted, 64, "U4: not every unfinished local request reached the fixture")
             honest.set()
             conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=1)
@@ -893,6 +897,13 @@ class DirectoryTests(unittest.TestCase):
         honest = {"CF-Connecting-IP": "192.0.2.200"}
         status, row = self.call("POST", "/v1/sessions", sample_register(), headers=honest)
         self.assertEqual(status, 200)
+        httpd = self.server.httpd
+        # Each dripper is paced on the directory taking it up, never on how long a sleep lasts.
+        taken = threading.Semaphore(0)
+        serve = httpd.process_request_thread
+        def counted(request: socket.socket, client_address: Any) -> None:
+            taken.release()
+            serve(request, client_address)
         sockets = []
         stop = threading.Event()
         def drip():
@@ -902,15 +913,19 @@ class DirectoryTests(unittest.TestCase):
                     except OSError: pass
         worker = threading.Thread(target=drip)
         try:
-            for index in range(64):
-                connection = socket.create_connection(("127.0.0.1", self.port), timeout=1)
-                sockets.append(connection)
-                try:
-                    connection.sendall((f"POST /v1/sessions HTTP/1.1\r\nHost: localhost\r\nX-Install-Key: {index:016x}\r\nCF-Connecting-IP: 192.0.2.1\r\nContent-Length: 4096\r\n\r\n{{").encode())
-                except OSError:
-                    pass
-                time.sleep(0.015)
+            with mock.patch.object(httpd, "process_request_thread", counted):
+                for index in range(64):
+                    connection = socket.create_connection(("127.0.0.1", self.port), timeout=1)
+                    sockets.append(connection)
+                    try:
+                        connection.sendall((f"POST /v1/sessions HTTP/1.1\r\nHost: localhost\r\nX-Install-Key: {index:016x}\r\nCF-Connecting-IP: 192.0.2.1\r\nContent-Length: 4096\r\n\r\n{{").encode())
+                    except OSError:
+                        pass
+                    self.assertTrue(taken.acquire(timeout=10), "T5: the directory never took up a dripping body")
             worker.start()
+            # A dripper the directory answered or closed is readable; the heartbeat must meet all 64 still held.
+            answered, _, _ = select.select(sockets, [], [], 0)
+            self.assertEqual(len(sockets) - len(answered), 64, "T5: the dripping bodies were let go before the heartbeat arrived")
             started = time.monotonic()
             try:
                 status, _ = self.call("POST", f"/v1/sessions/{row['session_id']}/heartbeat", {"token": row["token"], "peer_count": 1, "seats_free": 1}, headers=honest)
@@ -943,7 +958,16 @@ class DirectoryTests(unittest.TestCase):
         address = {"CF-Connecting-IP": "192.0.2.250"}
         status, row = self.call("POST", "/v1/sessions", sample_register(), headers=address)
         self.assertEqual(status, 200)
+        httpd = self.server.httpd
         threads, answers = [], []
+        # Each poll is paced on the directory's waiter decision, and its replies are counted, never timed.
+        decided, answered = threading.Semaphore(0), threading.Semaphore(0)
+        begin = httpd.begin_signal_wait
+        def counted(source: str) -> bool:
+            try:
+                return begin(source)
+            finally:
+                decided.release()
         def poll(index, source):
             conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=30)
             try:
@@ -955,14 +979,21 @@ class DirectoryTests(unittest.TestCase):
                 answers.append((0, type(error).__name__))
             finally:
                 conn.close()
+                answered.release()
+        # A held wait lasts the poll's whole 25 s, so the waiter capacity is full when the heartbeat comes, on any clock.
+        held = ExitStack()
+        held.enter_context(mock.patch.object(session_directory, "SIGNAL_POLL_WINDOW_S", session_directory.MAX_SIGNAL_WAIT_S))
+        held.enter_context(mock.patch.object(httpd, "begin_signal_wait", counted))
         try:
-            for count, shared in ((64, True), (200, False)):
+            for count, shared, waiting in ((64, True, session_directory.MAX_SIGNAL_WAITERS_PER_SOURCE), (200, False, session_directory.MAX_SIGNAL_WAITERS)):
                 for index in range(count):
                     source = "192.0.2.1" if shared else f"198.51.{index // 250}.{index % 250 + 1}"
                     worker = threading.Thread(target=poll, args=(len(threads) + 1000, source))
                     threads.append(worker)
                     worker.start()
-                    time.sleep(0.015)
+                    self.assertTrue(decided.acquire(timeout=10), "R2: a poll never reached the directory's waiter decision")
+                with httpd._waiter_lock:
+                    self.assertEqual(httpd._waiters, waiting, "R2: the waiter capacity was not full when the heartbeat came")
                 started = time.monotonic()
                 try:
                     status, _ = self.call("POST", f"/v1/sessions/{row['session_id']}/heartbeat",
@@ -972,13 +1003,17 @@ class DirectoryTests(unittest.TestCase):
                 self.assertEqual(status, 200, "R2: waiting polls prevented an honest heartbeat")
                 self.assertLess(time.monotonic() - started, self.server.store.expiry_s, "R2: heartbeat answered after its lease")
                 self.assertEqual(self.call("GET", "/v1/sessions", headers=address)[1]["total"], 1)
+            for _ in range(len(threads) - session_directory.MAX_SIGNAL_WAITERS):
+                self.assertTrue(answered.acquire(timeout=10), "R2: a poll past the waiter capacity was not answered at once")
             self.assertTrue(any(status == 200 and body.get("retry_after_s") for status, body in answers),
                             "R2: excess waiters did not get an immediate empty answer and retry hint")
         finally:
             completed = list(answers)
             self.server.store.stop()
+            held.close()
             for worker in threads:
                 worker.join(3)
+        self.assertEqual(len(completed), len(threads) - session_directory.MAX_SIGNAL_WAITERS, "R2: a held waiter was answered before the directory stopped")
         self.assertTrue(all(status == 200 for status, _ in completed),
                         f"R2: bounded waiters dropped an honest polling request: {[(status, body) for status, body in completed if status != 200]!r}")
 
@@ -3597,6 +3632,42 @@ class ConnectionAuthorityTests(unittest.TestCase):
         ties = dict(self.store.connections.records())[self.sid]["frame_ties"]
         self.assertEqual(len(ties), 2)
 
+    def test_frame_tie_three_seats_arbitrates_either_size_without_rewriting_history(self):
+        self.referee_fixture(seats=3)
+        self.assertEqual(self.frame_check_in(2, [2])["members"], [2])
+        self.assertEqual(self.frame_check_in(0, [0, 1])["members"], [2])
+        self.assertEqual(self.frame_check_in(1, [2], query_only=True)["members"], [2])
+        self.assertEqual(self.frame_check_in(0, [0, 1], frame=89)["members"], [0, 1])
+        self.assertEqual(self.frame_check_in(2, [2], frame=89)["members"], [0, 1])
+        self.assertEqual(self.store.connection_bootstrap(self.sid, self.now)["host_generation"], 0)
+
+    def test_frame_tie_unequal_groups_keep_retained_owner_and_signer_checks(self):
+        self.referee_fixture()
+        for members, caller in (([], 0), ([0, 1, 2, 3], 0), ([1, 1], 1), ([3, 2], 3), ([4], 0), ([1, 2, 3], 0)):
+            with self.subTest(members=members, caller=caller), self.assertRaises(ConnectionErrorReply) as invalid:
+                self.frame_check_in(caller, members)
+            self.assertEqual(invalid.exception.body["error"], "frame_tie_request")
+        with self.assertRaises(ConnectionErrorReply) as omitted:
+            self.frame_check_in(0, [0], owners=[0, 1, 2])
+        self.assertEqual(omitted.exception.body["error"], "frame_tie_owners")
+        self.assertEqual(self.frame_check_in(0, [1, 2, 3], query_only=True)["status"], "waiting")
+        self.assertEqual(self.frame_check_in(3, [1, 2, 3])["members"], [1, 2, 3])
+        self.assertEqual(self.frame_check_in(0, [0])["members"], [1, 2, 3])
+        self.assertEqual(self.frame_check_in(0, [0], frame=89)["members"], [0])
+        self.assertEqual(self.frame_check_in(2, [1, 2, 3], frame=89)["members"], [0])
+
+    def test_frame_tie_drops_a_seat_the_host_removed(self):
+        self.referee_fixture()
+        self.assertEqual(self.frame_check_in(2, [2, 3])["members"], [2, 3])
+        removal = dict(connection_protocol=session_directory.CONNECTION_PROTOCOL, operation="remove", token=self.row["token"], host_generation=0,
+                       participant=self.referee_players[3][0].public_key().public_bytes_raw().hex(), name="Seat 3", action="removed")
+        self.store.connection_request(self.sid, removal, self.now, INSTALL_KEY)
+        # A half cut off from the host still names the removed seat: its question is answered, never refused.
+        self.assertEqual(self.frame_check_in(0, [0, 1], query_only=True)["members"], [2])
+        later = self.frame_check_in(2, [2, 3], frame=90)
+        self.assertEqual((later["status"], later["members"]), ("decided", [2]))
+        self.assertEqual(self.frame_check_in(0, [0, 1], frame=90)["members"], [2])
+
     def test_frame_tie_decision_survives_later_ties_and_reload(self):
         self.referee_fixture()
         self.assertEqual(self.frame_check_in(0, [0, 1])["members"], [0, 1])
@@ -3618,6 +3689,117 @@ class ConnectionAuthorityTests(unittest.TestCase):
             record["host_seat"] = 2
             self.store.connections._save(self.sid, record)
         self.assertEqual(self.frame_check_in(3, [2, 3], query_only=True)["members"], [0, 1])
+
+    def test_inline_frame_tie_history_migrates_without_reopening_a_decision(self):
+        self.referee_fixture()
+        self.assertEqual(self.frame_check_in(0, [0, 1])["members"], [0, 1])
+        authority = self.store.connections
+        record = dict(authority.records())[self.sid]
+        nonce = os.urandom(12)
+        sealed = nonce + authority._seal.encrypt(nonce, json.dumps(record).encode(), self.sid.encode("ascii"))
+        with authority._db:
+            authority._db.execute("DELETE FROM connection_frame_ties WHERE session=?", (self.sid,))
+            authority._db.execute("UPDATE connections SET record=? WHERE session=?", (sealed, self.sid))
+        self.store.stop()
+        self.store = session_directory.SessionDirectory(15, 5, **self.options)
+        self.assertEqual(self.frame_check_in(2, [2, 3])["members"], [0, 1])
+        authority = self.store.connections
+        saved = authority._db.execute("SELECT record FROM connections WHERE session=?", (self.sid,)).fetchone()[0]
+        with self.assertRaises(InvalidTag):
+            authority._seal.decrypt(saved[:12], saved[12:], self.sid.encode("ascii"))
+        live = json.loads(authority._seal.decrypt(saved[:12], saved[12:], authority._record_context(self.sid)))
+        self.assertNotIn("frame_ties", live)
+        self.assertEqual(live["_frame_tie_history"]["count"], 1)
+        self.assertEqual(authority._db.execute("SELECT COUNT(*) FROM connection_frame_ties").fetchone()[0], 1)
+        self.store.stop()
+        self.store = session_directory.SessionDirectory(15, 5, **self.options)
+        self.assertEqual(self.frame_check_in(2, [2, 3], query_only=True)["members"], [0, 1])
+
+    def test_frame_tie_storage_rejects_missing_replaced_and_rebound_history(self):
+        for corruption in ("missing", "rebound", "replaced", "extra"):
+            with self.subTest(corruption=corruption):
+                path = Path(self.temporary.name) / f"ties-{corruption}.sqlite3"
+                authority = ConnectionAuthority(b"isolated-test-service-key", path)
+                sid = str(uuid.uuid4())
+                tie = dict(owners=[0, 1], host=0, winner=[0])
+                record = dict(version=session_directory.CONNECTION_PROTOCOL, seats={}, removed={}, retain_until=self.wall + 3600,
+                              frame_ties={"first": tie})
+                authority._save(sid, record)
+                with authority._db:
+                    if corruption == "missing":
+                        authority._db.execute("DELETE FROM connection_frame_ties")
+                    elif corruption == "rebound":
+                        authority._db.execute("UPDATE connection_frame_ties SET name='another'")
+                    elif corruption == "extra":
+                        authority._db.execute("INSERT INTO connection_frame_ties SELECT session, 'another', record FROM connection_frame_ties")
+                    else:
+                        # A valid older ciphertext must still match the live record's committed history digest.
+                        nonce = os.urandom(12)
+                        changed = json.dumps(dict(tie, winner=[1])).encode()
+                        sealed = nonce + authority._seal.encrypt(nonce, changed, authority._tie_context(sid, "first"))
+                        authority._db.execute("UPDATE connection_frame_ties SET record=?", (sealed,))
+                authority.close()
+                with self.assertRaisesRegex(ValueError, "could not be verified"):
+                    ConnectionAuthority(b"isolated-test-service-key", path)
+                path.unlink()
+
+    def test_history_larger_than_the_live_record_limit_survives_restart(self):
+        self.referee_fixture()
+        self.frame_check_in(0, [0, 1])
+        authority = self.store.connections
+        record = dict(authority.records())[self.sid]
+        for index in range(3):
+            record["frame_ties"][f"retained-{index}"] = dict(owners=[0, 1, 2, 3], host=0, winner=[0, 1],
+                                                          padding="x" * (MAX_RECORD_BYTES // 2))
+        self.assertGreater(len(authority._json(record)), MAX_RECORD_BYTES)
+        authority._save(self.sid, record)
+        saved = authority._db.execute("SELECT record FROM connections WHERE session=?", (self.sid,)).fetchone()[0]
+        self.assertLessEqual(len(saved), MAX_RECORD_BYTES + 28)
+        self.store.stop()
+        self.store = session_directory.SessionDirectory(15, 5, **self.options)
+        self.assertEqual(dict(self.store.connections.records())[self.sid]["frame_ties"], record["frame_ties"])
+        self.assertEqual(self.frame_check_in(2, [2, 3], query_only=True)["members"], [0, 1])
+
+    def test_frame_tie_history_and_live_record_commit_together(self):
+        self.referee_fixture()
+        self.frame_check_in(0, [0, 1])
+        authority = self.store.connections
+        record = dict(authority.records())[self.sid]
+        record["frame_ties"]["another"] = dict(owners=[0, 1, 2, 3], host=0, winner=[2, 3])
+        before = authority._db.execute("SELECT record FROM connections WHERE session=?", (self.sid,)).fetchone()[0]
+        authority._db.execute("CREATE TRIGGER reject_live_record BEFORE UPDATE ON connections BEGIN SELECT RAISE(ABORT, 'test write failure'); END")
+        with self.assertRaises(sqlite3.IntegrityError):
+            authority._save(self.sid, record)
+        self.assertEqual(authority._db.execute("SELECT COUNT(*) FROM connection_frame_ties").fetchone()[0], 1)
+        self.assertEqual(authority._db.execute("SELECT record FROM connections WHERE session=?", (self.sid,)).fetchone()[0], before)
+        self.assertNotIn("another", dict(authority.records())[self.sid]["frame_ties"])
+        authority._db.execute("DROP TRIGGER reject_live_record")
+        self.assertEqual(self.frame_check_in(2, [2, 3])["members"], [0, 1])
+
+    def test_separate_history_keeps_the_record_and_entry_size_bounds(self):
+        self.referee_fixture()
+        self.frame_check_in(0, [0, 1])
+        authority = self.store.connections
+        for large_tie in (False, True):
+            record = dict(authority.records())[self.sid]
+            if large_tie:
+                record["frame_ties"]["another"] = dict(padding="x" * MAX_RECORD_BYTES)
+            else:
+                record["padding"] = "x" * MAX_RECORD_BYTES
+            with self.assertRaises(ConnectionErrorReply) as too_large:
+                authority._save(self.sid, record)
+            self.assertEqual(too_large.exception.body["error"], "connection_capacity")
+        self.assertEqual(authority._db.execute("SELECT COUNT(*) FROM connection_frame_ties").fetchone()[0], 1)
+        self.assertEqual(self.frame_check_in(2, [2, 3])["members"], [0, 1])
+
+    def test_expired_match_removes_its_persisted_frame_ties(self):
+        self.referee_fixture()
+        self.frame_check_in(0, [0, 1])
+        authority = self.store.connections
+        authority.prune(dict(authority.records())[self.sid]["retain_until"] + 1)
+        self.assertNotIn(self.sid, authority._records)
+        self.assertNotIn(self.sid, authority._tie_rows)
+        self.assertEqual(authority._db.execute("SELECT COUNT(*) FROM connection_frame_ties").fetchone()[0], 0)
 
     def test_host_referee_names_one_host_boundary_and_fences_old_owner(self):
         self.referee_fixture(); self.referee_silent_host()
@@ -3777,6 +3959,17 @@ class ConnectionAuthorityTests(unittest.TestCase):
         self.assertIn("Original player", banned.exception.body["message"])
         with self.assertRaises(ConnectionErrorReply):
             self.store.connection_request(self.sid, self.issue, self.now, INSTALL_KEY)
+
+    def test_a_lifted_ban_lets_the_player_take_a_seat_again(self) -> None:
+        self.check()
+        removal = dict(connection_protocol=session_directory.CONNECTION_PROTOCOL, operation="remove", token=self.row["token"], host_generation=0,
+                       participant=self.issue["participant"], name="Original player", action="banned")
+        self.store.connection_request(self.sid, removal, self.now, INSTALL_KEY)
+        with self.assertRaises(ConnectionErrorReply):
+            self.store.connection_request(self.sid, self.issue, self.now, INSTALL_KEY)
+        self.store.connection_request(self.sid, dict(removal, action="lifted"), self.now, INSTALL_KEY)
+        self.store.connection_request(self.sid, self.issue, self.now, INSTALL_KEY)
+        self.assertEqual(self.check()["seat"], 1)
 
     def test_a_clock_refusal_names_the_directory_time(self) -> None:
         self.assertEqual(self.check()["directory_time"], int(self.wall))

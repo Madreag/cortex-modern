@@ -285,6 +285,7 @@ namespace RTE {
 			if (carriesReturnWindow) {
 				reserved |= NetMatchConfigUtil::c_ReservedReturnWindowBit;
 			}
+			if (config.directoryArbitration) reserved |= NetMatchConfigUtil::c_ReservedDirectoryArbitrationBit;
 			AppendU16LE(out, reserved);
 			if (!AppendString(out, config.activityType, NetLobbyProtocol::c_MaxShortTextBytes, "activity_type", error) ||
 			    !AppendString(out, config.activityPreset, NetLobbyProtocol::c_MaxShortTextBytes, "activity_preset", error) ||
@@ -398,6 +399,7 @@ namespace RTE {
 				return false;
 			}
 			out.dedicated = (reserved & NetMatchConfigUtil::c_ReservedDedicatedBit) != 0;
+			out.directoryArbitration = (reserved & NetMatchConfigUtil::c_ReservedDirectoryArbitrationBit) != 0;
 			const bool carriesRedundancy = (reserved & NetMatchConfigUtil::c_ReservedFrameRedundancyBit) != 0;
 			// The world bit is known only on a v5 config; a v4 reader still refuses the whole word, so
 			// an older peer can never read a world's round as an ordinary match.

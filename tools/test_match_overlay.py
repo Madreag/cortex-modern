@@ -963,7 +963,7 @@ def main():
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--exe-sha256", required=True)
     parser.add_argument("--timeout", type=int, default=600)
-    # A second lane runs the same matrix from its own scratch root and port range.
+    # A second run runs the same matrix from its own scratch root and port range.
     parser.add_argument("--scratch", type=Path, default=SCRATCH)
     parser.add_argument("--port-base", type=int, default=PORT_BASE)
     parser.add_argument("--sizes", default="640x360,960x540", help="viewports to run, in order")

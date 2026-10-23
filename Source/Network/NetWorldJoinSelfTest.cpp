@@ -4407,6 +4407,46 @@ namespace RTE {
 		return 0;
 	}
 
+	/// A replay held up by a lost datagram is missing its neighbours too: once it has passed fewer frames than the round made over a
+	/// resend time, every datagram it could pass in the next one goes again, while a replay that keeps the round's rate keeps the
+	/// resends to its lowest two.
+	int TestAStalledReplayGetsItsNextIntervalAgain() {
+		const auto resent = [](NetWorldJoinHost& host, uint64_t nowMs) {
+			std::vector<uint8_t> chunk;
+			size_t count = 0;
+			while (count < 1000 && host.NextTailDatagram(42, nowMs, chunk)) ++count;
+			return count;
+		};
+		for (const bool stalled: {false, true}) {
+			NetWorldJoinHost host;
+			auto config = NetMatchConfigUtil::MakeDefault(0x9A23);
+			std::string error;
+			if (!host.ConfigureMatchRejoins(config, 9, 1000.0 / 60.0, &error)) return Fail("stalled-tail fixture: " + error);
+			for (uint64_t tick = 30; tick <= 400; ++tick) {
+				NetLockstepFrame frame;
+				frame.senderPeerId = 1; frame.targetFrame = tick; frame.roundId = 9;
+				if (!host.Tail().Append(frame, &error)) return Fail("stalled-tail tail: " + error);
+			}
+			if (!host.BeginInPlaceRejoin(42, 2, 2, 3, "returning", 1, 50, &error)) return Fail("stalled-tail rejoin: " + error);
+			host.NoteRejoinLinkFit(42, true);
+			host.NoteTailLinkRtt(42, 282);
+			if (resent(host, 1000) == 0 || resent(host, 1030) == 0) return Fail("the stalled-tail fixture sent no tail and no repeats");
+			uint64_t activation = 0;
+			host.NoteCatchUpClock(42, 1100);
+			if (!host.NoteCatchUpProgress(42, 60, 10, 100, 120, &activation, &error)) return Fail(error);
+			(void)resent(host, 1100);
+			// One resend time after the report: a replay that has kept the round's rate since gets its lowest two only.
+			if (!stalled) {
+				host.NoteCatchUpClock(42, 1550);
+				if (!host.NoteCatchUpProgress(42, 100, 40, 450, 150, &activation, &error)) return Fail(error);
+			}
+			const size_t again = resent(host, 1700);
+			const size_t expected = stalled ? static_cast<size_t>(std::ceil(463.0 / (1000.0 / 60.0) * c_NetWorldTailStalledReplayRate / c_NetWorldTailDatagramFrames)) : c_NetWorldTailResendDepth;
+			if (again != expected) return Fail(std::string(stalled ? "a stalled" : "a moving") + " replay was resent " + std::to_string(again) + " datagrams, not " + std::to_string(expected));
+		}
+		return 0;
+	}
+
 	/// A held seat whose player kept its state catches up on the committed tail from its own tick: no image is staged or sent,
 	/// the tail starts at the next frame, and a state the kept tail no longer reaches is refused so the seat takes the image.
 	int TestAHeldSeatCatchesUpInPlaceWithoutAnImage() {
@@ -4711,7 +4751,7 @@ namespace RTE {
 	/// never activated and is told why once.
 	int TestActivationFollowsTheMeasuredTrail() {
 		const auto config = NetMatchConfigUtil::MakeDefault(0x9A53);
-		struct Case { const char* name; uint64_t behind; uint64_t advance; bool activates; uint64_t minTrail; const char* reason; uint64_t workUs = 1000000; };
+		struct Case { const char* name; uint64_t behind; uint64_t advance; bool activates; uint64_t minTrail; const char* reason; uint64_t workUs = 1000000; uint32_t rttMs = 0, ackMs = 0; };
 		const Case cases[] = {
 			{"round-pace-past-the-lead", 90, 30, true, 60, nullptr},
 			{"gaining-inside-the-lead", 40, 42, true, 0, nullptr},
@@ -4721,6 +4761,18 @@ namespace RTE {
 			// 240 ticks in 7.2 s of work is a replay at 0.56 of the round's rate: 90 frames behind at the round's pace, activated, the survivors
 			// would wait on every frame it is required for.
 			{"too-slow-to-keep-the-round", 90, 30, false, 0, "slower than the round", 7200000},
+			// FLAGGED fixture departure: no-headroom negatives report 1x work; the former 4x sample can align during neutral replay.
+			{"100ms-outside-first-input-runway", 9, 30, false, 0, "first input", 4000000, 100},
+			{"100ms-inside-first-input-runway", 6, 30, true, 6, nullptr, 1000000, 100},
+			{"200ms-outside-first-input-runway", 14, 30, false, 0, "first input", 4000000, 200},
+			{"200ms-inside-first-input-runway", 8, 30, true, 8, nullptr, 1000000, 200},
+			{"250ms-outside-first-input-runway", 18, 30, false, 0, "first input", 4000000, 250},
+			{"250ms-inside-first-input-runway", 10, 30, true, 10, nullptr, 1000000, 250},
+			{"100ms-spare-work-aligns-before-human-input", 9, 30, true, 9, nullptr, 1000000, 100},
+			{"250ms-spare-work-aligns-before-human-input", 18, 30, true, 18, nullptr, 1000000, 250},
+			// A real tail acknowledgement also waits for replay and report batching. It cannot replace a measured link RTT.
+			{"20ms-link-with-200ms-replay-ack", 6, 30, false, 0, "first input", 4000000, 20, 200},
+			{"100ms-link-with-300ms-replay-ack", 9, 30, false, 0, "first input", 4000000, 100, 300},
 		};
 		for (const Case& test: cases) {
 			NetWorldJoinHost host;
@@ -4733,14 +4785,21 @@ namespace RTE {
 			}
 			if (!host.BeginInPlaceRejoin(42, 2, 2, 3, "returning", 1, 500, &error)) return Fail("measured-trail rejoin: " + error);
 			host.NoteRejoinLinkFit(42, true);
+			host.NoteTailLinkRtt(42, test.rttMs);
 			if (!host.NoteRejoinCapacity(42, 240, test.workUs, 0)) return Fail("the compute headroom sample was refused");
+			if (test.ackMs) {
+				std::vector<uint8_t> sent;
+				if (!host.NextTailDatagram(42, 1000, sent)) return Fail("the delayed-replay-ack detector sent no actual tail datagram");
+			}
 			uint64_t activation = 0, applied = 500, round = 500 + test.behind;
 			if (!host.NoteCatchUpProgress(42, applied, 0, 1, round, &activation, &error)) return Fail(error);
 			for (int report = 0; report < 6 && activation == 0; ++report) {
 				applied += test.advance; round += 30;
 				if (!host.NoteCatchUpProgress(42, applied, test.advance, 500, round, &activation, &error)) return Fail(error);
+				if (test.ackMs) host.AcknowledgeTailDatagrams(42, 1000 + test.ackMs);
 			}
 			const NetWorldJoinSession* session = host.FindSession(42);
+			if (test.ackMs && (!session || session->tailAckRttMs != test.ackMs)) return Fail("the delayed tail acknowledgement was not measured");
 			const std::string gate = session && session->catchUpGate ? session->catchUpGate : "none";
 			const std::string reason = session && session->activationHeldReason ? session->activationHeldReason : "none";
 			if (test.activates && (activation < round + c_NetWorldActivationLeadFrames || !session || session->activationTrailFrames < test.minTrail)) {
@@ -8910,7 +8969,7 @@ namespace RTE {
 		return true;
 	}
 
-	// SEAT-ROSTER S2 at the service: a private return's phases come from the round - its image in moves the roster on, an abandoned
+	// A bounded return at the service: a private return's phases come from the round - its image in moves the roster on, an abandoned
 	// transfer fails the return - and a failed return is begun again only after the roster's backoff and under its bound.
 	bool TestAPrivateReturnFollowsTheRoundOnTheRoster(std::string* error) {
 		ScriptedAuthCrypto crypto;
@@ -10542,6 +10601,7 @@ namespace RTE {
 		if (const int result = TestPrivateRejoinHeadroom(); result != 0) return result;
 		if (const int result = TestPrivateActivationWaitsForTheCatchUp(); result != 0) return result;
 		if (const int result = TestAHeldSeatCatchesUpInPlaceWithoutAnImage(); result != 0) return result;
+		if (const int result = TestAStalledReplayGetsItsNextIntervalAgain(); result != 0) return result;
 		if (const int result = TestALostJournalDatagramIsSentAgain(); result != 0) return result;
 		if (const int result = TestAReturnedSeatTakesNoBaseThatStallsTheRound(); result != 0) return result;
 		if (const int result = TestTheColdFirstCaptureNeverDecidesAHeldSeatsRefresh(); result != 0) return result;

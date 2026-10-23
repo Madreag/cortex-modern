@@ -78,13 +78,13 @@ namespace RTE {
 	enum class NetRosterEventKind : uint8_t {
 		LinkDropped, ProcessRelaunched, Returned, Kicked, Banned, RoundEnded, RematchFormed, HostLinkLost, MemberSetProposed, TransferAborted,
 		LivenessPassed, SlowMachine, HostStalled, Admitted, ApplicantAccepted, RoundStarted, ImageLoaded, CaughtUp, HostResumed, HostChanged, SeatReleased, HeldInPlace,
-		SlotBound, PlacementStarted, CombatStarted, Count
+		SlotBound, PlacementStarted, CombatStarted, BanLifted, Count
 	};
 
 	struct NetRosterEvent {
 		NetRosterEventKind kind = NetRosterEventKind::Count;
 		uint8_t seat = 0;              ///< The seat the event names.
-		uint64_t owner = 0;            ///< Admitted / ApplicantAccepted: the player taking the seat.
+		uint64_t owner = 0;            ///< Admitted / ApplicantAccepted: the player taking the seat; BanLifted: the player the host let back.
 		uint64_t ticket = 0;           ///< Returned: the ticket shown; Admitted / ApplicantAccepted: the ticket issued.
 		std::string name;              ///< Admitted / ApplicantAccepted: the display name of the player taking the seat.
 		uint64_t nowMs = 0;            ///< The plane's clock, for the return's backoff.

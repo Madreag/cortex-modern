@@ -1116,16 +1116,16 @@ namespace RTE {
 		for (const auto& [peer, transport]: m_RemoteTransports) {
 			if (peer == 0 || peer > next.peerCount) continue;
 			auto& sample = m_InputDelaySamples[peer];
-			uint32_t rtt = !IsStartRequested() || (measurementDue && m_StartPathCounts[peer] == 0) ? m_Transport->GetPeerPingMs(transport) : 0;
+			bool measured = m_Transport->IsPeerPingMeasured(transport);
+			uint32_t rtt = measured ? m_Transport->GetPeerPingMs(transport) : 0;
 			if (const char* value = std::getenv("CC_TEST_SCENE_PATH_RTT_MS"); value &&
 			    (HasPendingStateChunks() || HasUnreceivedStartState())) {
-				const unsigned long measured = std::strtoul(value, nullptr, 10);
-				if (measured > 0 && measured <= 20000) rtt = static_cast<uint32_t>(measured);
+				const unsigned long injectedRtt = std::strtoul(value, nullptr, 10);
+				if (injectedRtt > 0 && injectedRtt <= 20000) { rtt = static_cast<uint32_t>(injectedRtt); measured = true; }
 			}
-			sample.Observe(nowMs, rtt);
-			const uint32_t needed = measurementDue && sample.P95Ms() == 0 ? floor :
-			    sample.SenderRequiredFrames(g_TimerMan.GetDeltaTimeMS(), next.slowPlayerBoundTicks, floor);
-			if (IsStartRequested() && !measurementDue && (sample.P95Ms() == 0 || needed > bound)) return;
+			sample.Observe(nowMs, rtt, measured);
+			const uint32_t needed = measured ? sample.RequiredFrames(g_TimerMan.GetDeltaTimeMS(), floor) : next.peerInputDelayFrames[peer - 1];
+			if (IsStartRequested() && !measurementDue && (!sample.HasMeasurement() || needed > bound)) return;
 			const uint16_t delay = static_cast<uint16_t>(std::min<uint32_t>(bound, needed));
 			hostDelay = std::max(hostDelay, delay);
 			next.peerInputDelayFrames[peer - 1] = delay;
@@ -1217,9 +1217,10 @@ namespace RTE {
 				if (delays.size() < m_Config.matchConfig.peerCount) delays.resize(m_Config.matchConfig.peerCount, std::max<uint16_t>(1, m_Config.matchConfig.inputDelayFrames));
 				const uint32_t rttMs = m_Transport->GetPeerPingMs(peer.transportPeerId);
 				auto& sample = m_InputDelaySamples[peerId];
-				sample.Observe(m_TimingClockMs, rttMs);
-				const uint16_t delay = static_cast<uint16_t>(std::min<uint32_t>(NetLockstepCodec::c_MaxPeerInputDelayFrames,
-				    sample.SenderRequiredFrames(g_TimerMan.GetDeltaTimeMS(), m_Config.matchConfig.slowPlayerBoundTicks, m_Config.matchConfig.inputDelayFrames)));
+				const bool measured = m_Transport->IsPeerPingMeasured(peer.transportPeerId);
+				sample.Observe(m_TimingClockMs, rttMs, measured);
+				const uint16_t delay = measured ? static_cast<uint16_t>(std::min<uint32_t>(NetLockstepCodec::c_MaxPeerInputDelayFrames,
+				    sample.RequiredFrames(g_TimerMan.GetDeltaTimeMS(), m_Config.matchConfig.inputDelayFrames))) : delays.at(peerId - 1);
 				delays.at(peerId - 1) = delay;
 				if (m_Config.matchConfig.hostPeerId > 0 && m_Config.matchConfig.hostPeerId <= delays.size())
 					delays.at(m_Config.matchConfig.hostPeerId - 1) = std::max(delays.at(m_Config.matchConfig.hostPeerId - 1), delay);
@@ -2060,7 +2061,7 @@ namespace RTE {
 				const auto ask = pending->second.find(serial);
 				if (ask == pending->second.end() || m_TimingClockMs < ask->second) return;
 				const uint32_t rtt = static_cast<uint32_t>(std::min<uint64_t>(UINT32_MAX, m_TimingClockMs - ask->second));
-				m_InputDelaySamples[message.peerId].Observe(m_TimingClockMs, std::max<uint32_t>(1, rtt));
+				// This application handshake proves scene readiness; its pump and machine cost is not a transport RTT sample.
 				++m_StartPathCounts[message.peerId];
 				pending->second.erase(ask);
 				DiagnosticLine() << "[net-start-path] peer=" << static_cast<int>(message.peerId) << " rtt_ms=" << rtt

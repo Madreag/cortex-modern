@@ -165,8 +165,10 @@ namespace RTE {
 		bool spectator = false;
 		uint64_t snapshotTick = 0;        //!< B.
 		uint64_t activationTick = 0;      //!< E, announced before it arrives; 0 until scheduled.
+		uint64_t activationSpacing = 0;   //!< Frames another return's activation moved this one past the frame its own progress chose.
 		uint64_t acknowledgedActivation = 0;
 		bool activationProposed = false;
+		bool activationReachable = true; //!< The last report still shows the returner reaching its announced activation in time.
 		bool activationCommitted = false;
 		uint64_t lastReannounceProgress = 0;
 		std::vector<uint8_t> pendingTail;
@@ -194,12 +196,15 @@ namespace RTE {
 		uint64_t closingAnchorApplied = 0, closingAnchorHorizon = 0; //!< The report its closing rate on the round is measured from.
 		double closingRate = 0.0; //!< Frames its replay gains on the round per frame the round commits, once measured.
 		bool closingMeasured = false;
-		uint64_t activationTrailFrames = 0; //!< How far it trailed the round when its activation was announced: its return leaves it that long.
+		uint64_t activationTrailFrames = 0; //!< Extra neutral frames for the replay's remaining trail and measured producer-alignment work.
 		uint32_t windowsWithoutProgress = 0; //!< Closing windows its replay stood still through, in a row.
 		struct TailDatagram { uint64_t first = 0, last = 0, firstSentMs = 0, sentMs = 0; bool repeated = false; };
 		std::deque<TailDatagram> tailInFlight; //!< Tail datagrams sent and not yet passed by its replay, lowest frames first.
 		double tailAckRttMs = 0; //!< The shortest time from a datagram's first send to the report that passes it; 0 until measured.
 		uint32_t tailLinkRttMs = 0; //!< The link's own round trip to the returner, as its transport measures it; 0 until known.
+		uint64_t returnTrailRoomFrames = UINT64_MAX; //!< The most frames its return may trail by, as the round's coordinator sizes it; unbounded until told.
+		uint64_t returnNoticeFrames = 0; //!< The frames its return is proposed ahead of its activation, as the round's service sizes them; 0 until told.
+		uint64_t tailStalledAck = 0, tailStalledSinceMs = 0; //!< Where its replay was when it last kept the round's rate, and since when it has not.
 		uint64_t tailSentNew = 0, tailSentRepeat = 0, tailSentResend = 0, tailSentBytes = 0, tailRefused = 0, tailLoggedMs = 0; //!< The tail's traffic, logged every two seconds.
 		const char* catchUpGate = nullptr; //!< What the last catch-up report met on its way to an activation.
 		const char* catchUpGateLogged = nullptr; //!< The gate last written to the log, and the horizon it was written at.
@@ -436,6 +441,8 @@ namespace RTE {
 	inline constexpr uint64_t c_NetWorldTailRepeatMs = 20;
 	/// How many of the lowest unpassed tail datagrams go again when their resend time runs out.
 	inline constexpr size_t c_NetWorldTailResendDepth = 2;
+	/// The replay rate a returner's tail is resent for while its replay stands still, until its headroom is measured.
+	inline constexpr double c_NetWorldTailStalledReplayRate = 3.0;
 	/// The datagrams in flight to one returner: a replay far behind passes them late, and new frames must not wait on it.
 	inline constexpr size_t c_NetWorldTailInFlightLimit = 8192;
 	/// How long a returning seat may replay without showing headroom before its rejoin is ended and retried.
@@ -719,6 +726,12 @@ namespace RTE {
 		void NoteTailDatagramRefused(NetPeerId connection);
 		/// Notes the link's own round trip to a returner: the tail's resends are timed on it, not on a replay that may trail its arrivals.
 		void NoteTailLinkRtt(NetPeerId connection, uint32_t rttMs);
+		/// Notes how far a returner's activation may trail the round, from the coordinator that will propose its return.
+		void NoteReturnTrailRoom(NetPeerId connection, uint64_t frames);
+		/// Notes how many frames ahead of a returner's activation its return is proposed, which is how far apart two returns are placed.
+		void NoteReturnNotice(NetPeerId connection, uint64_t frames);
+		/// Frames other returns of the round hold that this host does not serve, so no two returns are placed at one frame.
+		void ReserveActivations(std::set<uint64_t> frames) { m_ReservedActivations = std::move(frames); }
 		void NoteTailChunkSent(NetPeerId connection, size_t bytes);
 		bool NoteTransferStarted(NetPeerId connection, uint64_t transferId, uint16_t totalChunks, uint64_t deliveredThrough);
 		/// Records that this bootstrap has been sent the match config, so a retried transfer does not
@@ -798,6 +811,8 @@ namespace RTE {
 		NetWorldJoinSession* Find(NetPeerId connection);
 		/// E: the lead ahead of the committed frame, never at or behind the input already sent.
 		uint64_t ChooseActivationTick(uint64_t nowFrame) const;
+		/// The first frame from this one no other return of the round holds: a round agrees one return per frame.
+		uint64_t DistinctActivation(NetPeerId connection, uint64_t frame) const;
 		uint8_t AllocateSpectatorLobbyPeer() const;
 		std::string m_IdentityPath;
 
@@ -810,6 +825,7 @@ namespace RTE {
 		NetWorldMetrics m_Metrics;
 		NetWorldCheckpointImage m_Image;
 		std::vector<NetWorldJoinSession> m_Sessions;
+		std::set<uint64_t> m_ReservedActivations; //!< Activations other returns of the round hold, when they are served elsewhere.
 		std::vector<std::pair<NetPeerId, NetWorldJoinRefusal>> m_Refused; //!< Connections already turned away.
 		uint64_t m_NextJoinOrder = 1;    //!< Stamped on every bootstrap, so promotion reads join order.
 		uint64_t m_Promotions = 0;

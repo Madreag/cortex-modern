@@ -2,15 +2,15 @@
 our own relay through the directory's coturn backend, the player's fixed pair entered by hand, or Automatic), judged by
 the transport's own receipts against one table of mandatory checks per row.
 
-    python tools/relay_cloudflare_match.py --scenario mp-relay-cloudflare --out <scratch>/<lane>/<dir> [--run NAME ...]
-            [--box host=remote --box client=remote] [--tree remote=<scratch>/<lane>/engine] [--alias handheld=handheld-ts]
+    python tools/relay_cloudflare_match.py --scenario mp-relay-cloudflare --out <scratch>/<run>/<dir> [--run NAME ...]
+            [--box host=remote --box client=remote] [--tree remote=<scratch>/<run>/engine] [--alias handheld=handheld-ts]
             [--ticks N] [--no-replay] [--dry-run]
     python tools/relay_cloudflare_match.py --table <run dir> [<run dir> ...] --out <table.json>
     python tools/relay_cloudflare_match.py --remote-peers <spec.json>            (on a box, inside its session task)
     python tools/relay_cloudflare_match.py --evidence-list <root> --out <list>    (on a box, after its sweep)
     python tools/relay_cloudflare_match.py --bridge-remote <ip:udp-port> <tcp-port> (on REMOTE, in an ssh session)
 
-This box (the driver's) launches no engine. A lane row runs the session directory in this process on a loopback port
+This box (the driver's) launches no engine. A row on the run's own directory runs it in this process on a loopback port
 (TLS, a throwaway certificate every engine pins; the Cloudflare key read by path) and opens an `ssh -R` from each game
 box's loopback to it; a public row uses the game's own directory and reads the session's relay offer as a joiner does.
 Our relay is a coturn started for the run on the Mac with a per-run secret held in memory (a REST secret: every login the
@@ -58,13 +58,13 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE / 'remote'))
 
 MST = dt.timezone(dt.timedelta(hours=-7))
-LANE = os.environ.get('CC_RELAY_LANE')  # else the lane's scratch root the --out directory sits in (<scratch>/<lane>/...)
+SCRATCH_NAME = os.environ.get('CC_RELAY_LANE')  # else the scratch root the --out directory sits in (<scratch>/<run>/...)
 SCENARIO_DIR = HERE / 'e2e'
 CLOUDFLARE_TURN_CONFIG = Path(os.environ.get('CCCP_CLOUDFLARE_TURN_CONFIG', 'relay/turn-config-cloudflare.json'))
 # The retired fixed account (turnserver-fixed.conf): read into the book only, so a leak of it is still found; never used by a run.
 RETIRED_FIXED_CONF = Path(os.environ.get('CCCP_RETIRED_RELAY_CONFIG', 'relay/retired-turnserver.conf'))
 # Our relay for a run: a coturn on the Mac with a per-run REST secret, on its own LAN port and relay range.
-LANE_COTURN = dict(ssh='host-c', binary='/opt/homebrew/opt/coturn/bin/turnserver', address=os.environ.get('CC_RELAY_COTURN_ADDRESS', ''),
+RUN_COTURN = dict(ssh='host-c', binary='/opt/homebrew/opt/coturn/bin/turnserver', address=os.environ.get('CC_RELAY_COTURN_ADDRESS', ''),
                    ports=(3490, 3499), relay=(49301, 49340))
 # https://www.cloudflare.com/ips-v4 and /ips-v6, read 2026-10-03; turn.cloudflare.com resolved to 141.101.90.1 that day.
 CLOUDFLARE_RANGES = [ipaddress.ip_network(text) for text in (
@@ -151,15 +151,15 @@ def write_json(path, value) -> None:
     Path(path).write_text(redacted(json.dumps(value, indent=2)) + '\n', encoding='utf-8')
 
 
-def lane_for(out: Path) -> str:
-    """The lane's scratch root name: CC_RELAY_LANE, or the <scratch>/<lane> directory the output sits in."""
-    if LANE:
-        return LANE
+def scratch_name_for(out: Path) -> str:
+    """The run's scratch root name: CC_RELAY_LANE, or the <scratch>/<run> directory the output sits in."""
+    if SCRATCH_NAME:
+        return SCRATCH_NAME
     parts = Path(out).resolve().parts
     for index, part in enumerate(parts[:-1]):
         if part.lower() == 'mx' and index + 1 < len(parts):
             return parts[index + 1]
-    raise SystemExit('the output is not under <scratch>/<lane>: set CC_RELAY_LANE')
+    raise SystemExit('the output is not under <scratch>/<run>: set CC_RELAY_LANE')
 
 
 def boxes_file() -> Path:
@@ -1304,16 +1304,16 @@ print('served', served, flush=True)
 '''
 
 
-class LaneCoturn:
+class RunCoturn:
     """A coturn started for one run on the Mac: its own LAN port and relay range, REST authentication with a per-run secret
     that exists only in this process, in the directory's memory and in that coturn's memory (handed over on stdin and a
     named pipe, never as an argument a shell, a process list or an exception could show); stopped by its PID."""
 
     def __init__(self, book) -> None:
         self.secret = secrets.token_hex(24)
-        book.add('lane-coturn-secret', self.secret)
+        book.add('run-coturn-secret', self.secret)
         self.pid, self.port = None, None
-        self.address = LANE_COTURN['address']
+        self.address = RUN_COTURN['address']
         book.add('owner-address', self.address)
 
     def start(self) -> None:
@@ -1323,21 +1323,21 @@ class LaneCoturn:
             raise RuntimeError('CC_RELAY_COTURN_ADDRESS must name the test relay address') from None
 
         if DRY_RUN:
-            self.port = LANE_COTURN['ports'][0]
-            say(f'dry-run: coturn on {LANE_COTURN["ssh"]} {self.address}:{self.port} relay {LANE_COTURN["relay"]} (REST secret in memory)')
+            self.port = RUN_COTURN['ports'][0]
+            say(f'dry-run: coturn on {RUN_COTURN["ssh"]} {self.address}:{self.port} relay {RUN_COTURN["relay"]} (REST secret in memory)')
             return
-        free = subprocess.run(['ssh', '-o', 'BatchMode=yes', LANE_COTURN['ssh'],
+        free = subprocess.run(['ssh', '-o', 'BatchMode=yes', RUN_COTURN['ssh'],
                                '/usr/bin/python3 -c "import socket\nfor p in range(%d,%d):\n s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM)\n'
                                ' try:\n  s.bind((\'0.0.0.0\',p)); print(p); break\n except OSError: pass\n finally: s.close()"' % (
-                                   LANE_COTURN['ports'][0], LANE_COTURN['ports'][1] + 1)], capture_output=True, text=True, timeout=60)
+                                   RUN_COTURN['ports'][0], RUN_COTURN['ports'][1] + 1)], capture_output=True, text=True, timeout=60)
         self.port = int(free.stdout.split()[0])
-        low, high = LANE_COTURN['relay']
+        low, high = RUN_COTURN['relay']
         args = [f'--listening-port={self.port}', f'--listening-ip={self.address}', f'--relay-ip={self.address}', f'--min-port={low}',
-                f'--max-port={high}', '--realm=relay-proof.lane', '--use-auth-secret', '--fingerprint', '--no-tls', '--no-multicast-peers',
+                f'--max-port={high}', '--realm=relay-proof.run', '--use-auth-secret', '--fingerprint', '--no-tls', '--no-multicast-peers',
                 '--no-stdout-log', '--log-file=/dev/null', '--simple-log']
         starter = base64.b64encode(COTURN_STARTER.encode()).decode()
-        command = f"/usr/bin/python3 -c \"import base64;exec(base64.b64decode('{starter}'))\" {LANE_COTURN['binary']} '{json.dumps(args)}'"
-        done = subprocess.run(['ssh', '-o', 'BatchMode=yes', LANE_COTURN['ssh'], command], input=f'{self.secret}\n',
+        command = f"/usr/bin/python3 -c \"import base64;exec(base64.b64decode('{starter}'))\" {RUN_COTURN['binary']} '{json.dumps(args)}'"
+        done = subprocess.run(['ssh', '-o', 'BatchMode=yes', RUN_COTURN['ssh'], command], input=f'{self.secret}\n',
                               capture_output=True, text=True, timeout=60)
         lines = [line for line in done.stdout.splitlines() if line.strip()]
         self.pid = int(lines[0]) if lines and lines[0].strip().isdigit() else None
@@ -1353,7 +1353,7 @@ class LaneCoturn:
 
     def stop(self) -> None:
         if self.pid and not DRY_RUN:
-            subprocess.run(['ssh', '-o', 'BatchMode=yes', LANE_COTURN['ssh'],
+            subprocess.run(['ssh', '-o', 'BatchMode=yes', RUN_COTURN['ssh'],
                             f'kill {self.pid}; sleep 3; ps -p {self.pid} > /dev/null && kill -9 {self.pid}; true'], capture_output=True, timeout=60)
         self.pid = None
 
@@ -1547,7 +1547,7 @@ def ship(box, root: Path, specs: list[dict], directory_port: int, payload: Path,
     """The box's spec (its peers in start order) and the drivers; a menu script is written straight onto the box from
     memory (a Fixed pair inside one never touches this box's disk); returns the local copy of the rendered task payload."""
     spec_path = root / f'{box.name}-peers.json'
-    document = dict(root=str(root), lane=LANE, directory=dict(port=directory_port, cert=str(root / 'cert.pem'), public=public,
+    document = dict(root=str(root), lane=SCRATCH_NAME, directory=dict(port=directory_port, cert=str(root / 'cert.pem'), public=public,
                     host_name=host_name, host=tunnel_host), peers=specs)
     if DRY_RUN:
         say(f'dry-run: {box.name} runs {[spec["peer"] for spec in specs]} from {box.tree}: ' + json.dumps([spec['settings'] for spec in specs]))
@@ -1580,7 +1580,7 @@ def ship(box, root: Path, specs: list[dict], directory_port: int, payload: Path,
     from remote_box import render_payload
     script = render_payload(box.tree, [str(payload / 'relay_cloudflare_match.py'), '--remote-peers', str(spec_path)],
                             root / f'{box.name}-payload.log', root / f'{box.name}-payload.done',
-                            {'CC_RELAY_LANE': LANE, 'CC_REMOTE_CROSS_LANE': LANE, 'CC_RUNNER_BOX_MANIFEST': str(payload / 'boxes.json')},
+                            {'CC_RELAY_LANE': SCRATCH_NAME, 'CC_REMOTE_CROSS_LANE': SCRATCH_NAME, 'CC_RUNNER_BOX_MANIFEST': str(payload / 'boxes.json')},
                             box.path_prepend)
     local = root / f'{box.name}-run.ps1'
     local.write_text(script, encoding='utf-8')
@@ -1752,7 +1752,7 @@ def run_one(scenario: dict, run: dict, out: Path, boxes: dict, ticks: int, book)
     if not DRY_RUN:
         two_box_match.looped_input(h, root / 'input.txt', ticks)
     tunnels: list[Tunnel] = []
-    started, states, payload = stamp(), {}, Path(os.environ.get('CCCP_SCRATCH_ROOT', str(Path(tempfile.gettempdir())/'cortex-modern'))) / lane_for(out) / 'payload'
+    started, states, payload = stamp(), {}, Path(os.environ.get('CCCP_SCRATCH_ROOT', str(Path(tempfile.gettempdir())/'cortex-modern'))) / scratch_name_for(out) / 'payload'
     sanitize, cleanup, fetched, revokes, menus, clocks = [], [], [], [], [], {}
     failure = interrupt = None
     overrides_cleared, ended_epoch = False, time.time()
@@ -1761,7 +1761,7 @@ def run_one(scenario: dict, run: dict, out: Path, boxes: dict, ticks: int, book)
     # each box and here, revokes, and only then may an interrupt carry on.
     try:
         if run['relay'] in ('coturn', 'fixed'):
-            coturn = LaneCoturn(book)
+            coturn = RunCoturn(book)
             coturn.start()
             remote_box = next((box for box in used if box.name == 'remote'), None)
             bridge_url = None
@@ -2266,7 +2266,7 @@ def pair_ttl_receipt(target, pair, secret: str, book, now=time.time, sleep=time.
 # --- on the box ------------------------------------------------------------------------------------------------------
 
 def directory_session(directory: dict, budget_s: float) -> dict | None:
-    """The host's listing row: the lane directory's only row, or the public directory's row carrying the host's name."""
+    """The host's listing row: the run's own directory's only row, or the public directory's row carrying the host's name."""
     if directory.get('public') or directory.get('host'):
         url, context = f'https://{PUBLIC_DIRECTORY if directory.get("public") else directory["host"]}/v1/sessions', ssl.create_default_context()
     else:
@@ -2566,7 +2566,7 @@ def table(roots: list[Path]) -> dict:
 
 
 def main(argv=None) -> int:
-    global DRY_RUN, REDACTOR, LANE
+    global DRY_RUN, REDACTOR, SCRATCH_NAME
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--scenario')
     parser.add_argument('--run', action='append', default=[])
@@ -2613,11 +2613,11 @@ def main(argv=None) -> int:
     book = REDACTOR = SecretBook()
     for address in HOME.values():
         book.add('owner-address', address)
-    book.add('owner-address', LANE_COTURN['address'])
+    book.add('owner-address', RUN_COTURN['address'])
     if RETIRED_FIXED_CONF.is_file():
         book.add_fixed_login(RETIRED_FIXED_CONF, RETIRED_USERNAME_SCOPE)  # its leak is still found; no run uses it
     out = options.out.resolve()
-    LANE = lane_for(out)
+    SCRATCH_NAME = scratch_name_for(out)
     if not DRY_RUN:
         out.mkdir(parents=True, exist_ok=False)
     verdicts = []
@@ -2629,10 +2629,10 @@ def main(argv=None) -> int:
             resolved['record_replay'] = False
         if options.directory:
             resolved['directory'] = options.directory
-        # The lane directory is reached over the tailnet: a peer whose tunnel the row takes down could never list the session.
+        # The run's own directory is reached over the tailnet: a peer whose tunnel the row takes down could never list the session.
         if resolved.get('directory') == 'lane' and any(peer.get('overlay_vpn_down') for peer in resolved['peers']):
-            say(f'{run["name"]}: REFUSED: the lane directory is reached over the tailnet, and this row takes a peer\'s tunnel down')
-            verdicts.append(dict(name=run['name'], root=str(out / run['name']), passed=False, refused='lane directory with a tunnel taken down'))
+            say(f'{run["name"]}: REFUSED: the run\'s own directory is reached over the tailnet, and this row takes a peer\'s tunnel down')
+            verdicts.append(dict(name=run['name'], root=str(out / run['name']), passed=False, refused='own directory with a tunnel taken down'))
             continue
         ticks = options.ticks or int(run.get('ticks') or scenario.get('ticks') or MATCH_TICKS)
         try:

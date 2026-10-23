@@ -35,7 +35,7 @@ def main():
     if args.out.exists():
         parser.error('evidence directory already exists')
     if not PORT_LO <= args.port <= PORT_HI:
-        parser.error('port outside the assigned lane')
+        parser.error('port outside the assigned block')
     if firewall_allows_inbound(args.exe) is not True:
         parser.error('executable has no verified inbound firewall rule: ' + str(args.exe))
     fixture = FIXTURES / (args.case + '.txt')

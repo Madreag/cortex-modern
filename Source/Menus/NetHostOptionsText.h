@@ -27,8 +27,8 @@ namespace RTE {
 	}
 
 	/// How the automatic input delay is sized, in the words every delay readout uses.
-	inline std::string NetAutoDelayText(uint16_t marginTicks) {
-		return "ping plus a " + std::to_string(marginTicks) + "-tick margin, raised live if inputs arrive late";
+	inline std::string NetAutoDelayText() {
+		return "measured ping and recent jitter, re-sized live";
 	}
 
 	/// What each Timing row's choice costs, in the order the page lists them: input delay, minimum delay, slow player bound, redundancy.
@@ -189,9 +189,9 @@ namespace RTE {
 		return "The action could not be completed.";
 	}
 
-	/// What Remove ban did: a lifted ban opens the host's later games, while the match keeps the removal its ban made.
+	/// What Remove ban did: a lifted ban lifts its removal too, so the player may ask to join again, the running match included.
 	inline std::string NetUnbanStatus(NetKickBanResult result) {
-		return std::string("Remove ban: ") + NetKickBanResultText(result) + (result == NetKickBanResult::Ok ? " They may join your next games, not this match." : "");
+		return std::string("Remove ban: ") + NetKickBanResultText(result) + (result == NetKickBanResult::Ok ? " They may ask to join again, this match included." : "");
 	}
 
 	inline bool NetHostRepairEnabled(const NetMatchService& service) {
@@ -282,7 +282,7 @@ namespace RTE {
 		line(std::string("Input delay: ") +
 		     (config.delayPolicy == NetMatchDelayPolicy::Fixed
 		          ? "Fixed " + std::to_string(config.inputDelayFrames) + " ticks"
-		          : "Automatic, " + NetAutoDelayText(config.slowPlayerBoundTicks) + (live.empty() ? "" : " - now " + live)));
+		          : "Automatic, " + NetAutoDelayText() + (live.empty() ? "" : " - now " + live)));
 		line("Frame redundancy: " + std::to_string(config.frameRedundancyTicks) + " ticks   Slow player bound: " +
 		     std::to_string(config.slowPlayerBoundTicks) + " ticks");
 		line(std::string("When a player falls behind: ") + NetSlowPlayerPolicyText(config.slowPlayerPolicy));

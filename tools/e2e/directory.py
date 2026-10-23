@@ -74,7 +74,7 @@ def require_coturn(config, book=None):
 
 @contextmanager
 def serve(root, port, block=(49400, 49479), turn_config=None, secret_book=None):
-    """The directory on the given port, which must lie in the video driver's block (its default or a lane's own)."""
+    """The directory on the given port, which must lie in the video driver's block (its default or a caller's own)."""
     if not block[0] <= port <= block[1]:
         raise ValueError(f"the directory must stay in the video driver's port block {block[0]}-{block[1]}")
     require_coturn(turn_config, secret_book)

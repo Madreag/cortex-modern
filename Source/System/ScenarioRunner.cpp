@@ -41,6 +41,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <chrono>
+#include <cmath>
 #include <iomanip>
 #include <iostream>
 #include <map>
@@ -1536,6 +1537,18 @@ namespace RTE {
 		       WorldCatchUpHasFrame(nextSimTick);
 	}
 
+	static bool RebaseInputDelayClock(uint64_t nowMs) {
+		if (!s_LockstepCoordinator || !s_LockstepCoordinator->TakeInputDelayClockRebase()) return false;
+		// A new target mapping has a new input phase. Debt from the old phase would consume the producer's correction
+		// immediately; discard that clock debt, while every actual simulation tick still runs in order.
+		g_TimerMan.HoldSimTicks(0);
+		s_PaceSlide.Reset();
+		s_OwnSeatCatchUpBudget = 0;
+		s_PeerCatchUpCredit = 0;
+		s_PeerCatchUpBudgetAtMs = nowMs;
+		return true;
+	}
+
 	void ScenarioRunner::BeginWorldCatchUpFrame(double drawMs, double untilDrawMs, RTE::SteadyClock::time_point now) {
 		s_WorldCatchUpBudget = s_WorldCatchUpActive ? c_WorldCatchUpTicksPerRealFrame : 0;
 		// A replay that does not close on the round never comes back, and a frame's time after its draw reads the display's wait as
@@ -1573,7 +1586,8 @@ namespace RTE {
 		s_OwnSeatCatchUpGranted = 0;
 		NetLockstepPlaneGuard plane;
 		const uint64_t nowMs = NetLockstepNowMs();
-		const bool catchingUp = s_LockstepCoordinator && s_LockstepCoordinator->PeerFrameCatchUpActive();
+		(void)RebaseInputDelayClock(nowMs);
+		const bool catchingUp = s_LockstepCoordinator && s_LockstepCoordinator->PeerFrameCatchUpNeeded();
 		static uint64_t detailAtMs = 0, detailCalls = 0, detailActive = 0, detailElapsedMs = 0;
 		if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) {
 			++detailCalls;
@@ -1606,7 +1620,9 @@ namespace RTE {
 	bool ScenarioRunner::TakeOwnSeatCatchUpGrant(uint64_t nextSimTick, RTE::SteadyClock::time_point now) {
 		NetLockstepPlaneGuard plane;
 		if (s_OwnSeatCatchUpBudget <= 0 || !s_LockstepCoordinator || !s_LockstepCoordinator->HasReadyFrame(nextSimTick)) return false;
-		const bool catchingUp = s_LockstepCoordinator->PeerFrameCatchUpActive();
+		const double ordinaryWaitMs = std::max(0.0, static_cast<double>(g_TimerMan.GetDeltaTimeTicks() - g_TimerMan.GetSimAccumulator()) *
+		    1000.0 / g_TimerMan.GetTicksPerSecond());
+		const bool catchingUp = s_LockstepCoordinator->PeerFrameCatchUpActive(ordinaryWaitMs);
 		if (!catchingUp) {
 			// A returned reader's neutral interval follows the surviving displayed clock.
 			if (s_LockstepCoordinator->UsesPeerFrameGroups()) return false;
@@ -2425,6 +2441,13 @@ namespace RTE {
 		const auto& acks = s_LockstepCoordinator->GetAuthoritativeCommandAcks();
 		if (const auto ack = acks.find(config.localPeerId); ack != acks.end()) {
 			s_LocalCommandOutbox.erase(s_LocalCommandOutbox.begin(), s_LocalCommandOutbox.upper_bound(ack->second));
+		}
+		// The host acknowledges only what it plays: one the round holds or has lost acknowledges nothing until it is back, so a
+		// command waits for it through the reconnect window and no longer.
+		if (const uint8_t host = producing->GetHostPeerId(); host != config.localPeerId && config.simTickMs > 0 &&
+		    (producing->IsSeatUnderAI(host, tick) || producing->IsPeerGoneAtFrame(host, tick))) {
+			const uint64_t window = static_cast<uint64_t>(std::ceil(c_NetHostLossSilenceMs / config.simTickMs));
+			std::erase_if(s_LocalCommandOutbox, [&](const auto& entry) { return entry.second.frame + window < tick; });
 		}
 		std::vector<NetGameCommand> commands;
 		const uint64_t targetFrame = tick + producing->InputDelayAt(config.localPeerId, tick);
@@ -3478,7 +3501,7 @@ namespace RTE {
 	static bool RunPacedTick(uint64_t tick) {
 		std::string error;
 		if (!s_LockstepCoordinator->BeginSimulationTick(tick, &error)) { ScenarioRunner::SetControllerReplayError(error); return false; }
-		if (s_LockstepCoordinator->PeerFrameCatchUpActive()) {
+		if (s_LockstepCoordinator->PeerFrameCatchUpNeeded()) {
 			--s_OwnSeatCatchUpBudget;
 			s_PeerCatchUpCredit = std::max(0.0, s_PeerCatchUpCredit - 1.0);
 		}
@@ -3534,11 +3557,12 @@ namespace RTE {
 		// A service match measures and republishes activity startup after the
 		// lobby handshake. Keep the sim on the lobby countdown until the agreed
 		// first frame is installed; no AI hold can judge this interval.
-		if (!s_LockstepCoordinator->IsRunning()) {
+		if (!s_LockstepCoordinator->IsRunning() || s_LockstepCoordinator->AwaitingAlignedStart()) {
 			s_PreSimWait = now;
 			return false;
 		}
-		if (s_LockstepCoordinator->PeerFrameCatchUpActive()) {
+		if (RebaseInputDelayClock(NetLockstepNowMs())) return false;
+		if (s_LockstepCoordinator->PeerFrameCatchUpNeeded()) {
 			if (s_OwnSeatCatchUpBudget <= 0) { s_PreSimWait = now; return false; }
 		}
 		// The time this peer waited for its round to start is not owed: a peer that waited longer would race through it and run

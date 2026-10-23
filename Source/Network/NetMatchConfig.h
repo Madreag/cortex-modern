@@ -62,13 +62,14 @@ namespace RTE {
 	public:
 		static constexpr uint64_t c_WindowMs = 5000;
 		static constexpr uint64_t c_SampleMs = 100;
-		/// A link that fell silent once falls silent again: its longest silence is carried this long.
+		/// Retention for stream-silence diagnostics; these samples never size the link delay.
 		static constexpr uint64_t c_SilenceWindowMs = 120000;
-		/// A silence longer than half the largest delay is an outage the hold answers, not jitter a delay should carry.
+		/// Longer application gaps are outages; retain bounded silence diagnostics.
 		static constexpr uint32_t c_MaxCarriedSilenceMs = 500;
-		/// The most a link's silences add to its delay: a returning seat's delay still fits beside a long round trip and its restart.
-		static constexpr uint32_t c_MaxSilenceMarginMs = 300;
 		void Observe(uint64_t nowMs, uint32_t rttMs);
+		/// Transport measurements may be zero; absence is a separate fact.
+		void Observe(uint64_t nowMs, uint32_t rttMs, bool measured);
+		bool HasMeasurement() const { return m_HasMeasurement; }
 		/// Records how long the sender's input stream fell silent beyond its cadence.
 		void ObserveSilence(uint64_t nowMs, uint32_t silenceMs);
 		void Rebase(uint64_t nowMs);
@@ -87,6 +88,7 @@ namespace RTE {
 		mutable uint64_t m_RankedRevision = UINT64_MAX; //!< The revision the ranked percentiles below were taken at.
 		mutable std::array<std::pair<unsigned, uint32_t>, 2> m_Ranked{}; //!< The percentiles asked for since, each with its value.
 		uint32_t m_LastMeasuredRttMs = 0;
+		bool m_HasMeasurement = false;
 		std::deque<std::pair<uint64_t, uint32_t>> m_Silences;
 		std::optional<uint64_t> m_BelowSince;
 	};
@@ -162,6 +164,9 @@ namespace RTE {
 		NetHash32 seatRosterHash{};      ///< HashRoster of that revision: a peer whose copy differs is refused at the start by name.
 		// How long a held seat's history stays on the host for a return in place; a later return loads an image.
 		uint8_t returnWindowMinutes = 5;
+		// Every seat checks in with the session directory, which then referees the round's splits and host changes. One seat
+		// without a directory lease puts the whole round on the direct-play rule.
+		bool directoryArbitration = false;
 
 		bool operator==(const NetMatchConfig&) const = default;
 	};
@@ -185,13 +190,15 @@ namespace RTE {
 		static constexpr uint16_t c_TimingOptionsVersion = 6;
 		static constexpr uint16_t c_DefaultSlowPlayerBoundTicks = c_NetSlowPlayerBoundTicks;
 		static constexpr uint16_t c_MaxSlowPlayerBoundTicks = 120;
-		// Reserved values are 1 dedicated, 2 path, 4 world (v5), 8 redundancy, 16 migration and 32 return window.
+		// Reserved values are 1 dedicated, 2 path, 4 world (v5), 8 redundancy, 16 migration, 32 return window and 64 directory arbitration.
 		static constexpr uint16_t c_ReservedDedicatedBit = 1;
 		static constexpr uint16_t c_ReservedPathHorizonBit = 2;
 		static constexpr uint16_t c_ReservedFrameRedundancyBit = 8; // A trailing U16 carries the window.
 		static constexpr uint16_t c_ReservedPersistentWorldBit = 4;
 		static constexpr uint16_t c_ReservedReturnWindowBit = 32; // A U8 of minutes trails the whole config.
-		static constexpr uint16_t c_ReservedKnownMask = c_ReservedDedicatedBit | c_ReservedPathHorizonBit | c_ReservedFrameRedundancyBit | c_MigrationConfigFlag | c_ReservedReturnWindowBit;
+		static constexpr uint16_t c_ReservedDirectoryArbitrationBit = 64; // The directory referees the round; it carries no payload.
+		static constexpr uint16_t c_ReservedKnownMask = c_ReservedDedicatedBit | c_ReservedPathHorizonBit | c_ReservedFrameRedundancyBit | c_MigrationConfigFlag |
+		    c_ReservedReturnWindowBit | c_ReservedDirectoryArbitrationBit;
 		// The default keeps five minutes of a held seat's history: past it the host frees the journal and a return loads an image.
 		static constexpr uint8_t c_DefaultReturnWindowMinutes = 5;
 		static constexpr uint32_t c_DefaultAutosaveIntervalSeconds = 300; // A host saves every five minutes unless it chooses otherwise.
@@ -225,6 +232,10 @@ namespace RTE {
 		/// which seats start present is the host's to name in activePeerIds.
 		static bool DeriveRematchConfig(const NetMatchConfig& previous, NetMatchConfig& outConfig, std::string* error = nullptr);
 		static bool ValidateLocalAlpha(const NetMatchConfig& config, std::string* error = nullptr);
+		/// Puts a config with timing options on the one slow-player policy this version offers, whatever a saved preset carries.
+		static void KeepOfferedSlowPlayerPolicy(NetMatchConfig& config);
+		/// Readies a saved config for its resumed lobby: a new revision every peer acks again, on the slow-player policy this version offers.
+		static void PrepareResumedConfig(NetMatchConfig& config);
 		/// Whether the text is a canonical lowercase 8-4-4-4-12 UUID, the only shape a world id may take.
 		static bool IsWorldId(const std::string& text);
 		/// The rules the config hash has followed. A stored hash names the rule that made it, so a checkpoint an

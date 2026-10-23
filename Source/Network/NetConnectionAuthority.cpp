@@ -192,7 +192,7 @@ namespace RTE {
 		std::erase_if(m_Operations, [](const auto& item) { return !item.second.removal; });
 		for (auto& [key, operation]: m_Operations) { (void)key; operation.request.reset(); }
 		m_HostChange.reset(); m_HostChangeRequest.reset(); m_HostChangeReply = {}; m_HostChangeToken.clear();
-		m_FrameTie.reset(); m_FrameTieRequest.reset(); m_FrameTieReply = {}; m_NextFrameTie = 0;
+		m_FrameTie.reset(); m_FrameTieQuestions.clear(); m_ActiveFrameTie.reset(); m_NextFrameTieQuestion = 0;
 		m_HostSigningKey.fill(0);
 		m_BootstrapWanted = false;
 		m_Suspended = true;
@@ -201,7 +201,7 @@ namespace RTE {
 		std::lock_guard lock(m_Mutex);
 		m_Operations.clear(); m_CheckIn.reset(); m_Bootstrap.reset(); m_LocalLease.reset(); m_Host.reset();
 		m_HostChange.reset(); m_HostChangeRequest.reset(); m_HostChangeReply = {}; m_HostChangeToken.clear(); m_NextHostChange = 0;
-		m_FrameTie.reset(); m_FrameTieRequest.reset(); m_FrameTieReply = {}; m_NextFrameTie = 0;
+		m_FrameTie.reset(); m_FrameTieQuestions.clear(); m_ActiveFrameTie.reset(); m_NextFrameTieQuestion = 0;
 		m_SessionId.clear(); m_HostToken.clear(); m_DirectoryKey = {}; m_Route = {}; m_Relay = {};
 		m_HostSigningKey.fill(0);
 		m_Removals.clear(); m_PeerRoutes.clear();
@@ -226,7 +226,7 @@ namespace RTE {
 	void NetConnectionAuthority::SetDirectory(std::string sessionId, std::string hostToken, uint32_t hostGeneration, std::string authorityKey) {
 		std::lock_guard lock(m_Mutex);
 		if (m_SessionId != sessionId) {
-			m_FrameTie.reset(); m_FrameTieRequest.reset(); m_FrameTieReply = {}; m_NextFrameTie = 0; m_ListedMatchHash.reset();
+			m_FrameTie.reset(); m_FrameTieQuestions.clear(); m_ActiveFrameTie.reset(); m_NextFrameTieQuestion = 0; m_ListedMatchHash.reset();
 			m_HostChange.reset(); m_HostChangeRequest.reset(); m_HostChangeReply = {}; m_HostChangeToken.clear(); m_NextHostChange = 0;
 			m_Host.reset(); m_Bootstrap.reset(); m_CheckIn.reset(); m_Operations.clear(); m_DirectoryKey = {}; m_Removals.clear(); m_PeerRoutes.clear(); m_Relay = {};
 			if (m_LocalLease && m_LocalLease->directorySessionId != sessionId) m_LocalLease.reset();
@@ -342,6 +342,19 @@ namespace RTE {
 		Operation operation; operation.removal = true;
 		operation.body = json{{"connection_protocol", NetSeatLease::c_Version}, {"operation", "remove"}, {"token", m_HostToken}, {"host_generation", m_HostGeneration},
 			{"participant", Hex(player)}, {"name", name}, {"action", ban ? "banned" : "removed"}}.dump();
+		m_Operations[key] = std::move(operation);
+	}
+
+	void NetConnectionAuthority::Readmit(const NetParticipantId& player, const std::string& name) {
+		std::lock_guard lock(m_Mutex);
+		const std::string key = "remove:" + Hex(player);
+		const bool known = m_Removals.erase(key) != 0;
+		// A removal the directory has not recorded yet is simply never sent.
+		if (const auto queued = m_Operations.find(key); queued != m_Operations.end() && !queued->second.request) { m_Operations.erase(queued); return; }
+		if (!known || m_SessionId.empty()) return;
+		Operation operation; operation.removal = true;
+		operation.body = json{{"connection_protocol", NetSeatLease::c_Version}, {"operation", "remove"}, {"token", m_HostToken}, {"host_generation", m_HostGeneration},
+			{"participant", Hex(player)}, {"name", name}, {"action", "lifted"}}.dump();
 		m_Operations[key] = std::move(operation);
 	}
 
@@ -521,7 +534,7 @@ namespace RTE {
 				if (!ReadLeaseReply(response.body, lease, error) || !lease.SameSeat(*m_LocalLease) || lease.participant != m_Player->PublicId()) { m_NextCheckIn = FailedReply(response, m_CheckInRetry, steadyMs, "seat-check-in"); return; }
 				m_LocalLease = std::move(lease); ++m_CheckIns; m_CheckedGeneration = m_CheckInGeneration; m_Error.clear();
 				// The directory answers again: a tie request backing off from its silence asks at once.
-				m_FrameTieRetry = {};
+				for (auto& question: m_FrameTieQuestions) question.retry = {};
 				try {
 					const auto body = json::parse(response.body);
 					if (body.contains("host")) { NetConnectionHost host; if (ReadHostReply(body.at("host").dump(), host, error)) m_Host = std::move(host); else { m_Error = error; m_Refused = !error.empty(); } }
@@ -597,38 +610,55 @@ namespace RTE {
 	NetFrameTieReply NetConnectionAuthority::QueryFrameTie(const NetFrameTieRequest& peerRequest) {
 		std::lock_guard lock(m_Mutex);
 		if (m_Suspended || m_SessionId.empty() || m_BaseUrl.empty() || !m_Player || !m_LocalLease || m_LocalLease->directorySessionId != m_SessionId) return {};
-		// The round id separates rounds; the directory knows the match by the configuration it listed.
-		// A joiner obtains that same identity from its authenticated host reply.
 		auto request = peerRequest;
 		request.configHash = DirectoryMatchHash(peerRequest.configHash);
-		if (!m_FrameTieRequest || *m_FrameTieRequest != request) {
-			if (m_FrameTieRequest && m_FrameTieReply.state == NetFrameTieReply::State::Decided) {
-				auto decided = *m_FrameTieRequest;
-				decided.members = request.members; decided.queryOnly = request.queryOnly;
-				if (decided == request) return m_FrameTieReply;
+		if (!m_FrameTieQuestions.empty() && (m_FrameTieQuestions.front().request.roundId != request.roundId ||
+		    m_FrameTieQuestions.front().request.configHash != request.configHash)) {
+			if (m_FrameTie) {
+				if (m_RetiredFrameTies.size() >= 16) return {};
+				m_RetiredFrameTies.push_back(std::move(m_FrameTie));
 			}
-			// Authenticated traffic from the playing half turns a failed check-in into a read of its decision.
-			// Its old HTTP timeout must not keep the recovered seat from asking that question.
-			if (m_FrameTie && !(request.queryOnly && m_FrameTieRequest && !m_FrameTieRequest->queryOnly)) return {NetFrameTieReply::State::Waiting};
-			if (m_RetiredFrameTies.size() >= 16) return {};
-			// A query on the sim thread retires an old request without joining its worker.
-			if (m_FrameTie) m_RetiredFrameTies.push_back(std::move(m_FrameTie));
-			// A seat that hears the other half again only asks what was decided; its own check-ins failing while it was cut off are no reason to wait.
-			if (request.queryOnly && m_FrameTieRequest && !m_FrameTieRequest->queryOnly) { m_FrameTieRetry = {}; m_NextFrameTie = 0; }
-			m_FrameTieRequest = request; m_NextFrameTie = std::max(m_NextFrameTie, m_FrameTieRetry.nextMs);
-			m_FrameTieCheckedIn = false;
-			m_FrameTieBoundStartMs.reset(); m_FrameTieFinalQuerySent = false;
-			m_FrameTieReply = {}; m_FrameTieReply.state = NetFrameTieReply::State::Waiting;
+			m_FrameTieQuestions.clear(); m_ActiveFrameTie.reset(); m_NextFrameTieQuestion = 0;
 		}
-		return m_FrameTieReply;
+		size_t index = 0;
+		for (; index < m_FrameTieQuestions.size(); ++index) {
+			auto identity = m_FrameTieQuestions[index].request;
+			identity.members = request.members; identity.queryOnly = request.queryOnly;
+			if (identity == request) break;
+		}
+		if (index == m_FrameTieQuestions.size()) m_FrameTieQuestions.push_back(FrameTieOperation{request});
+		auto& question = m_FrameTieQuestions[index];
+		if (question.reply.state == NetFrameTieReply::State::Decided) return question.reply;
+		// A check-in that becomes a query, or a smaller group's query that becomes its own question past its grace, is asked afresh.
+		if (request.queryOnly != question.request.queryOnly) {
+			if (m_ActiveFrameTie == index && m_FrameTie) {
+				if (m_RetiredFrameTies.size() >= 16) return {};
+				m_RetiredFrameTies.push_back(std::move(m_FrameTie));
+				m_ActiveFrameTie.reset();
+			}
+			question = FrameTieOperation{request};
+		}
+		return question.reply;
+	}
+
+	std::optional<size_t> NetConnectionAuthority::NextFrameTie(uint64_t steadyMs) {
+		for (size_t offset = 0; offset < m_FrameTieQuestions.size(); ++offset) {
+			const size_t index = (m_NextFrameTieQuestion + offset) % m_FrameTieQuestions.size();
+			const auto& question = m_FrameTieQuestions[index];
+			if (question.reply.state == NetFrameTieReply::State::Decided || steadyMs < question.nextMs || steadyMs < question.retry.nextMs) continue;
+			m_NextFrameTieQuestion = (index + 1) % m_FrameTieQuestions.size();
+			return index;
+		}
+		return {};
 	}
 
 	void NetConnectionAuthority::PollFrameTie(uint64_t steadyMs, uint64_t unixSeconds) {
 		std::erase_if(m_RetiredFrameTies, [](const auto& request) { return request->Poll() == NetHttpClient::PollResult::Done; });
-		if (!m_FrameTieRequest || !m_LocalLease || !m_Player || m_Instance == NetAuthBytes16{} || m_FrameTieReply.state == NetFrameTieReply::State::Decided) return;
+		if (!m_LocalLease || !m_Player || m_Instance == NetAuthBytes16{}) return;
 		if (m_FrameTie) {
+			auto& question = m_FrameTieQuestions.at(*m_ActiveFrameTie);
 			if (m_FrameTie->Poll() == NetHttpClient::PollResult::Pending) return;
-			const auto response = m_FrameTie->GetResponse(); m_FrameTie.reset(); m_NextFrameTie = steadyMs + 50;
+			const auto response = m_FrameTie->GetResponse(); m_FrameTie.reset(); m_ActiveFrameTie.reset(); question.nextMs = steadyMs + 50;
 			const uint64_t exchangeMs = steadyMs >= m_FrameTieSentMs ? steadyMs - m_FrameTieSentMs : 0;
 			if (ConnectionTrace()) {
 				const auto body = json::parse(response.body, nullptr, false);
@@ -637,14 +667,14 @@ namespace RTE {
 					code = body["error"].get<std::string>();
 					if (code.size() > 64 || code.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789_") != std::string::npos) code.clear();
 				}
-				System::PrintDiagnosticLine("[net-frame-referee] reply frame=" + std::to_string(m_FrameTieRequest->frame) +
+				System::PrintDiagnosticLine("[net-frame-referee] reply frame=" + std::to_string(question.request.frame) +
 				    " status=" + std::to_string(response.statusCode) + " code=" + code + " now_ms=" + std::to_string(steadyMs));
 			}
-			m_FrameTieReply = {};
+			question.reply = {};
 			if (response.statusCode == 200 && response.error.empty()) try {
 				const auto body = json::parse(response.body);
 				std::string error;
-				const auto& expected = *m_FrameTieRequest;
+				const auto& expected = question.request;
 				NetHash32 hash{};
 				if (!Protocol(body, error) || body.at("round_id") != expected.roundId || body.at("generation") != expected.generation ||
 				    body.at("frame") != expected.frame || !Unhex(body.at("config_hash").get<std::string>(), hash) || hash != expected.configHash) throw json::other_error::create(501, "frame reply", &body);
@@ -654,44 +684,46 @@ namespace RTE {
 				// request before that deadline when the outward latency shrinks.
 				// An acknowledged check-in is a conservative local anchor; later
 				// waiting replies never extend it.
-				if (!m_FrameTieCheckedIn) m_FrameTieBoundStartMs = steadyMs;
-				m_FrameTieCheckedIn = true;
-				m_FrameTieReply.state = NetFrameTieReply::State::Waiting;
+				if (!question.checkedIn) question.boundStartMs = steadyMs;
+				question.checkedIn = true;
+				question.reply.state = NetFrameTieReply::State::Waiting;
 				if (body.at("status") == "decided") {
 					auto members = body.at("members").get<std::vector<uint16_t>>();
-					if (members.empty() || members.size() * 2 != expected.owners.size() || !std::is_sorted(members.begin(), members.end()) ||
+					if (members.empty() || members.size() >= expected.owners.size() || !std::is_sorted(members.begin(), members.end()) ||
 					    std::adjacent_find(members.begin(), members.end()) != members.end() || !std::includes(expected.owners.begin(), expected.owners.end(), members.begin(), members.end())) throw json::other_error::create(501, "frame reply", &body);
-					m_FrameTieReply.state = NetFrameTieReply::State::Decided; m_FrameTieReply.members = std::move(members);
+					question.reply.state = NetFrameTieReply::State::Decided; question.reply.members = std::move(members);
 				}
-				m_FrameTieRetry.Succeeded();
+				question.retry.Succeeded();
 				m_FrameTieExchangeMs = std::max(exchangeMs, m_FrameTieExchangeMs - m_FrameTieExchangeMs / 4);
 				// Past the bound's last query an undecided split is still asked at the allowance's pace: a check-in may land later.
-				if (m_FrameTieFinalQuerySent) m_NextFrameTie = steadyMs + c_TiePollMs;
-			} catch (const json::exception&) { m_FrameTieReply = {}; m_NextFrameTie = FailedReply(response, m_FrameTieRetry, steadyMs, "frame-tie"); m_FrameTieFinalQuerySent = false; }
+				if (question.finalQuerySent) question.nextMs = steadyMs + c_TiePollMs;
+			} catch (const json::exception&) { question.reply = {}; question.nextMs = FailedReply(response, question.retry, steadyMs, "frame-tie"); question.finalQuerySent = false; }
 			// An exchange that timed out may still have been recorded: a check-in is asked again at once, as only the first one counts.
-			else if (response.statusCode == 0 && m_FrameTieSentCheckIn) { m_FrameTieExchangeMs = std::max(m_FrameTieExchangeMs, exchangeMs); m_FrameTieFinalQuerySent = false; }
-			else { m_NextFrameTie = FailedReply(response, m_FrameTieRetry, steadyMs, "frame-tie"); m_FrameTieFinalQuerySent = false; }
+			else if (response.statusCode == 0 && m_FrameTieSentCheckIn) { m_FrameTieExchangeMs = std::max(m_FrameTieExchangeMs, exchangeMs); question.finalQuerySent = false; }
+			else { question.nextMs = FailedReply(response, question.retry, steadyMs, "frame-tie"); question.finalQuerySent = false; }
 		}
-		if (m_FrameTie || m_FrameTieReply.state == NetFrameTieReply::State::Decided) return;
-		const bool finalQuery = m_FrameTieBoundStartMs && steadyMs >= *m_FrameTieBoundStartMs + c_NetFrameTieDeadlineMs;
-		if (steadyMs < m_NextFrameTie || steadyMs < m_FrameTieRetry.nextMs) return;
 		if (!CanTieRequest(steadyMs)) {
 			if (ConnectionTrace() && m_TieRequests.size() >= c_TieRequestsPerMinute)
 				NetDirectoryRetry::Note(steadyMs, "frame-tie", "tie_allowance", m_TieRequests.front() + 60100 - steadyMs);
 			return;
 		}
-		auto request = *m_FrameTieRequest;
+		const auto selected = NextFrameTie(steadyMs);
+		if (!selected) return;
+		auto& question = m_FrameTieQuestions[*selected];
+		const bool finalQuery = question.boundStartMs && steadyMs >= *question.boundStartMs + c_NetFrameTieDeadlineMs;
+		auto request = question.request;
 		// Retry an unacknowledged check-in, then only query the frozen tie.
 		// Keep the original request as the identity of this asynchronous operation.
-		request.queryOnly = request.queryOnly || m_FrameTieCheckedIn || finalQuery;
+		request.queryOnly = request.queryOnly || question.checkedIn || finalQuery;
 		const std::string body = SignedSeatRequest("frame-tie", unixSeconds, nullptr, &request);
 		if (!body.empty()) {
 			// The exchange gets twice the longest one measured lately: a fresh secure connection can take longer than the floor.
 			const uint64_t timeoutMs = std::clamp<uint64_t>(2 * m_FrameTieExchangeMs, c_NetFrameTieHttpTimeoutMs, c_TieTimeoutCapMs);
 			m_FrameTie = StartRequest("POST", body, static_cast<int>(timeoutMs));
 			// At the full bound a status query is drained like any other; a missing answer never supplies frame authority.
-			m_FrameTieFinalQuerySent = m_FrameTieFinalQuerySent || finalQuery;
+			question.finalQuerySent = question.finalQuerySent || finalQuery;
 			if (m_FrameTie) {
+				m_ActiveFrameTie = selected;
 				m_TieRequests.push_back(steadyMs); m_FrameTieSentMs = steadyMs; m_FrameTieSentCheckIn = !request.queryOnly;
 				if (ConnectionTrace()) System::PrintDiagnosticLine("[net-frame-referee] sent frame=" + std::to_string(request.frame) +
 				    " query_only=" + std::to_string(request.queryOnly) + " requests=" + std::to_string(m_TieRequests.size()) + " timeout_ms=" + std::to_string(timeoutMs) + " now_ms=" + std::to_string(steadyMs));

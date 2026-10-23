@@ -1,4 +1,4 @@
-"""Refuse a POSIX launch while another lane owns the box reservation."""
+"""Refuse a POSIX launch while another run owns the box reservation."""
 from __future__ import annotations
 import argparse
 import os
