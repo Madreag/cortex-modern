@@ -13,8 +13,14 @@
 #include "PresetMan.h"
 #include "SettingsMan.h"
 #include "SoundContainer.h"
+#include "ScenarioRunner.h"
 
 #include "tracy/Tracy.hpp"
+
+#include <algorithm>
+#include <cmath>
+#include <cstring>
+#include <vector>
 
 using namespace RTE;
 
@@ -427,13 +433,74 @@ void ADoor::TempEraseOrRedrawDoorMaterial(bool erase) {
 	bool doorMaterialDrawnState = m_DoorMaterialDrawn;
 	if (erase && m_DoorMaterialDrawn && !m_DoorMaterialTempErased) {
 		m_DoorMaterialTempErased = erase;
-		EraseDoorMaterial(false);
+		// Each machine updates its paths on its own ticks, so in a match the override must leave the terrain exactly as it found it.
+		if (ScenarioRunner::LockstepCoordinatorAttached()) {
+			TempEraseDoorMaterialRestorably();
+		} else {
+			EraseDoorMaterial(false);
+		}
 		m_DoorMaterialDrawn = doorMaterialDrawnState;
 	} else if (!erase && m_DoorMaterialDrawn && m_DoorMaterialTempErased) {
 		m_DoorMaterialTempErased = erase;
-		DrawDoorMaterial(true, false);
+		if (m_TempErasedDoorMaterial) {
+			RestoreTempErasedDoorMaterial();
+		} else {
+			DrawDoorMaterial(true, false);
+		}
 		m_DoorMaterialDrawn = doorMaterialDrawnState;
 	}
+}
+
+void ADoor::TempEraseDoorMaterialRestorably() {
+	m_TempErasedDoorMaterial.emplace();
+	BITMAP* materialBitmap = g_SceneMan.GetTerrain()->GetMaterialBitmap();
+	const int fillX = m_LastDoorMaterialPos.GetFloorIntX();
+	const int fillY = m_LastDoorMaterialPos.GetFloorIntY();
+	if (!m_Door || fillX < 0 || fillY < 0 || fillX >= materialBitmap->w || fillY >= materialBitmap->h) {
+		return;
+	}
+	const unsigned char material = static_cast<unsigned char>(_getpixel(materialBitmap, fillX, fillY));
+	if (material == g_MaterialAir) {
+		return;
+	}
+
+	// The door's material lies inside its sprite bounds; the fill stops there instead of following connected terrain.
+	const float reach = std::ceil(m_Door->GetRadius() * std::max(1.0F, m_Door->GetScale())) + 1.0F;
+	const int left = std::max(0, static_cast<int>(std::floor(m_LastDoorMaterialPos.GetX() - reach)));
+	const int top = std::max(0, static_cast<int>(std::floor(m_LastDoorMaterialPos.GetY() - reach)));
+	const int right = std::min(materialBitmap->w, static_cast<int>(std::ceil(m_LastDoorMaterialPos.GetX() + reach)) + 1);
+	const int bottom = std::min(materialBitmap->h, static_cast<int>(std::ceil(m_LastDoorMaterialPos.GetY() + reach)) + 1);
+	const int width = right - left;
+	const int height = bottom - top;
+
+	std::vector<unsigned char> before(static_cast<size_t>(width) * height);
+	for (int y = 0; y < height; ++y) {
+		std::memcpy(&before[static_cast<size_t>(y) * width], materialBitmap->line[top + y] + left, width);
+	}
+	BITMAP* footprint = create_sub_bitmap(materialBitmap, left, top, width, height);
+	if (!footprint) {
+		return;
+	}
+	floodfill(footprint, fillX - left, fillY - top, g_MaterialAir);
+	destroy_bitmap(footprint);
+
+	m_TempErasedDoorMaterial->material = material;
+	for (int y = 0; y < height; ++y) {
+		const unsigned char* row = materialBitmap->line[top + y] + left;
+		for (int x = 0; x < width; ++x) {
+			if (row[x] != before[static_cast<size_t>(y) * width + x]) {
+				m_TempErasedDoorMaterial->pixels.emplace_back(left + x, top + y);
+			}
+		}
+	}
+}
+
+void ADoor::RestoreTempErasedDoorMaterial() {
+	BITMAP* materialBitmap = g_SceneMan.GetTerrain()->GetMaterialBitmap();
+	for (const auto& [x, y]: m_TempErasedDoorMaterial->pixels) {
+		_putpixel(materialBitmap, x, y, m_TempErasedDoorMaterial->material);
+	}
+	m_TempErasedDoorMaterial.reset();
 }
 
 void ADoor::GibThis(const Vector& impactImpulse, MovableObject* movableObjectToIgnore) {
