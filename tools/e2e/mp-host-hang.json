@@ -145,6 +145,22 @@
       ]
     }
   ],
+  "allowed_stills": [
+    {
+      "peer": "joiner",
+      "run": "world",
+      "from_mark": "hang-host",
+      "to_mark": "host-unresponsive",
+      "reason": "the player waits on its silent host until the hold window ends the round"
+    },
+    {
+      "peer": "joiner",
+      "run": "dedicated",
+      "from_mark": "hang-host",
+      "to_mark": "host-unresponsive",
+      "reason": "the player waits on its silent host until the hold window ends the round"
+    }
+  ],
   "checklist": [
     {
       "id": "world-playing",
