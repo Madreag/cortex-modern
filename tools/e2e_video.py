@@ -402,15 +402,18 @@ def gate_parts(gate):
 def run_preflight(scenario, run, captures, tokens):
     peers = run.get("peers") or scenario.get("peers", [])
     for node in [run, *peers]:
-        kill_gate = node.get("kill_when")
-        # A list of gates drops the peer at the first one met.
-        for gate in (kill_gate if isinstance(kill_gate, list) else [kill_gate] if kill_gate else []):
-            parts = gate_parts(gate)
-            if not isinstance(parts, list) or not parts or any(
-                    not isinstance(part, dict) or part.get("peer") not in {peer["name"] for peer in peers} or
-                    [bool(part.get("event")), part.get("probe_complete") is True, bool(part.get("log")), "sim_tick" in part].count(True) != 1
-                    for part in parts):
-                return {"class": "harness", "reason": "A process-drop gate must name a peer and one of an event, a completed probe, a log line or a sim tick"}
+        # A list of gates drops (or hangs) the peer at the first one met.
+        for key in ("kill_when", "suspend_when"):
+            kill_gate = node.get(key)
+            for gate in (kill_gate if isinstance(kill_gate, list) else [kill_gate] if kill_gate else []):
+                parts = gate_parts(gate)
+                if not isinstance(parts, list) or not parts or any(
+                        not isinstance(part, dict) or part.get("peer") not in {peer["name"] for peer in peers} or
+                        [bool(part.get("event")), part.get("probe_complete") is True, bool(part.get("log")), "sim_tick" in part].count(True) != 1
+                        for part in parts):
+                    return {"class": "harness", "reason": "A process-drop gate must name a peer and one of an event, a completed probe, a log line or a sim tick"}
+        if node.get("suspend_when") and not (isinstance(node.get("suspend_s"), (int, float)) and node["suspend_s"] > 0):
+            return {"class": "harness", "reason": "A process hang needs suspend_s, the seconds the peer stays stopped"}
         condition = node.get("start_when", {})
         if condition.get("run") and not cross_run_ready(captures, condition):
             return {"class": "harness", "reason": f"Previous run has not ended: {condition}"}
@@ -2050,6 +2053,46 @@ def stage_peer(scenario, peer, root, tokens):
     return environment
 
 
+SUSPEND_RECEIPT = "injected-suspend.json"
+def hang_peer(handle, seconds, stop):
+    """Stops every thread of a peer's engine for the given seconds, then lets it run on: a machine that stops answering.
+    A stalled simulation is not this; its network thread still answers."""
+    started, receipt = time.monotonic(), {"suspended": stamp(), "seconds": seconds}
+    if hasattr(handle, "suspend"):
+        receipt["method"] = "runner suspend"
+        stop_process, continue_process = handle.suspend, handle.resume
+    elif sys.platform == "win32":
+        import ctypes
+        ntdll, process = ctypes.WinDLL("ntdll"), ctypes.c_void_p(handle.process)
+        receipt["method"] = "NtSuspendProcess"
+
+        def native(call):
+            status = call(process)
+            if status:
+                raise RuntimeError(f"process suspension failed with native status {status}")
+
+        stop_process, continue_process = (lambda: native(ntdll.NtSuspendProcess)), (lambda: native(ntdll.NtResumeProcess))
+    else:
+        import signal
+        # The engine leads its own process group, on the far side of a local hop too.
+        group = handle.engine_pid
+        receipt.update(method="SIGSTOP", group=group)
+        stop_process, continue_process = (lambda: os.killpg(group, signal.SIGSTOP)), (lambda: os.killpg(group, signal.SIGCONT))
+    try:
+        stop_process()
+    except (ProcessLookupError, RuntimeError, OSError) as error:
+        return {**receipt, "error": f"{type(error).__name__}: {error}", "suspended_ms": 0}
+    try:
+        # A capture that stops early lets the peer run on at once, so its runner can end it.
+        stop.wait(seconds)
+    finally:
+        try:
+            continue_process()
+        except (ProcessLookupError, RuntimeError, OSError) as error:
+            receipt["resume_error"] = f"{type(error).__name__}: {error}"
+    return {**receipt, "resumed": stamp(), "suspended_ms": round((time.monotonic() - started) * 1000)}
+
+
 def drop_peer(handle, reason="scenario drop"):
     """Kills one peer through its runner. A peer that already finished is not a failure here."""
     try:
@@ -2359,6 +2402,20 @@ def _run_one(options, scenario, run, run_index, out, case_root=None):
                 drop_peer(runs[name], "scenario drop after " + description)
                 return
 
+    def suspend_when(name, gates, seconds):
+        gates = gates if isinstance(gates, list) else [gates]
+        while not stop_watchers.wait(.05):
+            if name in records:
+                return
+            gate = next((candidate for candidate in gates if gate_met(candidate)), None)
+            if gate:
+                rows = read_index(shared[f"VIDEO_{name}"])
+                receipt = {"requested_event": gate, "last_recorded_frame": rows[-1] if rows else None}
+                receipt.update(hang_peer(runs[name], seconds, stop_watchers))
+                # The receipt lands where the peer's signals live, so another player's script can wait for the peer's return.
+                write_json(Path(shared[f"PROBE_DIR_{name}"]) / SUSPEND_RECEIPT, receipt)
+                return
+
     def kill_after_seconds(name, seconds):
         video = Path(shared[f'VIDEO_{name}'])
         rows = read_index(video)
@@ -2405,6 +2462,10 @@ def _run_one(options, scenario, run, run_index, out, case_root=None):
                 killers.append(watcher)
             if peer.get("kill_when"):
                 watcher = threading.Thread(target=kill_when, args=(name, peer["kill_when"]), daemon=True)
+                watcher.start()
+                killers.append(watcher)
+            if peer.get("suspend_when"):
+                watcher = threading.Thread(target=suspend_when, args=(name, peer["suspend_when"], float(peer["suspend_s"])), daemon=True)
                 watcher.start()
                 killers.append(watcher)
         def measure_footprint():
