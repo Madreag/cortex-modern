@@ -3124,7 +3124,8 @@ namespace RTE {
 	}
 
 	bool NetHostMigrationCodec::Decode(const std::vector<uint8_t>& bytes, const NetHash32& key, NetHostMigrationMessage& message) {
-		if (bytes.size() < 32 || bytes.size() > c_ChunkBytes + c_MessageOverheadBytes || std::all_of(key.begin(), key.end(), [](uint8_t value) { return value == 0; }))
+		// Another protocol's packet is refused before its MAC is computed.
+		if (bytes.size() < 32 || bytes.size() > c_ChunkBytes + c_MessageOverheadBytes || !LooksLikePacket(bytes) || std::all_of(key.begin(), key.end(), [](uint8_t value) { return value == 0; }))
 			return false;
 		uint8_t mac[32]{};
 		const size_t bodySize = bytes.size() - sizeof(mac);
