@@ -4,6 +4,7 @@
 
 #include "NetIdentity.h"
 #include "NetLockstep.h"
+#include "NetMatchRunner.h"
 #include "NetProtocol.h"
 #include "NetSession.h"
 #include "NetWorldJoin.h"
@@ -1073,6 +1074,20 @@ namespace RTE {
 		m_StartDelayMeasured = false;
 	}
 
+	void NetLobbySession::CoverClientLinks(NetMatchConfig& config, const std::map<uint8_t, uint32_t>& measuredRttMs, double tickMs, uint16_t floor, uint16_t bound) {
+		if (!NetMatchRunner::UsesPeerFraming(config)) return;
+		std::vector<uint16_t>& delays = config.peerInputDelayFrames;
+		for (const auto& [sender, senderRtt]: measuredRttMs) {
+			if (sender == config.hostPeerId || sender == 0 || sender > delays.size()) continue;
+			uint32_t worst = 0;
+			for (const auto& [reader, readerRtt]: measuredRttMs) if (reader != sender && reader != config.hostPeerId) worst = std::max(worst, senderRtt + readerRtt);
+			if (worst == 0) continue;
+			NetInputDelayEstimator link;
+			link.Observe(0, worst, true);
+			delays[sender - 1] = static_cast<uint16_t>(std::max<uint32_t>(delays[sender - 1], std::min<uint32_t>(bound, link.RequiredFrames(tickMs, floor))));
+		}
+	}
+
 	void NetLobbySession::SampleInputDelays(uint64_t nowMs) {
 		if (!m_Config.host || !m_Config.autoInputDelay || IsTerminal(m_State) || IsStartCommitted()) return;
 		if (HasPendingStateChunks() || HasUnreceivedStartState() || !m_QueuedStateTransfers.empty() ||
@@ -1113,6 +1128,7 @@ namespace RTE {
 			if (!measurementDue) for (uint8_t peer: m_RemotePeerIds) if (m_StartPathCounts[peer] < 3) return;
 		}
 		uint16_t hostDelay = floor;
+		std::map<uint8_t, uint32_t> measuredRtts;
 		for (const auto& [peer, transport]: m_RemoteTransports) {
 			if (peer == 0 || peer > next.peerCount) continue;
 			auto& sample = m_InputDelaySamples[peer];
@@ -1124,6 +1140,7 @@ namespace RTE {
 				if (injectedRtt > 0 && injectedRtt <= 20000) { rtt = static_cast<uint32_t>(injectedRtt); measured = true; }
 			}
 			sample.Observe(nowMs, rtt, measured);
+			if (measured) measuredRtts[peer] = rtt;
 			const uint32_t needed = measured ? sample.RequiredFrames(g_TimerMan.GetDeltaTimeMS(), floor) : next.peerInputDelayFrames[peer - 1];
 			if (IsStartRequested() && !measurementDue && (!sample.HasMeasurement() || needed > bound)) return;
 			const uint16_t delay = static_cast<uint16_t>(std::min<uint32_t>(bound, needed));
@@ -1131,6 +1148,7 @@ namespace RTE {
 			next.peerInputDelayFrames[peer - 1] = delay;
 		}
 		if (next.hostPeerId > 0 && next.hostPeerId <= next.peerCount) next.peerInputDelayFrames[next.hostPeerId - 1] = hostDelay;
+		CoverClientLinks(next, measuredRtts, g_TimerMan.GetDeltaTimeMS(), floor, bound);
 		if (IsStartRequested()) {
 			m_StartDelayMeasured = true;
 			m_StartPathPending.clear();

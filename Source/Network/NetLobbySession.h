@@ -247,6 +247,9 @@ namespace RTE {
 		std::string BuildReportJson() const;
 
 		static const char* StateName(NetLobbyState state);
+		/// A client's delay covers the client links of a peer-frame round as two trips through the host: the lobby measures only
+		/// those trips, and every other client reads the sender's input over its own link from the round's first frame.
+		static void CoverClientLinks(NetMatchConfig& config, const std::map<uint8_t, uint32_t>& measuredRttMs, double tickMs, uint16_t floor, uint16_t bound);
 
 	private:
 		void HandleMigration(const NetLobbyMigration& message);

@@ -9040,6 +9040,44 @@ namespace RTE {
 		return true;
 	}
 
+	// The three-box relay run started a client at 2 ticks from its 12 ms link to the host while its link to the other client ran
+	// 15-17 ms: the first start-up wait past its 35 ms of runway held that healthy seat at frame 25, before the live re-size at 35.
+	// A client's start delay covers its links to the other clients as two trips through the host.
+	bool TestAClientsStartDelayCoversTheOtherClients(std::string* error) {
+		struct Case {
+			const char* name;
+			bool peerFraming;
+			std::vector<uint16_t> lobby;
+			std::map<uint8_t, uint32_t> rtts;
+			std::vector<uint16_t> expected;
+		};
+		const uint16_t bound = NetLockstepCodec::c_MaxPeerInputDelayFrames;
+		const Case cases[] = {
+		    {"the relay run's three seats", true, {3, 3, 2}, {{2, 8}, {3, 12}}, {3, 3, 3}},
+		    {"a far client and a near one", true, {6, 2, 6}, {{2, 5}, {3, 70}}, {6, 6, 6}},
+		    {"two seats", true, {2, 2}, {{2, 12}}, {2, 2}},
+		    {"a client no link measured", true, {3, 3, 2}, {{3, 12}}, {3, 3, 2}},
+		    {"links past the bound", true, {bound, bound, bound}, {{2, 400}, {3, 400}}, {bound, bound, bound}},
+		    {"direct frames through the host", false, {3, 3, 2}, {{2, 8}, {3, 12}}, {3, 3, 2}},
+		};
+		for (const Case& c: cases) {
+			NetMatchConfig config = MakeConfig();
+			config.slowPlayerPolicy = c.peerFraming ? NetSlowPlayerPolicy::Substitute : NetSlowPlayerPolicy::Pause;
+			config.hostPeerId = 1;
+			config.peerCount = static_cast<uint8_t>(c.lobby.size());
+			config.peerInputDelayFrames = c.lobby;
+			NetLobbySession::CoverClientLinks(config, c.rtts, 1000.0 / 60.0, 1, bound);
+			for (size_t seat = 0; seat < c.expected.size(); ++seat) {
+				if (config.peerInputDelayFrames[seat] == c.expected[seat]) continue;
+				*error = std::string("with ") + c.name + " seat " + std::to_string(seat + 1) + " starts at " + std::to_string(config.peerInputDelayFrames[seat]) +
+				         " ticks, " + (config.peerInputDelayFrames[seat] < c.expected[seat] ? "short of its links to the other clients" : "more than its links cost");
+				return false;
+			}
+		}
+		std::cout << "PASS a_clients_start_delay_covers_the_other_clients cases=" << sizeof(cases) / sizeof(cases[0]) << std::endl;
+		return true;
+	}
+
 	// A client whose link to the host dropped in the rematch's lobby ended its match (the four-box run: 'rematch setup failed:
 	// Connection dropped', exit 1) while the host played the round with its seat held; a lobby drop returns as a match drop does.
 	// l4p-40: a held rejoin to a live host whose hello went unanswered took the host for gone, dialled the peers that host nothing in a
@@ -19793,6 +19831,7 @@ namespace RTE {
 		sessionRow([&] { return TestAHeldRejoinAsksItsHostAgainOffTheGameThread(&error); }, "TestAHeldRejoinAsksItsHostAgainOffTheGameThread()");
 		sessionRow([&] { return TestAnImageReturnKeepsTheDirectorysRule(&error); }, "TestAnImageReturnKeepsTheDirectorysRule()");
 		sessionRow([&] { return TestARoundStartsDelayCoversTheStartWork(&error); }, "TestARoundStartsDelayCoversTheStartWork()");
+		sessionRow([&] { return TestAClientsStartDelayCoversTheOtherClients(&error); }, "TestAClientsStartDelayCoversTheOtherClients()");
 		sessionRow([&] { return TestARematchStartsWithoutTheEndedRoundsCatchUp(&error); }, "TestARematchStartsWithoutTheEndedRoundsCatchUp()");
 		sessionRow([&] { return TestLeavingEndsTheSeatsCatchUp(&error); }, "TestLeavingEndsTheSeatsCatchUp()");
 		sessionRow([&] { return TestALobbyDropsAnAbandonedTransfersTail(&error); }, "TestALobbyDropsAnAbandonedTransfersTail()");
