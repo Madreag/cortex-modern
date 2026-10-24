@@ -1019,6 +1019,16 @@ class DirectoryTests(unittest.TestCase):
                         f"a 256-descriptor start was left at {raised.call_args}")
 
     def test_R2_waiters_leave_heartbeats_capacity(self) -> None:
+        if os.name == "posix":
+            import resource
+            # Both ends of every held poll live in this process: a full waiter pool and the shared caller's wave.
+            needed = 2 * (64 + session_directory.MAX_SIGNAL_WAITERS) + 256
+            original = resource.getrlimit(resource.RLIMIT_NOFILE)
+            if original[0] != resource.RLIM_INFINITY and original[0] < needed:
+                self.assertTrue(original[1] == resource.RLIM_INFINITY or original[1] >= needed,
+                                f"R2: a full waiter pool and its local clients need a {needed}-descriptor test budget")
+                resource.setrlimit(resource.RLIMIT_NOFILE, (needed, original[1]))
+                self.addCleanup(resource.setrlimit, resource.RLIMIT_NOFILE, original)
         self.start(port=0)
         self.server.store.caller_mode = "tunnel"
         address = {"CF-Connecting-IP": "192.0.2.250"}
