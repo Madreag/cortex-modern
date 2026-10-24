@@ -26,7 +26,7 @@
             "-max-ticks",
             "1200"
           ],
-          "menu_script": "mp-resume-from-disk.host.menu.txt",
+          "menu_script": "stress.host.menu",
           "input_script": "mp-resume-from-disk.input.txt",
           "probe": "mp-resume-from-disk.before.probe.json",
           "kill_when": {
@@ -43,7 +43,23 @@
             "NetworkShowDiagnostics": "1",
             "NetworkMatchStatusMode": "Always",
             "NetworkAutosavesKept": "2"
-          }
+          },
+          "runtime_files": [
+            {
+              "copy": "tools/feel/FeelBaseline.lua",
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua",
+              "replace": [
+                [
+                  "^local WINDOW_TICKS = \\d+;$",
+                  "local WINDOW_TICKS = 9000;"
+                ]
+              ]
+            },
+            {
+              "to": "Userdata/UserScenes.rte/Index.ini",
+              "write": "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n\tAddActivity = GAScripted\n\t\tCopyOf = P4 Alpha Duel\n\t\tPresetName = Determinism FeelBaseline\n\t\tScriptPath = UserScenes.rte/FeelBaseline.lua\n\t\tLuaClassName = FeelBaseline\n\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n"
+            }
+          ]
         },
         {
           "name": "client",
@@ -84,7 +100,23 @@
             "peer": "host",
             "event": "video_mark resume-host-listening",
             "timeout_s": 90
-          }
+          },
+          "runtime_files": [
+            {
+              "copy": "tools/feel/FeelBaseline.lua",
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua",
+              "replace": [
+                [
+                  "^local WINDOW_TICKS = \\d+;$",
+                  "local WINDOW_TICKS = 9000;"
+                ]
+              ]
+            },
+            {
+              "to": "Userdata/UserScenes.rte/Index.ini",
+              "write": "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n\tAddActivity = GAScripted\n\t\tCopyOf = P4 Alpha Duel\n\t\tPresetName = Determinism FeelBaseline\n\t\tScriptPath = UserScenes.rte/FeelBaseline.lua\n\t\tLuaClassName = FeelBaseline\n\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n"
+            }
+          ]
         }
       ]
     },
@@ -327,5 +359,8 @@
       ],
       "assert": "the resumed round's committed frames across the marked window, which closes on the round's own frame 850 (and no sooner than 5 s), so a loaded box stretches the window instead of thinning it"
     }
-  ]
+  ],
+  "scripts": {
+    "stress.host.menu": "wait_ms 1800\nactivate ButtonMainToMultiplayer\nwait_ms 600\nsettext TextMultiplayerName Host\nactivate ButtonMultiplayerHostGame\nwait_ms 600\ncombo_select ComboHostActivity Determinism FeelBaseline\nsetup_host_port {PORT}\ncombo_select ComboHostPlayers 2\nactivate ButtonHostOptions\nwait_ms 600\nactivate TabHostPageRecovery\nvideo_mark resume-autosave-options\nwait_ms 900\nassert_visible CollectionBoxHostPageRecovery 1\nsetcheck CheckHostRecAutosave 1\nwait_ms 600\nobserve assert_checked CheckHostRecAutosave 1\nobserve assert_enabled ComboHostRecAutosaveInterval 1\nwait_ms 600\nobserve assert_label ComboHostRecAutosaveInterval 1 second\nobserve assert_enabled ButtonHostOptApply 0\nwait_ms 900\ndump_host_options\nactivate ButtonHostOptBack\nwait_ms 600\nactivate ButtonMultiplayerCreate\nwait_ms 900\nassert_substate Lobby\nvideo_mark resume-host-listening\nwait_connected 2 90\nwait_remote_ready 90\nvideo_mark resume-ready-start\ndump_lobby\nassert_enabled ButtonMultiplayerStart 1\nactivate ButtonMultiplayerStart\nwait_file {PROBE_DIR}/ready-to-drop.json 120\nwait_ms 120000\n"
+  }
 }
