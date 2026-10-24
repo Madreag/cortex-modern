@@ -19,11 +19,87 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
+#include <iostream>
+#include <unordered_map>
 #include <vector>
 
 using namespace RTE;
 
 ConcreteClassInfo(ADoor, Actor, 20);
+
+namespace {
+	// CC_TEST_DOOR_DIG_AGE_MS=N: in a match, each closed door with its material drawn has a slit dug through it once it is N sim ms old,
+	// then says how many sim ms its material took to be whole again.
+	long long DoorDigAgeMs() {
+		static const long long ageMs = [] {
+			const char* value = std::getenv("CC_TEST_DOOR_DIG_AGE_MS");
+			return value ? std::atoll(value) : -1LL;
+		}();
+		return ageMs;
+	}
+
+	struct DoorDig {
+		long long dugAtMs = 0;
+		std::vector<std::pair<int, int>> pixels;
+		bool reported = false;
+	};
+
+	std::unordered_map<long, DoorDig>& DoorDigs() {
+		static std::unordered_map<long, DoorDig> digs;
+		return digs;
+	}
+
+	void DigDoorForTest(const ADoor& door) {
+		if (!ScenarioRunner::LockstepCoordinatorAttached() || !door.GetDoor() || !door.GetDoorMaterialDrawn() || door.GetDoorState() != ADoor::CLOSED ||
+		    static_cast<long long>(door.GetAge()) < DoorDigAgeMs() || DoorDigs().count(door.GetUniqueID()) != 0) {
+			return;
+		}
+		BITMAP* material = g_SceneMan.GetTerrain()->GetMaterialBitmap();
+		Box bounds = door.GetDoor()->GetBoundingBox();
+		bounds.Unflip();
+		const int left = std::max(0, static_cast<int>(std::floor(bounds.GetCorner().GetX())));
+		const int top = std::max(0, static_cast<int>(std::floor(bounds.GetCorner().GetY())));
+		const int right = std::min(material->w, static_cast<int>(std::ceil(bounds.GetCorner().GetX() + bounds.GetWidth())));
+		const int bottom = std::min(material->h, static_cast<int>(std::ceil(bounds.GetCorner().GetY() + bounds.GetHeight())));
+		if (right - left < 4 || bottom - top < 4) {
+			return;
+		}
+		// Three pixels wide across the door's short side, a quarter of the way along it, so the slit parts the door the way a dig does.
+		const bool tall = bottom - top >= right - left;
+		const int along = tall ? top + (bottom - top) * 3 / 4 : left + (right - left) * 3 / 4;
+		DoorDig& dig = DoorDigs()[door.GetUniqueID()];
+		dig.dugAtMs = g_TimerMan.GetSimTimeMS();
+		for (int y = tall ? along : top; y < (tall ? along + 3 : bottom); ++y) {
+			for (int x = tall ? left : along; x < (tall ? right : along + 3); ++x) {
+				if (_getpixel(material, x, y) == g_MaterialDoor) {
+					_putpixel(material, x, y, g_MaterialAir);
+					dig.pixels.emplace_back(x, y);
+				}
+			}
+		}
+		g_SceneMan.GetTerrain()->AddUpdatedMaterialArea(Box(Vector(static_cast<float>(left), static_cast<float>(top)), Vector(static_cast<float>(right), static_cast<float>(bottom))));
+		std::cout << "[door-reseal] door=" << door.GetUniqueID() << " team=" << door.GetTeam() << " dug=" << dig.pixels.size() << " at_ms=" << dig.dugAtMs << std::endl;
+	}
+
+	void NoteDoorResealForTest(const ADoor& door) {
+		const auto found = DoorDigs().find(door.GetUniqueID());
+		if (found == DoorDigs().end() || found->second.reported) {
+			return;
+		}
+		DoorDig& dig = found->second;
+		BITMAP* material = g_SceneMan.GetTerrain()->GetMaterialBitmap();
+		const long long afterMs = g_TimerMan.GetSimTimeMS() - dig.dugAtMs;
+		const bool whole = std::all_of(dig.pixels.begin(), dig.pixels.end(), [material](const std::pair<int, int>& pixel) { return _getpixel(material, pixel.first, pixel.second) == g_MaterialDoor; });
+		if (whole) {
+			std::cout << "[door-reseal] door=" << door.GetUniqueID() << " team=" << door.GetTeam() << " resealed_after_ms=" << afterMs << std::endl;
+			dig.reported = true;
+		} else if (afterMs > 12000) {
+			std::cout << "[door-reseal] door=" << door.GetUniqueID() << " team=" << door.GetTeam() << " not resealed after_ms=" << afterMs << std::endl;
+			dig.reported = true;
+		}
+	}
+} // namespace
 
 ADoor::ADoor(const ADoor& source, CheckpointNativeSnapshot& snapshot) :
 	Actor(source, snapshot),
@@ -638,6 +714,10 @@ void ADoor::Update() {
 
 		UpdateDoorAttachableActions();
 
+		if (DoorDigAgeMs() >= 0) {
+			DigDoorForTest(*this);
+		}
+
 		bool shouldDrawDoorMaterial = ((m_DrawMaterialLayerWhenOpen && m_DoorState == OPEN) ||
 		                               (m_DrawMaterialLayerWhenClosed && m_DoorState == CLOSED) ||
 		                               ((m_DrawMaterialLayerWhenOpen || m_DrawMaterialLayerWhenClosed) && m_DoorState == STOPPED)) &&
@@ -645,6 +725,10 @@ void ADoor::Update() {
 		if (shouldDrawDoorMaterial) {
 			DrawDoorMaterial(true);
 			m_DoorMaterialRedrawTimer.Reset();
+		}
+
+		if (DoorDigAgeMs() >= 0) {
+			NoteDoorResealForTest(*this);
 		}
 	}
 
