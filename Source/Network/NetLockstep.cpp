@@ -7611,8 +7611,18 @@ namespace RTE {
 		if (arrivals.size() < 2 || nowMs < arrivals.front().first || arrivals.back().first < arrivals.front().first || arrivals.back().first - arrivals.front().first < 1000) return false;
 		// Counted in the seat's own ticks: a delay re-size moves its target frames without the seat running faster or slower.
 		const auto ownTick = [this, peerId](uint64_t target) { const uint64_t delay = InputDelayAt(peerId, target); return target > delay ? target - delay : 0; };
-		const uint64_t newest = ownTick(arrivals.back().second), oldest = ownTick(arrivals.front().second);
-		const double fed = static_cast<double>(newest > oldest ? newest - oldest : 0) * 1000.0 / static_cast<double>(arrivals.back().first - arrivals.front().first);
+		// The rate every arrival in the window fits, not the span of its first and last: one packet a jittery relay holds back at
+		// either end is not the machine feeding slower.
+		double meanMs = 0, meanTick = 0;
+		for (const auto& [ms, target]: arrivals) { meanMs += static_cast<double>(ms - arrivals.front().first); meanTick += static_cast<double>(ownTick(target)); }
+		meanMs /= static_cast<double>(arrivals.size()); meanTick /= static_cast<double>(arrivals.size());
+		double spread = 0, covariance = 0;
+		for (const auto& [ms, target]: arrivals) {
+			const double dt = static_cast<double>(ms - arrivals.front().first) - meanMs;
+			spread += dt * dt; covariance += dt * (static_cast<double>(ownTick(target)) - meanTick);
+		}
+		if (spread <= 0) return false;
+		const double fed = covariance / spread * 1000.0;
 		return fed < own - tolerance;
 	}
 

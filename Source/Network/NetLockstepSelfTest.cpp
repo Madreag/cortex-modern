@@ -3830,6 +3830,29 @@ namespace RTE {
 			return true;
 		}
 
+		static bool RelayJitterDoesNotMakeAFastMachineSlow(std::string* error) {
+			// A 60 tick/s sender over a jittery relay: one input in thirty, the newest among them, arrives 67 ms late (the relay's
+			// receipt p95), and the waits it caused cost 0.612 ticks/s. A 56 tick/s sender on the same relay is still slow.
+			for (const double rate: {60.0, 56.0}) {
+				Wire wire; NetLockstepCoordinator peer;
+				Configure(peer, wire);
+				peer.m_Config.peerFrameGroups = true;
+				peer.m_TickCosts.assign(60, 1.0);
+				peer.m_PeerEffectiveStart[1] = 1;
+				auto& stats = peer.m_Stats.peers[1];
+				const uint64_t count = static_cast<uint64_t>(rate * 3) + 1;
+				for (uint64_t i = 0; i < count; ++i) {
+					const bool late = i % 30 == 29 || i + 1 == count;
+					stats.arrivals.emplace_back(1000 + static_cast<uint64_t>(std::llround(i * 1000.0 / rate)) + (late ? 67 : 0), 4000 + i);
+				}
+				stats.waitCosts.emplace_back(stats.arrivals.back().first, 102);
+				const bool slow = peer.CostsPastTolerance(1, 4000 + count, stats.arrivals.back().first);
+				if (rate == 60.0 && slow) { *error = "fast-machine-held-for-relay-jitter: a sender feeding 60 ticks/s was judged a slow machine from one late relayed input"; return false; }
+				if (rate == 56.0 && !slow) { *error = "a sender feeding 56 ticks/s escaped the slow-machine judgement"; return false; }
+			}
+			return true;
+		}
+
 		static bool SilenceDoesNotChangeTheSendingRate(std::string* error) {
 			Wire wire; NetLockstepCoordinator peer;
 			Configure(peer, wire);
@@ -33723,6 +33746,12 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS a_seat_every_other_held_yields_its_play\n[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "relay-jitter-capacity") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::RelayJitterDoesNotMakeAFastMachineSlow(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS relay_jitter_does_not_make_a_fast_machine_slow\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "own-late-input-receipt") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::OwnLateInputsLeaveTheirReceiptTime(&error)) return fail(error);
@@ -34295,6 +34324,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::AHoldInvalidatesOnlyUnplayedPreparation, "a_hold_invalidates_only_unplayed_preparation");
 		row(&SessionPlaneRecoveryTest::NeutralSeatOnlyQueriesTheReferee, "a_neutral_seat_only_queries_the_assigned_referee_half");
 		row(&SessionPlaneRecoveryTest::SilenceDoesNotChangeTheSendingRate, "a_silent_interval_does_not_lower_the_measured_sending_rate");
+		row(&SessionPlaneRecoveryTest::RelayJitterDoesNotMakeAFastMachineSlow, "relay_jitter_does_not_make_a_fast_machine_slow");
 		row(&SessionPlaneRecoveryTest::HoldInvitation, "an_unsigned_hold_invitation_never_fences_an_input");
 		row(&SessionPlaneRecoveryTest::OwnAheadHoldFence, "a_seat_co_signs_and_fences_its_own_future_hold");
 		row(&SessionPlaneRecoveryTest::CaptureWireContract, "private_capture_has_a_distinct_wire_and_admission_contract");
