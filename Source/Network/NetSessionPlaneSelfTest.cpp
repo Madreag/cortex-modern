@@ -69,6 +69,18 @@ namespace RTE {
 		/// The longest a tie exchange waits for its answer, as NetConnectionAuthority's c_TieTimeoutCapMs.
 		constexpr uint64_t c_TestTieTimeoutCapMs = 2000;
 		using HoldBoundaries = std::map<uint8_t, std::map<uint64_t, bool>>;
+		// Levers read once: every getenv takes the C runtime's environment lock and scans the environment, and the wire asks per message.
+		bool DirectFaultObservations() {
+			static const bool enabled = std::getenv("CC_TEST_DIRECT_FAULT_OBSERVATIONS") != nullptr;
+			return enabled;
+		}
+		const char* ObservedTargetText() {
+			static const std::optional<std::string> text = [] {
+				const char* value = std::getenv("CC_TEST_LOCKSTEP_OBSERVE_TARGET");
+				return value ? std::optional<std::string>(value) : std::nullopt;
+			}();
+			return text ? text->c_str() : nullptr;
+		}
 		// Installed state, read by the self-test's friend accessors. The fixture never supplies a voting group to a peer.
 		std::function<uint32_t(const NetLockstepCoordinator&, uint64_t)> s_FrameMembers, s_HeldSeats;
 		std::function<uint8_t(const NetLockstepCoordinator&, const NetLockstepReadyFrame&)> s_FrameAuthor;
@@ -417,7 +429,7 @@ namespace RTE {
 				}
 				const auto frameTie = [&](const NetFrameTieRequest& sent) {
 					const auto answer = directory.FrameTie(seat, sent, nowMs);
-					if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS") && answer.status != 200) {
+					if (NetPeerFrameDetail::ReturnInputDetails() && answer.status != 200) {
 						uint32_t members = 0; for (uint16_t member: sent.members) if (member > 0 && member <= 4) members |= 1U << (member - 1);
 						DiagnosticLine() << "[session-plane-directory-refusal] seat=" << unsigned(seat) << " frame=" << sent.frame
 						    << " request_generation=" << sent.generation << " request_host=" << sent.host << " query_only=" << sent.queryOnly
@@ -965,7 +977,7 @@ namespace RTE {
 			struct ImageTailDelivery { uint8_t donor; NetTransportLane lane; NetLobbyStateChunk chunk; };
 			std::deque<ImageTailDelivery> receivedImageTail;
 			bool TraceFaultObservation() const {
-				return std::getenv("CC_TEST_DIRECT_FAULT_OBSERVATIONS") && owner == 2 && hub.now >= hub.faultAt && hub.now <= hub.faultAt + 100;
+				return DirectFaultObservations() && owner == 2 && hub.now >= hub.faultAt && hub.now <= hub.faultAt + 100;
 			}
 			static std::string BytesHex(const std::vector<uint8_t>& bytes) {
 				static constexpr char digits[] = "0123456789abcdef";
@@ -1069,8 +1081,8 @@ namespace RTE {
 #endif
 			}
 			void TraceInputWindow(const std::vector<uint8_t>& bytes, const char* stage, uint8_t receiver) const {
-				const char* watched = std::getenv("CC_TEST_LOCKSTEP_OBSERVE_TARGET");
-				if (!watched || !std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) return;
+				const char* watched = ObservedTargetText();
+				if (!watched || !NetPeerFrameDetail::ReturnInputDetails()) return;
 				const uint64_t target = std::strtoull(watched, nullptr, 10);
 				NetHostMigrationMessage packet; NetHash32 key; key.fill(0x39);
 				if (!NetHostMigrationCodec::Decode(bytes, key, packet)) return;
@@ -1139,7 +1151,7 @@ namespace RTE {
 					}
 				}
 				if (hub.row.receiptGap && NetHostMigrationCodec::Decode(bytes, key, decision) && RemoveReceiptGap(decision, delivered)) return true;
-				if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS") && peekInto(decision) && decision.type == NetHostMigrationMessageType::PeerControl) {
+				if (NetPeerFrameDetail::ReturnInputDetails() && peekInto(decision) && decision.type == NetHostMigrationMessageType::PeerControl) {
 					const auto decoded = NetLockstepCodec::Decode(decision.bytes, ControllerFrame::c_Version);
 					if (decoded.ok) if (const auto* start = std::get_if<NetLockstepStart>(&decoded.packet.payload))
 						DiagnosticLine() << "[session-plane-start-send] transport_owner=" << unsigned(owner) << " to=" << unsigned(other->owner)
@@ -1240,7 +1252,7 @@ namespace RTE {
 						ping.pending.emplace(hub.now + trip, trip);
 					}
 					if (reliable) { auto& last = lastDelivery[{id, lane}]; at = std::max(at, last); last = at; }
-					if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) if (const char* watched = std::getenv("CC_TEST_LOCKSTEP_OBSERVE_TARGET");
+					if (NetPeerFrameDetail::ReturnInputDetails()) if (const char* watched = ObservedTargetText();
 					    watched && peekInto(decision) && (decision.type == NetHostMigrationMessageType::PeerInput || decision.type == NetHostMigrationMessageType::PeerForwardInput) &&
 					    decision.frame == std::strtoull(watched, nullptr, 10))
 						DiagnosticLine() << "[session-plane-input-delivery] sender=" << unsigned(owner) << " receiver=" << unsigned(other->owner)
@@ -1935,7 +1947,7 @@ namespace RTE {
 						auto& waiting = unexplained[a][b];
 						if (waiting.first != frame) {
 							waiting = {frame, hub.now};
-							if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) {
+							if (NetPeerFrameDetail::ReturnInputDetails()) {
 								std::string seen;
 								for (const auto& [at, observation]: hub.receiptEvidence) if (at + 8 >= frame && at <= frame + 8)
 									seen += " receipt@" + std::to_string(at) + ":" + std::to_string(observation.packet.senderPeerId) + ">" + std::to_string(observation.receiver) +
@@ -2283,7 +2295,7 @@ namespace RTE {
 							winnersLeft &= winnersElsewhere;
 							if (IsLosingDecision(id, decision.request, decision.reply) && !winnersLeft && decider == id &&
 							    splitDecisions[id - 1].insert(key).second) {
-								if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) DiagnosticLine() << "[session-plane-decision-class] seat=" << unsigned(id)
+								if (NetPeerFrameDetail::ReturnInputDetails()) DiagnosticLine() << "[session-plane-decision-class] seat=" << unsigned(id)
 								    << " query_only=" << decision.request.queryOnly << " question=" << decision.request.frame << " now_ms=" << hub.now
 								    << " image_reading=" << imageReading[id - 1] << " image_returns=" << imageReturns[id - 1]
 								    << " displayed=" << world.applied << " resume=" << peer.GetResumeFrame() << std::endl;
@@ -2388,8 +2400,8 @@ namespace RTE {
 						frameAuthors[id - 1].push_back(s_FrameAuthor(peer, ready));
 						if (hub.row.captureFrames) committed[id - 1][ready.frame] = ready;
 						peer.FinishSimulationTick(ready.frame); credits[id - 1].Consume(catchingUp);
-						if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) {
-							const char* watched = std::getenv("CC_TEST_LOCKSTEP_OBSERVE_TARGET");
+						if (NetPeerFrameDetail::ReturnInputDetails()) {
+							const char* watched = ObservedTargetText();
 							const uint64_t target = watched ? std::strtoull(watched, nullptr, 10) : UINT64_MAX;
 							if (ready.frame <= 3 || (watched && ready.frame <= target && target - ready.frame <= 16))
 								DiagnosticLine() << "[session-plane-display-clock] local=" << unsigned(id) << " frame=" << ready.frame
@@ -2408,7 +2420,7 @@ namespace RTE {
 					if (hub.now < hub.faultEnd && hub.row.gapMs < 5000 && HoldVisible(peer, hub.row.subject, hub.now)) { error = "a short hiccup showed a held seat"; return false; }
 					if (hub.row.frozen && HoldVisible(peer, hub.row.subject, hub.now)) { error = "flowing keepalives showed a held seat"; return false; }
 					if (hub.now == hub.faultAt - 1) {
-						if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) DiagnosticLine() << "[session-plane-pre-fault] seat=" << unsigned(id) << " applied=" << world.applied << " now_ms=" << hub.now << std::endl;
+						if (NetPeerFrameDetail::ReturnInputDetails()) DiagnosticLine() << "[session-plane-pre-fault] seat=" << unsigned(id) << " applied=" << world.applied << " now_ms=" << hub.now << std::endl;
 						preFaultPaceLeadMs[id - 1] = static_cast<int64_t>(std::llround((world.applied - 1) * c_TestTickMs)) -
 						    static_cast<int64_t>(displayedAt[id - 1] - firstDisplayedAt[id - 1]);
 						settledDelay[id - 1] = peer.InputDelayAt(id, world.applied + 1); settledChanges[id - 1] = SenderResizes(peer, id);
@@ -2435,7 +2447,7 @@ namespace RTE {
 					hub.refaultAt = hub.now + hub.row.refaultAfterMs;
 					hub.refaultEnd = hub.refaultAt + hub.row.refaultMs;
 				}
-				if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS") && hub.now + 1000 >= hub.faultAt && hub.now < hub.faultEnd && hub.now % 250 == 0) {
+				if (NetPeerFrameDetail::ReturnInputDetails() && hub.now + 1000 >= hub.faultAt && hub.now < hub.faultEnd && hub.now % 250 == 0) {
 					DiagnosticLine line; line << "[session-plane-fault-pace] now_ms=" << hub.now;
 					for (uint8_t id = 1; id <= hub.row.seats; ++id) line << " seat" << unsigned(id) << "=" << worlds[id - 1].applied;
 				}
@@ -2445,7 +2457,7 @@ namespace RTE {
 					const bool relayed = peers.front()->GetConfig().matchConfig.dedicated;
 					uint64_t highest = 0;
 					for (uint8_t id = relayed ? 2 : 1; id <= hub.row.seats; ++id) highest = std::max(highest, worlds[id - 1].applied);
-					if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS") && (hub.now - hub.faultEnd) % 1000 == 0) {
+					if (NetPeerFrameDetail::ReturnInputDetails() && (hub.now - hub.faultEnd) % 1000 == 0) {
 						DiagnosticLine line; line << "[session-plane-caught-up] now_ms=" << hub.now << " highest=" << highest;
 						for (uint8_t id = 1; id <= hub.row.seats; ++id) line << " seat" << unsigned(id) << "=" << worlds[id - 1].applied << (caughtAt[id - 1] ? "+" : "");
 					}
@@ -2517,7 +2529,7 @@ namespace RTE {
 				for (uint8_t seat = 1; seat <= hub.row.seats; ++seat)
 					if ((imageReading[seat - 1] || imageNeeded[seat - 1]) && heldSince[seat] != UINT64_MAX && !(returnActivations[seat] && returnActivations[seat] <= head)) held[seat] = true;
 				for (uint8_t seat = 1; seat <= hub.row.seats; ++seat) {
-					if (held[seat] && heldSince[seat] == UINT64_MAX && std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) {
+					if (held[seat] && heldSince[seat] == UINT64_MAX && NetPeerFrameDetail::ReturnInputDetails()) {
 						std::string by;
 						for (uint8_t observer = 1; observer <= hub.row.seats; ++observer) if (peers[observer - 1]->IsRunning())
 							by += " observer" + std::to_string(observer) + "=" + (views[observer].contains(seat) ? "bridge" : "") + (peers[observer - 1]->HasHeldAISeat(seat) ? "+ai" : "") +
@@ -2778,13 +2790,13 @@ namespace RTE {
 						if (found != wire->receivedReturnCertificates.end()) { proof = &found->second; break; }
 					}
 					if (!proof) return true;
-					if (!certificateReported && std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) {
+					if (!certificateReported && NetPeerFrameDetail::ReturnInputDetails()) {
 						DiagnosticLine() << "[session-plane-image-certificate] returner=" << unsigned(seat) << " activation=" << activation
 						    << " boundary=" << proof->boundary << " replay_start=" << replayCoordinator.GetConfig().startFrame << " replay_applied=" << replay.applied << std::endl;
 						certificateReported = true;
 					}
 					if (!replayCoordinator.AdoptPeerReturn(config, replayCoordinator, *proof, activation, &lastRefusal)) {
-						if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS") && !refusalReported) {
+						if (NetPeerFrameDetail::ReturnInputDetails() && !refusalReported) {
 							refusalReported = true;
 							const auto describe = [](const NetLockstepReadyFrame& ready) {
 								std::string text = "authority=" + std::to_string(ready.authorityPeerId) + "/" + std::to_string(ready.updateAuthorityPeerId) + " departed=";
@@ -2836,7 +2848,7 @@ namespace RTE {
 				config.relayToOtherPeers = config.localPeerId == config.authorityPeerId;
 				for (uint8_t peer = 1; peer <= seats; ++peer) config.peerInputDelayFrames[peer] = config.matchConfig.peerInputDelayFrames[peer - 1];
 				config.peerIncarnations[seat] = incarnation; config.seatStateThroughFrame = replay.applied;
-				if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) {
+				if (NetPeerFrameDetail::ReturnInputDetails()) {
 					std::string held, reclaimed;
 					for (const auto& [peer, hold]: config.initialSeatHolds) held += " " + std::to_string(peer) + "@" + std::to_string(hold.cutoffFrame);
 					for (const auto& [peer, back]: config.initialSeatReclaims) reclaimed += " " + std::to_string(peer) + "@" + std::to_string(back.activationFrame);
@@ -2935,7 +2947,7 @@ namespace RTE {
 					if (!replayCoordinator.PopReadyFrame(ready)) co_return fail("the private coordinator did not consume committed frame " +
 					    std::to_string(recorded.targetFrame) + ": state=" + std::to_string(static_cast<int>(replayCoordinator.GetState())) +
 					    " next=" + std::to_string(replayCoordinator.GetStats().nextFrame) + " reason=" + replayCoordinator.GetStats().timeoutReason);
-					if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) replayedFrames[ready.frame] = ready;
+					if (NetPeerFrameDetail::ReturnInputDetails()) replayedFrames[ready.frame] = ready;
 					if (!replay.Apply(ready, error)) co_return false;
 					replayCoordinator.FinishSimulationTick(ready.frame);
 					if (liveStarted) fixture.peers[seat - 1]->AdoptReplayedSeatTransitions(replayCoordinator, replay.applied);
@@ -2944,7 +2956,7 @@ namespace RTE {
 					// FLAGGED fixture departure: a private replay reports the same work cost as its supplied machine capacity.
 					workUs += static_cast<uint64_t>(std::ceil(c_TestTickMs * 1000 / capacity));
 				}
-				if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS") && fixture.hub.now >= replayTracedAt + 250) {
+				if (NetPeerFrameDetail::ReturnInputDetails() && fixture.hub.now >= replayTracedAt + 250) {
 					replayTracedAt = fixture.hub.now;
 					DiagnosticLine() << "[session-plane-image-replay] returner=" << unsigned(seat) << " applied=" << replay.applied << " received=" << receivedTail.size()
 					    << " lowest=" << (receivedTail.empty() ? 0 : receivedTail.begin()->first) << " highest=" << (receivedTail.empty() ? 0 : receivedTail.rbegin()->first)
@@ -3078,7 +3090,7 @@ namespace RTE {
 			if (!fixture.peers[seat - 1]->IsRunning()) co_return fail("the returning seat did not finish its live handshake before activation: state=" +
 			    std::to_string(static_cast<int>(fixture.peers[seat - 1]->GetState())) + " starts_received=" + std::to_string(fixture.peers[seat - 1]->GetStats().startPacketsReceived) + s_WaitState(*fixture.peers[seat - 1]));
 			fixture.peers[seat - 1]->AdoptReplayedSeatTransitions(replayCoordinator, activation - 1);
-			if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) DiagnosticLine() << "[session-plane-image-adopted] returner=" << unsigned(seat) << " activation=" << activation
+			if (NetPeerFrameDetail::ReturnInputDetails()) DiagnosticLine() << "[session-plane-image-adopted] returner=" << unsigned(seat) << " activation=" << activation
 			    << " replay_applied=" << replay.applied << " live_running=" << fixture.peers[seat - 1]->IsRunning()
 			    << s_WaitState(*fixture.peers[seat - 1]) << " now_ms=" << fixture.hub.now << std::endl;
 			fixture.discardedHistories[seat - 1].push_back(fixture.worlds[seat - 1].hashes);
