@@ -2787,7 +2787,8 @@ void NetModerationGUI::Draw() {
 	m_RosterWrap = {};
 	m_StatusWrap = {};
 	const auto state = g_NetMatchService.GetState();
-	if (state == NetMatchServiceState::Failed || state == NetMatchServiceState::Idle) {
+	// A held seat's rejoin wait keeps its line between attempts, a failed attempt included.
+	if ((state == NetMatchServiceState::Failed || state == NetMatchServiceState::Idle) && !m_HeldWaitScreen) {
 		if (m_ConnectionControls) ClearConnectionControls();
 		return;
 	}
