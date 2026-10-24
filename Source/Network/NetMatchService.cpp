@@ -7068,6 +7068,7 @@ static std::string ResyncSaveName() {
 			if (!ScenarioRunner::RestoreCommittedCatchUpState(committed, &error) || !ScenarioRunner::RestoreLockstepPauseState(pause, committed.savedTick)) {
 				ScenarioRunner::SetControllerReplayError("private catch-up activation: " + error); return;
 			}
+			const auto activationState = RTE::SteadyClock::now();
 			if (g_ActivityMan.GetActivity() && m_ActivateCatchUpLocalSeat && !m_ActivateCatchUpLocalSeat(*g_ActivityMan.GetActivity())) {
 				// A relaunched returner has no player state of its own; a seat held since its round began has no agreed binding either.
 				const auto binding = committed.playerBindings.find(m_LocalPeerId);
@@ -7077,6 +7078,7 @@ static std::string ResyncSaveName() {
 					ScenarioRunner::SetControllerReplayError("private catch-up could not restore the local seat"); return;
 				}
 			}
+			const auto activationSeat = RTE::SteadyClock::now();
 			g_UInputMan.ClearMouseButtons();
 			// A local human seat resumes sampling before its first human frame is committed.
 			Activity* activity = g_ActivityMan.GetActivity();
@@ -7122,6 +7124,8 @@ static std::string ResyncSaveName() {
 				std::ostringstream line;
 				line << "[net-match] activation work frame=" << m_WorldCatchUp.activationTick
 				     << " capture_ms=" << milliseconds(activationBegan, activationCaptured) << " local_ms=" << milliseconds(activationCaptured, activationLocal)
+				     << " state_ms=" << milliseconds(activationCaptured, activationState) << " seat_ms=" << milliseconds(activationState, activationSeat)
+				     << " inputs_ms=" << milliseconds(activationSeat, activationLocal)
 				     << " wire_ms=" << milliseconds(activationLocal, activationWired) << " cleanup_ms=" << milliseconds(activationWired, RTE::SteadyClock::now());
 				System::PrintDiagnosticLine(line.str());
 			}
