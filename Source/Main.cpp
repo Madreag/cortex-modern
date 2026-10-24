@@ -3250,7 +3250,7 @@ bool HandleMainArgs(int argCount, char** argValue) {
 			if (!FrameMan::SetFeelRecordDirectory(argValue[++i])) {
 				{
 					std::ostringstream line;
-					line << "[feel] recording requires CCCP_HEADLESS=1 and a fresh existing output directory";
+					line << "[feel] recording requires a headless harness or an opted-in headed runner and a fresh existing output directory";
 					System::PrintDiagnosticErrorLine(line.str());
 				}
 				return false;
@@ -6436,6 +6436,7 @@ static void LocalPredictionInvarianceOnTick(uint64_t simTick) {
 			for (int n = 0; n < repeats; ++n) {
 				LocalPrediction::Clear();
 				LocalPrediction::RunPreview();
+				if (LocalPrediction::GetLastDepth() != depth) fail("completed preview depth " + std::to_string(LocalPrediction::GetLastDepth()) + " is short of the requested input horizon");
 				// A real frame: the substitution, the HUD and the hidden residents all go through the draw.
 				DrawFrameWithPreviews();
 				if (const std::string failure = CheckPreviewOutcome(static_cast<long long>(simTick), static_cast<long long>(simTick) + depth); !failure.empty() && outcomeFailure.empty()) {
@@ -6504,6 +6505,26 @@ static void LocalPredictionInvarianceOnTick(uint64_t simTick) {
 				}
 			}
 		}
+	}
+	// Losing the local actor must not turn a requested horizon into an executed-depth measurement.
+	if (Activity* activity = g_ActivityMan.GetActivity()) {
+		Activity::RollbackState saved;
+		activity->CaptureRollbackState(saved);
+		auto absent = saved;
+		std::fill(std::begin(absent.controlledActorUID), std::end(absent.controlledActorUID), 0);
+		const auto beforeCount = LocalPrediction::GetPreviewCount(), beforeTick = LocalPrediction::GetLastFillTick();
+		const int beforeDepth = LocalPrediction::GetLastDepth();
+		LocalPrediction::Clear();
+		LocalPrediction::SetDepthOverride(beforeDepth + 1);
+		activity->RestoreRollbackState(absent);
+		LocalPrediction::RunPreview();
+		activity->RestoreRollbackState(saved);
+		const bool truthful = LocalPrediction::GetPreviewCount() == beforeCount && LocalPrediction::GetLastFillTick() == beforeTick &&
+		    LocalPrediction::GetLastDepth() == beforeDepth;
+		if (!truthful) ++failures;
+		System::PrintDiagnosticLine(std::string("[lpinv] ") + (truthful ? "PASS" : "FAIL") + " absent_actor_keeps_the_completed_preview_measurement" +
+		    " requested=" + std::to_string(beforeDepth + 1) + " measured=" + std::to_string(LocalPrediction::GetLastDepth()) +
+		    " bounded=" + std::to_string(ScenarioRunner::UsesBoundedLockstepWait()));
 	}
 	if (!s_lpOverlayLinkModes.empty()) {
 		// Each letter is compared against its own baseline, so the set keeps its own end-to-end compare for drift across letters.
@@ -7924,6 +7945,18 @@ static void HandleControllerReplayFailure(bool& returnToMenuAfterNetworkEnd) {
 			} else {
 				returnToMenuAfterNetworkEnd = true;
 			}
+		} else if (const size_t unresponsive = error.find(c_NetHostUnresponsiveStop); unresponsive != std::string::npos) {
+			const std::string reason = error.substr(unresponsive + c_NetHostUnresponsiveStop.size());
+			g_ConsoleMan.PrintString("NETWORK: " + reason);
+			g_NetMatchService.ReportRuntimeError(reason);
+			g_ActivityMan.EndActivity();
+			g_ActivityMan.SetInActivity(false);
+			ScenarioRunner::ClearControllerReplayError();
+			if (s_netMatchServiceE2E) {
+				s_netMatchServiceE2EError = reason;
+				s_netMatchServiceE2EExitCode = 1;
+				System::SetQuit(true);
+			} else returnToMenuAfterNetworkEnd = true;
 		} else if (const size_t refused = error.find("WorldJoinRefused:"); refused != std::string::npos) {
 			const std::string reason = error.substr(refused + std::string("WorldJoinRefused:").size());
 			g_ConsoleMan.PrintString("NETWORK: " + reason);
@@ -11003,6 +11036,13 @@ std::string BuildNetMatchServiceE2EReportJson(int exitCode, const std::string& s
 	out << "\"frames_planned\":" << (s_netLockstepTicks > 0 ? s_netLockstepTicks : 600) << ",";
 	out << "\"local_prediction\":{\"enabled\":" << (LocalPrediction::IsEnabled() ? "true" : "false")
 	    << ",\"previews\":" << LocalPrediction::GetPreviewCount() << ",\"actor_ticks\":" << LocalPrediction::GetPreviewTicks()
+	    << ",\"last_depth\":" << LocalPrediction::GetLastDepth()
+	    << ",\"last_completed_tick\":" << LocalPrediction::GetLastFillTick()
+	    << ",\"last_requested_tick\":" << LocalPrediction::GetLastRequestedTick()
+	    << ",\"last_request_completed\":" << (LocalPrediction::LastRequestCompleted() ? "true" : "false")
+	    << ",\"input_delay_ticks\":" << LocalPrediction::GetLastInputDelay()
+	    << ",\"configured_max_ticks\":" << g_SettingsMan.GetLocalPredictionMaxTicks()
+	    << ",\"effective_max_ticks\":" << LocalPrediction::GetLastEffectiveMaxTicks()
 	    << ",\"ms_total\":" << LocalPrediction::GetPreviewMs() << ",\"shadows\":" << LocalPrediction::GetShadows() << ",\"taken\":" << LocalPrediction::GetTaken()
 	    << ",\"violations\":" << LocalPrediction::GetViolations()
 	    << ",\"events_played_at_preview\":" << PreviewEventLedger::GetCounters().playedAtPreview
@@ -11157,6 +11197,8 @@ bool StartNetReplayPlayback(const std::string& path, bool fromMenu, std::string*
 	lockstepConfig.authorityPeerId = ScenarioRunner::GetLockstepReplayStartAuthorityPeerId();
 	lockstepConfig.ownershipPolicy = NetMatchConfigUtil::OwnershipPolicyName(replayConfig.ownershipPolicy);
 	lockstepConfig.matchConfig = replayConfig;
+	// The preview regression exercises the unbounded policy on the same recorded actors and inputs.
+	if (s_lpInvarianceTick > 0 && std::getenv("CC_TEST_PREVIEW_UNBOUNDED")) lockstepConfig.matchConfig.slowPlayerPolicy = NetSlowPlayerPolicy::Pause;
 	if (!s_replayCoordinator.StartReplay(s_nullTransport, lockstepConfig, &setupError)) {
 		if (error) *error = setupError;
 		CloseNetReplayPlayback();

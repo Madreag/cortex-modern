@@ -1,4 +1,4 @@
-"""Play a scene on the lead's named boxes with the existing game runners.
+"""Play a scene on the named boxes with the existing game runners.
 
     python tools/e2e_peers.py --scenario fight15-s02 --out <capture> \
         --peer-boxes host=<BOX>,joiner=<BOX> --boxes-file <box facts>
@@ -218,7 +218,7 @@ class PlayerRun:
 def check_build(request):
     box = request["box"]
     if sys.platform != box["os"] or socket.gethostname().casefold() != box["hostname"].casefold():
-        raise ValueError("player is on a different box from the lead's assignment")
+        raise ValueError("player is on a different box from its named assignment")
     repo = Path(box["repo"])
     source = video.source_evidence(repo)
     if source["tip"] != request["commit"] or source["dirty"]:
@@ -700,7 +700,7 @@ def main():
     parser.add_argument("--out", type=Path)
     parser.add_argument("--peer-boxes")
     parser.add_argument("--boxes-file", type=Path, default=os.environ.get("CORTEX_SCENE_BOXES"))
-    parser.add_argument("--port", type=int, help=f"this lane's lobby port inside {video.PORT_LO}-{video.PORT_HI}; defaults to the scene's port_base")
+    parser.add_argument("--port", type=int, help=f"this run's lobby port inside {video.PORT_LO}-{video.PORT_HI}; defaults to the scene's port_base")
     parser.add_argument("--engine-env", action="append", default=[], metavar="CC_TEST_NAME=VALUE",
                         help="a test lever set in both players' engines; recorded in the capture")
     parser.add_argument("--check-spread", type=Path)

@@ -15,6 +15,9 @@ namespace RTE {
 		uint32_t live = 0;
 		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) {
 			if (peer == GetHostPeerId() || m_RemovedPeers.contains(peer) || IsSeatReleased(peer)) continue;
+			// Direct administration belongs to the mutually playing group, including a lone survivor. Incoming one-way traffic
+			// from a different held continuation neither adds its humans to this electorate nor prevents migration.
+			if (!MigrationUsesDirectory() && (PeerFrameMembersAt(m_Stats.nextFrame) & AdminBit(peer)) == 0) continue;
 			const uint64_t heard = LastAuthenticatedTraffic(peer);
 			if (peer == m_Config.localPeerId || (nowMs >= heard && nowMs - heard < c_NetHostLossSilenceMs)) live |= AdminBit(peer);
 		}
@@ -32,12 +35,11 @@ namespace RTE {
 		}
 		// Each signer checks silence and the complete survivor set before voting.
 		// An already signed certificate remains valid when the old host returns.
-		// A lone direct joiner cannot distinguish a dead host from a partitioned
-		// host that still owns the frame tie. Only the directory can fence it.
+		// Direct groups migrate locally and resolve competing histories only when their link heals.
 		uint32_t owners = 0;
 		for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer)
 			if (!m_RemovedPeers.contains(peer) && !IsSeatReleased(peer)) owners |= AdminBit(peer);
-		return std::popcount(voters) >= 2 && (voters & ~owners) == 0 && 2 * std::popcount(voters) > std::popcount(owners);
+		return voters != 0 && (voters & ~owners) == 0 && (!m_Config.frameTieReferee || std::popcount(voters) >= 2);
 	}
 
 	bool NetLockstepCoordinator::ValidatePeerAdmin(const NetHostMigrationMessage& proposal) const {
@@ -60,6 +62,9 @@ namespace RTE {
 		if (!UsesPeerFrameGroups() || !IsRunning() || m_PlaneTicking || m_GrantedSimulationTick || !m_LastCompletedSimulationTick) return;
 		const bool superseded = m_CertifiedSupersedingGeneration > m_Config.migrationGeneration;
 		if (m_Config.localPeerId == GetHostPeerId() && !superseded) return;
+		// A seat that has not heard the host in this round - one that returned into it with the host held - times the host's
+		// silence from its own first tick in it.
+		if (m_AuthorityLastHeardMs == 0) m_AuthorityLastHeardMs = nowMs;
 		if (!superseded && !m_PeerAdminOwnVote && !MigrationUsesDirectory() &&
 		    (nowMs < m_AuthorityLastHeardMs || nowMs - m_AuthorityLastHeardMs < c_NetHostLossSilenceMs)) return;
 		if (!m_PeerAdminRequest) {
@@ -69,6 +74,9 @@ namespace RTE {
 			m_PeerAdminRequest->configHash = m_RoundConfigHash; m_PeerAdminRequest->appliedFrame = *m_LastCompletedSimulationTick;
 			m_PeerAdminRequest->preparedFrame = m_Stats.nextFrame - 1;
 			m_MigrationPhase = NetHostMigrationPhase::Contacting; m_MigrationSinceMs = nowMs;
+			if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) DiagnosticLine() << "[net-admin] request local=" << static_cast<int>(m_Config.localPeerId)
+			    << " authority_heard_ms=" << m_AuthorityLastHeardMs << " superseded=" << superseded << " own_vote=" << m_PeerAdminOwnVote.has_value()
+			    << " directory=" << MigrationUsesDirectory() << " now_ms=" << nowMs << std::endl;
 		}
 		if (m_MigrationChoice && !MigrationUsesDirectory() && !m_PeerAdminOwnVote) {
 			uint32_t chosen = 0;
@@ -82,7 +90,8 @@ namespace RTE {
 				if (choice.generation != m_Config.migrationGeneration + 1 || choice.host == 0 || choice.host > m_Config.peerCount || choice.boundary == UINT64_MAX || choice.members.empty()) return;
 			} else {
 				const uint32_t survivors = PeerAdminSurvivors(nowMs);
-				if (std::popcount(survivors) < 2) return;
+				// Only direct play grants a lone peer authority without a directory decision.
+				if (survivors == 0 || (m_Config.frameTieReferee && std::popcount(survivors) < 2)) return;
 				choice.generation = m_Config.migrationGeneration + 1; choice.boundary = *m_LastCompletedSimulationTick;
 				for (uint8_t peer = 1; peer <= m_Config.peerCount; ++peer) if ((survivors & AdminBit(peer)) != 0) {
 					choice.members.push_back(peer);
@@ -150,7 +159,7 @@ namespace RTE {
 		NetGameHostAuthority authority{GetHostPeerId(), proposal.successorPeerId, proposal.completeFrom, proposal.frame, voters, voters, voters};
 		if (!authority.IsValid()) return;
 		m_AuthorityEvents.emplace(proposal.frame, authority);
-		if (2 * std::popcount(voters) >= m_Config.peerCount) m_PeerAdminFrameMembers = voters;
+		m_PeerAdminFrameMembers = voters;
 		m_MigrationBoundary = proposal.boundary;
 		m_MigrationSuccessor = proposal.successorPeerId;
 		m_MigrationGeneration = proposal.completeFrom;
@@ -164,6 +173,8 @@ namespace RTE {
 			const auto* authority = std::get_if<NetGameHostAuthority>(&command.payload);
 			if (!authority || !authority->IsValid() || authority->applyFrame != ready.frame || authority->generation <= m_Config.migrationGeneration) continue;
 			m_Config.authorityPeerId = authority->peerId; m_Config.migrationGeneration = authority->generation;
+			// The new host's silence is timed from its own traffic, never from the host it replaces.
+			m_AuthorityLastHeardMs = std::max(m_AuthorityLastHeardMs, LastAuthenticatedTraffic(authority->peerId));
 			m_AuthorityEvents.emplace(ready.frame, *authority);
 			m_MigrationResult = {}; m_MigrationResult.generation = authority->generation; m_MigrationResult.boundary = m_MigrationBoundary;
 			m_MigrationResult.activationFrame = ready.frame; m_MigrationResult.hostPeerId = authority->peerId;

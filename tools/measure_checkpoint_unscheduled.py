@@ -178,7 +178,8 @@ def main():
     checks = {'no_driver_failure': failure is None, 'all_exit_zero': len(records) == expected_runs and all(r.get('exit_code') == 0 and not r.get('timed_out') for r in records.values()),
               'one_named_capture': len(named) == 1, 'minimum_lead': len(named) == 1 and named[0]['lead_ticks'] == int(delay) + 2,
               'one_measured_arm': len(selected) == 1 and all(k in selected[0] for k in ('native_arm_us', 'lua_arm_us')),
-              'no_capture_refusals': all('not taken:' not in log(role) and '[autosave] failed' not in log(role) for role in started)}
+              # A peer still replaying its catch-up is not live at a named tick and is not one of its writers; a live peer must take it.
+              'no_capture_refusals': all('not taken: catch_up=false' not in log(role) and '[autosave] failed' not in log(role) for role in started)}
     result = {**config, 'pass': all(checks.values()), 'checks': checks, 'failure': failure,
               'named': named, 'all_named': all_named, 'join_request_tick': join_request_tick,
               'measured_role': selected_role, 'measured_arms': selected, 'all_arms': arms,

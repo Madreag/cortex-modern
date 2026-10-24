@@ -49,7 +49,7 @@ def main():
     if args.out.exists():
         parser.error('evidence directory already exists')
     if not any(low <= args.port <= high for low, high in LANE_PORTS):
-        parser.error('port outside the assigned lanes')
+        parser.error('port outside the assigned blocks')
     stall_peer = 'sp' if args.sp else args.stall_peer
     if args.stall is not None:
         tick, _, ms = args.stall.partition(':')

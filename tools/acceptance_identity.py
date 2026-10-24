@@ -19,7 +19,7 @@ def sha256(path):
 
 def identity(box, repo, executable, receipt, source_sha, collection_id=None):
     errors, build, measured = [], {}, None
-    if box not in BOXES: errors.append(f'node/box name maps to no BOXES.md role: {box!r}')
+    if box not in BOXES: errors.append(f'node/box name maps to no known box role: {box!r}')
     if not isinstance(source_sha, str) or not re.fullmatch('[0-9a-f]{40}', source_sha): errors.append('source_sha is not a full commit')
     try:
         measured = sha256(executable)

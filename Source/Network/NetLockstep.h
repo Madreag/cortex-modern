@@ -126,7 +126,7 @@ namespace RTE {
 		bool agreedStartRecord = false;
 		uint64_t agreedFirstFrame = 0;
 		uint64_t agreedEffectiveStartFrame = 0;
-		uint64_t agreedDeadlineMs = 0;
+		uint64_t agreedStartLeadMs = 0; //!< How long after sending this record the host starts its clock; every seat starts at that instant.
 		uint32_t publishedPeerMask = 0;
 		uint32_t heldPeerMask = 0;
 		std::array<uint64_t, 16> peerEffectiveStartFrames{};
@@ -476,6 +476,7 @@ namespace RTE {
 		NetHash32 configHash{};
 		uint64_t appliedFrame = 0;
 		uint64_t preparedFrame = 0; //!< Highest complete input frame retained for the handover, even before simulation.
+		uint32_t rosterRevision = 0; //!< The roster revision accompanying a direct heal's committed history.
 		uint64_t completeFrom = 0;
 		uint64_t boundary = 0;
 		uint64_t frame = 0;
@@ -491,6 +492,9 @@ namespace RTE {
 	/// A combat bridge stays invisible until this interval; host loss requires total traffic silence.
 	constexpr uint64_t c_NetSeatDisconnectSilenceMs = 5000;
 	constexpr uint64_t c_NetHostLossSilenceMs = 15000;
+	/// How long a group smaller than half of its split's seats lets the larger half's question reach the referee first, as the
+	/// referee's own tie deadline.
+	constexpr uint64_t c_NetMinorityTieGraceMs = 1000;
 	constexpr uint64_t c_NetInputContinuityMs = 2000;
 	constexpr uint64_t c_NetHeldActionReleaseMs = 250;
 	constexpr uint32_t c_NetSeatCatchUpRate = 3;
@@ -499,10 +503,17 @@ namespace RTE {
 	/// How often a frame-group peer sends its undecided votes and recent certificates again, and its progress at the least.
 	constexpr uint64_t c_NetPeerVoteResendMs = 100;
 	constexpr uint64_t c_NetPeerHeartbeatMs = 250;
+	/// A receipt whose boundary is one of these asks a member for its applied records of named frames, answers with them, or carries
+	/// the action the seat deciding for a continuation took on a ruling.
+	constexpr uint64_t c_NetPeerRecordRequest = 1, c_NetPeerRecordAnswer = 2, c_NetPeerSplitDecision = 3;
+	constexpr size_t c_NetPeerRecordBatch = 64;
 	constexpr uint64_t c_NetFrameTieBoundMs = 1000;
 	/// One reading of host loss for every path that judges it: the round's own check, the roll call and a held seat's catch-up.
 	inline uint64_t NetHostLossBoundMs(uint64_t rttMs) { (void)rttMs; return c_NetHostLossSilenceMs; }
 	inline bool NetHostLinkLost(bool linkClosed, uint64_t silentMs, uint64_t rttMs) { (void)linkClosed; return silentMs >= NetHostLossBoundMs(rttMs); }
+	/// A host-routed round cannot pass its authority on: when its host stops responding, its players end it with this line.
+	constexpr std::string_view c_NetHostUnresponsiveStop = "HostUnresponsive:";
+	constexpr std::string_view c_NetHostUnresponsiveText = "The host stopped responding. The round has ended; the world continues from its last save when the host is back.";
 
 	/// Progress toward the same boundary for every survivor named by the authority decision.
 	struct NetHostMigrationReach {
@@ -522,7 +533,7 @@ namespace RTE {
 	class NetHostMigrationCodec {
 	public:
 		static constexpr uint32_t c_Magic = 0x314D4843;
-		static constexpr uint16_t c_Version = 6;
+		static constexpr uint16_t c_Version = 8;
 		static constexpr size_t c_ChunkBytes = 64 * 1024;
 		static constexpr size_t c_MaxFrameBytes = 4 * 512 * 1024 + 256;
 		static constexpr size_t c_MaxPeerTailBytes = c_MaxFrameBytes + 64 * 1024;
@@ -622,7 +633,7 @@ namespace RTE {
 		uint64_t lastProgressMs = 0; //!< When this peer last raised the newest tick it has sent us.
 		std::deque<std::pair<uint64_t, uint64_t>> arrivals; //!< When this peer's newest tick rose, and to which, over the last seconds.
 		std::deque<uint64_t> waitedFrames; //!< The frames of the last second this machine waited on this peer's input.
-		std::deque<std::pair<uint64_t, uint64_t>> waitCosts; //!< When each wait this machine spent on this peer's input ended and how long it lasted, over the capacity window.
+		std::deque<std::pair<uint64_t, uint64_t>> waitCosts; //!< End and duration of actual combat-input wait intervals, over the capacity window.
 		uint64_t slowSinceMs = 0; //!< Since when this peer has fed below the round's rate without a break; 0 while it has not.
 		uint64_t reclaimAdmittedMs = 0; //!< When this seat's reclaim was admitted; its allowance runs from here.
 		uint64_t returnerCaughtUpMs = 0; //!< When this returning seat's catch-up reached its reclaim frame; 0 while it has not.
@@ -747,7 +758,7 @@ namespace RTE {
 		static constexpr uint32_t c_Magic = 0x334C4343U;
 		/// Version 40 carries scene-load readiness; version 39 carries each seat's device class.
 		static constexpr uint16_t c_Version = 40;
-		static constexpr uint16_t c_AdmissionVersion = 48; //!< Catch-up reports identify the replay owning their work counters.
+		static constexpr uint16_t c_AdmissionVersion = 52; //!< Direct holds continue locally and arbitrate authenticated histories at the heal.
 		static constexpr uint16_t c_EditorPlacementVersion = 47;
 		static constexpr uint16_t c_HostAuthorityVersion = 49; //!< Committed handovers carry their tick and voting certificate.
 		static constexpr uint16_t c_WorldVersion = 39;
@@ -1185,7 +1196,12 @@ namespace RTE {
 		void SetPeerFrameBlackoutForTest(uint64_t frame, uint64_t durationMs, bool directoryDark = false) {
 			NET_PLANE_CHECK(); m_TestBlackoutFrame = frame; m_TestBlackoutDurationMs = durationMs; m_TestBlackoutDirectoryDark = directoryDark; m_TestBlackoutAtMs.reset();
 		}
-		bool PeerFrameCatchUpActive() const;
+		/// A pending display-phase goal keeps accruing bounded credit while an extra tick awaits input receipts.
+		bool PeerFrameCatchUpNeeded() const;
+		/// Whether the next extra tick fits that goal and its complete receipt runway, including time to the next ordinary slot.
+		bool PeerFrameCatchUpActive(double nextOrdinaryTickInMs = 0) const;
+		/// Consumes a committed delay fall's clock rebase; old consumer debt must not spend the producer's new phase.
+		bool TakeInputDelayClockRebase();
 		/// The latest local input accepted by the current peer authority, inclusive.
 		std::optional<uint64_t> GetLocalInputAcceptedThrough() const;
 		/// @param fromFrame The first frame the hold covers, when the seat named it; 0 for the first frame the host lacks its input.
@@ -1194,6 +1210,10 @@ namespace RTE {
 		/// trailFrames: how far the returner's replay trails the round at the round's pace; its first required frame comes that much later.
 		bool SchedulePeerReclaim(uint8_t peerId, NetPeerId transport, uint32_t incarnation, uint64_t frame, std::string* error = nullptr, uint64_t trailFrames = 0);
 		bool SchedulePeerAdmission(uint8_t peerId, NetPeerId transport, uint32_t incarnation, uint64_t frame, std::string* error = nullptr, uint64_t trailFrames = 0);
+		/// The most frames a private return at the frame may trail by and still fit its neutral interval inside the future-frame skew.
+		/// The member that serves a private return: the first playing survivor, never a seat still in its own return's neutral interval.
+		uint8_t PeerReturnLeader() const;
+		uint64_t PeerReturnTrailRoom(uint8_t peerId, NetPeerId transport, uint64_t frame) const;
 		bool ProposeWorldAdmission(NetPeerId transport, uint32_t incarnation, const NetGameWorldTransition& transition, std::string* error = nullptr);
 		bool HasAgreedSeatReclaim(uint8_t peer, uint64_t frame) const { NET_PLANE_CHECK(); const auto it = m_ReclaimTransactions.find(peer); return it != m_ReclaimTransactions.end() && it->second.activationFrame == frame; }
 		bool HasWorldAdmission(uint8_t peer, uint64_t frame) const { NET_PLANE_CHECK(); const auto it = m_ReclaimTransactions.find(peer); return it != m_ReclaimTransactions.end() && it->second.activationFrame == frame && it->second.worldTransition.has_value(); }
@@ -1240,6 +1260,8 @@ namespace RTE {
 		void NoteReturnerCaughtUp(uint8_t peerId, uint64_t nowMs);
 		/// Host: a held seat that catches up in place on its own state and connection pays no restart, so none is owed to its return.
 		void NoteInPlaceReturn(uint8_t peerId);
+		/// Imports completed private replay prefixes; false rejects an unavailable or foreign source.
+		bool AdoptReplayedFramePrefixes(const NetLockstepCoordinator& replay, uint64_t throughFrame);
 		/// A joining round whose seat state was read before its first frame takes every hold and return of another seat that the replay
 		/// of its committed tail applied after that read, through the frame before its first; the host's own notice of them may never reach it.
 		void AdoptReplayedSeatTransitions(const NetLockstepCoordinator& replay, uint64_t throughFrame);
@@ -1272,6 +1294,8 @@ namespace RTE {
 		}
 		/// A seat the AI holds for its returner. A released seat stays under the AI but no longer waits for anyone.
 		bool HasHeldAISeat(uint8_t peerId) const { NET_PLANE_CHECK(); return m_AiHeldSeats.contains(peerId) && !m_ReleasedAiSeats.contains(peerId); }
+		/// Whether this peer has heard the seat's player announce its leave of the round.
+		bool HasHeardLeave(uint8_t peerId) const { NET_PLANE_CHECK(); return m_AnnouncedLeavers.contains(peerId); }
 		/// Lines this peer has said about a silent host, all told: one for each second of a silence.
 		uint32_t GetHostSilentReports() const { return m_HostSilentReports; }
 		bool AnyHeldAISeat() const { NET_PLANE_CHECK(); return std::any_of(m_AiHeldSeats.begin(), m_AiHeldSeats.end(), [&](const auto& seat) { return !m_ReleasedAiSeats.contains(seat.first); }); }
@@ -1316,9 +1340,9 @@ namespace RTE {
 		uint64_t GetLocalHoldFrame() const { NET_PLANE_CHECK(); return m_LocalHoldFrame; }
 		/// Whether the host held this seat at or after a frame: a hold this round took, or one still waiting for its start.
 		bool HeldLocalSeatSince(uint64_t frame) const;
-		bool PreparePeerRejoin(uint8_t peerId, uint32_t rttMs, uint64_t nowMs, std::string* error = nullptr);
-		bool PreparePeerAdmission(uint8_t peerId, uint32_t rttMs, uint64_t nowMs, std::string* error = nullptr);
-		/// Delay window a returning seat needs: the measured round trip plus the restart its first tick pays.
+		bool PreparePeerRejoin(uint8_t peerId, std::optional<uint32_t> rttMs, uint64_t nowMs, std::string* error = nullptr);
+		bool PreparePeerAdmission(uint8_t peerId, std::optional<uint32_t> rttMs, uint64_t nowMs, std::string* error = nullptr);
+		/// Link-derived delay for a returning seat; restart and catch-up belong to its temporary neutral interval.
 		uint32_t RejoinDelayFrames(uint8_t peerId, const NetInputDelayEstimator& estimate) const;
 		/// Delay a sender needs once its start work is published: its link's need plus the start work its machine did beyond ours,
 		/// since it begins the round that much later and stays that far behind until its stream shows the slack.
@@ -1327,6 +1351,8 @@ namespace RTE {
 
 		NetLockstepState GetState() const { NET_PLANE_CHECK(); return m_State; }
 		bool IsRunning() const { NET_PLANE_CHECK(); return m_State == NetLockstepState::Running; }
+		/// True until the instant the agreed start names, so every seat's clock starts together however long the record took to reach it.
+		bool AwaitingAlignedStart() const { NET_PLANE_CHECK(); return m_AlignedStartAtMs > m_TimingNowMs; }
 		/// Hands back the decisions a round heard before its start, for a round that will not start.
 		std::vector<std::pair<NetLockstepTiming, NetPeerId>> TakePreStartTiming() { NET_PLANE_CHECK(); return std::exchange(m_PreStartTiming, {}); }
 		bool HasReceivedAllRemoteStarts() const { NET_PLANE_CHECK(); return AllRemoteStartsReceived(); }
@@ -1655,7 +1681,10 @@ namespace RTE {
 		std::map<NetPeerId, uint8_t>& PeerPrimaryBindings() { return m_Config.peerSessionLinks ? m_Config.peerSessionLinks->primaryBindings : m_PeerPrimaryBindings; }
 		bool& PeerPrimaryListener() { return m_Config.peerSessionLinks ? m_Config.peerSessionLinks->primaryListener : m_PeerPrimaryListener; }
 		bool HasPeerFrameRoute(uint8_t peer) const;
-		bool PeerLinkLostBeforeOwnInput(uint8_t peer, uint64_t frame) const;
+		bool PeerFrameCatchUp(bool requireReceiptRunway, double nextOrdinaryTickInMs = 0) const;
+		std::optional<double> PeerInputDeadlineMs(uint64_t frame) const;
+		bool PeerConsumerHoldDue(uint64_t frame, uint64_t nowMs) const;
+		bool PeerMissingInputReceipt(uint8_t peer, uint64_t frame) const;
 		std::pair<INetTransport*, NetPeerId> PeerFrameRoute(uint8_t peer) const;
 		void NotePeerRoundEnd(uint8_t peer, uint64_t frame, uint64_t nowMs, bool closedLink, bool completedRound = false);
 		void AdjudicatePeerRoundEnds(uint64_t nowMs);
@@ -1673,34 +1702,69 @@ namespace RTE {
 		bool PeerWantsLiveInput(uint8_t peer) const;
 		bool PeerReadsInputLive(uint8_t peer, uint64_t nowMs) const;
 		void TickPeerFrameGroups(uint64_t nowMs);
+		void CheckDirectPeerHistory(const NetHostMigrationMessage& message, uint64_t nowMs);
+		uint32_t DirectPeerWinner(uint32_t first, uint32_t second) const;
 		bool PeerFrameBlackout(uint64_t nowMs);
 		bool PeerInputAccepted(uint64_t frame, uint8_t owner = 0) const;
 		uint32_t PeerInputVoters(uint64_t frame, uint8_t owner) const;
+		uint32_t PeerInputReceiptGroup(uint64_t frame) const;
+		enum class PeerVotingScope { Input, History };
 		/// Whether voters decide for the group at a frame (the next one to prepare by default): a majority of the seats that vote there,
 		/// or on a tie the half the round's tie rule names.
-		bool PeerGroupHasAuthority(uint32_t voters, uint64_t frame = UINT64_MAX) const;
+		bool PeerGroupHasAuthority(uint32_t voters, uint64_t frame = UINT64_MAX, PeerVotingScope scope = PeerVotingScope::Input) const;
+		/// A bounded local hold can precede split arbitration. This permission never certifies unrelated inputs or roster changes.
+		bool PeerGroupMayHold(uint32_t voters, uint64_t frame) const;
 		/// The seats that vote at a frame (the next one to prepare by default), with voters narrowed to them; zero when no voter is a retained seat.
-		uint32_t PeerVotingOwners(uint32_t& voters, uint64_t frame = UINT64_MAX) const;
+		uint32_t PeerVotingOwners(uint32_t& voters, uint64_t frame = UINT64_MAX, PeerVotingScope scope = PeerVotingScope::Input) const;
 		uint32_t PeerHeldSeatsAt(uint64_t frame) const;
 		uint32_t PeerRetainedSeatsAt(uint64_t frame) const;
 		uint32_t PeerFrameMembersAt(uint64_t frame) const;
 		void PrunePeerFrameSeatChanges(uint64_t floor);
-		/// Whether the round's referee decides its ties: a directory round of two or four retained seats; the host's half wins any other tie.
+		/// Whether the directory arbitrates splits of this round's retained seats asynchronously.
 		bool PeerTieRefereed(uint64_t frame = UINT64_MAX) const;
-		/// Whether voters are exactly half of the seats that vote at a frame in a round whose ties the referee decides.
-		bool PeerGroupIsRefereedHalf(uint32_t voters, uint64_t frame = UINT64_MAX) const;
+		/// Whether voters are a nonempty proper subset of the seats that vote in a directory round.
+		bool PeerGroupNeedsArbitration(uint32_t voters, uint64_t frame = UINT64_MAX) const;
 		/// The frame from which the whole group last played together at or before frame: the name every half gives the split after it.
 		uint64_t PeerSplitEpoch(uint64_t frame) const;
+		/// The seat that decides for a continuation how it takes a ruling: the round's host when it plays there, else its lowest seat.
+		uint8_t PeerSplitDecider(uint32_t group) const;
+		/// Records this seat's decision for its continuation and sends it to the seats that follow it.
+		void AnnouncePeerSplitDecision(uint64_t split, uint32_t winners, uint32_t group, uint8_t action, uint64_t nowMs);
+		/// A member whose committed record of a frame this seat also applied differs plays another continuation.
+		void NotePeerContinuation(uint8_t peer, uint64_t frame, const NetHash32& applied, uint32_t peerMembers);
+		/// Records whether a member's witnessed record of a frame this peer applied is its own, for the checksum that follows.
+		void NotePeerRecord(uint8_t peer, uint64_t frame, const NetHash32& applied);
+		enum class ChecksumCause { Desync, Continuation, Undecided };
+		/// Why a member's hash of a frame differs from this peer's: records that differed since the last match, the same records, or not yet known.
+		ChecksumCause PeerChecksumCause(uint8_t peer, uint64_t frame, uint64_t& firstDiffering) const;
+		/// The frames up to frame whose record from this member the last match still leaves unknown, oldest first, at most limit.
+		std::vector<uint64_t> MissingPeerRecords(uint8_t peer, uint64_t frame, size_t limit) const;
+		/// Asks each member whose differing hash waits on its records for them again, until they arrive.
+		void RequestPeerRecords(uint64_t nowMs);
+		/// Answers a member with this peer's applied records of the frames it named, and the first frame it still holds one of.
+		void AnswerPeerRecordRequest(const NetHostMigrationMessage& request);
+		void RecheckDeferredChecksums();
+		bool HoldsOtherContinuation(uint64_t frame) const;
 		/// Whether these seats confirm a frame the given group of members played: a majority of them, or on a tie the half the round's tie
 		/// rule names, as for every other decision of that group.
 		bool PeerFrameGroupConfirms(uint32_t agreeing, uint32_t members, uint64_t frame) const;
 		void SendForwardedPeerInput(const NetLockstepFrame& input, uint8_t onlyPeer);
 		void CheckPeerFrameTie(uint64_t frame, uint32_t members, uint64_t nowMs);
+		void AskPeerFrameTie(uint64_t split, uint64_t frame, uint32_t members, uint64_t nowMs);
+		void DerivePeerCommonSplit(uint8_t sender, uint64_t remoteSplit, uint64_t remoteBoundary, uint64_t nowMs);
+		void PollPeerFrameTies(uint64_t nowMs);
 		bool ProposePeerBridge(uint64_t frame, uint64_t nowMs, bool returningOnly = false);
+		/// Takes back this seat's own yield when no voter certified it in the time an answer takes, and fills the targets it deferred.
+		bool WithdrawOwnYield(uint64_t nowMs);
 		bool ValidatePeerBridge(const NetHostMigrationMessage& proposal) const;
 		/// Whether this peer already voted a return of one of the proposal's seats at another frame that is still undecided: a held seat
 		/// returns once, so a member backs one return of it until that one is certified or played past.
 		bool VotedOtherPeerReturn(const NetHostMigrationMessage& proposal) const;
+		/// Whether this hold, with every hold this peer has installed (and, to sign it, every hold it has signed), would hold every seat of
+		/// the round; to sign it, also whether a seat held or that signed its own hold would hold another. The round keeps a playing seat.
+		bool HoldEmptiesTheRound(const NetHostMigrationMessage& hold, bool signing) const;
+		/// The candidates that accepted, directly or through another held seat, an input of a held owner that is missing here.
+		uint32_t PeerReplacedInputWitnesses(uint64_t frame, const std::vector<uint8_t>& held, uint32_t candidates) const;
 		bool PeerBridgeHasInputConflict(const NetHostMigrationMessage& proposal) const;
 		void ResolvePeerBridgeInputConflicts(uint64_t nowMs);
 		bool DecodePeerBridgeCertificate(const NetHostMigrationMessage& certificate, NetHostMigrationMessage& agreed, uint32_t& voters) const;
@@ -1717,7 +1781,7 @@ namespace RTE {
 		bool ValidatePeerCaptureBridge(const NetHostMigrationMessage& proposal) const;
 		void AppendPeerCaptureCommand(NetLockstepReadyFrame& ready) const;
 		void TryCommitPeerBridge(uint64_t frame, uint64_t nowMs, uint8_t kind = 0);
-		void InstallPeerBridge(const NetHostMigrationMessage& certificate, uint64_t nowMs);
+		void InstallPeerBridge(const NetHostMigrationMessage& certificate, uint64_t nowMs, bool fromCommittedTail = false);
 		/// Takes the decisions kept for their frame, in frame order.
 		/// @return Whether the next frame waits on a decision: one kept for it, one this peer voted for, or a return proposed for it of a seat
 		/// still held, while it is undecided.
@@ -1727,11 +1791,16 @@ namespace RTE {
 		void RepairPeerReceiptGaps(uint64_t nowMs);
 		void RemovePeerFrameSeat(uint8_t peer, uint64_t frame);
 		bool ApplyPeerCommittedTail(uint64_t frame, uint64_t nowMs);
+		bool PrivateTailUnusable(uint64_t frame, uint64_t nowMs, const char* reason);
 		/// Commit a donor's frame once its group confirms it, with the witnesses this peer received itself as well as those carried in it.
 		bool ConfirmPeerTail(uint64_t frame, uint64_t nowMs);
 		void SendPeerCommittedTail(uint8_t peer, uint64_t fromFrame);
 		void FlushPeerCommittedTails(uint64_t nowMs);
 		void RequestPeerCommittedTail(uint64_t nowMs);
+		/// A held seat that no seat can give its next frame - every other seat silent past the host-loss window or held itself - takes its
+		/// seat back and holds the others at that frame, so its player plays on alone; of several such seats only the original host, else
+		/// the lowest, does, and the rest read its history. Whether this seat did.
+		bool TakeLoneSeat(uint64_t nowMs);
 		NetHash32 PeerFramePrefix(uint64_t frame) const;
 		NetHash32 PeerAppliedFramePrefix(uint64_t frame) const;
 		NetHash32 CommittedFramePrefix(const NetLockstepReadyFrame& ready) const;
@@ -1753,7 +1822,6 @@ namespace RTE {
 		std::map<PeerDecisionKey, std::map<uint8_t, NetHostMigrationMessage>> m_PeerBridgeVotes;
 		std::map<PeerDecisionKey, NetHostMigrationMessage> m_PeerBridgeCertificates;
 		std::map<PeerDecisionKey, std::pair<NetHostMigrationMessage, uint64_t>> m_PendingPeerDecisions; //!< Certificates that came before this peer could take them, and since when.
-		std::map<PeerDecisionKey, uint64_t> m_PeerVotedAtMs; //!< When this peer voted for, or first waited on, a decision it has not yet seen certified.
 		std::map<PeerDecisionKey, uint64_t> m_AuthorityWaitSinceMs; //!< Decisions this peer could not yet show the authority of, and since when.
 		std::map<uint64_t, NetHostMigrationMessage> m_PeerReturnProofs;
 		std::map<uint64_t, uint32_t> m_PeerRejectedInputs;
@@ -1786,6 +1854,11 @@ namespace RTE {
 			uint64_t through = 0;
 		};
 		std::map<uint64_t, std::map<uint8_t, PeerTailVote>> m_PeerTailVotes;
+		std::pair<uint64_t, uint64_t> m_PeerTailUnconfirmed{}; //!< The frame this private reader holds unconfirmed records of, and since when.
+		uint64_t m_PeerTailForeignFrame = 0; //!< The next frame this private reader was served by a group with no authority in its history.
+		uint64_t m_TailArrivalNamed = 0; //!< The private reader's next frame whose first tail arrival the details lever named.
+		uint64_t m_TieUnaskedNamed = UINT64_MAX; //!< The split whose unasked question the details lever last named.
+		uint64_t m_ExitedHoldFrame = UINT64_MAX; //!< The frame whose unproposed hold the details lever last named.
 		std::map<uint64_t, std::vector<NetHostMigrationMessage>> m_PeerTailDecisions;
 		struct PeerFrameIncoming {
 			uint32_t totalBytes = 0;
@@ -1800,14 +1873,25 @@ namespace RTE {
 		uint8_t m_PeerPaceReference = 0;
 		bool m_PeerHadHitch = false;
 		std::map<uint8_t, uint64_t> m_PeerAppliedThrough;
+		std::map<uint8_t, std::pair<uint64_t, NetHash32>> m_PeerAppliedPrefixes;
 		std::map<uint8_t, uint64_t> m_PeerAppliedAtMs;
 		std::map<uint8_t, std::deque<std::pair<uint64_t, uint64_t>>> m_PeerAppliedProgress; //!< When each seat's applied frame rose, and to which, over the last seconds.
 		std::deque<std::pair<uint64_t, uint64_t>> m_OwnDisplayProgress; //!< When this machine displayed each recent tick, over the last seconds.
 		uint64_t m_PeerHeartbeatAtMs = 0;
+		std::optional<uint64_t> m_PeerHistoryQuestion; //!< Last direct question advertised; rotate retained epochs without adding heartbeat traffic.
 		uint64_t m_PeerTailRequestAtMs = 0;
 		uint8_t m_PeerTailDonor = 0;
+		std::map<uint8_t, uint32_t> m_PeerReportedMembers; //!< The seats each seat last reported playing at its applied frame.
+		std::map<uint8_t, uint64_t> m_PeerOtherContinuations; //!< Members seen playing another continuation, from the frame whose records differed.
+		struct PeerContinuationEvidence { std::set<uint64_t> frames; };
+		std::map<uint8_t, PeerContinuationEvidence> m_PeerContinuationEvidence; //!< Differing records since a member's last matching one.
+		struct PeerQuestionHeard { uint64_t boundary = 0; uint32_t times = 0; };
+		std::map<uint8_t, std::map<uint64_t, PeerQuestionHeard>> m_PeerQuestionsHeard; //!< Each seat's split questions heard on its heartbeats.
+		std::optional<uint64_t> m_PeerNoDonorSinceMs; //!< Since when no seat could give this held seat its next frame.
+		bool m_LoneSeatInstalling = false; //!< This seat's own return as the round's lone player is being installed.
 		uint64_t m_PeerTailDuplicateFrames = 0;
 		std::map<uint64_t, uint64_t> m_PeerTailRequestedUntil;
+		std::map<uint64_t, uint8_t> m_PeerTailRequestedOf; //!< The donor each pending frame was last asked of.
 		std::map<uint8_t, std::map<uint64_t, uint64_t>> m_PeerTailLastSentMs;
 		std::map<uint8_t, std::set<uint64_t>> m_PeerTailResendFrames;
 		std::map<uint8_t, std::pair<uint64_t, uint64_t>> m_PeerTailSendRanges;
@@ -1828,6 +1912,19 @@ namespace RTE {
 		std::optional<NetFrameTieRequest> m_PeerFrameTie;
 		uint64_t m_PeerFrameTieSinceMs = 0;
 		std::map<uint64_t, uint32_t> m_PeerFrameTieWinners;
+		struct PeerSplitArbitration {
+			NetFrameTieRequest request;
+			uint32_t owners = 0;
+			std::optional<uint64_t> holdFrame;
+			uint32_t historiesSeen = 0; //!< Direct heartbeat acknowledgement of independently committed continuations in this epoch.
+			std::optional<NetHostMigrationMessage> offeredHold; //!< Another continuation's local hold, not authority to suspend this one.
+			std::optional<uint64_t> readerHoldFrame; //!< The bilateral exchange confirmed no local continuation past this hold.
+			uint32_t asked = 0; //!< The seats this seat itself first asked the referee to rule for.
+			bool derived = false; //!< Named from two halves' questions at their common frame, not from a hold of this seat's own.
+		};
+		std::map<uint64_t, PeerSplitArbitration> m_PeerSplitArbitrations;
+		std::map<uint64_t, std::pair<uint64_t, uint32_t>> m_PeerMinorityTieAsks; //!< A smaller group's own question: when it may ask, and its seats.
+		std::map<uint64_t, std::pair<uint64_t, uint64_t>> m_PeerTieSettles; //!< When each split's first question may decide - once the group it asks for has settled - and the frame it asks at; 0 once asked.
 		uint64_t m_TestBlackoutFrame = UINT64_MAX, m_TestBlackoutDurationMs = 0;
 		std::optional<uint64_t> m_TestBlackoutAtMs;
 		bool m_TestBlackoutEnded = false;
@@ -1944,7 +2041,7 @@ namespace RTE {
 		/// Delivers the frames and checksums a peer sent before its start reached us.
 		void FlushPreStart(uint8_t peerId, uint64_t nowMs);
 		/// Clears everything one round owns, so leaving a round cannot carry a fact from it.
-		void ResetRoundState();
+		void ResetRoundState(bool playback = false);
 		/// Sends the production a followed round owes the host, in order, retrying a refused send.
 		void FlushResendFrames();
 		void HandleStop(const NetLockstepStop& stop, uint64_t nowMs, NetPeerId fromTransport);
@@ -1965,7 +2062,7 @@ namespace RTE {
 		/// Host: proposes the agreed frame for every seat it released whose release no frame carries yet.
 		void ProposeOwedSeatReleases(uint64_t nowMs);
 		bool ScheduleSeatActivation(uint8_t peerId, NetPeerId transport, uint32_t incarnation, uint64_t frame, std::string* error, uint64_t trailFrames);
-		bool PrepareSeatImageJoin(uint8_t peerId, uint32_t rttMs, uint64_t nowMs, std::string* error);
+		bool PrepareSeatImageJoin(uint8_t peerId, std::optional<uint32_t> rttMs, uint64_t nowMs, std::string* error);
 		/// Whether a release of the seat lands at or after the seat's newest hold.
 		bool HasReleaseSinceHold(uint8_t peerId) const;
 		void MaybeSendControlHeartbeat(uint64_t nowMs);
@@ -2067,10 +2164,13 @@ namespace RTE {
 		/// Whether a seat this machine waits on at the frame has cost it more than the round allows a slower machine: at 59.5 ticks a
 		/// second or more half a tick a second, below that a tenth of its own rate, over the last capacity window.
 		bool CostsPastTolerance(uint8_t peerId, uint64_t frame, uint64_t nowMs, double* cost = nullptr);
+		/// Attribute the observed combat wait interval to its missing human inputs, independently of the raw wait clock.
+		void AccrueConsumerWaitCost(uint64_t nowMs);
 		static constexpr uint64_t c_CapacityWindowMs = 10000;
 		/// The ticks a second a seat applied over the second of its reports before the last one this machine's display covers, and the
-		/// ticks a second this machine displayed over the same window; nothing while the reports span less than half a second.
-		std::optional<std::pair<double, double>> PeerAppliedRate(uint8_t peerId) const;
+		/// ticks a second this machine displayed over the same window, or over the window `lagMs` earlier for a seat that applies what this
+		/// machine displayed that long before; nothing while the reports span less than half a second.
+		std::optional<std::pair<double, double>> PeerAppliedRate(uint8_t peerId, uint64_t lagMs = 0) const;
 		static void NoteArrival(NetLockstepPeerStats& stats, uint64_t nowMs, uint64_t frame);
 		/// Wait for every human owner's published startup before committing the first frame.
 		void TickStartupWait(uint64_t nowMs);
@@ -2088,6 +2188,8 @@ namespace RTE {
 		void FlushTimingOutgoing();
 		void CommitTiming(uint64_t revision);
 		void ApplyTiming(const NetLockstepTiming& timing, bool recorded = false);
+		void ApplyInputDelayChange(uint8_t peer, uint64_t frame, uint16_t delay, uint64_t nowMs);
+		std::optional<uint64_t> InputDelayRetimingTarget() const;
 		bool HasOrderedHostHold() const;
 		bool IsOrderedHostReturn(const NetLockstepTiming& timing) const;
 		void ReclaimHostSeat(uint64_t nowMs);
@@ -2121,6 +2223,9 @@ namespace RTE {
 		bool DecisionSettled(const TimingDecision& decision) const;
 		std::vector<std::pair<NetLockstepTiming, NetPeerId>> m_PreStartTiming;
 		std::map<uint8_t, std::map<uint64_t, uint16_t>> m_DelayChanges;
+		struct InputDelayPace { uint64_t atMs = 0, frame = 0, freshFromFrame = 0; };
+		std::optional<InputDelayPace> m_InputDelayPace; //!< A delay fall advances only this producer's phase, through the bounded match budget.
+		bool m_InputDelayClockRebase = false;
 		std::map<uint8_t, NetInputDelayEstimator> m_DelayEstimators;
 		std::map<uint8_t, uint64_t> m_LastDelayResizeMs;
 		std::map<uint8_t, uint64_t> m_LastSubstituteCommittedMs;
@@ -2152,6 +2257,7 @@ namespace RTE {
 		static constexpr uint64_t c_MarginWindowMs = 1000; //!< The arrivals a rise is judged over: short, so it lands before a spike finds the seat.
 		std::map<uint8_t, std::deque<NetLockstepTiming>> m_TimingOutgoing;
 		std::map<int64_t, ControllerFrame> m_DeferredControllerFrames;
+		uint64_t m_OwnYieldDeferredThrough = 0; //!< The last own target deferred behind this seat's uncertified yield.
 		uint64_t m_NextTimingRevision = 1;
 		uint64_t m_LastTimingSampleMs = UINT64_MAX;
 		uint64_t m_LastTimingStatusMs = UINT64_MAX;
@@ -2171,6 +2277,12 @@ namespace RTE {
 		std::set<uint8_t> m_ReleasedAiSeats; //!< AI-held seats no returner may reclaim; the AI keeps their units.
 		std::map<uint8_t, std::map<uint64_t, NetGameSeatRelease>> m_SeatReleases; //!< The agreed frames the host's releases land on, every peer the same.
 		std::set<uint8_t> m_AnnouncedLeavers; //!< Host: clean leavers being held, whose closing links are not sent their hold.
+		std::set<uint64_t> m_PeerSplitsStanding; //!< Splits ruled for a continuation whose every player has left, which this one outlives.
+		std::map<uint64_t, uint32_t> m_PeerSplitsSettled; //!< Splits whose ruling this seat has played under with every winner it names, and those winners.
+		/// How the seat deciding for a continuation took a ruling: 1 stops, 2 stands; the ruling's winners and the continuation's seats then.
+		struct PeerSplitDecision { uint8_t action = 0; uint32_t winners = 0, group = 0; };
+		std::map<uint64_t, std::map<uint8_t, PeerSplitDecision>> m_PeerSplitDecisions; //!< Each split's decisions, by deciding seat.
+		std::map<uint64_t, std::pair<NetHostMigrationMessage, uint64_t>> m_PeerSplitDecisionsSent; //!< This seat's announced decisions, sent again until then.
 		std::set<uint8_t> m_SlowMachineHolds; //!< Host: seats whose latest hold was for a machine that cannot keep up.
 		std::map<uint8_t, std::pair<NetLockstepStop, NetPeerId>> m_PendingMemberEnds; //!< Host: members' own ends this round has not played past yet.
 		/// Host: takes each member's end this round has played past, and goes on, as that member's leave.
@@ -2186,7 +2298,9 @@ namespace RTE {
 		uint64_t m_FirstMissingMs = 0;
 		std::optional<uint64_t> m_LastDeliveredFrame;
 		uint64_t m_ConsumerWaitStartMs = 0;
-		std::vector<uint8_t> m_ConsumerWaitMissing; //!< The seats whose input the current wait is for.
+		uint64_t m_RefusedHoldFrame = 0; //!< The waited frame whose refused hold the details lever last named.
+		std::optional<uint64_t> m_ConsumerCostObservedAtMs;
+		std::vector<uint8_t> m_ConsumerCostPeers; //!< Missing human inputs during the last observed combat wait interval.
 		uint64_t m_LastTickMs = 0; //!< Our own last Tick; a gap in it is our park, not a peer's silence.
 		std::atomic<uint64_t> m_SimTickedMs{0}; //!< The simulation thread's last Tick; the plane stands in once it is a tick old.
 		bool m_PlaneTicking = false; //!< Inside PlaneTick: events that call out of the coordinator are deferred.
@@ -2204,6 +2318,7 @@ namespace RTE {
 		std::set<uint8_t> m_PeerStartupPublished; //!< Peers whose startup reading has reached us.
 		std::set<uint8_t> m_StartupLinksLost; //!< Link-loss facts before the agreed start; human startup remains required.
 		bool m_AgreedStartApplied = false;
+		uint64_t m_AlignedStartAtMs = 0; //!< When this seat's clock starts: the instant the agreed start names for every seat.
 		std::optional<NetLockstepStart> m_AgreedStartRecord;
 		std::set<uint8_t> m_StartupHeldSeatStamps; //!< Boundary-held seats stamped on their first committed tick.
 		std::map<uint8_t, NetPeerId> m_LateStartReclaims; //!< Boundary-held seats whose late start still owes a reclaim.
@@ -2223,6 +2338,13 @@ namespace RTE {
 		std::map<uint8_t, NetPeerId> m_RemoteTransports; //!< Lockstep peerId -> transport id for each remote.
 		std::set<uint8_t> m_RemoteStartsReceived; //!< Remotes whose matching Start we've accepted; run when all present.
 		std::map<uint8_t, NetLockstepStart> m_RemoteStarts; //!< Each accepted start, re-sent when a peer repeats its own.
+		struct PrivateStart {
+			NetLockstepStart start;
+			NetPeerId transport;
+			uint8_t authenticatedPeer;
+			uint64_t receivedMs;
+		};
+		std::map<uint8_t, PrivateStart> m_PrivateStarts; //!< Future member terms await this reader's replayed admissions.
 		std::set<uint8_t> m_PeersPlayedThisRound; //!< Remotes whose frames this round took; they are not still forming it.
 		std::map<uint8_t, uint64_t> m_PeerLeaveFrames; //!< Cleanly-left peers -> the first frame WITHOUT their data.
 		std::map<uint8_t, uint64_t> m_RefusedHoldFrames; //!< The frame each seat's last refused hold was asked at, so a refusal is named once.
@@ -2245,6 +2367,7 @@ namespace RTE {
 		std::map<uint8_t, uint64_t> m_PeerEffectiveStart; //!< peerId -> the first frame that carries this sender's input.
 		struct PeerAdmission { uint64_t frame; uint16_t delay; };
 		std::map<uint8_t, PeerAdmission> m_PeerAdmissions;
+		std::optional<uint64_t> m_ReturnStartWaitSinceMs; //!< When a returning seat began to wait on its members' starts.
 		std::map<uint8_t, uint64_t> m_StaleStartNamed; //!< The start frame each seat's straggler was last named at.
 		uint64_t m_LastQueuedTargetFrame = UINT64_MAX; //!< Highest produced target frame; UINT64_MAX until the first queue.
 		std::set<uint64_t> m_ObservationEpochs;        //!< Every announced frame senders spell their keys out from again.
@@ -2357,6 +2480,8 @@ namespace RTE {
 		uint64_t m_ReturnHistoryFloor = 0; //!< Host: the oldest frame a returning seat may still be served from.
 		/// The least delay a seat comes back or into a world at: the margin every seat's delay keeps, sized from its own link's ping.
 		uint16_t ReturnDelayFloor(uint8_t peerId, NetPeerId transport) const;
+		/// The delay and the link a frame-group private return's neutral interval covers before its trail.
+		uint64_t PeerReturnPipeline(uint8_t peer, NetPeerId transport, uint64_t frame, uint32_t* outDelay = nullptr, uint64_t* outTransit = nullptr) const;
 		uint64_t m_HostSilentReportedSecond = UINT64_MAX; //!< The second of the host's silence last reported; one line a second.
 		uint32_t m_HostSilentReports = 0;                  //!< Lines reported about a silent host, all told.
 		static constexpr uint64_t c_SeatTransitionHistoryFrames = 3600; //!< How far behind this peer's simulation the seat transitions reach.
@@ -2451,6 +2576,11 @@ namespace RTE {
 		std::map<uint8_t, uint64_t> m_AuthoritativeCommandAcks;
 		std::map<uint64_t, std::map<uint8_t, std::array<uint8_t, 32>>> m_RemoteChecksums; //!< frame -> (peerId -> hash)
 		std::map<uint8_t, uint64_t> m_VerifiedAppliedFrames; //!< Matching hashes keep their applied prefix after the hash buffers are pruned.
+		std::map<uint8_t, std::map<uint64_t, bool>> m_PeerRecordMatches; //!< Each member's witnessed record of a frame applied here: whether it was this peer's.
+		std::set<uint64_t> m_DeferredChecksumFrames; //!< Frames whose differing hash waits on the records that decide it.
+		std::map<uint8_t, uint64_t> m_PeerRecordRequestAtMs; //!< When this peer next asks a member for the records a differing hash waits on.
+		std::map<uint8_t, uint64_t> m_PeerRecordFloors; //!< The first frame each member holds a record of: what it played before came with an image.
+		uint64_t m_PeerRecordRequests = 0;
 		std::deque<NetLockstepReadyFrame> m_ReadyFrames;
 		/// Command counts before the coordinator adds boundary events, by frame and sender.
 		std::map<uint64_t, std::map<uint8_t, size_t>> m_PendingSourceCommandCounts;
@@ -2458,7 +2588,11 @@ namespace RTE {
 
 		bool AllRemoteStartsReceived() const {
 			return std::all_of(m_RemotePeerIds.begin(), m_RemotePeerIds.end(), [&](uint8_t peer) {
-				return m_RemoteStartsReceived.contains(peer) || (m_Config.joinsRunningRound && !IsRemoteRequiredForFrame(peer, m_Config.startFrame));
+				const bool start = m_RemoteStartsReceived.contains(peer) || (m_Config.joinsRunningRound && !IsRemoteRequiredForFrame(peer, m_Config.startFrame));
+				// A fresh mesh round's first heartbeat follows establishment of every direct input route.
+				// Host-routed configurations without a peer connector keep their existing start handshake.
+				return start && (!UsesPeerFrameGroups() || !m_Config.migrationTransportFactory || m_Config.joinsRunningRound || m_Config.continuesMatch ||
+				    (HasPeerFrameRoute(peer) && m_PeerAppliedPrefixes.contains(peer)));
 			});
 		}
 		bool IsKnownRemotePeer(uint8_t peerId) const;

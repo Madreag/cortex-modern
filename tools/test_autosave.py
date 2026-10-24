@@ -151,7 +151,7 @@ def exact_role_compare(control: Path, saved: Path, ticks: int) -> None:
 
 
 def main() -> int:
-    # The explicit helper directory is the lead's shared main worktree. Do not
+    # The explicit helper directory is a shared main worktree. Do not
     # vendor or patch the mechanism in an autosave-specific transport wrapper.
     helper_parser = argparse.ArgumentParser(add_help=False)
     helper_parser.add_argument("--spread-tools", type=Path)
@@ -169,7 +169,7 @@ def main() -> int:
         sys.modules[spec.name] = spread
         spec.loader.exec_module(spread)
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--spread-tools", type=Path, help="lead's shared main tools directory; use its unmodified named transport")
+    parser.add_argument("--spread-tools", type=Path, help="a shared main tools directory; use its unmodified named transport")
     if spread:
         spread.add_arguments(parser)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
@@ -236,11 +236,11 @@ def main() -> int:
             if named:
                 port = args.port + index
                 peers = [spread.Peer("host", os="posix", memory=6, timeout=360,
-                                     lane="sol-checkpoint-restore-20261006", share_ok=False),
+                                     lane="checkpoint-restore", share_ok=False),
                          spread.Peer("client", os="windows", memory=6, timeout=360,
-                                     lane="sol-checkpoint-restore-20261006", share_ok=False)]
+                                     lane="checkpoint-restore", share_ok=False)]
                 match = spread.Match(port, directory_port=48216 + port - 48212,
-                                     parameters={"network": "ice", "lane": "sol-checkpoint-restore-20261006",
+                                     parameters={"network": "ice", "lane": "checkpoint-restore",
                                                  "label": args.runner_label, "runner_wait": args.runner_wait})
                 with spread.prepare_case(repo, arm_root, peers, match) as case:
                     records = run_pair(repo, arm_root, port, cadence, args.ticks, prepare=prepare, case=case)

@@ -470,6 +470,8 @@ namespace RTE {
 		void BindParticipantId(NetPeerId connection, const NetAuthBytes32& id);
 		/// Host: close this holder without a reclaim hold. Reuses the clean-leave seat close.
 		NetKickBanResult RemoveParticipant(const NetModerationSelection& selection, NetParticipantRemovalAction action, uint64_t nowMs, uint64_t unixNowMs, uint64_t sessionId, uint32_t round, uint64_t boundaryFrame, NetParticipantRemovalIssue& issued);
+		/// Lets a player whose ban the host lifted ask for a seat again: the removal and the roster's ban go the same tick; no seat is given back.
+		bool LiftParticipantBan(const NetAuthBytes32& participantId);
 		bool HasSubstitution(uint16_t stableSeat) const;
 		size_t GetApplicantCount() const { return m_Applicants.size(); }
 		/// Applications a lost host left pending that no applicant has asked this host again for yet.

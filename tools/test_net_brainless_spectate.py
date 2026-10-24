@@ -13,7 +13,7 @@ Arms
   sp_view_is_local   sp_keep_playing with and without the spectator cycling input: the per-tick
                      hashes must be identical, so the spectator view writes no simulation state.
 
-Every engine launch goes through tools/win32_test_runner.py. Nothing runs while the lead's family
+Every engine launch goes through tools/win32_test_runner.py. Nothing runs while the family
 lock exists.
 """
 from __future__ import annotations
@@ -186,7 +186,7 @@ def net_arm(out: Path, port: int, rule_on: bool, ticks: int, timeout: float, sim
 
     def prepare(*positional, **keywords):
         if dedicated and positional and "-net-host" in positional[0]:
-            # The harness lane always hosts with a seat; this arm needs the seatless host instead.
+            # The harness always hosts with a seat; this arm needs the seatless host instead.
             argv = ["-net-dedicated" if item == "-net-host" else item for item in positional[0]]
             positional = (argv,) + positional[1:]
         run = original_run(*positional, **keywords)

@@ -120,7 +120,7 @@ def join_gate(check, facts, boxes=True, progress=True):
     check.require(join.get("directory") in ("public-default", "loopback-fallback"), "join", "directory route missing")
     if join.get("directory") == "loopback-fallback":
         check.require(join.get("public_directory_down") is True and join.get("own_certificate") is True,
-                      "join", "fallback lacks outage and lane-certificate receipts")
+                      "join", "fallback lacks outage and own-certificate receipts")
     check.require(join.get("nat_to_nat") is True and join.get("stun") is True,
                   "join", "NAT-to-NAT STUN receipt missing")
     check.require(join.get("route") == "direct", "join", "completed direct route missing")

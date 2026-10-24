@@ -469,8 +469,8 @@ def firewall_disabled_everywhere():
 def firewall_allows_inbound(exe):
     """True when the firewall is off on every profile or an active inbound Allow rule names this executable.
 
-    A firewall that is off filters nothing, so no rule is needed and none is asked for (the user keeps every box's
-    firewall off). Otherwise read the rule store in the registry (no elevation needed) instead of the WMI cmdlets,
+    A firewall that is off filters nothing, so no rule is needed and none is asked for.
+    Otherwise read the rule store in the registry (no elevation needed) instead of the WMI cmdlets,
     which take tens of seconds. Without such a rule Windows raises the "new app listening" prompt on the desktop the
     first time the process binds a socket, and an unattended run then waits on nobody.
     """

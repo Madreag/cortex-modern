@@ -44,7 +44,8 @@ How the multiplayer screens behave, for players and for anyone changing them. Ev
   `Kick player` and `Ban this session` ("Confirm kick" - "Press Confirm kick to remove <player> from this session"), and the
   session's `End session` ("Confirm end"). Any other press takes the first one back. A removed player stays refused for the
   rest of the match ("The host removed you from this session"). `Banned players` lists the session's bans; `Remove ban` lifts
-  one for the host's next games and says so - a banned player stays out of the running match.
+  one together with the removal it made and says so ("They may ask to join again, this match included"): the player may
+  join again at once, and in a running match ask for a seat, which the host answers as any request.
 
 ## In a match
 
@@ -53,7 +54,13 @@ How the multiplayer screens behave, for players and for anyone changing them. Ev
   Settings > Network > Show network diagnostics.
 - A player whose own seat is held reads "The AI is playing for you until you are back" once, in the status box; the
   notifications below never repeat a line the status box already shows, and the Players panel's line says how everyone
-  else is ("Everyone else is playing").
+  else is ("Everyone else is playing"). This holds for the host and for a joining player; the roster decides whether the
+  seat is held, also while its connection stays live. A returning seat stays held while it catches up, and the line changes
+  when the agreed return gives the player control again. The held player's probe requires the whole sentence in the shown
+  status label, ordinary line wrapping allowed.
+- With Show network diagnostics the status box says "Input delay N ticks / M ms", milliseconds to one decimal place: the local
+  input delay in force on the frame being drawn. It changes when an agreed re-size takes effect, on the smaller-screen layout
+  too, and the screen probe compares it with the engine's current local delay.
 - Under the default brain-loss rule ("Keep playing, humans spectate") a player whose brain is destroyed watches while the
   match plays on for everyone else; when only one side is left standing the round ends there.
 - After a match the lobby's last-match line names the result and its reason in a player's words, such as "Joiner's brain was
@@ -63,9 +70,11 @@ How the multiplayer screens behave, for players and for anyone changing them. Ev
 
 - **Recovery:** autosave checkpoints are on by default, every 5 minutes, chosen from a drop-down of 1 to 60 minutes or turned
   off with the checkbox. The page says that held seats wait until the host gives them away. Automatic match repair is on.
-- **Timing:** Input delay is Automatic by default. A hint under the rows names what the row under the hand costs: a higher
-  minimum delay rides out spikes but every press lands later, a lower slow-player bound keeps everyone else smooth, more frame
-  redundancy rides out lost packets but uses more bandwidth.
+- **Timing:** Input delay is Automatic by default, from "measured ping and recent jitter, re-sized live". A hint under the
+  rows names what the row under the hand costs: a higher minimum delay rides out spikes but every press lands later, a lower
+  slow-player bound keeps everyone else smooth, more frame redundancy rides out lost packets but uses more bandwidth. The
+  slow-player bound is a separate setting: holding a slow player's seat does not add that machine's compute time to anyone's
+  input delay.
 - **Connection:** the game listing (Public by default), `Ask my router to open the game port - players connect directly` (on
   by default), automatic connection and the match relay (the game service's by default).
 - **Session:** the idle wait, the banned players list and `End session`.

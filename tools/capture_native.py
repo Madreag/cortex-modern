@@ -1,6 +1,6 @@
 """Reuse a verified native build in its caller-owned repository.
 
-The lead names every peer. The native runner owns its capacity and launch.
+The caller names every peer. The native runner owns its capacity and launch.
 An optional CORTEX_CAPTURE_NATIVE_BUILDS JSON file maps the named boxes to
 repo and receipt paths; otherwise the existing transport builds those inputs.
 """
@@ -19,7 +19,7 @@ import subprocess
 def verify(repo: Path, receipt: Path, head: str, exe: str) -> dict:
     repo, receipt = repo.resolve(), receipt.resolve()
     if not receipt.is_relative_to(repo.parent):
-        raise RuntimeError("native build receipt is outside the caller's lane")
+        raise RuntimeError("native build receipt is outside the caller's scratch root")
     relative = PurePosixPath(exe)
     if relative.is_absolute() or ".." in relative.parts:
         raise RuntimeError("native executable path escapes its repository")

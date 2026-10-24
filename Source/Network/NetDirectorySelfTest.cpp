@@ -3,6 +3,9 @@
 #include "NetDirectoryCodec.h"
 #include "NetDirectorySignalChannel.h"
 #include "NetHttpClient.h"
+#include "NetLobbyProtocol.h"
+#include "NetLockstep.h"
+#include "NetMatchRunner.h"
 #include "NetMatchService.h"
 #include "NetMuxTransport.h"
 #include "AreaEditor.h"
@@ -49,6 +52,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <mutex>
 #include <future>
 #include <deque>
 #include <iostream>
@@ -58,6 +62,7 @@
 #include <system_error>
 #include <thread>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace RTE {
@@ -198,8 +203,10 @@ namespace RTE {
 			bool connected = false;
 			bool lobbyPublished = false, lobbyAccepted = false, lobbyReady = false, lobbyStarted = false;
 			NetMatchConfig match = NetMatchConfigUtil::MakeDefault(73);
+			NetHash32 frameKey;
 			std::vector<NetTransportEvent> pending;
 			DirectHost() {
+				frameKey.fill(0x5A);
 				match.inputDelayFrames = 1; match.delayPolicy = NetMatchDelayPolicy::Fixed;
 				match.successorOrder = {2};
 				match.migrationPeers = {{1, 47468, {"127.0.0.1"}}, {2, 47469, {"127.0.0.1"}}};
@@ -232,7 +239,7 @@ namespace RTE {
 							lobbyPublished = true;
 							NetLobbyHello hello; hello.peerId = 1; hello.displayName = "Host"; hello.desiredRole = "host";
 							NetLobbyMigration capsule; capsule.kind = 2; capsule.peerId = 2;
-							capsule.configHash = NetMatchConfigUtil::HashConfig(match); capsule.sealedState.assign(32, 0x5A);
+							capsule.configHash = NetMatchConfigUtil::HashConfig(match); capsule.sealedState.assign(frameKey.begin(), frameKey.end());
 							if (!ReplyLobby({hello}) || !ReplyLobby({NetLobbyMatchConfig{match}}) || !ReplyLobby({capsule})) return false;
 						}
 						if (const auto* ack = std::get_if<NetLobbyConfigAck>(&lobby.message.payload))
@@ -244,7 +251,10 @@ namespace RTE {
 						}
 						return true;
 					}
-					const auto round = NetLockstepCodec::Decode(bytes);
+					// A peer waiting in a mesh round publishes its start as an authenticated control, and a host answers in kind.
+					NetHostMigrationMessage control;
+					const bool meshControl = NetHostMigrationCodec::Decode(bytes, frameKey, control) && control.type == NetHostMigrationMessageType::PeerControl;
+					const auto round = NetLockstepCodec::Decode(meshControl ? control.bytes : bytes);
 					if (round.ok && std::holds_alternative<NetLockstepStart>(round.packet.payload)) {
 						auto start = std::get<NetLockstepStart>(round.packet.payload);
 						start.localPeerId = 1; start.roundId = 73;
@@ -257,6 +267,11 @@ namespace RTE {
 							start.peerInputDelays[peer] = 1;
 						}
 						if (!NetLockstepCodec::Encode({start}, reply)) return false;
+						if (meshControl) {
+							control.senderPeerId = control.successorPeerId = 1;
+							control.bytes = std::exchange(reply, {}); control.totalBytes = static_cast<uint32_t>(control.bytes.size());
+							if (!NetHostMigrationCodec::Encode(control, frameKey, reply)) return false;
+						}
 					}
 				}
 				if (!reply.empty()) pending.push_back({NetTransportEventType::PacketReceived, 1, NetTransportLane::ControlReliable, std::move(reply)});
@@ -341,7 +356,7 @@ namespace RTE {
 			auto expectedTie = tie;
 			auto expectedChange = change;
 			expectedTie.configHash.fill(byte); expectedChange.configHash.fill(byte);
-			return authority.m_FrameTieRequest == expectedTie && authority.m_HostChangeRequest == expectedChange;
+			return authority.m_FrameTieQuestions.back().request == expectedTie && authority.m_HostChangeRequest == expectedChange;
 		};
 		if (!queuedAs(0x22)) { *error = "a joiner's recovery named its round configuration instead of the listed match"; return false; }
 		authority.m_Host->row.matchConfigHash = std::string(64, '3');
@@ -357,21 +372,57 @@ namespace RTE {
 		authority.m_LocalLease->directorySessionId = authority.DirectorySessionId();
 		if (!queuedAs(0x11)) { *error = "a new directory session inherited the old match identity"; return false; }
 		// The decided split is the same answer when the other half describes it, including a read after healing.
-		authority.m_FrameTieReply.state = NetFrameTieReply::State::Decided;
-		authority.m_FrameTieReply.members = {1};
+		authority.m_FrameTieQuestions.back().reply = {NetFrameTieReply::State::Decided, {1}};
 		auto otherHalf = tie; otherHalf.members = {0}; otherHalf.queryOnly = true;
 		const auto decided = authority.QueryFrameTie(otherHalf);
 		if (decided.state != NetFrameTieReply::State::Decided || decided.members != std::vector<uint16_t>{1}) {
 			*error = "a read of the same decided split lost its answer when the half changed"; return false;
 		}
 		// A failed exchange can still be in flight when an authenticated peer proves the link has recovered.
-		authority.m_FrameTieReply = {};
+		authority.m_FrameTieQuestions.back().reply = {};
 		authority.m_FrameTie = std::make_unique<NetHttpClient>();
-		authority.m_FrameTieRetry.nextMs = authority.m_NextFrameTie = 2000;
+		authority.m_ActiveFrameTie = authority.m_FrameTieQuestions.size() - 1;
+		authority.m_FrameTieQuestions.back().retry.nextMs = authority.m_FrameTieQuestions.back().nextMs = 2000;
 		authority.QueryFrameTie(otherHalf);
-		if (authority.m_FrameTie || authority.m_RetiredFrameTies.size() != 1 || authority.m_FrameTieRequest != otherHalf || authority.m_NextFrameTie != 0) {
+		if (authority.m_FrameTie || authority.m_RetiredFrameTies.size() != 1 || authority.m_FrameTieQuestions.back().request != otherHalf || authority.m_FrameTieQuestions.back().nextMs != 0) {
 			*error = "a healed seat waited on its failed check-in before asking for the committed decision"; return false;
 		}
+		authority.m_FrameTieQuestions.back().reply = {NetFrameTieReply::State::Decided, {1}};
+		auto nested = otherHalf; ++nested.frame; nested.queryOnly = false; nested.members = {1};
+		if (authority.QueryFrameTie(nested).state != NetFrameTieReply::State::Waiting ||
+		    authority.QueryFrameTie(otherHalf).state != NetFrameTieReply::State::Decided) {
+			*error = "a later split discarded the earlier split's authenticated answer"; return false;
+		}
+		auto unrecorded = nested; ++unrecorded.frame; unrecorded.queryOnly = true;
+		authority.QueryFrameTie(unrecorded);
+		const auto first = authority.NextFrameTie(100), second = authority.NextFrameTie(100);
+		if (!first || !second || *first == *second || authority.m_FrameTieQuestions[*first].request != nested ||
+		    authority.m_FrameTieQuestions[*second].request != unrecorded) {
+			*error = "a waiting split query starved a different split's eligible check-in"; return false;
+		}
+		authority.m_FrameTieQuestions[*first].retry.nextMs = 200;
+		if (authority.NextFrameTie(100) != second || authority.NextFrameTie(200) != first) {
+			*error = "split scheduling discarded a deferred retry or ignored its backoff"; return false;
+		}
+		authority.m_FrameTie = std::make_unique<NetHttpClient>(); authority.m_ActiveFrameTie = first;
+		authority.m_TieRequests.push_back(100);
+		auto rematch = nested; ++rematch.roundId;
+		if (authority.QueryFrameTie(rematch).state != NetFrameTieReply::State::Waiting || authority.m_FrameTie ||
+		    authority.m_RetiredFrameTies.size() != 2 || authority.m_FrameTieQuestions.size() != 1 ||
+		    authority.m_FrameTieQuestions.front().request != rematch || authority.m_TieRequests.size() != 1) {
+			*error = "a rematch kept the previous round's questions or reset its request allowance"; return false;
+		}
+		// A smaller group's query that becomes its own question past the referee's deadline is asked afresh as a check-in.
+		auto smaller = rematch; ++smaller.frame; smaller.queryOnly = true;
+		authority.QueryFrameTie(smaller);
+		authority.m_FrameTieQuestions.back().checkedIn = true;
+		authority.m_FrameTieQuestions.back().reply = {NetFrameTieReply::State::Waiting};
+		auto own = smaller; own.queryOnly = false;
+		authority.QueryFrameTie(own);
+		if (authority.m_FrameTieQuestions.back().request != own || authority.m_FrameTieQuestions.back().checkedIn) {
+			*error = "a smaller group's question past its deadline stayed a query"; return false;
+		}
+		std::cout << "[net-directory-selftest] PASS concurrent_frame_ties_keep_their_answers" << std::endl;
 		std::cout << "[net-directory-selftest] PASS recovered_frame_tie_reads_its_decision" << std::endl;
 		std::cout << "[net-directory-selftest] PASS recovery_uses_listed_match" << std::endl;
 		return true;
@@ -423,6 +474,59 @@ namespace RTE {
 		const std::string reason = NetIceResolveSessionRow({row}, local, newId, &target, &local);
 		if (!reason.empty() || target.identity != NetIceHostIdentity(oldId)) { *error = "F2: a joiner on the changed row id dialed a different world listener: " + reason; return false; }
 		std::cout << "[net-directory-selftest] PASS recovered_directory_binding" << std::endl;
+		return true;
+	}
+
+	// A listed host whose joiner came by typed address plays one rule with it: the direct-play rule, with no referee.
+	bool TestRoundRefereeFollowsTheAgreedRule(std::string* error) {
+		NetMatchService service;
+		service.m_ConnectionAuthority.SetDirectory("7b8c9d2e-1111-4222-8333-444455556666", "host-token", 1);
+		NetLockstepConfig config;
+		config.matchConfig = NetMatchConfigUtil::MakeDefault(77);
+		config.matchConfig.successorOrder = {2};
+		{
+			std::lock_guard<std::mutex> lock(service.m_Mutex);
+			service.InstallRoundRefereesLocked(config);
+		}
+		if (config.frameTieReferee || config.hostChangeReferee) {
+			*error = "a listed host refereed a round whose joiner holds no directory lease"; return false;
+		}
+		// A round the agreed config puts under the directory is refereed by every seat that checks in with it.
+		NetLockstepConfig refereed;
+		refereed.matchConfig = config.matchConfig; refereed.matchConfig.directoryArbitration = true;
+		{
+			std::lock_guard<std::mutex> lock(service.m_Mutex);
+			service.InstallRoundRefereesLocked(refereed);
+		}
+		if (!refereed.frameTieReferee || !refereed.hostChangeReferee) { *error = "a seat of a round the agreed config puts under the directory has no referee"; return false; }
+		// The host puts the round under the directory only when the directory hears every human seat.
+		NetMatchConfig seats = NetMatchConfigUtil::MakeDefault(77);
+		if (service.EverySeatChecksIn(seats)) { *error = "a joiner the directory never heard put the round under the directory"; return false; }
+		{
+			std::lock_guard lock(service.m_ConnectionAuthority.m_Mutex);
+			service.m_ConnectionAuthority.m_PeerRoutes[1] = NetConnectionRoute{};
+		}
+		if (!service.EverySeatChecksIn(seats)) { *error = "a round whose every seat checks in stayed on the direct-play rule"; return false; }
+		for (auto& player: seats.players) if (player.peerId != seats.hostPeerId) player.cpu = true;
+		{
+			std::lock_guard lock(service.m_ConnectionAuthority.m_Mutex);
+			service.m_ConnectionAuthority.m_PeerRoutes.clear();
+		}
+		if (!service.EverySeatChecksIn(seats)) { *error = "a computer seat kept the round off the directory"; return false; }
+		// The rule rides the agreed config and its hash, and a peer the directory cannot hear refuses that round by name.
+		NetMatchConfig coded = NetMatchConfigUtil::MakeDefault(77);
+		coded.directoryArbitration = true;
+		std::vector<uint8_t> wire;
+		if (!NetLobbyProtocol::Encode({NetLobbyMatchConfig{coded}}, wire)) { *error = "the refereed config did not encode"; return false; }
+		const auto decoded = NetLobbyProtocol::Decode(wire);
+		const auto* carried = decoded.ok ? std::get_if<NetLobbyMatchConfig>(&decoded.message.payload) : nullptr;
+		if (!carried || carried->config != coded || NetMatchConfigUtil::HashConfig(coded) == NetMatchConfigUtil::HashConfig(NetMatchConfigUtil::MakeDefault(77))) {
+			*error = "the directory's arbitration did not ride the agreed config and its hash"; return false;
+		}
+		if (NetMatchRunner::DirectoryRuleRefusal(refereed.matchConfig, false).empty() || !NetMatchRunner::DirectoryRuleRefusal(refereed.matchConfig, true).empty() ||
+		    !NetMatchRunner::DirectoryRuleRefusal(config.matchConfig, false).empty()) {
+			*error = "a peer the directory cannot hear did not refuse its refereed round by name"; return false;
+		}
 		return true;
 	}
 
@@ -3942,7 +4046,7 @@ namespace RTE {
 				if (selected) { std::cout << "[net-directory-selftest] PASS" << std::endl; return 0; }
 			}
 #endif
-			for (const auto& test : std::vector<std::pair<const char*, bool (*)(std::string*)>>{{"LJ", TestJoiningProgress}, {"L7", TestLobbyDepartureNotice}, {"L2", TestAreaEditorCancel}, {"L5", TestJoiningFailureDetail}, {"L10", TestLobbyPingReadout}, {"L1", TestLobbyDirectoryLeaseRecovery}, {"L3", TestLobbyDirectoryStatus}, {"T1", TestDirectoryErrorSnapshot}, {"T2", TestDirectoryCapacityFallback}, {"F1", TestListedRefusalsKeepRetrying}, {"F2", TestRecoveredDirectoryBinding}, {"F5", TestSignalPumpInitialCredential}, {"F7", TestSignalRebindKeepsQueuedPosts}, {"S5", TestWorldProofSurvivesOneRefusal}}) {
+			for (const auto& test : std::vector<std::pair<const char*, bool (*)(std::string*)>>{{"LJ", TestJoiningProgress}, {"L7", TestLobbyDepartureNotice}, {"L2", TestAreaEditorCancel}, {"L5", TestJoiningFailureDetail}, {"L10", TestLobbyPingReadout}, {"L1", TestLobbyDirectoryLeaseRecovery}, {"RA", TestRoundRefereeFollowsTheAgreedRule}, {"L3", TestLobbyDirectoryStatus}, {"T1", TestDirectoryErrorSnapshot}, {"T2", TestDirectoryCapacityFallback}, {"F1", TestListedRefusalsKeepRetrying}, {"F2", TestRecoveredDirectoryBinding}, {"F5", TestSignalPumpInitialCredential}, {"F7", TestSignalRebindKeepsQueuedPosts}, {"S5", TestWorldProofSurvivesOneRefusal}}) {
 				if (!selected || std::string(selected) == test.first || (std::string(selected) == "U5" && std::string(test.first) == "T2")) {
 					if (!test.second(&error)) return fail(error);
 					if (selected) { std::cout << "[net-directory-selftest] PASS" << std::endl; return 0; }
