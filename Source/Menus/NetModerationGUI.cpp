@@ -1767,7 +1767,7 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	const bool ownRejoin = !menuLobby && !hostLost && (resyncing || ScenarioRunner::WorldCatchUpActive()) &&
 	                       (OwnRosterSeatHeld() || ScenarioRunner::IsLockstepOwnSeatHeld());
 	// A seat on its way back reads held through its catch-up and the lobby its return passes, as the screen watch judges it.
-	const bool ownHeld = !hostLost && NetPlayerPresentation::OwnSeatAway(snapshot);
+	const bool ownHeld = !hostLost && m_DrawnOwnSeatAway;
 	std::string ownHeldCause;
 	if (ownHeld) {
 		if (const auto view = g_NetMatchService.GetSeatView(snapshot.localPeerId)) {
@@ -2780,6 +2780,8 @@ void NetModerationGUI::Draw() {
 	++m_DrawSerial;
 	const NetLobbySnapshot& snapshot = *m_FrameSnapshot;
 	NetPlayerPresentation::Remember(snapshot, g_SettingsMan.GetNetworkDisplayName());
+	// One reading of the own seat per frame: the status line and its watch judge the same one, and the wait screen is held by its nature.
+	m_DrawnOwnSeatAway = m_HeldWaitScreen || NetPlayerPresentation::OwnSeatAway(snapshot);
 	s_OverlayPhases.Lap(0);
 	m_StatusRect = {};
 	m_ChatRect = {};

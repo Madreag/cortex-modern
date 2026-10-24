@@ -1538,6 +1538,25 @@ namespace RTE::MenuAutomation {
 		return nullptr;
 	}
 
+	bool s_FrameLocalHeld = false; //!< This machine's own seat read as away, for the frame being judged.
+
+	/// The own seat's reading for this frame's watches. The status line was laid out from the reading its frame drew with, so one
+	/// that moved between that draw and this judgement is the next frame's to show; a second frame in a row that disagrees is judged
+	/// on the live reading, so a line that keeps an old reading still shows.
+	void NoteFrameLocalHeld() {
+		static uint64_t s_PanelSerial = 0;
+		static int s_Disagreements = 0;
+		s_FrameLocalHeld = NetPlayerPresentation::OwnSeatAway(g_NetMatchService.GetLobbySnapshot());
+		const NetModerationGUI* panel = g_MenuMan.GetNetworkPanel();
+		if (!panel || panel->DrawSerial() == s_PanelSerial) return;
+		s_PanelSerial = panel->DrawSerial();
+		if (panel->DrawnOwnSeatAway() == s_FrameLocalHeld) {
+			s_Disagreements = 0;
+		} else if (++s_Disagreements < 2) {
+			s_FrameLocalHeld = false;
+		}
+	}
+
 	bool WatchStateHolds(const std::string& state) {
 		if (state == "always") return true;
 		if (state == "panel_open") return g_MenuMan.IsNetworkPanelOpen();
@@ -1546,7 +1565,7 @@ namespace RTE::MenuAutomation {
 		}
 		const auto snapshot = g_NetMatchService.GetLobbySnapshot();
 		if (state == "running") return snapshot.serviceState == "Running";
-		if (state == "local_held") return NetPlayerPresentation::OwnSeatAway(snapshot);
+		if (state == "local_held") return s_FrameLocalHeld;
 		if (state == "remote_held") {
 			// A seat the host opened is released, as its label reads it, though a peer still catching up replays it held.
 			const uint64_t frame = ScenarioRunner::GetLockstepCompletedFrame();
@@ -1744,6 +1763,7 @@ namespace RTE::MenuAutomation {
 		s_LastEvaluated = now;
 		std::vector<ShownLine> lines;
 		bool linesRead = false;
+		NoteFrameLocalHeld();
 		for (auto& [name, watch]: s_Watches) {
 			++watch.frames;
 			struct Cost {
