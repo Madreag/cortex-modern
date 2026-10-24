@@ -86,8 +86,16 @@ def judge(logs, rows):
     host_last = host_rows[-1]['tick'] if host_rows else None
     if back and (host_last is None or host_last <= int(back[1])):
         errors.append(f'the host did not play on past its return (last tick {host_last})')
+    # Back means playing: a returned seat the round holds again before the guest's stay ends never got back.
+    reheld = []
+    if back:
+        # The hold the host's own exit at its stay's end draws comes after its last tick and is not a return failing.
+        reheld = [int(frame) for frame in re.findall(r'\[net-peer-hold-installed\] local=2 peer=1 frame=(\d+)', guest)
+                  if int(frame) > int(back[1]) and (host_last is None or int(frame) < host_last)]
+        if reheld:
+            errors.append(f'the returned host was held again at frame {reheld[0]}')
     return errors, dict(ruling_frame=int(ruling[1]) if ruling else None, winners=int(ruling[2]) if ruling else None,
-                        self_dials=len(dialled_self), host_back_at=int(back[1]) if back else None,
+                        self_dials=len(dialled_self), host_back_at=int(back[1]) if back else None, reheld_at=reheld[0] if reheld else None,
                         host_last_tick=host_last, guest_last_tick=guest_last)
 
 
@@ -110,6 +118,8 @@ def run_case(repo, out, args):
     for peer, record in enumerate(records, 1):
         if record.get('timed_out'):
             errors.append(f'peer {peer} did not finish before its timeout')
+        elif record.get('exit_code') != 0:
+            errors.append(f'peer {peer} exited with {record.get("exit_code")}')
     result = dict(cut=cut, **facts, errors=errors, host_exit=records[0].get('exit_code'), guest_exit=records[1].get('exit_code'),
                   source_tip=subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip(),
                   binary_sha256=hashlib.sha256(engine_executable(repo).read_bytes()).hexdigest(),
