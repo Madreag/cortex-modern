@@ -2283,6 +2283,7 @@ namespace RTE {
 		std::set<uint8_t> m_AnnouncedLeavers; //!< Host: clean leavers being held, whose closing links are not sent their hold.
 		std::set<uint64_t> m_PeerSplitsStanding; //!< Splits ruled for a continuation whose every player has left, which this one outlives.
 		std::optional<uint64_t> m_PeerYieldFrame; //!< Every other seat held this one there and it held none of them: it returns through the image.
+		std::optional<uint64_t> m_ReturnHeldAgainFrame; //!< A certified hold of this returning seat at or past the start its round still waits on.
 		std::map<uint64_t, uint32_t> m_PeerSplitsSettled; //!< Splits whose ruling this seat has played under with every winner it names, and those winners.
 		/// How the seat deciding for a continuation took a ruling: 1 stops, 2 stands; the ruling's winners and the continuation's seats then.
 		struct PeerSplitDecision { uint8_t action = 0; uint32_t winners = 0, group = 0; };

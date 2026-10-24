@@ -5439,7 +5439,7 @@ namespace RTE {
 		m_ReleasedAiSeats.clear();
 		m_SeatReleases.clear();
 		m_AnnouncedLeavers.clear();
-		m_PeerSplitsStanding.clear(); m_PeerSplitsSettled.clear(); m_PeerSplitDecisions.clear(); m_PeerSplitDecisionsSent.clear(); m_PeerYieldFrame.reset();
+		m_PeerSplitsStanding.clear(); m_PeerSplitsSettled.clear(); m_PeerSplitDecisions.clear(); m_PeerSplitDecisionsSent.clear(); m_PeerYieldFrame.reset(); m_ReturnHeldAgainFrame.reset();
 		m_SlowMachineHolds.clear();
 		m_PendingMemberEnds.clear();
 		m_EvictAfterReclaim.clear();
@@ -7806,6 +7806,7 @@ namespace RTE {
 		NET_PLANE_CHECK();
 		if (m_Config.localPeerId == GetHostPeerId()) return false;
 		if (m_LocalSeatHeld && m_LocalHoldFrame >= frame) return true;
+		if (m_ReturnHeldAgainFrame && *m_ReturnHeldAgainFrame >= frame) return true;
 		const uint32_t local = 1U << (m_Config.localPeerId - 1);
 		return std::any_of(m_PreStartTiming.begin(), m_PreStartTiming.end(), [&](const auto& pending) {
 			const NetLockstepTiming& timing = pending.first;

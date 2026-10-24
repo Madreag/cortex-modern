@@ -258,6 +258,40 @@ namespace RTE {
 			return true;
 		}
 
+		static bool AReturnHeldAgainBeforeItStartsIsOver(std::string* error) {
+			// The others held this returning seat at 4575 while its round still waited to start at 4505: that return is over.
+			for (const uint8_t heldSeat: {uint8_t{1}, uint8_t{3}}) {
+				Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
+				peer.m_Config.localPeerId = 1; peer.m_Config.authorityPeerId = 2;
+				peer.m_Config.peerFrameGroups = true; peer.m_Config.joinsRunningRound = true;
+				peer.m_Config.startFrame = 4505;
+				peer.m_State = NetLockstepState::WaitingForStart;
+				peer.m_MigrationPhase = NetHostMigrationPhase::None; peer.m_MigrationSuccessor = 0;
+				peer.m_RemotePeerIds = {2, 3}; peer.m_RemoteTransports = {{2, 42}, {3, 43}};
+				peer.m_Stats.nextFrame = 4505; peer.m_LastCompletedSimulationTick.reset();
+				auto vote = peer.PeerFrameMessage(NetHostMigrationMessageType::PeerBridge);
+				vote.senderPeerId = vote.successorPeerId = 2; vote.frame = 4575; vote.boundary = 4575; vote.preparedFrame = 0;
+				vote.connectedMask = heldSeat == 1 ? 6 : 3; vote.members = {heldSeat};
+				vote.bytes.assign(NetHash32{}.size(), 0x5a); vote.totalBytes = vote.bytes.size();
+				auto certificate = vote; certificate.type = NetHostMigrationMessageType::PeerBridgeCommit; certificate.voterMask = 2;
+				certificate.bytes = {1};
+				auto signedBy = vote; signedBy.voterMask = 2;
+				std::vector<uint8_t> signedVote;
+				if (!NetHostMigrationCodec::Encode(signedBy, peer.m_Config.migrationKey, signedVote)) { *error = "the hold vote did not encode"; return false; }
+				for (unsigned shift = 0; shift < 32; shift += 8) certificate.bytes.push_back(static_cast<uint8_t>(signedVote.size() >> shift));
+				certificate.bytes.insert(certificate.bytes.end(), signedVote.begin(), signedVote.end());
+				certificate.totalBytes = certificate.bytes.size();
+				peer.InstallPeerBridge(certificate, 1000);
+				const bool over = peer.HeldLocalSeatSince(4505);
+				if (heldSeat == 1 && !over) {
+					*error = "return-held-again-unseen: the others held this returning seat at 4575 and its round, still waiting to start at 4505, did not see that return is over";
+					return false;
+				}
+				if (heldSeat == 3 && over) { *error = "a hold of another seat ended this seat's return"; return false; }
+			}
+			return true;
+		}
+
 		static bool ASeatEveryOtherHeldYieldsItsPlay(std::string* error) {
 			// The other seat held this one at 969 after this one played it: this seat's play past the hold is its own to leave.
 			for (const bool alreadyHeldThem: {false, true}) {
@@ -33677,6 +33711,12 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS tail_hold_signers_are_not_another_playing_half\n[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "return-held-again") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::AReturnHeldAgainBeforeItStartsIsOver(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS a_return_held_again_before_it_starts_is_over\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "played-past-own-hold") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::ASeatEveryOtherHeldYieldsItsPlay(&error)) return fail(error);
@@ -34187,6 +34227,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::RemoteInputReceiptsFormTheLocalHoldGroup, "remote_input_receipts_form_the_local_hold_group");
 		row(&SessionPlaneRecoveryTest::OwnLateInputsLeaveTheirReceiptTime, "own_late_inputs_leave_their_receipt_time");
 		row(&SessionPlaneRecoveryTest::ASeatEveryOtherHeldYieldsItsPlay, "a_seat_every_other_held_yields_its_play");
+		row(&SessionPlaneRecoveryTest::AReturnHeldAgainBeforeItStartsIsOver, "a_return_held_again_before_it_starts_is_over");
 		row(&SessionPlaneRecoveryTest::AcceptedInputsKeepTheirPlayingReceiptGroup, "accepted_inputs_keep_their_playing_receipt_group");
 		row(&SessionPlaneRecoveryTest::MissingInputsExcludeIncompatibleWitnesses, "missing_inputs_exclude_incompatible_witnesses");
 		row(&SessionPlaneRecoveryTest::MissingOrZeroLinkNeverUsesReceipts, "missing_or_zero_rtt_never_uses_machine_receipts");

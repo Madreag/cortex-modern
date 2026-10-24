@@ -843,6 +843,15 @@ namespace RTE {
 		};
 		NetHostMigrationMessage agreed; uint32_t voters = 0;
 		if (!DecodePeerBridgeCertificate(certificate, agreed, voters)) { refused("certificate"); return; }
+		// The round a returning seat still waits to start is over once the others hold that seat again at or past its start.
+		if (agreed.preparedFrame == 0 && m_State == NetLockstepState::WaitingForStart && m_Config.joinsRunningRound && agreed.frame >= m_Config.startFrame &&
+		    (agreed.connectedMask & SeatBit(m_Config.localPeerId)) == 0 &&
+		    std::find(agreed.members.begin(), agreed.members.end(), m_Config.localPeerId) != agreed.members.end() &&
+		    (!m_ReturnHeldAgainFrame || agreed.frame < *m_ReturnHeldAgainFrame)) {
+			m_ReturnHeldAgainFrame = agreed.frame;
+			DiagnosticLine() << "[net-peer-return-held] local=" << static_cast<int>(m_Config.localPeerId) << " frame=" << agreed.frame << " start=" << m_Config.startFrame
+			    << " signers=" << voters << " now_ms=" << nowMs << std::endl;
+		}
 		// Foreign decisions cannot govern this active continuation. In direct play that includes another group's migration: only the
 		// heal decides between continuations.
 		if (agreed.preparedFrame != 0 && (agreed.preparedFrame != 3 || !MigrationUsesDirectory()) &&
