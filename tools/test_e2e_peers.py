@@ -208,6 +208,43 @@ class HeldHostSceneTest(unittest.TestCase):
             self.assertEqual({row["id"]: row for row in peers.video.capture_evidence_items(other, dict(name="run0"), peer)}["drawn-frames-host"]["probe"], "fail")
 
 
+class PacedRunTest(unittest.TestCase):
+    """A run whose saves are the stress lever judges its players' frame rate in the run it names at a real interval."""
+
+    def rows(self, paced_probe="pass", paced=True):
+        stress = dict(id="drawn-frames-host", run="died", peer="host", probe="fail", drawn_frames=dict(status="FAIL"),
+                      finding=dict(**{"class": "harness"}, reason="4 of 6 windows uneven", launch=None, errors=[]))
+        rows = [stress, dict(id="recording-rate-host", run="died", peer="host", probe="pass")]
+        if paced:
+            judged = dict(id="drawn-frames-host", run="died-paced", peer="host", probe=paced_probe, drawn_frames=dict(status="PASS" if paced_probe == "pass" else "FAIL"))
+            if paced_probe != "pass":
+                judged["finding"] = dict(**{"class": "harness"}, reason="1 with an interval over 4", launch=None, errors=[])
+            rows.append(judged)
+        definition = dict(runs=[dict(name="died", pacing_judged_in=dict(run="died-paced", reason="stress")), dict(name="died-paced")])
+        return {(row["id"], row["run"]): row for row in peers.video.judge_pacing_where_named(definition, rows)}
+
+    def test_the_stress_runs_frame_rate_takes_the_paced_runs_verdict(self):
+        rows = self.rows()
+        stress = rows[("drawn-frames-host", "died")]
+        self.assertEqual(stress["probe"], "pass")
+        self.assertNotIn("finding", stress)
+        self.assertEqual(stress["at_stress"]["finding"]["reason"], "4 of 6 windows uneven")
+        self.assertEqual(stress["judged_in"]["run"], "died-paced")
+
+    def test_a_paced_run_whose_frame_rate_fails_fails_the_stress_row_too(self):
+        stress = self.rows(paced_probe="fail")[("drawn-frames-host", "died")]
+        self.assertEqual(stress["probe"], "fail")
+        self.assertEqual(stress["finding"]["reason"], "died-paced: 1 with an interval over 4")
+
+    def test_a_paced_run_that_never_drew_fails_the_stress_row(self):
+        stress = self.rows(paced=False)[("drawn-frames-host", "died")]
+        self.assertEqual(stress["probe"], "fail")
+        self.assertIn("died-paced", stress["finding"]["reason"])
+
+    def test_only_the_frame_rate_row_moves(self):
+        self.assertEqual(self.rows()[("recording-rate-host", "died")], dict(id="recording-rate-host", run="died", peer="host", probe="pass"))
+
+
 class LostSoldierTest(unittest.TestCase):
     def test_a_soldier_lost_before_its_player_takes_it_is_bought_again(self):
         # 1 of 5 turns on 10-14: the fight killed a bought soldier during its player's held turn and the run failed on it.
