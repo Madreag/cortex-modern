@@ -371,6 +371,25 @@ def saver_delay_ms(who: str) -> int:
     return CLIENT_SAVER_DELAY_MS if who == "client" and CLIENT_SAVER_DELAY_MS else SAVER_DELAY_MS
 
 
+# A host prints one of these as it opens its session, a resumed host too, before any client can reach it.
+HOST_LISTENS = re.compile(r"^\[net-auth\] (?:reconnect-auth epoch armed|crypto unavailable - reconnect auth disabled)$", re.MULTILINE)
+
+
+def pair_env(**extra: str) -> dict:
+    """The environment of each peer of a two-peer e2e match: the host asks to start only once its client is seated and ready,
+    so a round never forms on the host alone however late its client arrives."""
+    return {"CCCP_HEADLESS": "1", "CC_TEST_NET_MATCH_E2E_WAIT_PEERS": "1", **extra}
+
+
+def start_host_then_client(threads: list, root: Path) -> None:
+    """Starts the host, then the client once the host's session is open: the client dials a lobby that is already waiting, as a
+    player joining a hosted match does, so a host that would start its round without its client does so on every box."""
+    threads[0].start()
+    while threads[0].is_alive() and not HOST_LISTENS.search(peer_log(root, "host")):
+        threading.Event().wait(0.1)
+    threads[1].start()
+
+
 def run_pair(repo: Path, root: Path, port: int, ticks: int, seconds: int, extra: dict, settings: dict | None = None, load_objects: int = 0) -> dict:
     """Two peers of one match, each with the arm's own extra flags and Settings.ini values."""
     if box_facts.held("verification"):
@@ -387,9 +406,7 @@ def run_pair(repo: Path, root: Path, port: int, ticks: int, seconds: int, extra:
                 "-net-match-report", str(root / f"{who}_report.json")]
         args += ["-net-host"] if who == "host" else ["-net-join", "127.0.0.1"]
         args += extra.get(who, []) + fullstate_args()
-        env = {"CCCP_HEADLESS": "1"}
-        if delay := saver_delay_ms(who):
-            env["CC_TEST_SAVER_DELAY_MS"] = str(delay)
+        env = pair_env(**({"CC_TEST_SAVER_DELAY_MS": str(delay)} if (delay := saver_delay_ms(who)) else {}))
         runs[who] = make_run(repo, args, root / who, 420, env=env)
         stage_baseline(runs[who], ticks, load_objects=load_objects)
         if settings and settings.get(who):
@@ -403,9 +420,7 @@ def run_pair(repo: Path, root: Path, port: int, ticks: int, seconds: int, extra:
 
     threads = [threading.Thread(target=drive, args=(who,)) for who in runs]
     try:
-        threads[0].start()
-        threading.Event().wait(1)
-        threads[1].start()
+        start_host_then_client(threads, root)
         for thread in threads:
             thread.join()
     finally:
@@ -975,8 +990,7 @@ def arm_resume(repo: Path, root: Path, port: int, client_stall: str = "", client
         args += fullstate_args()
         if who == 'client':
             args += stall_args(client_stall)
-        # The host asks to start only once its client is seated and ready, never on the client's head start alone.
-        runs[who] = make_run(repo, args, first / who, 420, env={"CCCP_HEADLESS": "1", "CC_TEST_NET_MATCH_E2E_WAIT_PEERS": "1"})
+        runs[who] = make_run(repo, args, first / who, 420, env=pair_env())
         stage_baseline(runs[who], window)
 
     def drive(who: str) -> None:
@@ -988,9 +1002,7 @@ def arm_resume(repo: Path, root: Path, port: int, client_stall: str = "", client
     threads = [threading.Thread(target=drive, args=(who,)) for who in ("host", "client")]
     killed = False
     try:
-        threads[0].start()
-        threading.Event().wait(1)
-        threads[1].start()
+        start_host_then_client(threads, first)
         deadline = threading.Event()
         for _ in range(4200):  # 420 s at the poll below, the runner's own budget.
             deadline.wait(0.1)
@@ -1037,7 +1049,7 @@ def arm_resume(repo: Path, root: Path, port: int, client_stall: str = "", client
         if who == 'client' and client_stall:
             stall_tick, stall_ms = map(int, client_stall.split(':'))
             args += stall_args(f'{resume_tick + stall_tick}:{stall_ms}')
-        env = {"CCCP_HEADLESS": "1", "CC_TEST_NET_MATCH_E2E_WAIT_PEERS": "1", **({"CCCP_TEST_CAPTURE_OUTGROWN": "1"} if who == "client" and client_outgrows else {})}
+        env = pair_env(**({"CCCP_TEST_CAPTURE_OUTGROWN": "1"} if who == "client" and client_outgrows else {}))
         resumed[who] = make_run(repo, args, second / who, 420, env=env)
         stage_baseline(resumed[who], window)
         # What a restarted process finds on its own disk: its checkpoints, its manifests, its admission
@@ -1066,9 +1078,7 @@ def arm_resume(repo: Path, root: Path, port: int, client_stall: str = "", client
 
     threads = [threading.Thread(target=drive_resumed, args=(who,)) for who in ("host", "client")]
     try:
-        threads[0].start()
-        threading.Event().wait(1)
-        threads[1].start()
+        start_host_then_client(threads, second)
         for thread in threads:
             thread.join()
     finally:
@@ -2613,6 +2623,47 @@ class WorldRestartOracleTests(unittest.TestCase):
                     self.assertEqual(verdicts["."]["passed"], passes, verdicts["."]["reasons"])
         finally:
             FULLSTATE_EVERY = every
+
+
+class PairStartTests(unittest.TestCase):
+    """A two-peer arm's host asks to start only once its client is seated and ready, and the client dials a host that is already
+    listening, so a round that would form on the host alone forms so on every box, never only on a slow one."""
+
+    def test_the_host_waits_for_a_client_that_dials_after_it_listens(self):
+        import sys
+        from unittest import mock
+        module = sys.modules[__name__]
+        launched, order = {}, []
+
+        class FakeRun:
+            def __init__(self, root: Path, env: dict):
+                self.root, self.env, self.cwd = root, env, str(root / "runtime")
+
+            def start(self):
+                order.append((self.root.name, bool(HOST_LISTENS.search(peer_log(self.root.parent, "host")))))
+                if self.root.name == "host":
+                    # The host's session opens a while after its process starts, as a real engine's does after its data loads.
+                    threading.Event().wait(1.5)
+                    (self.root / "stdout.log").write_text("[net-auth] reconnect-auth epoch armed\n", encoding="utf-8")
+                return self
+
+            def finish(self):
+                return {"exit_code": 0}
+
+            def close(self):
+                pass
+
+        def fake_make_run(repo, args, root, timeout, env=None):
+            root.mkdir(parents=True)
+            launched[root.name] = FakeRun(root, env or {})
+            return launched[root.name]
+
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(module, "make_run", fake_make_run), \
+                mock.patch.object(module, "stage_baseline", lambda *_, **__: None):
+            run_pair(Path(directory), Path(directory) / "pair", 48720, 800, 2, {})
+        for who in ("host", "client"):
+            self.assertEqual(launched[who].env.get("CC_TEST_NET_MATCH_E2E_WAIT_PEERS"), "1", f"the {who} does not hold the start for its peers")
+        self.assertEqual(order, [("host", False), ("client", True)], "the client dialed before the host's session was open")
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
