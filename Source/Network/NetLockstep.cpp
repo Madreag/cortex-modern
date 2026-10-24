@@ -4923,8 +4923,10 @@ namespace RTE {
 		plane.windows.fetch_sub(1, std::memory_order_acq_rel);
 		plane.openWindow.store(m_Enclosing, std::memory_order_release);
 		if (m_Name) {
+			// CC_TEST_PLANE_WINDOW_MS names a shorter open window than the 250 ms reported by default.
+			static const uint64_t reportMs = [] { const char* value = std::getenv("CC_TEST_PLANE_WINDOW_MS"); const uint64_t ms = value ? std::strtoull(value, nullptr, 10) : 0; return ms ? ms : 250; }();
 			const uint64_t openMs = NetLockstepNowMs() - m_OpenedMs;
-			if (openMs >= 250)
+			if (openMs >= reportMs)
 				DiagnosticLine() << "[net-plane] the " << m_Name << " stayed open " << openMs << " ms: plane_ticks=" << Ticks() - m_TicksAtOpen << " clock=" << NetLockstepSharedClockMs() << std::endl;
 		}
 		if (plane.checksArmed.load(std::memory_order_relaxed) && plane.checkTrips.load(std::memory_order_acquire) > 0) {

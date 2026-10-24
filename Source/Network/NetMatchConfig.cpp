@@ -8,11 +8,13 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdlib>
 #include <deque>
 #include <iterator>
 #include <limits>
 #include <mutex>
 #include <set>
+#include <string_view>
 #include <regex>
 #include <vector>
 
@@ -127,12 +129,15 @@ namespace RTE {
 	}
 
 	void NetRelayConfig::TurnLists(std::string& servers, std::string& users, std::string& passwords) const {
+		// CC_TEST_TURN_STREAMS_ONLY=1 offers only the TCP and TLS relays, the path of a network that refuses UDP to the relay.
+		static const bool streamsOnly = [] { const char* value = std::getenv("CC_TEST_TURN_STREAMS_ONLY"); return value && std::string_view(value) == "1"; }();
 		servers.clear(); users.clear(); passwords.clear();
 		for (const auto& server : iceServers) {
 			for (const auto& url : server.urls) {
 				if (!url.starts_with("turn:") && !url.starts_with("turns:")) continue;
 				const size_t query = url.find('?');
 				const bool udp = url.starts_with("turn:") && (query == std::string::npos || url.substr(query) == "?transport=udp");
+				if (udp && streamsOnly) continue;
 				const std::string separator = servers.empty() ? "" : ",";
 				servers += separator + (udp ? url.substr(5, query == std::string::npos ? query : query - 5) : url);
 				users += separator + server.username;
