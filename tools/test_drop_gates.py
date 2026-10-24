@@ -123,13 +123,13 @@ class HangGateTests(unittest.TestCase):
         self.assertLess(receipt["suspended_ms"], 5000)
 
     @staticmethod
-    def probe(folder, services, pressed=True):
+    def probe(folder, services, pressed=True, landing=""):
         """A player's probe result: the landing's reason waited for, the steps after it, the Rejoin Match press."""
         script = [{"op": "wait", "service": "Running"},
                   {"op": "wait", "scope": "menu", "control": "LabelMultiplayerLandingStatus", "text_contains": "The host stopped responding."},
                   *({"op": "wait", "elapsed_ms": 1200} for _ in services[1:]),
                   {"op": "menu", "command": "activate ButtonMultiplayerReconnect"}]
-        steps = [{"index": 0, "observed": {"service": "Running"}}] + [{"index": 1 + index, "observed": {"service": service}}
+        steps = [{"index": 0, "observed": {"service": "Running"}}] + [{"index": 1 + index, "observed": {"service": service, "control": {"text": landing}}}
                                                                       for index, service in enumerate(services)]
         if pressed:
             steps.append({"index": len(script) - 1, "observed": {"service": "Failed"}})
@@ -137,7 +137,9 @@ class HangGateTests(unittest.TestCase):
         (folder / "net-ui-result.json").write_text(json.dumps({"script": {"steps": script}, "steps": steps}))
         return str(folder)
 
-    def hang(self, silences, ended, menu_after_ms, receipt=None, line=True, after="", services=("Failed", "Failed")):
+    LINE = "The host stopped responding. The round has ended; the world continues from its last save when the host is back."
+
+    def hang(self, silences, ended, menu_after_ms, receipt=None, line=True, after="", services=("Failed", "Failed"), landing=""):
         import tempfile
         folder = Path(tempfile.mkdtemp())
         player, probe = folder / "joiner", folder / "host-stage" / "probe"
@@ -152,7 +154,7 @@ class HangGateTests(unittest.TestCase):
         (player / "console.log").write_text(("NETWORK: " + LINE + "\n") if line else "")
         index = [{"frame": 1, "screen": "MultiplayerScreen", "wall_ms": 0}, {"frame": 2, "screen": "game", "wall_ms": 1000},
                  {"frame": 3, "screen": "game", "wall_ms": 2000}, {"frame": 4, "screen": "MultiplayerScreen", "wall_ms": 2000 + menu_after_ms}]
-        return e2e_video.host_hang_evidence({"root": str(player), "index": index, "probe_dir": self.probe(folder / "joiner-stage" / "probe", services)},
+        return e2e_video.host_hang_evidence({"root": str(player), "index": index, "probe_dir": self.probe(folder / "joiner-stage" / "probe", services, landing=landing)},
                                             {"probe_dir": str(probe)}, {"window_ms": 15000, "line": LINE})
 
     def test_a_player_back_on_the_menu_at_the_window_with_the_reason_passes(self):
@@ -165,6 +167,7 @@ class HangGateTests(unittest.TestCase):
         self.assertIn("never ended", self.hang([1000, 14000], None, 400)["reason"])
         self.assertIn("back on the multiplayer menu 18004", self.hang([14000], 15004, 3000)["reason"])
         self.assertIn("word for word", self.hang([14000], 15004, 400, line=False)["reason"])
+        self.assertTrue(self.hang([14000], 15004, 400, line=False, landing=self.LINE)["pass"])
         self.assertIn("not past", self.hang([14000], 15004, 400, receipt={"suspended_ms": 9000})["reason"])
         self.assertIn("before it asked", self.hang([14000], 15004, 400, services=("Failed", "Starting"))["reason"])
         self.assertTrue(self.hang([14000], 15004, 400, services=("Failed", "Failed", "Failed"))["pass"])

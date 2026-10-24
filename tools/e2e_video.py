@@ -1489,7 +1489,8 @@ def probe_rejoin_steps(record):
     press = next((index for index, step in enumerate(script) if step.get("command") == "activate ButtonMultiplayerReconnect"), None)
     if reason is None or press is None:
         return [], None
-    landed = [{"step": index, "service": observed[index].get("service")} for index in range(reason, press) if index in observed]
+    landed = [{"step": index, "service": observed[index].get("service"), "text": (observed[index].get("control") or {}).get("text")}
+              for index in range(reason, press) if index in observed]
     return landed, press if press in observed else None
 
 
@@ -1530,7 +1531,9 @@ def host_hang_evidence(record, host, spec):
         (ended is None, "the player's round never ended on the host's silence"),
         (ended_ms is not None and not window <= ended_ms <= window + grace, f"the round ended {ended_ms} ms into the host's silence"),
         (silent and max(silent) >= window + grace, f"the player sat through {max(silent or [0])} ms of the host's silence"),
-        (spec.get("line") and "NETWORK: " + spec["line"] not in console, "the reason is not in the player's console word for word"),
+        # The landing's own label, as the probe read it when it showed the reason; a console a killed engine never flushed may lack it.
+        (spec.get("line") and not (landed and landed[0]["text"] == spec["line"]) and "NETWORK: " + spec["line"] not in console,
+         "the reason is not on the player's landing or in its console word for word"),
         (not landed or asked is None, "the probe never reached the landing's reason and the player's Rejoin Match"),
         (reconnect is not None, "the player was put back to waiting on the silent host before it asked to rejoin"),
         (return_ms is None, "no multiplayer-menu frame after the player's last game frame"),
