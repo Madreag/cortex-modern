@@ -85,6 +85,9 @@
     <ClInclude Include="Source\System\Matrix.h">
       <Filter>System</Filter>
     </ClInclude>
+    <ClInclude Include="Source\System\ParticleFrame.h">
+      <Filter>System</Filter>
+    </ClInclude>
     <ClInclude Include="Source\System\PathFinder.h">
       <Filter>System</Filter>
     </ClInclude>

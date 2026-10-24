@@ -921,6 +921,7 @@
     <ClInclude Include="Source\Renderer\GraphicalPrimitive.h" />
     <ClInclude Include="Source\System\Gamepad.h" />
     <ClInclude Include="Source\Menus\InventoryMenuGUI.h" />
+    <ClInclude Include="Source\System\ParticleFrame.h" />
     <ClInclude Include="Source\System\PieQuadrant.h" />
     <ClInclude Include="Source\System\Semver200\semver200.h" />
     <ClInclude Include="Source\System\Semver200\version.h" />
