@@ -7741,6 +7741,45 @@ namespace RTE {
 		return true;
 	}
 
+	/// A returner that finds the published base due for a refresh waits for the one asked for it: the older base's tail may already be
+	/// gone from the round's history, and what is left of it replays from the journal far behind the round.
+	bool TestAReturnerTakesTheBaseAskedForIt(std::string* error) {
+		NetMatchService service;
+		service.m_IsHost = true;
+		const auto config = NetMatchConfigUtil::MakeDefault(0x9A25);
+		if (!service.m_WorldJoin.ConfigureMatchRejoins(config, 1, 1000.0 / 60.0, error) || !service.m_WorldJoin.BeginRejoin(42, 2, 2, 3, "returning", 1000, error)) return false;
+		NetWorldCheckpointImage published;
+		published.privateSessionId = config.sessionId; published.round = 1; published.tick = 1776; published.bytes = 8;
+		published.checkpointConfig = "config"; published.sideState = "state"; published.authorityPeerId = 1;
+		service.m_WorldJoin.PublishImage(published);
+		// The host has just asked the checkpoint schedule for a fresh base, so the published one reads as fresh.
+		service.m_PrivateImageTakenMs = 5000;
+		std::vector<std::string> sent;
+		const auto leaves = [&](const char* while_) { if (service.PrivateTransferWaitLocked(5001).empty()) sent.push_back(while_); };
+		service.m_PrivateBaseRequested = true;
+		leaves("the fresh base was asked of the schedule");
+		service.m_PrivateBaseRequested = false;
+		service.m_PrivateBaseTick = 9243;
+		leaves("the fresh base was taken at its tick");
+		service.m_PrivateBaseTick = 0;
+		NetWorldCheckpointImage taken = published; taken.tick = 9243;
+		service.m_PrivateBasePending = taken;
+		leaves("the fresh base was being written");
+		service.m_PrivateBasePending.reset();
+		if (!sent.empty()) {
+			std::string joined;
+			for (const std::string& when: sent) joined += (joined.empty() ? "" : "; ") + when;
+			*error = "stale-base-sent: the base of tick 1776 left for the returner while " + joined;
+			return false;
+		}
+		if (const std::string why = service.PrivateTransferWaitLocked(5001); !why.empty()) {
+			*error = "the published base was held back with no fresher one on its way: " + why;
+			return false;
+		}
+		std::cout << "[net-world-join-selftest] PASS a_returner_takes_the_base_asked_for_it published=1776 fresh=9243" << std::endl;
+		return true;
+	}
+
 	bool TestWorldCatchUpRefusal(std::string* error) {
 		if (!MetricsCollector::IsConstructed()) MetricsCollector::Construct();
 		NetMatchService service;
@@ -10478,6 +10517,10 @@ namespace RTE {
 		}
 		if (!selected || std::string(selected) == "journal-pace") {
 			if (const int result = TestAJournalReturnerKeepsTheRingsPace(); result != 0) return result;
+			if (selected) return Pass();
+		}
+		if (!selected || std::string(selected) == "returner-base") {
+			if (!TestAReturnerTakesTheBaseAskedForIt(&findingError)) return Fail(findingError);
 			if (selected) return Pass();
 		}
 		// The Lua states a row brings up close with the suite, not at the process exit.

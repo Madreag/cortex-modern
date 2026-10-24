@@ -3769,6 +3769,13 @@ static std::string ResyncSaveName() {
 		return !fresh && PrivateBaseRefreshDue(true, 0, m_WorldJoin.Image().tick, SteadyCaptureMs(m_PrivateCaptureCosts));
 	}
 
+	std::string NetMatchService::PrivateTransferWaitLocked(uint64_t nowMs) const {
+		if (!m_WorldJoin.Image().IsValid()) return "no base yet";
+		if (m_PrivateImageTask.valid() || m_PrivateBaseTick != 0 || m_PrivateBasePending) return "its base is being written";
+		if (m_PrivateBaseRequested) return "its base is asked of the checkpoint schedule";
+		return PrivateBaseWantedLocked(nowMs) ? "a fresher base is wanted" : "";
+	}
+
 	bool NetMatchService::ReadPrivateBaseLocked(uint64_t tick, NetWorldCheckpointImage& image, std::string* error) {
 		const auto& config = m_Coordinator->GetConfig();
 		const uint64_t round = m_Coordinator->GetRoundId();
@@ -5558,8 +5565,7 @@ static std::string ResyncSaveName() {
 			if (INetTransport* wire = ActiveWireLocked()) m_WorldJoin.NoteTailLinkRtt(session.connection, wire->GetPeerPingMs(session.connection));
 			// A returning seat takes the base being captured for it, not the older one that capture replaces.
 			if (session.phase == NetWorldJoinPhase::SnapshotTransfer && !session.transferStarted) {
-				std::string why = !m_WorldJoin.Image().IsValid() ? "no base yet" : m_PrivateImageTask.valid() ? "its base is being written" :
-				                  PrivateBaseWantedLocked(SteadyNowMs()) ? "a fresher base is wanted" : "";
+				std::string why = PrivateTransferWaitLocked(SteadyNowMs());
 				if (why.empty() && !StartJoinerImageTransfer(session, &why, nullptr) && why.empty()) why = "its lobby is not up";
 				// A returner whose image does not leave says why, once per reason.
 				if (!why.empty() && m_PrivateTransferHeldReasons[session.connection] != why) {
