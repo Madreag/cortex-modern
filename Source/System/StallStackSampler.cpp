@@ -15,9 +15,40 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <dbghelp.h>
+#include <tlhelp32.h>
+
+#include <algorithm>
+#include <deque>
+#include <unordered_map>
+#include <utility>
+#include <vector>
 #endif
 
 namespace RTE {
+
+#ifdef _WIN32
+	namespace {
+		// The CPU cycles each of this process's threads has run so far.
+		std::vector<std::pair<DWORD, ULONG64>> ThreadCycles() {
+			std::vector<std::pair<DWORD, ULONG64>> cycles;
+			const HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+			if (snapshot == INVALID_HANDLE_VALUE) return cycles;
+			THREADENTRY32 entry{};
+			entry.dwSize = sizeof(entry);
+			const DWORD process = GetCurrentProcessId();
+			for (BOOL more = Thread32First(snapshot, &entry); more; more = Thread32Next(snapshot, &entry)) {
+				if (entry.th32OwnerProcessID != process) continue;
+				if (const HANDLE thread = OpenThread(THREAD_QUERY_LIMITED_INFORMATION, FALSE, entry.th32ThreadID)) {
+					ULONG64 count = 0;
+					if (QueryThreadCycleTime(thread, &count)) cycles.emplace_back(entry.th32ThreadID, count);
+					CloseHandle(thread);
+				}
+			}
+			CloseHandle(snapshot);
+			return cycles;
+		}
+	}
+#endif
 
 	void StallStackSampler::ArmForCurrentThread() {
 		const char* text = std::getenv("CCCP_STALL_STACK_MS");
@@ -62,8 +93,49 @@ namespace RTE {
 	void StallStackSampler::Watch(std::stop_token stop) {
 		int64_t sampledBegin = 0;
 		int64_t nextSampleMs = 0;
+#ifdef _WIN32
+		// Every thread's cycles, every 50 ms for the last few seconds: a long tick is compared with the count from before it began.
+		std::deque<std::pair<int64_t, std::vector<std::pair<DWORD, ULONG64>>>> counts;
+		uint64_t reportedLongTicks = s_LongTicks.load(std::memory_order_acquire);
+#endif
 		while (!stop.stop_requested()) {
 			std::this_thread::sleep_for(std::chrono::milliseconds(2));
+#ifdef _WIN32
+			if (const int64_t now = NowMs(); counts.empty() || now - counts.back().first >= 50) {
+				const auto started = RTE::SteadyClock::now();
+				counts.emplace_back(now, ThreadCycles());
+				if (counts.size() > 100) counts.pop_front();
+				HarnessCost::Charge(HarnessCost::StallSampler, std::chrono::duration_cast<std::chrono::nanoseconds>(RTE::SteadyClock::now() - started).count());
+			}
+			if (const uint64_t longTicks = s_LongTicks.load(std::memory_order_acquire); longTicks != reportedLongTicks) {
+				reportedLongTicks = longTicks;
+				const auto started = RTE::SteadyClock::now();
+				const int64_t longBegan = s_LongTickBeganMs.load(std::memory_order_relaxed);
+				auto before = counts.begin();
+				for (auto count = counts.begin(); count != counts.end() && count->first <= longBegan; ++count) before = count;
+				std::unordered_map<DWORD, ULONG64> earlier(before->second.begin(), before->second.end());
+				std::vector<std::pair<ULONG64, DWORD>> ran;
+				for (const auto& [thread, cycles]: ThreadCycles()) {
+					const auto found = earlier.find(thread);
+					ran.emplace_back(cycles - (found != earlier.end() ? found->second : 0), thread);
+				}
+				std::sort(ran.rbegin(), ran.rend());
+				const DWORD own = GetCurrentThreadId(), simulation = GetThreadId(static_cast<HANDLE>(s_Thread));
+				for (size_t index = 0; index < ran.size() && index < 5; ++index) {
+					const auto [cycles, id] = ran[index];
+					std::string stack = "not sampled";
+					int priority = THREAD_PRIORITY_ERROR_RETURN;
+					if (const HANDLE thread = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, id)) {
+						priority = GetThreadPriority(thread);
+						if (id != own && id != simulation) stack = Sample(thread, false);
+						CloseHandle(thread);
+					}
+					System::PrintDiagnosticLine(std::format("[stall-threads] tick={} tick_ms={} since_ms={} thread={} priority={} mcycles={} {}{} at {}", s_LongTickTick.load(std::memory_order_relaxed),
+					    s_LongTickMs.load(std::memory_order_relaxed), NowMs() - before->first, id, priority, cycles / 1000000, id == simulation ? "simulation" : "", id == own ? "sampler" : "", stack));
+				}
+				HarnessCost::Charge(HarnessCost::StallSampler, std::chrono::duration_cast<std::chrono::nanoseconds>(RTE::SteadyClock::now() - started).count());
+			}
+#endif
 			const int64_t began = s_BeganMs.load(std::memory_order_acquire);
 			if (began == 0) {
 				continue;
@@ -91,12 +163,16 @@ namespace RTE {
 	}
 
 	std::string StallStackSampler::Sample() {
+		return Sample(s_Thread, true);
+	}
+
+	std::string StallStackSampler::Sample(void* target, bool simulation) {
 #ifdef _WIN32
-		HANDLE thread = static_cast<HANDLE>(s_Thread);
+		HANDLE thread = static_cast<HANDLE>(target);
 		constexpr int c_MaxFrames = 24;
 		DWORD64 addresses[c_MaxFrames] = {};
 		int count = 0;
-		s_LastSuspendNs = 0;
+		if (simulation) s_LastSuspendNs = 0;
 		const auto suspended = RTE::SteadyClock::now();
 		if (SuspendThread(thread) == static_cast<DWORD>(-1)) {
 			return "suspend failed";
@@ -120,8 +196,10 @@ namespace RTE {
 			}
 		}
 		ResumeThread(thread);
-		s_LastSuspendNs = std::chrono::duration_cast<std::chrono::nanoseconds>(RTE::SteadyClock::now() - suspended).count();
-		HarnessCost::NoteSimulationSuspended(s_LastSuspendNs);
+		if (simulation) {
+			s_LastSuspendNs = std::chrono::duration_cast<std::chrono::nanoseconds>(RTE::SteadyClock::now() - suspended).count();
+			HarnessCost::NoteSimulationSuspended(s_LastSuspendNs);
+		}
 		HANDLE process = GetCurrentProcess();
 		const bool symbols = s_Symbols;
 		std::ostringstream line;
@@ -148,6 +226,8 @@ namespace RTE {
 		}
 		return line.str();
 #else
+		(void)target;
+		(void)simulation;
 		return "unsupported";
 #endif
 	}
