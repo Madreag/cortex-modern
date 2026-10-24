@@ -1608,9 +1608,11 @@ static std::string ResyncSaveName() {
 			if (isHost) {
 				runner->SetStartFrame(ScenarioRunner::ResyncResumeStartFrame(dropFrame));
 			}
-			if (!m_Coordinator->GetConfig().matchConfig.successorOrder.empty())
+			if (!m_Coordinator->GetConfig().matchConfig.successorOrder.empty()) {
+				// Nothing pumps the stopped round while it waits, so the heal's lobby reads the retained links itself.
+				m_Coordinator->ReleasePeerFrameReader();
 				m_MigrationFallbackCoordinator = std::move(m_Coordinator);
-			else
+			} else
 				m_Coordinator.reset();
 			coordinator = std::make_unique<NetLockstepCoordinator>();
 			m_WorkerDone = false;

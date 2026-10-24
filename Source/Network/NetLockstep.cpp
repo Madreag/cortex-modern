@@ -3440,7 +3440,17 @@ namespace RTE {
 			return false;
 		}
 		m_MigrationNeedsResync = true;
+		// The fallback runs again, so it reads its retained links again.
+		if (m_Config.peerFrameGroups && m_Config.peerSessionLinks) {
+			const NetLockstepPlaneGuard guard;
+			m_Config.peerSessionLinks->frameReader = this;
+		}
 		return true;
+	}
+
+	void NetLockstepCoordinator::ReleasePeerFrameReader() {
+		const NetLockstepPlaneGuard guard;
+		if (m_Config.peerSessionLinks && m_Config.peerSessionLinks->frameReader == this) m_Config.peerSessionLinks->frameReader = nullptr;
 	}
 
 	std::vector<std::string> NetLockstepCoordinator::MigrationListenAddrs(const std::string& lanAddress, bool iceRoute) {
