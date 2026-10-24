@@ -8,15 +8,17 @@ from a returning seat's base being asked to its being published or no longer wai
 dropped or was refused (base). A base window is a base window whatever the saver logged: the base's own write is part of
 what the return costs the host.
 --client-rejoin TICK drops the client once its game reaches TICK and starts it again with its reconnect ticket, so it
-returns through the host's image and the host asks for its base; a tick shortly after a capture meets the host's writer
-still busy with that save.
+returns through the host's image and the host asks for its base. The restarted client's join waits at its door
+(CC_TEST_JOIN_GATE_FILE) until the host holds the dropped seat and has passed the tick of a capture it named after that and
+has not yet written; the host then asks for the base while its writer is busy with that save, on any box whose save outlasts
+a join's handshake. The return judged is the one the kill caused: the first the host's log records after the kill.
 
 For each peer and kind the result gives the median frame rate, the 95th percentile of the per-window worst frame interval,
 the median tick rate and the seat holds whose frame falls there. The verdict: each peer's ordinary saves (in a rejoin run
 the host's alone, the client being replaced) and the host's frames while a base waits or is written keep at least 95 % of
 the idle frame rate and at most 125 % of the idle worst frame interval, and the host keeps its idle tick rate within
 0.5 ticks/s while a base waits; in a rejoin run the returner also catches up with no refusal of its base
-(tools/rejoin_stage_check.py). Every span a peer's saver logs as overdue needs a cause this driver finds in the log on its
+(tools/rejoin_stage_check.py) and on the link its return came on, which nothing on one box drops. Every span a peer's saver logs as overdue needs a cause this driver finds in the log on its
 own: a deadline that passed while that peer's own capture was unwritten, a periodic save named late for that peer's own
 writer (the save written last before its naming is the peer's own and ends at it), or a manual save; a base is no cause.
 --base names a base build's result.json (or its run folder), as often as there are base runs; each base run's logs are
@@ -43,7 +45,9 @@ import re
 import statistics
 import subprocess
 import sys
+import tempfile
 import time
+import unittest
 
 
 def fields(line):
@@ -254,16 +258,59 @@ def last_tick(text):
     return int(ticks_seen[-1]) if ticks_seen else 0
 
 
-def named_after_return(host_text):
-    # The captures the host named after its log says the returning seat is back.
-    back = re.search(r'^\[roster\] rev=\d+ seat=\d+ CaughtUp REJOIN_CATCHUP->RUNNING', host_text, re.M)
+HELD = re.compile(r'^\[roster\] rev=\d+ seat=\d+ HeldInPlace ', re.M)
+RETURNED = re.compile(r'^\[roster\] rev=\d+ seat=\d+ Returned HELD->REJOIN_IMAGE', re.M)
+CAUGHT_UP = re.compile(r'^\[roster\] rev=\d+ seat=\d+ CaughtUp REJOIN_CATCHUP->RUNNING', re.M)
+REFUSED = re.compile(r'^\[net-match\] rejoin refused connection=', re.M)
+LOST_RETURN = re.compile(r'^\[roster\] rev=\d+ seat=\d+ LinkDropped REJOIN_(?:IMAGE|CATCHUP)->', re.M)
+NAMED = re.compile(r'^\[autosave\] named tick=(\d+) at=\d+ writers=\d+', re.M)
+
+
+def reached(text):
+    # The newest frame the log shows its game reached: its per-frame cost line, else its last frame-pace window.
+    frames = re.findall(r'^\[harness-cost-frame\] .*?"frame":(\d+)', text[-65536:], re.M)
+    return max(int(frames[-1]) if frames else 0, last_tick(text))
+
+
+def offset_at_tick(host_text, tick):
+    """Where the host's log stood at its first frame-pace window that reached the tick: the kill's place for a run recorded
+    before the driver kept the log's offset at the kill."""
+    for match in re.finditer(r'^\[frame-pace\] .*? tick=(\d+) ', host_text, re.M):
+        if int(match.group(1)) >= tick:
+            return match.start()
+    return len(host_text)
+
+
+def kill_return(host_text, at):
+    """The return the kill caused: the host's first seat Returned after its log's place at the kill, and the first CaughtUp
+    after that. A return that ended before the kill is not it."""
+    returned = RETURNED.search(host_text, at)
+    return returned, (CAUGHT_UP.search(host_text, returned.end()) if returned else None)
+
+
+def named_after_return(host_text, at):
+    # The captures the host named after the seat the kill dropped was back.
+    back = kill_return(host_text, at)[1]
     return named_ticks(host_text[back.end():]) if back else []
 
 
-def judge(out, cfg, references, warmup, failure, exits_ok):
+def release_save(host_text, at):
+    """The capture the restarted client's join goes into: once the host holds the seat the kill dropped, a capture it named after
+    that, whose tick its game has passed and which its writer has not yet written; None until there is one."""
+    held = HELD.search(host_text, at)
+    if not held:
+        return None
+    written = set(written_ticks(host_text))
+    unwritten = [int(match.group(1)) for match in NAMED.finditer(host_text, held.end()) if int(match.group(1)) not in written]
+    return unwritten[0] if unwritten and reached(host_text) >= unwritten[0] else None
+
+
+def judge(out, cfg, references, warmup, failure, exits_ok, kill=None):
     """The run's checks from its logs: the placed windows against idle or the base runs, the logged overdue spans' causes,
-    the captures, refusals, the return and the returned seat's saves."""
+    the captures, refusals, the return and the returned seat's saves. `kill` is the host log's offset and tick at the kill: the
+    base asked while the writer was busy and the saves after the return are the kill's own return's."""
     rejoin, after_count = cfg.get('client_rejoin', 0), cfg.get('saves_after_return', 0)
+    at, kill_tick = (kill['offset'], kill['host_tick']) if kill else (0, 0)
     judged, in_run = {}, {}
     peers = analyze(out, warmup, 60 * cfg.get('autosave_seconds', 0))
     for role in ('host', 'client'):
@@ -274,7 +321,7 @@ def judge(out, cfg, references, warmup, failure, exits_ok):
             if references:
                 judged[role] = {f'save_{name}': value for name, value in equals_base(role, 'save', save, idle, references, 5).items()}
         if rejoin and role == 'host':
-            busy = any(any(start <= asked <= end for start, end in saves) for asked, _ in bases)
+            busy = any(any(start <= asked <= end for start, end in saves) for asked, _ in bases if asked >= kill_tick)
             in_run[role].update({'base_asked_while_writer_busy': busy, **{f'base_{name}': value for name, value in keeps(base, idle, 3).items()}})
             if base['windows'] >= 3:
                 in_run[role]['base_keeps_tick_rate'] = base['tps_median'] >= idle['tps_median'] - 0.5
@@ -298,11 +345,15 @@ def judge(out, cfg, references, warmup, failure, exits_ok):
         from rejoin_stage_check import check as stage_check
         stage = stage_check(host_text)
         checks['returner_caught_up_unrefused'] = stage['status'] == 'PASS' and stage['returns_caught_up'] > 0
+        # Nothing on one box drops a returning link: one lost while the host made it wait for its base was refused in silence.
+        returned, back = kill_return(host_text, at)
+        lost = returned and LOST_RETURN.search(host_text, returned.end(), back.start() if back else len(host_text))
+        checks['returner_back_on_the_link_it_came_on'] = bool(back) and not lost
     returned = None
     if after_count:
         # The returned seat saves every capture named after it is back, refuses none, and its game goes on past the last.
         returner_text = log_text(out, 'client-rejoined')
-        after = named_after_return(host_text)[:after_count]
+        after = named_after_return(host_text, at)[:after_count]
         written = set(written_ticks(returner_text))
         failed = re.findall(r'^\[autosave\] failed .*$', returner_text, re.M)
         returned = {'named_after_return': after, 'written': sorted(written & set(after)), 'failed': failed,
@@ -350,7 +401,13 @@ def main():
         recorded = json.loads((run_dir / 'result.json').read_text())
         cfg = json.loads((run_dir / 'configuration.json').read_text())
         exits_ok = all(code == 0 for role, code in recorded.get('exits', {}).items() if role != 'client-dropped')
-        verdict = judge(run_dir, cfg, references, a.warmup_ticks, recorded.get('failure'), exits_ok)
+        kill = None
+        if recorded.get('rejoined_at_host_tick') is not None:
+            offset = recorded.get('host_log_offset_at_kill')
+            if offset is None:
+                offset = offset_at_tick(log_text(run_dir, 'host'), recorded['rejoined_at_host_tick'])
+            kill = {'offset': offset, 'host_tick': recorded['rejoined_at_host_tick']}
+        verdict = judge(run_dir, cfg, references, a.warmup_ticks, recorded.get('failure'), exits_ok, kill)
         verdict = {'judged_run': str(run_dir), 'recorded_pass': recorded.get('pass'), **verdict,
                    'bases': [{'path': b['path'], 'exe_sha256': b['exe_sha256'], 'source_head': b['source_head']} for b in references]}
         a.out.mkdir(parents=True, exist_ok=True)
@@ -422,13 +479,16 @@ def main():
     def written(role):
         return len(written_ticks(log(role)))
 
-    def returner_done():
-        after = named_after_return(log('host'))[:a.saves_after_return]
+    def returner_done(host):
+        after = named_after_return(host, kill['offset'])[:a.saves_after_return]
         return (len(after) == a.saves_after_return and set(after) <= set(written_ticks(log('client-rejoined'))) and
                 last_tick(log('client-rejoined')) >= after[-1] + 600)
 
     failure = None
     rejoined_at = None
+    # The host's log offset and tick at the kill, and the capture the returner's join was released into.
+    kill, released = None, None
+    gate = out / 'client-rejoined-join.gate'
     returner_progress = (0, time.monotonic())
     began = time.monotonic()
     try:
@@ -438,32 +498,42 @@ def main():
         until = time.monotonic() + a.limit_seconds
         while True:
             if a.client_rejoin and rejoined_at is None and last_tick(log('client')) >= a.client_rejoin:
+                offset = len(log('host'))
                 runs['client'].terminate(reason=f'the client drops at tick {a.client_rejoin}')
                 records['client-dropped'] = runs['client'].finish()
                 runs['client-dropped'] = runs.pop('client')
                 rejoined_at = last_tick(log('host'))
+                kill = {'offset': offset, 'host_tick': rejoined_at}
+                # The returner loads at once and waits at its door until its join is released into a save.
                 runs['client'] = make_run(repo, argv['client'], out / 'client-rejoined', a.limit_seconds + 600,
-                                          env=probe_env('client-rejoined'), runtime=Path(runs['client-dropped'].cwd))
+                                          env={**probe_env('client-rejoined'), 'CC_TEST_JOIN_GATE_FILE': str(gate)},
+                                          runtime=Path(runs['client-dropped'].cwd))
                 runs['client'].start()
+            host = log('host')
+            if kill and released is None and (save := release_save(host, kill['offset'])) is not None:
+                released = {'save': save, 'host_frame': reached(host)}
+                gate.write_text(json.dumps(released))
+            back = kill_return(host, kill['offset'])[1] if kill else None
             # A rejoin run lasts until its base is published and the returner is back or refused.
-            rejoin_pending = bool(a.client_rejoin) and (rejoined_at is None or not re.search('private base taken', log('host')) or
-                                                        not re.search(r'CaughtUp REJOIN_CATCHUP->RUNNING|rejoin refused connection=', log('host')))
-            if a.saves_after_return and re.search(r'CaughtUp REJOIN_CATCHUP->RUNNING', log('host')):
+            rejoin_pending = bool(a.client_rejoin) and (kill is None or not re.compile('private base taken').search(host, kill['offset']) or
+                                                        not (back or REFUSED.search(host, kill['offset'])))
+            if a.saves_after_return and back:
                 # A returned seat whose game stops while the host plays on is the defect this mode looks for.
                 tick = last_tick(log('client-rejoined'))
                 if tick > returner_progress[0]:
                     returner_progress = (tick, time.monotonic())
-                elif tick and time.monotonic() - returner_progress[1] > 60 and last_tick(log('host')) > tick + 600:
-                    raise RuntimeError(f'the returned seat stopped ticking at tick {tick} while the host reached {last_tick(log("host"))}')
-            after_pending = bool(a.saves_after_return) and not returner_done()
-            captures = named_ticks(log('host'))
-            if len(captures) >= a.periodic_captures and written('host') >= len(captures) and not rejoin_pending and not after_pending:
+                elif tick and time.monotonic() - returner_progress[1] > 60 and last_tick(host) > tick + 600:
+                    raise RuntimeError(f'the returned seat stopped ticking at tick {tick} while the host reached {last_tick(host)}')
+            after_pending = bool(a.saves_after_return) and not (kill and returner_done(host))
+            captures = named_ticks(host)
+            if len(captures) >= a.periodic_captures and len(written_ticks(host)) >= len(captures) and not rejoin_pending and not after_pending:
                 break
             if time.monotonic() > until:
                 raise RuntimeError(f'{len(captures)} captures named, {written("host")} written by the host in {a.limit_seconds} s')
             if any(runs[role].poll() is not None for role in ('host', 'client')):
                 raise RuntimeError('an engine ended before the captures')
-            time.sleep(1)
+            # The release into a save is timed to its frames; everything else to the second.
+            time.sleep(0.1 if kill and released is None else 1)
     except Exception as error:
         failure = repr(error)
     finally:
@@ -474,13 +544,99 @@ def main():
         for run in runs.values():
             run.close()
     exits_ok = all(r.get('exit_code') == 0 and not r.get('timed_out') for role, r in records.items() if role != 'client-dropped')
-    verdict = judge(out, config, references, a.warmup_ticks, failure, exits_ok)
+    verdict = judge(out, config, references, a.warmup_ticks, failure, exits_ok, kill)
     result = {**config, **verdict, 'failure': failure, 'wall_seconds': round(time.monotonic() - began, 1), 'rejoined_at_host_tick': rejoined_at,
+              'host_log_offset_at_kill': kill['offset'] if kill else None, 'returner_released_into': released,
               'exits': {role: r.get('exit_code') for role, r in records.items()}}
     (out / 'result.json').write_text(json.dumps(result, indent=2))
     print(json.dumps({'pass': result['pass'], 'checks': result['checks'], 'failure': failure,
                       'kinds': {role: verdict['peers'][role]['kinds'] for role in verdict['peers']}}))
     return 0 if result['pass'] else 1
+
+
+def write_return_after_return(run_dir, lost_link=False):
+    """A rejoin run's logs where an earlier return caught up before the kill: its base was asked inside a save, two captures
+    were named after it, and the kill's own return then came back with its base asked outside any save; with `lost_link` that
+    return's first link drops while it waits and a second one brings it back. Returns the result the driver records (the
+    kill's host tick and the host log's offset at it)."""
+    def pace(first, last):
+        return f'[frame-pace] mode=lockstep first_tick={first} tick={last} frames=60 wall_ms=1000.0 fps=60.00 interval_max_ms=17.0 ticks=60\n'
+    host = [pace(tick - 59, tick) for tick in range(60, 601, 60)]
+    host += ['[roster] rev=5 seat=2 Returned HELD->REJOIN_IMAGE: Rejoining - waiting for the host recovery boundary\n',
+             '[autosave] named tick=640 at=637 writers=1\n', pace(601, 660),
+             '[net-match] private base asked of the checkpoint schedule at tick 650\n', pace(661, 720),
+             '[autosave] tick=640 capture_ms=1.0 bytes=1\n',
+             '[net-match] private base taken at the announced tick 700; its archive follows from the writer\n',
+             '[net-match] private base published from the announced capture at tick 700 bytes=1\n',
+             '[roster] rev=7 seat=2 CaughtUp REJOIN_CATCHUP->RUNNING: the player is back\n']
+    for tick in (1000, 2000):
+        host += [pace(tick - 59, tick), f'[autosave] named tick={tick} at={tick - 3} writers=2\n', f'[autosave] tick={tick} capture_ms=1.0 bytes=1\n']
+    host += [pace(2441, 2500)]
+    offset = len(''.join(host))
+    host += ['[roster] rev=8 seat=2 LinkDropped RUNNING->RUNNING: Connection lost\n', pace(2501, 2560),
+             '[roster] rev=9 seat=2 HeldInPlace RUNNING->HELD: Connection lost\n', pace(2561, 2620),
+             '[roster] rev=10 seat=2 Returned HELD->REJOIN_IMAGE: Rejoining - waiting for the host recovery boundary\n']
+    if lost_link:
+        host += ['[roster] rev=11 seat=2 LinkDropped REJOIN_IMAGE->HELD: Connection lost\n',
+                 '[roster] rev=12 seat=2 Returned HELD->REJOIN_IMAGE: Rejoining - waiting for the host recovery boundary\n']
+    host += ['[net-match] private base asked of the checkpoint schedule at tick 2630\n',
+             '[autosave] named tick=2634 at=2631 writers=1\n', pace(2621, 2680),
+             '[net-match] private base taken at the announced tick 2634; its archive follows from the writer\n',
+             '[autosave] tick=2634 capture_ms=1.0 bytes=1\n',
+             '[net-match] private base published from the announced capture at tick 2634 bytes=1\n',
+             '[roster] rev=13 seat=2 CaughtUp REJOIN_CATCHUP->RUNNING: the player is back\n']
+    for tick in (3000, 4000, 5000):
+        host += [pace(tick - 59, tick), f'[autosave] named tick={tick} at={tick - 3} writers=2\n', f'[autosave] tick={tick} capture_ms=1.0 bytes=1\n']
+    host += [pace(5641, 5700)]
+    returner = [pace(2700, 2759)] + [f'[autosave] tick={tick} capture_ms=1.0 bytes=1\n' for tick in (3000, 4000, 5000)] + [pace(5641, 5700)]
+    for role, lines in (('host', host), ('client', [pace(1, 60)]), ('client-rejoined', returner)):
+        (run_dir / role).mkdir(parents=True)
+        (run_dir / role / 'stdout.log').write_text(''.join(lines))
+    cfg = {'client_rejoin': 2480, 'saves_after_return': 3, 'periodic_captures': 3, 'autosave_seconds': 0}
+    result = {'rejoined_at_host_tick': 2500, 'host_log_offset_at_kill': offset, 'exits': {'host': 0, 'client': 0}, 'failure': None, 'pass': None}
+    (run_dir / 'configuration.json').write_text(json.dumps(cfg))
+    (run_dir / 'result.json').write_text(json.dumps(result))
+    return cfg, result
+
+
+class KillReturnTests(unittest.TestCase):
+    """The return judged is the one the kill caused, and the restarted client's join is released into a save the host's writer
+    has not yet written."""
+
+    def judged(self, recorded_offset=True, lost_link=False):
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory)
+            cfg, result = write_return_after_return(run_dir, lost_link)
+            offset = result['host_log_offset_at_kill'] if recorded_offset else offset_at_tick(log_text(run_dir, 'host'), result['rejoined_at_host_tick'])
+            return judge(run_dir, cfg, [], 0, None, True, {'offset': offset, 'host_tick': result['rejoined_at_host_tick']})
+
+    def test_the_saves_after_return_are_those_after_the_kills_own_return(self):
+        for recorded in (True, False):
+            with self.subTest(recorded_offset=recorded):
+                verdict = self.judged(recorded)
+                self.assertEqual(verdict['returned_seat']['named_after_return'], [3000, 4000, 5000])
+                self.assertTrue(verdict['checks']['returner_writes_saves_after_return'], verdict['returned_seat'])
+
+    def test_a_return_whose_link_dropped_while_it_waited_is_red(self):
+        self.assertTrue(self.judged()['checks']['returner_back_on_the_link_it_came_on'])
+        lost = self.judged(lost_link=True)['checks']
+        self.assertFalse(lost['returner_back_on_the_link_it_came_on'])
+        self.assertTrue(lost['returner_writes_saves_after_return'], 'the second link still brought the seat back')
+
+    def test_a_busy_writer_counts_only_for_the_kills_own_base(self):
+        # The earlier return's base was asked inside save 640; the kill's own base was asked with the writer idle.
+        self.assertFalse(self.judged()['checks']['host_base_asked_while_writer_busy'])
+
+    def test_the_join_is_released_into_a_save_its_writer_has_not_written(self):
+        held = '[roster] rev=9 seat=2 HeldInPlace RUNNING->HELD: Connection lost\n'
+        frame = '[harness-cost-frame] {{"costs_ms":{{}},"frame":{}}}\n'
+        named = '[autosave] named tick=6000 at=5997 writers=1\n'
+        written = '[autosave] tick=6000 capture_ms=1.0 bytes=1\n'
+        self.assertIsNone(release_save(named + frame.format(6001), 0), 'released before the seat was held')
+        self.assertIsNone(release_save(held + named + frame.format(5998), 0), 'released before the capture tick')
+        self.assertEqual(release_save(held + named + frame.format(6000), 0), 6000)
+        self.assertIsNone(release_save(held + named + frame.format(6100) + written, 0), 'released into a save already written')
+        self.assertEqual(release_save(held + named + written + named.replace('6000', '11400').replace('5997', '11397') + frame.format(11401), 0), 11400)
 
 
 if __name__ == '__main__':
