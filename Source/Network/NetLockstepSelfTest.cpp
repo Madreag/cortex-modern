@@ -31889,7 +31889,7 @@ namespace {
 			return true;
 		}
 		static bool WriterBackInPlaceReportsBeforeTheNextSave(std::string* error) {
-			enum class End { Reports, ImageReturn, NeverReports };
+			enum class End { Reports, ImageReturn, NeverReports, HeldAtNaming };
 			const auto run = [](End end, std::string* error) {
 				NetMatchService service;
 				service.m_IsHost = true;
@@ -31898,38 +31898,43 @@ namespace {
 				const int64_t tickLength = g_TimerMan.GetDeltaTimeTicks();
 				const int64_t interval = 60 * g_TimerMan.GetTicksPerSecond();
 				const int64_t start = 1000000;
-				// Both seats took the capture at 3601; the joiner's seat is then held in place for a few ticks while its writer still works on it.
-				service.m_OpenCaptureTick = 3601; service.m_OpenCaptureApplied = true; service.m_CaptureWriters = {1, 2};
-				service.m_NextAutosaveSimTime = start + interval; service.m_LastAutosaveSimTime = start;
+				// The save at 3601 falls due as the round plays; the joiner's seat is held in place for a few ticks while its writer still
+				// works on it, or, in the last case, while that save is named, and it takes it then as it plays on.
+				service.m_NextAutosaveSimTime = start; service.m_LastAutosaveSimTime = start - 2 * tickLength;
 				NetMatchService::AutosaveTickInput input;
-				input.localPeer = 1; input.lead = 2; input.writerReady = true; input.incarnations = {{1, 1}, {2, 1}};
+				input.localPeer = 1; input.lead = 2; input.writerReady = true; input.peers = {2}; input.incarnations = {{1, 1}, {2, 1}};
 				const auto step = [&](uint64_t tick, std::set<uint8_t> writers) {
-					input.tick = tick; input.now = start + static_cast<int64_t>(tick - 3601) * tickLength; input.writers = std::move(writers);
+					input.tick = tick; input.now = start + (static_cast<int64_t>(tick) - 3601) * tickLength; input.writers = std::move(writers);
 					const auto output = service.StepAutosaveSchedule(input);
 					input.applied.clear(); input.finished.clear();
 					return std::any_of(output.send.begin(), output.send.end(), [](const auto& note) { return note.kind == NetGameCheckpoint::Capture; });
 				};
-				(void)step(3780, {1});
-				(void)step(3790, {1, 2});
+				const bool heldAtNaming = end == End::HeldAtNaming;
+				if (!step(3599, heldAtNaming ? std::set<uint8_t>{1} : std::set<uint8_t>{1, 2}) || service.m_OpenCaptureTick != 3601) { *error = "the save at 3601 was not named"; return false; }
+				input.applied = {{1, NetGameCheckpoint::Capture, 3601}};
+				(void)step(3601, heldAtNaming ? std::set<uint8_t>{1} : std::set<uint8_t>{1, 2});
+				if (!heldAtNaming) (void)step(3780, {1});
+				(void)step(3790, heldAtNaming ? std::set<uint8_t>{1} : std::set<uint8_t>{1, 2});
 				input.finished = {3601};
-				(void)step(4170, {1, 2});
+				(void)step(4170, heldAtNaming ? std::set<uint8_t>{1} : std::set<uint8_t>{1, 2});
+				(void)step(4200, {1, 2});
 				if (step(7199, {1, 2})) { *error = "the host named its next save while a writer back from a hold in place still wrote the last one"; return false; }
 				uint64_t settled = 7240;
-				if (end == End::Reports) input.applied = {{2, NetGameCheckpoint::Written, 3601}};
+				if (end == End::Reports || end == End::HeldAtNaming) input.applied = {{2, NetGameCheckpoint::Written, 3601}};
 				if (end == End::ImageReturn) input.incarnations[2] = 2;
 				if (end == End::NeverReports) {
 					settled = 3790 + static_cast<uint64_t>(2 * interval / tickLength);
 					if (step(settled - 1, {1, 2})) { *error = "the host named past an unreported save before two intervals of its writer's play"; return false; }
 				}
 				if (!step(settled, {1, 2})) {
-					*error = end == End::Reports ? "the host named no save after the writer back in place reported the last one"
-					       : end == End::ImageReturn ? "the host still waited for the save of a writer that came back through an image"
-					                                 : "the host waited for an unreported save past two intervals";
+					*error = end == End::ImageReturn ? "the host still waited for the save of a writer that came back through an image"
+					       : end == End::NeverReports ? "the host waited for an unreported save past two intervals"
+					                                  : "the host named no save after the writer back in place reported the last one";
 					return false;
 				}
 				return true;
 			};
-			return run(End::Reports, error) && run(End::ImageReturn, error) && run(End::NeverReports, error);
+			return run(End::Reports, error) && run(End::ImageReturn, error) && run(End::NeverReports, error) && run(End::HeldAtNaming, error);
 		}
 		static void Reset() {
 			auto& service = g_NetMatchService;
