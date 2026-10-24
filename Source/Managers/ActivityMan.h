@@ -194,7 +194,8 @@ namespace RTE {
 		/// Captures a callback-free checkpoint at a completed sim tick and queues its archive write.
 		bool SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick);
 		/// The same capture, stamped with the identity a restore checks and the rewind point retention keeps.
-		bool SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick, const AutosaveIdentity& identity);
+		/// @param waitForPlan A capture this machine owes at this tick waits for its saver to prepare a plan the world outgrew, instead of being refused.
+		bool SaveAutosaveSnapshot(const std::string& matchId, uint64_t tick, const AutosaveIdentity& identity, bool waitForPlan = false);
 		bool RunCheckpointCaptureSelfTest(uint64_t tick);
 		/// Test lever: takes the autosave's capture at a completed tick and logs a hash of each shared section of it from the
 		/// writer thread. A dump directory also receives every section's bytes. Whether the capture was taken.

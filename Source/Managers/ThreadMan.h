@@ -120,6 +120,19 @@ namespace RTE {
 			Lend& operator=(const Lend&) = delete;
 		};
 
+		/// The game waits on the saver's work as on a due save its writer still holds: the gate opens and the saver runs at the
+		/// game's priority until the wait ends.
+		class Await {
+		public:
+			Await() : m_WasOverdue(s_Overdue.load(std::memory_order_acquire)) { SetOverdue(true); }
+			~Await() { SetOverdue(m_WasOverdue); }
+			Await(const Await&) = delete;
+			Await& operator=(const Await&) = delete;
+		private:
+			Lend m_Lend;
+			bool m_WasOverdue;
+		};
+
 		/// The game loop drives the slices while this is held; outside it (menus, loading) the saver runs freely.
 		class Gating {
 		public:

@@ -338,6 +338,20 @@ namespace RTE {
 		FlushReconnectOutbound();
 	}
 
+	void NetSession::KeepUncarriedPeersAlive(uint64_t nowMs, const std::function<bool(NetPeerId)>& carried) {
+		m_NowMs = std::max(m_NowMs, nowMs);
+		if (m_Role != NetSessionRole::Host || !m_Transport || m_State == NetSessionState::Stopped || m_State == NetSessionState::Closed ||
+		    m_State == NetSessionState::Rejected || m_State == NetSessionState::Failed || m_Config.heartbeatIntervalMs == 0 || m_NowMs < m_NextHeartbeatMs) {
+			return;
+		}
+		for (const PeerState& peer : m_Peers) {
+			if ((peer.state == NetSessionState::Ready || peer.state == NetSessionState::Accepted) && !carried(peer.transportPeerId)) {
+				SendHeartbeat(peer.transportPeerId);
+			}
+		}
+		m_NextHeartbeatMs = m_NowMs + m_Config.heartbeatIntervalMs;
+	}
+
 	void NetSession::NotePeerTraffic(NetPeerId peerId, uint64_t nowMs) {
 		m_NowMs = std::max(m_NowMs, nowMs);
 		if (m_Role == NetSessionRole::Host) {

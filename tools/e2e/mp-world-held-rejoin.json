@@ -1,0 +1,133 @@
+{
+  "schema": 1,
+  "name": "mp-world-held-rejoin",
+  "port_base": 49403,
+  "size": "960x540",
+  "timeout_s": 480,
+  "title": "A persistent world's player is stopped for 4 s on its machine and comes back through the held rejoin over the relay",
+  "public_directory": true,
+  "scripts": {
+    "joiner.menu": "wait_ms 1800\nactivate ButtonMainToMultiplayer\nwait_ms 600\nassert_substate Landing\nsettext TextMultiplayerName Joiner\nactivate ButtonMultiplayerJoinGame\nwait_ms 600\nassert_substate JoinSetup\nwait_file {PROBE_DIR_host}/lobby.json 120\nwait_row PublicGameRowLobby:{PROBE_DIR_host}/lobby.json 120\nclick_row PublicGameRowLobby:{PROBE_DIR_host}/lobby.json\nassert_label LabelJoinSelected internet\nassert_enabled ButtonMultiplayerConnect 1\nactivate ButtonMultiplayerConnect\nwait_connected 1 120\nwait_substate Lobby 120\nwait_ms 1200\nactivate ButtonMultiplayerReady\nwait_file {PROBE_DIR}/done.json 420\nwait_ms 1400\nexit\n",
+    "joiner.probe": "{\n  \"schema\": 1,\n  \"timeout_ms\": 420000,\n  \"step_timeout_ms\": 240000,\n  \"label_dump\": {\n    \"every_ms\": 5000\n  },\n  \"steps\": [\n    {\n      \"op\": \"wait\",\n      \"service\": \"Running\",\n      \"within_ms\": 180000\n    },\n    {\n      \"op\": \"wait\",\n      \"service\": \"Running\",\n      \"lockstep_frame_at_least\": 1260,\n      \"ai_held_peer_ids\": [],\n      \"within_ms\": 180000\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark playing\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"playing\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"wait\",\n      \"service\": \"Starting\",\n      \"within_ms\": 120000\n    },\n    {\n      \"op\": \"wait\",\n      \"service\": \"Running\",\n      \"within_ms\": 240000\n    },\n    {\n      \"op\": \"wait\",\n      \"service\": \"Running\",\n      \"control\": \"LabelNetMatchStatus\",\n      \"text_contains\": \"Everyone is connected\",\n      \"equals\": {\n        \"visible\": true\n      },\n      \"within_ms\": 240000\n    },\n    {\n      \"op\": \"wait\",\n      \"service\": \"Running\",\n      \"elapsed_ms\": 3000,\n      \"ai_held_peer_ids\": [],\n      \"within_ms\": 120000\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark returned\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 6000,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"returned\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"finish\"\n    }\n  ]\n}\n"
+  },
+  "runs": [
+    {
+      "name": "world",
+      "peers": [
+        {
+          "name": "host",
+          "args": [
+            "-net-dedicated",
+            "-net-persistent-world",
+            "-net-world-fresh",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "2",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "20",
+            "-net-match-ticks",
+            "30000",
+            "-max-ticks",
+            "30000",
+            "-net-match-report",
+            "{OUT}/host-match.json"
+          ],
+          "lobby_file": "{PROBE_DIR}/lobby.json",
+          "settings": {
+            "SessionDirectoryUrl": "directory.broserver.com",
+            "NetworkHostRelayMode": "Directory",
+            "NetworkConnectionMode": "RelayOnly",
+            "NetworkIceEnable": 1,
+            "NetworkPortMapEnable": 0,
+            "NetworkMatchStatusMode": "Always",
+            "NetworkDisplayName": "World"
+          },
+          "kill_when": {
+            "peer": "joiner",
+            "probe_complete": true
+          },
+          "observe_after_failure": true
+        },
+        {
+          "name": "joiner",
+          "menu_script": "joiner.menu",
+          "probe": "joiner.probe",
+          "suspend_when": {
+            "peer": "joiner",
+            "event": "video_mark playing"
+          },
+          "suspend_s": 4,
+          "settings": {
+            "SessionDirectoryUrl": "directory.broserver.com",
+            "NetworkHostRelayMode": "Directory",
+            "NetworkConnectionMode": "RelayOnly",
+            "NetworkIceEnable": 1,
+            "NetworkPortMapEnable": 0,
+            "NetworkMatchStatusMode": "Always",
+            "NetworkDisplayName": "Joiner"
+          },
+          "env": {
+            "CCCP_TEST_READBACK_TIMING": "1"
+          },
+          "kill_when": {
+            "peer": "joiner",
+            "probe_complete": true
+          }
+        }
+      ]
+    }
+  ],
+  "checklist": [
+    {
+      "id": "held-playing",
+      "run": "world",
+      "peer": "joiner",
+      "mark": "playing",
+      "screen": "game",
+      "what": "The player plays its seat of the world over the relay before its machine stops."
+    },
+    {
+      "id": "held-rejoin-taken",
+      "run": "world",
+      "peer": "joiner",
+      "mark": "returned",
+      "screen": "game",
+      "what": "Held while its machine stopped, the player returns through the held rejoin and the host's image.",
+      "log_regex": [
+        "^\\[net-match\\] recovery requested tick=\\d+ .*PeerHeld:",
+        "^\\[net-match\\] rejoin phase Connecting -> ImagePending$"
+      ]
+    },
+    {
+      "id": "held-returned",
+      "run": "world",
+      "peer": "joiner",
+      "mark": "returned",
+      "screen": "game",
+      "sim_progress": 120,
+      "probe_steps": [
+        7,
+        8,
+        9,
+        10
+      ],
+      "what": "Back in its own seat, the player plays the world on; its status line reads the world back."
+    },
+    {
+      "id": "held-relay",
+      "run": "world",
+      "peer": "joiner",
+      "mark": "returned",
+      "screen": "game",
+      "what": "Every connection the player makes to its host, the return included, goes through the relay.",
+      "log_regex": [
+        "^\\[net-ice\\] connected connection=\\d+ after_ms=\\d+ route=relay$"
+      ],
+      "forbidden_log_regex": [
+        "^\\[net-ice\\] connected connection=\\d+ after_ms=\\d+ route=(?!relay$)"
+      ]
+    }
+  ]
+}

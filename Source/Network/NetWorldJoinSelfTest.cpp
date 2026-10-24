@@ -1214,7 +1214,7 @@ namespace RTE {
 				uint64_t simTick = c_SnapshotTick, committed = c_SnapshotTick + c_Behind;
 				while (committed - simTick > c_NetWorldActivationLeadFrames && nowMs < c_LimitMs) {
 					ScenarioRunner::BeginWorldCatchUpFrame(drawMs, capped ? std::max(0.0, nextDrawMs - nowMs) : -1.0, at(nowMs));
-					while (ScenarioRunner::TakeWorldCatchUpGrant(simTick + 1, at(nowMs))) {
+					while (ScenarioRunner::TakeWorldCatchUpGrant(simTick + 1, false, at(nowMs))) {
 						NetLockstepReadyFrame ready;
 						if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(++simTick, ready, &error)) {
 							ScenarioRunner::ReleaseWorldCatchUp();
@@ -1267,7 +1267,7 @@ namespace RTE {
 				ScenarioRunner::BeginWorldCatchUpFrame(0.0, -1.0, at(nowMs));
 				uint64_t simTick = from;
 				int granted = 0;
-				while (ScenarioRunner::TakeWorldCatchUpGrant(simTick + 1, at(nowMs))) {
+				while (ScenarioRunner::TakeWorldCatchUpGrant(simTick + 1, false, at(nowMs))) {
 					NetLockstepReadyFrame ready;
 					if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(++simTick, ready, &error)) {
 						granted = -1;
@@ -1288,6 +1288,46 @@ namespace RTE {
 			if (fresh < fits) {
 				return Fail("catch-up-kept-the-last-ticks-time: a fresh catch-up of 1 ms ticks applied " + std::to_string(fresh) +
 				            " ticks in a frame with " + std::to_string(fits + 1) + " ms free, after a catch-up whose ticks took a second each");
+			}
+			return 0;
+		}
+
+		/// A tick the round named for a capture collects every Lua state, several ticks' work: the catch-up runs it alone in its frame,
+		/// never after other ticks of that frame and never with more after it.
+		int TestCatchUpRunsACollectingTickAlone() {
+			using namespace std::chrono;
+			std::string error;
+			constexpr uint64_t c_From = 4000, c_Collecting = c_From + 2;
+			std::vector<NetLockstepFrame> tail;
+			for (uint64_t target = c_From + 1; target <= c_From + 40; ++target) {
+				tail.push_back(MakeCommittedFrame(target));
+			}
+			if (!ScenarioRunner::InstallWorldCatchUp(c_From, tail, &error)) return Fail("collecting catch-up install: " + error);
+			const RTE::SteadyClock::time_point began = RTE::SteadyClock::now();
+			const auto at = [&](double ms) { return began + duration_cast<RTE::SteadyClock::duration>(duration<double, std::milli>(ms)); };
+			// Uncapped and undrawn, 1 ms ticks: a frame has room for a dozen; the counts per frame are what the rule sets.
+			std::vector<int> frames;
+			uint64_t simTick = c_From;
+			double nowMs = 0.0;
+			for (int frame = 0; frame < 3; ++frame) {
+				ScenarioRunner::BeginWorldCatchUpFrame(0.0, -1.0, at(nowMs));
+				int granted = 0;
+				while (ScenarioRunner::TakeWorldCatchUpGrant(simTick + 1, simTick + 1 == c_Collecting, at(nowMs))) {
+					NetLockstepReadyFrame ready;
+					if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(++simTick, ready, &error)) {
+						ScenarioRunner::ReleaseWorldCatchUp();
+						return Fail("collecting catch-up: tick " + std::to_string(simTick) + " had no committed frame");
+					}
+					++granted;
+					nowMs += 1.0;
+				}
+				frames.push_back(granted);
+				nowMs = std::ceil((nowMs + 0.5) / (c_DefaultDeltaTimeS * 1000.0)) * c_DefaultDeltaTimeS * 1000.0;
+			}
+			ScenarioRunner::ReleaseWorldCatchUp();
+			if (frames[0] != 1 || frames[1] != 1 || frames[2] < 2) {
+				return Fail("catch-up-stacks-a-collecting-tick: frames applied " + std::to_string(frames[0]) + ", " + std::to_string(frames[1]) + ", " +
+				            std::to_string(frames[2]) + " ticks with tick " + std::to_string(c_Collecting) + " collecting every state (expected 1, 1, then more)");
 			}
 			return 0;
 		}
@@ -4566,6 +4606,73 @@ namespace RTE {
 		return 0;
 	}
 
+	/// A returner whose tail is older than the memory ring is sent it from the journal as fast as from the ring: one pump's datagrams
+	/// come from what the journal has read, and the reads an earlier returner left behind never hold a later one below them.
+	int TestAJournalReturnerKeepsTheRingsPace() {
+		ResumeScratchDirectory scratch;
+		NetWorldJoinHost host;
+		auto config = NetMatchConfigUtil::MakeDefault(0x9A24);
+		std::string error;
+		if (!host.ConfigureMatchRejoins(config, 1, 1000.0 / 60.0, &error)) return Fail("journal pace fixture: " + error);
+		NetWorldFrameLog& tail = host.Tail();
+		constexpr uint64_t last = 2400, ring = 400, ringFirst = last - ring + 1;
+		tail.Configure(ring, 1 << 20);
+		for (uint64_t tick = 1; tick <= last; ++tick) {
+			if (!tail.Append(MakeCommittedFrame(tick), &error)) return Fail(error);
+			if (tick == 1) tail.EnableJournal((scratch.path / "match.inputs").string());
+		}
+		(void)SettledJournalStats(tail);
+		if (tail.FirstFrame() != ringFirst) return Fail("journal pace fixture: the memory ring starts at " + std::to_string(tail.FirstFrame()));
+		// One pump: the datagrams a host frame sends one returner, then a moment for the journal's own thread.
+		uint64_t nowMs = 1000;
+		std::set<uint64_t> carried;
+		std::string wrongFrame;
+		const auto pump = [&](NetPeerId connection) {
+			std::vector<uint8_t> packed;
+			for (int datagram = 0; datagram < 32 && host.NextTailDatagram(connection, nowMs, packed); ++datagram) {
+				for (size_t offset = 0; offset + 4 <= packed.size();) {
+					const uint32_t bytes = static_cast<uint32_t>(packed[offset]) | (static_cast<uint32_t>(packed[offset + 1]) << 8) |
+						(static_cast<uint32_t>(packed[offset + 2]) << 16) | (static_cast<uint32_t>(packed[offset + 3]) << 24);
+					offset += 4;
+					NetLockstepFrame frame;
+					if (bytes > packed.size() - offset || !DecodeCommittedJoinFrame(std::vector<uint8_t>(packed.begin() + offset, packed.begin() + offset + bytes), frame, &error) ||
+					    frame != MakeCommittedFrame(frame.targetFrame)) {
+						if (wrongFrame.empty()) wrongFrame = "a datagram carried a frame other than the committed one at " + std::to_string(frame.targetFrame) + ": " + error;
+						break;
+					}
+					if (connection == 42) carried.insert(frame.targetFrame);
+					offset += bytes;
+				}
+			}
+			nowMs += 17;
+			std::this_thread::sleep_for(std::chrono::milliseconds(2));
+		};
+		const auto delivered = [&](NetPeerId connection) {
+			const NetWorldJoinSession* session = host.FindSession(connection);
+			return session ? session->deliveredThrough : 0;
+		};
+		// An earlier returner was sent the journal from frame 1501 up to the ring.
+		if (!host.BeginInPlaceRejoin(41, 2, 2, 3, "earlier", nowMs, 1500, &error)) return Fail("journal pace fixture: " + error);
+		host.NoteRejoinLinkFit(41, true);
+		for (int pumps = 0; pumps < 4000 && delivered(41) < ringFirst; ++pumps) pump(41);
+		if (delivered(41) < ringFirst) return Fail("journal pace fixture: the earlier returner was sent only through frame " + std::to_string(delivered(41)));
+		host.CancelJoin(41, "the earlier returner dropped", false);
+		// The next returner starts below every frame the earlier one was sent.
+		if (!host.BeginInPlaceRejoin(42, 2, 2, 4, "returning", nowMs, 100, &error)) return Fail("journal pace fixture: " + error);
+		host.NoteRejoinLinkFit(42, true);
+		constexpr int c_Pumps = 120;
+		int pumps = 0;
+		for (; pumps < c_Pumps && delivered(42) < ringFirst; ++pumps) pump(42);
+		if (!wrongFrame.empty()) return Fail(wrongFrame);
+		if (delivered(42) < ringFirst)
+			return Fail("journal-returner-starved: a returner from frame 101 was sent through frame " + std::to_string(delivered(42)) + " in " + std::to_string(c_Pumps) +
+			            " pumps of 32 datagrams; the memory ring starts at frame " + std::to_string(ringFirst));
+		for (uint64_t frame = 101; frame < ringFirst; ++frame)
+			if (!carried.contains(frame)) return Fail("journal-returner-gap: frame " + std::to_string(frame) + " never left in a datagram");
+		std::cout << "[net-world-join-selftest] PASS a_journal_returner_keeps_the_rings_pace from=101 ring_first=" << ringFirst << " pumps=" << pumps << std::endl;
+		return 0;
+	}
+
 	/// A returning seat is activated where it will have caught up: at its measured replay rate it closes on the round
 	/// only by the difference of the two rates, and an activation the round reaches first leaves every peer waiting.
 	int TestPrivateActivationWaitsForTheCatchUp() {
@@ -7674,6 +7781,94 @@ namespace RTE {
 		return true;
 	}
 
+	/// A returner that finds the published base due for a refresh waits for the one asked for it: the older base's tail may already be
+	/// gone from the round's history, and what is left of it replays from the journal far behind the round.
+	bool TestAReturnerTakesTheBaseAskedForIt(std::string* error) {
+		NetMatchService service;
+		service.m_IsHost = true;
+		const auto config = NetMatchConfigUtil::MakeDefault(0x9A25);
+		if (!service.m_WorldJoin.ConfigureMatchRejoins(config, 1, 1000.0 / 60.0, error) || !service.m_WorldJoin.BeginRejoin(42, 2, 2, 3, "returning", 1000, error)) return false;
+		NetWorldCheckpointImage published;
+		published.privateSessionId = config.sessionId; published.round = 1; published.tick = 1776; published.bytes = 8;
+		published.checkpointConfig = "config"; published.sideState = "state"; published.authorityPeerId = 1;
+		service.m_WorldJoin.PublishImage(published);
+		// The host has just asked the checkpoint schedule for a fresh base, so the published one reads as fresh.
+		service.m_PrivateImageTakenMs = 5000;
+		std::vector<std::string> sent;
+		const auto leaves = [&](const char* while_) { if (service.PrivateTransferWaitLocked(5001).empty()) sent.push_back(while_); };
+		service.m_PrivateBaseRequested = true;
+		leaves("the fresh base was asked of the schedule");
+		service.m_PrivateBaseRequested = false;
+		service.m_PrivateBaseTick = 9243;
+		leaves("the fresh base was taken at its tick");
+		service.m_PrivateBaseTick = 0;
+		NetWorldCheckpointImage taken = published; taken.tick = 9243;
+		service.m_PrivateBasePending = taken;
+		leaves("the fresh base was being written");
+		service.m_PrivateBasePending.reset();
+		if (!sent.empty()) {
+			std::string joined;
+			for (const std::string& when: sent) joined += (joined.empty() ? "" : "; ") + when;
+			*error = "stale-base-sent: the base of tick 1776 left for the returner while " + joined;
+			return false;
+		}
+		if (const std::string why = service.PrivateTransferWaitLocked(5001); !why.empty()) {
+			*error = "the published base was held back with no fresher one on its way: " + why;
+			return false;
+		}
+		std::cout << "[net-world-join-selftest] PASS a_returner_takes_the_base_asked_for_it published=1776 fresh=9243" << std::endl;
+		return true;
+	}
+
+	bool TestALateBaseVerdictKeepsTheNextAsk(std::string* error) {
+		for (const bool asked: {true, false}) {
+			NetMatchService service;
+			service.m_IsHost = true;
+			// The last base's capture was taken; its writer's verdict lands after the returner's next base was asked, or with none asked.
+			service.m_AwaitedAutosaves.push_back({3083, true, false});
+			service.m_PrivateBaseRequested = asked;
+			service.m_WorldCapturePending = asked;
+			service.ResolveAwaitedAutosave(3083, true);
+			if (service.m_WorldCapturePending != asked) {
+				*error = asked ? "base-ask-lost: the verdict of the base taken at tick 3083 cleared the capture the returner's next base was asked for"
+				               : "a capture stayed pending after its verdict with no base asked";
+				return false;
+			}
+		}
+		std::cout << "[net-world-join-selftest] PASS a_late_base_verdict_keeps_the_next_ask" << std::endl;
+		return true;
+	}
+
+	// A base asked for a waiting returner serves it when its writer lands, however long the writer took past the shared window.
+	bool TestASlowWrittenBaseServesItsReturner(std::string* error) {
+		NetMatchService service;
+		service.m_IsHost = true;
+		const auto config = NetMatchConfigUtil::MakeDefault(0x9A36);
+		if (!service.m_WorldJoin.ConfigureMatchRejoins(config, 1, 1000.0 / 60.0, error) || !service.m_WorldJoin.BeginRejoin(44, 2, 2, 3, "returning", 1000, error)) return false;
+		const auto nowMs = [] { return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now().time_since_epoch()).count()); };
+		// The base was asked 13.5 s ago, as long as a loaded host's writer took to walk its graph.
+		const uint64_t writerMs = NetMatchService::c_PrivateImageMinIntervalMs + 3500;
+		service.m_PrivateImageTakenMs = nowMs() - writerMs;
+		NetMatchService::PrivateJoinImage written;
+		written.image.privateSessionId = config.sessionId; written.image.round = 1; written.image.tick = 3369; written.image.bytes = 8;
+		written.image.checkpointConfig = "config"; written.image.sideState = "state"; written.image.authorityPeerId = 1;
+		written.archive = std::make_shared<std::vector<uint8_t>>(8, uint8_t{1});
+		std::promise<NetMatchService::PrivateJoinImage> writer;
+		service.m_PrivateImageTask = writer.get_future();
+		writer.set_value(std::move(written));
+		service.PublishFinishedWorldJoinImage();
+		if (service.m_WorldJoin.Image().tick != 3369) {
+			*error = "the written base was not published: image tick " + std::to_string(service.m_WorldJoin.Image().tick);
+			return false;
+		}
+		if (const std::string why = service.PrivateTransferWaitLocked(nowMs()); !why.empty()) {
+			*error = "base-never-fresh: the base of tick 3369 asked for the waiting returner was held back when its writer landed " + std::to_string(writerMs) + " ms later: " + why;
+			return false;
+		}
+		std::cout << "[net-world-join-selftest] PASS a_slow_written_base_serves_its_returner writer_ms=" << writerMs << std::endl;
+		return true;
+	}
+
 	bool TestWorldCatchUpRefusal(std::string* error) {
 		if (!MetricsCollector::IsConstructed()) MetricsCollector::Construct();
 		NetMatchService service;
@@ -9499,7 +9694,7 @@ namespace RTE {
 			return true;
 		};
 		struct Outcome { bool landed = false; bool reconnecting = false; std::string errorText; };
-		const auto run = [&](bool hostLeaves, uint16_t port, Outcome& outcome, std::string& why) {
+		const auto run = [&](bool hostLeaves, uint16_t port, Outcome& outcome, std::string& why, const std::string& ownError) {
 			LoopbackTransport hostWire, clientWire;
 			NetSession hostSession;
 			NetMatchService service;
@@ -9528,7 +9723,7 @@ namespace RTE {
 				service.ReportRuntimeError("PeerDisconnected: peer 1 disconnected");
 			} else {
 				// The link is alive; the failure is this peer's own.
-				service.ReportRuntimeError("private catch-up activation: the committed state did not restore");
+				service.ReportRuntimeError(ownError);
 			}
 			service.m_TicketStore.SetPath(ticket.string());
 			service.DriveReconnectUx(1000);
@@ -9540,9 +9735,10 @@ namespace RTE {
 			outcome.reconnecting = service.m_ReconnectUx.GetState() != NetReconnectUxState::Idle;
 			return true;
 		};
-		Outcome own, departed;
+		Outcome own, departed, hung;
 		std::string why;
-		if (!run(false, 43705, own, why) || !run(true, 43707, departed, why)) {
+		const std::string ownSide = "private catch-up activation: the committed state did not restore";
+		if (!run(false, 43705, own, why, ownSide) || !run(true, 43707, departed, why, ownSide) || !run(false, 43709, hung, why, std::string(c_NetHostUnresponsiveText))) {
 			*error = "the own-side error fixture: " + why;
 			std::filesystem::remove_all(scratch, ignored);
 			return false;
@@ -9630,7 +9826,13 @@ namespace RTE {
 			*error = "a seat with nothing committed stayed on after its host left: landed=" + std::to_string(departed.landed) + " error='" + departed.errorText + "'";
 			return false;
 		}
-		std::cout << "[net-world-join-selftest] PASS an_own_side_error_keeps_the_seats_reconnect own_side=reconnect host_left=landed" << std::endl;
+		// A round its host stopped answering has ended: the seat is offered to rejoin by hand, nothing reconnects to that host.
+		if (hung.reconnecting || hung.landed || hung.errorText != c_NetHostUnresponsiveText) {
+			*error = "a round whose host stopped answering reconnected to that host: reconnecting=" + std::to_string(hung.reconnecting) +
+			         " landed=" + std::to_string(hung.landed) + " error='" + hung.errorText + "'";
+			return false;
+		}
+		std::cout << "[net-world-join-selftest] PASS an_own_side_error_keeps_the_seats_reconnect own_side=reconnect host_left=landed host_unresponsive=offered" << std::endl;
 		return true;
 	}
 
@@ -10103,6 +10305,10 @@ namespace RTE {
 			s_FailTag = "net-world-catchup-fresh-selftest";
 			return TestCatchUpForgetsTheLastTicksTime();
 		}
+		if (std::strcmp(name, "catchup-collecting") == 0 || std::strcmp(name, "-net-world-catchup-collecting-selftest") == 0) {
+			s_FailTag = "net-world-catchup-collecting-selftest";
+			return TestCatchUpRunsACollectingTickAlone();
+		}
 		if (std::strcmp(name, "catchup-census") == 0 || std::strcmp(name, "-net-world-catchup-census-selftest") == 0) {
 			s_FailTag = "net-world-catchup-census-selftest";
 			return TestCatchUpTicksAreNotSinglePlayers();
@@ -10402,6 +10608,16 @@ namespace RTE {
 			if (const int result = TestJournalDeleteIsRetriedAndCounted(); result != 0) return result;
 			if (selected) return Pass();
 		}
+		if (!selected || std::string(selected) == "journal-pace") {
+			if (const int result = TestAJournalReturnerKeepsTheRingsPace(); result != 0) return result;
+			if (selected) return Pass();
+		}
+		if (!selected || std::string(selected) == "returner-base") {
+			if (!TestAReturnerTakesTheBaseAskedForIt(&findingError)) return Fail(findingError);
+			if (!TestALateBaseVerdictKeepsTheNextAsk(&findingError)) return Fail(findingError);
+			if (!TestASlowWrittenBaseServesItsReturner(&findingError)) return Fail(findingError);
+			if (selected) return Pass();
+		}
 		// The Lua states a row brings up close with the suite, not at the process exit.
 		struct LuaTakeDown {
 			bool owned = !LuaMan::IsConstructed();
@@ -10438,6 +10654,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestCatchUpForgetsTheLastTicksTime(); result != 0) {
+			return result;
+		}
+		if (const int result = TestCatchUpRunsACollectingTickAlone(); result != 0) {
 			return result;
 		}
 		if (const int result = TestCatchUpTicksAreNotSinglePlayers(); result != 0) {

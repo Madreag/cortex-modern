@@ -1,0 +1,326 @@
+{
+  "schema": 1,
+  "name": "door-fill",
+  "title": "Reinforced fill over each brain chamber's closed door: every running tick's terrain alike on both players while the AI re-routes",
+  "port_base": 49474,
+  "size": "960x540",
+  "timeout_s": 900,
+  "public_directory": true,
+  "peers": [
+    {
+      "name": "host",
+      "menu_script": "host.menu",
+      "probe": "host.probe",
+      "env": {
+        "CCCP_TEST_READBACK_TIMING": "1",
+        "CC_TEST_DOOR_DIG_AGE_MS": "20000"
+      },
+      "settings": {
+        "SessionDirectoryUrl": "directory.broserver.com",
+        "NetworkHostRelayMode": "Directory",
+        "NetworkConnectionMode": "Automatic",
+        "NetworkIceEnable": 1,
+        "NetworkPortMapEnable": 0,
+        "NetworkMatchStatusMode": "Always",
+        "NetworkDisplayName": "Captain"
+      },
+      "args": [
+        "-memory-census-seconds",
+        "60",
+        "-net-live-tick-hashes",
+        "{PROBE_DIR}/ticks.jsonl"
+      ]
+    },
+    {
+      "name": "joiner",
+      "menu_script": "joiner.menu",
+      "probe": "joiner.probe",
+      "env": {
+        "CCCP_TEST_READBACK_TIMING": "1",
+        "CC_TEST_DOOR_DIG_AGE_MS": "20000"
+      },
+      "settings": {
+        "SessionDirectoryUrl": "directory.broserver.com",
+        "NetworkHostRelayMode": "Directory",
+        "NetworkConnectionMode": "Automatic",
+        "NetworkIceEnable": 1,
+        "NetworkPortMapEnable": 0,
+        "NetworkMatchStatusMode": "Always",
+        "NetworkDisplayName": "Joiner"
+      },
+      "args": [
+        "-memory-census-seconds",
+        "60",
+        "-net-live-tick-hashes",
+        "{PROBE_DIR}/ticks.jsonl"
+      ]
+    }
+  ],
+  "scripts": {
+    "host.menu": "wait_ms 1800\nactivate ButtonMainToMultiplayer\nwait_ms 600\nassert_substate Landing\nsettext TextMultiplayerName Captain\nactivate ButtonMultiplayerHostGame\nwait_ms 500\nassert_substate HostSetup\ncombo_select ComboHostActivity Skirmish Defense\nwait_combo ComboHostScene Grasslands\ncombo_select ComboHostScene Grasslands\nsetup_host_port {PORT}\ncombo_select ComboHostPlayers 4\nactivate ButtonHostOptions\nwait_ms 500\nassert_substate HostOptions\nactivate TabHostPageConnection\ncombo_select ComboHostNetVisibility Public (default)\ncombo_select ComboHostNetRelay Game service (default)\nactivate TabHostPageSeats\nvideo_mark cpu-seats-host\ncombo_select ComboHostSeatType2 CPU\ncombo_select ComboHostSeatType3 CPU\nassert_label ComboHostSeatType0 Open\nassert_label ComboHostSeatType1 Open\nassert_label ComboHostSeatType2 CPU\nassert_label ComboHostSeatType3 CPU\nassert_text_fits LabelHostSeatState2\nassert_text_fits LabelHostSeatState3\nwait_ms 1400\nassert_label LabelHostSeatPlayers Human players\nvideo_mark cpu-human-count-host\ncombo_select ComboHostSeatPlayers 2\nassert_label ComboHostSeatPlayers 2\nassert_label ComboHostSeatType2 CPU\nassert_label ComboHostSeatType3 CPU\nwait_ms 1400\nactivate TabHostPageConnection\nassert_label ComboHostNetVisibility Public (default)\nassert_label ComboHostNetRelay Game service (default)\nactivate TabHostPageRules\nslider_set SliderHostRulesDifficulty 0\nslider_set SliderHostRulesGold 31000\nsetcheck CheckHostRulesClearPath 0\nactivate ButtonHostOptApply\nwait_ms 400\nactivate ButtonHostOptBack\nwait_ms 500\nactivate ButtonMultiplayerCreate\nwait_substate Lobby 90\nwrite_lobby {PROBE_DIR}/lobby.json 90\nvideo_mark fight15-host-listening\nwait_connected 4 90\nwait_ms 1200\nwait_remote_ready 90\nactivate ButtonMultiplayerStart\nwait_file {PROBE_DIR}/done.json 1600\nwait_ms 1400\nexit\n",
+    "joiner.menu": "wait_ms 1800\nactivate ButtonMainToMultiplayer\nwait_ms 600\nassert_substate Landing\nsettext TextMultiplayerName Joiner\nactivate ButtonMultiplayerJoinGame\nwait_ms 600\nassert_substate JoinSetup\nwait_file {PROBE_DIR_host}/lobby.json 90\nwait_row PublicGameRowLobby:{PROBE_DIR_host}/lobby.json 90\nclick_row PublicGameRowLobby:{PROBE_DIR_host}/lobby.json\nassert_label LabelJoinSelected internet\nassert_enabled ButtonMultiplayerConnect 1\nactivate ButtonMultiplayerConnect\nwait_connected 4 90\nwait_substate Lobby 90\nwait_ms 1200\nactivate ButtonMultiplayerReady\nwait_file {PROBE_DIR}/done.json 1600\nwait_ms 1400\nexit\n",
+    "host.probe": "{\n  \"schema\": 1,\n  \"timeout_ms\": 1600000,\n  \"step_timeout_ms\": 60000,\n  \"label_dump\": {\n    \"every_ms\": 5000\n  },\n  \"steps\": [\n    {\n      \"op\": \"wait\",\n      \"editing\": true\n    },\n    {\n      \"op\": \"editor_pick\",\n      \"input_player\": 0,\n      \"brain\": false,\n      \"class\": \"BunkerAssembly\",\n      \"preset\": \"Brain Chamber Left 2x2 - 1\"\n    },\n    {\n      \"op\": \"editor_move\",\n      \"input_player\": 0,\n      \"x_fraction\": 0.3,\n      \"y\": 1104,\n      \"remember\": \"bunker\"\n    },\n    {\n      \"op\": \"wait\",\n      \"picker_open\": false,\n      \"player\": 0\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark bunker-preview-host\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"bunker-preview-host\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_editor\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"screen_text\": \"Click to ADD a new object - Drag for precision\"\n      }\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": true\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": false\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"sim_advanced\": 90,\n      \"elapsed_ms\": 1600\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark bunker-installed-host\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"bunker-installed-host\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_editor\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"placement_refused\": false\n      }\n    },\n    {\n      \"op\": \"wait\",\n      \"editing\": true\n    },\n    {\n      \"op\": \"editor_pick\",\n      \"input_player\": 0,\n      \"brain\": false,\n      \"class\": \"TerrainObject\",\n      \"preset\": \"Reinforced Concrete Fill\"\n    },\n    {\n      \"op\": \"editor_move\",\n      \"input_player\": 0,\n      \"relative_to\": \"bunker\",\n      \"offset_x\": -144,\n      \"offset_y\": -144\n    },\n    {\n      \"op\": \"wait\",\n      \"picker_open\": false,\n      \"player\": 0\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": true\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": false\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"sim_advanced\": 30,\n      \"elapsed_ms\": 600\n    },\n    {\n      \"op\": \"assert_editor\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"placement_refused\": false\n      }\n    },\n    {\n      \"op\": \"wait\",\n      \"editing\": true\n    },\n    {\n      \"op\": \"editor_pick\",\n      \"input_player\": 0,\n      \"brain\": false,\n      \"class\": \"TerrainObject\",\n      \"preset\": \"Reinforced Concrete Fill\"\n    },\n    {\n      \"op\": \"editor_move\",\n      \"input_player\": 0,\n      \"relative_to\": \"bunker\",\n      \"offset_x\": -48,\n      \"offset_y\": -144\n    },\n    {\n      \"op\": \"wait\",\n      \"picker_open\": false,\n      \"player\": 0\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": true\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": false\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"sim_advanced\": 30,\n      \"elapsed_ms\": 600\n    },\n    {\n      \"op\": \"assert_editor\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"placement_refused\": false\n      }\n    },\n    {\n      \"op\": \"wait\",\n      \"editing\": true\n    },\n    {\n      \"op\": \"editor_pick\",\n      \"input_player\": 0,\n      \"brain\": false,\n      \"class\": \"TerrainObject\",\n      \"preset\": \"Reinforced Concrete Fill\"\n    },\n    {\n      \"op\": \"editor_move\",\n      \"input_player\": 0,\n      \"relative_to\": \"bunker\",\n      \"offset_x\": 48,\n      \"offset_y\": -144\n    },\n    {\n      \"op\": \"wait\",\n      \"picker_open\": false,\n      \"player\": 0\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": true\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": false\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"sim_advanced\": 30,\n      \"elapsed_ms\": 600\n    },\n    {\n      \"op\": \"assert_editor\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"placement_refused\": false\n      }\n    },\n    {\n      \"op\": \"wait\",\n      \"editing\": true\n    },\n    {\n      \"op\": \"editor_pick\",\n      \"input_player\": 0,\n      \"brain\": false,\n      \"class\": \"TerrainObject\",\n      \"preset\": \"Reinforced Concrete Fill\"\n    },\n    {\n      \"op\": \"editor_move\",\n      \"input_player\": 0,\n      \"relative_to\": \"bunker\",\n      \"offset_x\": 144,\n      \"offset_y\": -144\n    },\n    {\n      \"op\": \"wait\",\n      \"picker_open\": false,\n      \"player\": 0\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": true\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": false\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"sim_advanced\": 30,\n      \"elapsed_ms\": 600\n    },\n    {\n      \"op\": \"assert_editor\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"placement_refused\": false\n      }\n    },\n    {\n      \"op\": \"wait\",\n      \"editing\": true\n    },\n    {\n      \"op\": \"editor_pick\",\n      \"input_player\": 0,\n      \"brain\": false,\n      \"class\": \"TerrainObject\",\n      \"preset\": \"Reinforced Concrete Fill\"\n    },\n    {\n      \"op\": \"editor_move\",\n      \"input_player\": 0,\n      \"relative_to\": \"bunker\",\n      \"offset_x\": -144,\n      \"offset_y\": -48\n    },\n    {\n      \"op\": \"wait\",\n      \"picker_open\": false,\n      \"player\": 0\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": true\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": false\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"sim_advanced\": 30,\n      \"elapsed_ms\": 600\n    },\n    {\n      \"op\": \"assert_editor\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"placement_refused\": false\n      }\n    },\n    {\n      \"op\": \"wait\",\n      \"editing\": true\n    },\n    {\n      \"op\": \"editor_pick\",\n      \"input_player\": 0,\n      \"brain\": false,\n      \"class\": \"TerrainObject\",\n      \"preset\": \"Reinforced Concrete Fill\"\n    },\n    {\n      \"op\": \"editor_move\",\n      \"input_player\": 0,\n      \"relative_to\": \"bunker\",\n      \"offset_x\": -144,\n      \"offset_y\": 48\n    },\n    {\n      \"op\": \"wait\",\n      \"picker_open\": false,\n      \"player\": 0\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": true\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": false\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"sim_advanced\": 30,\n      \"elapsed_ms\": 600\n    },\n    {\n      \"op\": \"assert_editor\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"placement_refused\": false\n      }\n    },\n    {\n      \"op\": \"wait\",\n      \"editing\": true\n    },\n    {\n      \"op\": \"editor_pick\",\n      \"input_player\": 0,\n      \"brain\": false,\n      \"class\": \"TerrainObject\",\n      \"preset\": \"Reinforced Concrete Fill\"\n    },\n    {\n      \"op\": \"editor_move\",\n      \"input_player\": 0,\n      \"relative_to\": \"bunker\",\n      \"offset_x\": 144,\n      \"offset_y\": -48\n    },\n    {\n      \"op\": \"wait\",\n      \"picker_open\": false,\n      \"player\": 0\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": true\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": false\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"sim_advanced\": 30,\n      \"elapsed_ms\": 600\n    },\n    {\n      \"op\": \"assert_editor\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"placement_refused\": false\n      }\n    },\n    {\n      \"op\": \"wait\",\n      \"editing\": true\n    },\n    {\n      \"op\": \"editor_pick\",\n      \"input_player\": 0,\n      \"brain\": false,\n      \"class\": \"TerrainObject\",\n      \"preset\": \"Reinforced Concrete Fill\"\n    },\n    {\n      \"op\": \"editor_move\",\n      \"input_player\": 0,\n      \"relative_to\": \"bunker\",\n      \"offset_x\": 144,\n      \"offset_y\": 48\n    },\n    {\n      \"op\": \"wait\",\n      \"picker_open\": false,\n      \"player\": 0\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": true\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": false\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"sim_advanced\": 30,\n      \"elapsed_ms\": 600\n    },\n    {\n      \"op\": \"assert_editor\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"placement_refused\": false\n      }\n    },\n    {\n      \"op\": \"wait\",\n      \"editing\": true\n    },\n    {\n      \"op\": \"editor_pick\",\n      \"input_player\": 0,\n      \"brain\": false,\n      \"class\": \"TerrainObject\",\n      \"preset\": \"Reinforced Concrete Fill\"\n    },\n    {\n      \"op\": \"editor_move\",\n      \"input_player\": 0,\n      \"relative_to\": \"bunker\",\n      \"offset_x\": 48,\n      \"offset_y\": 48\n    },\n    {\n      \"op\": \"wait\",\n      \"picker_open\": false,\n      \"player\": 0\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": true\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": false\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"sim_advanced\": 30,\n      \"elapsed_ms\": 600\n    },\n    {\n      \"op\": \"assert_editor\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"placement_refused\": false\n      }\n    },\n    {\n      \"op\": \"wait\",\n      \"editing\": true\n    },\n    {\n      \"op\": \"editor_pick\",\n      \"input_player\": 0\n    },\n    {\n      \"op\": \"editor_move\",\n      \"input_player\": 0,\n      \"x_fraction\": 0.3,\n      \"relative_to\": \"bunker\",\n      \"offset_x\": -48,\n      \"offset_y\": -48\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 5,\n      \"elapsed_ms\": 1000\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark valid-preview-host\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"valid-preview-host\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_editor\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"screen_text\": \"Valid spot - click to INSTALL your brain\"\n      }\n    },\n    {\n      \"op\": \"assert_net_ui_clear\",\n      \"player\": 0\n    },\n    {\n      \"op\": \"assert_control\",\n      \"control\": \"LabelNetMatchStatus\",\n      \"text_contains\": \"0 of 2\",\n      \"fits\": true,\n      \"inside\": \"BoxNetMatchStatus\"\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": true\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": false\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"setup_ready\": 1\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark placed-host\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"placed-host\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_editor\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"ready\": true,\n        \"submitted\": true,\n        \"screen_text\": \"READY to start - wait for others to finish...\"\n      }\n    },\n    {\n      \"op\": \"assert_net_ui_clear\",\n      \"player\": 0\n    },\n    {\n      \"op\": \"assert_control\",\n      \"control\": \"LabelNetMatchStatus\",\n      \"text_contains\": \"1 of 2\",\n      \"fits\": true,\n      \"inside\": \"BoxNetMatchStatus\"\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"Return\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"Return\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"editing\": false,\n      \"paused\": false\n    },\n    {\n      \"op\": \"assert\",\n      \"equals\": {\n        \"setup_ready\": 2,\n        \"setup_humans\": 2,\n        \"local_actor_alive\": true\n      }\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"pan_scene\",\n      \"input_player\": 0,\n      \"y\": 600,\n      \"speed\": 8\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark playing-host\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"playing-host\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"pan_scene\",\n      \"input_player\": 0,\n      \"y\": 600,\n      \"speed\": 8\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2,\n        \"screen_text\": \"Select a body to switch control to...\"\n      }\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark ai-view-host\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"ai-view-host\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"wait\",\n      \"service\": \"Running\",\n      \"editing\": false,\n      \"paused\": false,\n      \"sim_advanced\": 10800,\n      \"within_ms\": 300000\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"signal\",\n      \"name\": \"fight-ticks-complete\"\n    },\n    {\n      \"op\": \"wait_file\",\n      \"path\": \"{PROBE_DIR_joiner}/fight-ticks-complete.json\"\n    },\n    {\n      \"op\": \"pan_scene\",\n      \"enabled\": false\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 90\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2,\n        \"actor_selection\": false\n      }\n    },\n    {\n      \"op\": \"wait_file\",\n      \"path\": \"{PROBE_DIR_joiner}/end-checked.json\"\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"Escape\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"Escape\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"screen\": \"Pause\"\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"activate ButtonEndMatch\"\n    },\n    {\n      \"op\": \"wait\",\n      \"screen\": \"PauseLeaveConfirm\"\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"activate ButtonLeaveConfirm\"\n    },\n    {\n      \"op\": \"wait\",\n      \"scope\": \"menu\",\n      \"screen\": \"MultiplayerScreen\",\n      \"control\": \"LabelMultiplayerStatus\",\n      \"text_contains\": \"Waiting for Joiner to press Ready\",\n      \"within_ms\": 90000\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark fight-ended-host\",\n      \"capture_screen\": \"MultiplayerScreen\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"fight-ended-host\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"assert_label LabelLastMatchSummary Match ended by host\"\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"assert_text_fits LabelLastMatchSummary\"\n    },\n    {\n      \"op\": \"signal\",\n      \"name\": \"done\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"finish\"\n    }\n  ],\n  \"activate_phase\": \"Running\",\n  \"sim_clock\": \"lockstep\"\n}\n",
+    "joiner.probe": "{\n  \"schema\": 1,\n  \"timeout_ms\": 1600000,\n  \"step_timeout_ms\": 60000,\n  \"label_dump\": {\n    \"every_ms\": 5000\n  },\n  \"steps\": [\n    {\n      \"op\": \"wait\",\n      \"editing\": true\n    },\n    {\n      \"op\": \"editor_pick\",\n      \"input_player\": 0,\n      \"brain\": false,\n      \"class\": \"BunkerAssembly\",\n      \"preset\": \"Brain Chamber Left 2x2 - 1\"\n    },\n    {\n      \"op\": \"editor_move\",\n      \"input_player\": 0,\n      \"x_fraction\": 0.7,\n      \"y\": 1104,\n      \"remember\": \"bunker\"\n    },\n    {\n      \"op\": \"wait\",\n      \"picker_open\": false,\n      \"player\": 1\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark bunker-preview-joiner\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"bunker-preview-joiner\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_editor\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"screen_text\": \"Click to ADD a new object - Drag for precision\"\n      }\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": true\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": false\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"sim_advanced\": 90,\n      \"elapsed_ms\": 1600\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark bunker-installed-joiner\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"bunker-installed-joiner\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_editor\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"placement_refused\": false\n      }\n    },\n    {\n      \"op\": \"wait\",\n      \"editing\": true\n    },\n    {\n      \"op\": \"editor_pick\",\n      \"input_player\": 0,\n      \"brain\": false,\n      \"class\": \"TerrainObject\",\n      \"preset\": \"Reinforced Concrete Fill\"\n    },\n    {\n      \"op\": \"editor_move\",\n      \"input_player\": 0,\n      \"relative_to\": \"bunker\",\n      \"offset_x\": -144,\n      \"offset_y\": -144\n    },\n    {\n      \"op\": \"wait\",\n      \"picker_open\": false,\n      \"player\": 1\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": true\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": false\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"sim_advanced\": 30,\n      \"elapsed_ms\": 600\n    },\n    {\n      \"op\": \"assert_editor\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"placement_refused\": false\n      }\n    },\n    {\n      \"op\": \"wait\",\n      \"editing\": true\n    },\n    {\n      \"op\": \"editor_pick\",\n      \"input_player\": 0,\n      \"brain\": false,\n      \"class\": \"TerrainObject\",\n      \"preset\": \"Reinforced Concrete Fill\"\n    },\n    {\n      \"op\": \"editor_move\",\n      \"input_player\": 0,\n      \"relative_to\": \"bunker\",\n      \"offset_x\": -48,\n      \"offset_y\": -144\n    },\n    {\n      \"op\": \"wait\",\n      \"picker_open\": false,\n      \"player\": 1\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": true\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": false\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"sim_advanced\": 30,\n      \"elapsed_ms\": 600\n    },\n    {\n      \"op\": \"assert_editor\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"placement_refused\": false\n      }\n    },\n    {\n      \"op\": \"wait\",\n      \"editing\": true\n    },\n    {\n      \"op\": \"editor_pick\",\n      \"input_player\": 0,\n      \"brain\": false,\n      \"class\": \"TerrainObject\",\n      \"preset\": \"Reinforced Concrete Fill\"\n    },\n    {\n      \"op\": \"editor_move\",\n      \"input_player\": 0,\n      \"relative_to\": \"bunker\",\n      \"offset_x\": 48,\n      \"offset_y\": -144\n    },\n    {\n      \"op\": \"wait\",\n      \"picker_open\": false,\n      \"player\": 1\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": true\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": false\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"sim_advanced\": 30,\n      \"elapsed_ms\": 600\n    },\n    {\n      \"op\": \"assert_editor\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"placement_refused\": false\n      }\n    },\n    {\n      \"op\": \"wait\",\n      \"editing\": true\n    },\n    {\n      \"op\": \"editor_pick\",\n      \"input_player\": 0,\n      \"brain\": false,\n      \"class\": \"TerrainObject\",\n      \"preset\": \"Reinforced Concrete Fill\"\n    },\n    {\n      \"op\": \"editor_move\",\n      \"input_player\": 0,\n      \"relative_to\": \"bunker\",\n      \"offset_x\": 144,\n      \"offset_y\": -144\n    },\n    {\n      \"op\": \"wait\",\n      \"picker_open\": false,\n      \"player\": 1\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": true\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": false\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"sim_advanced\": 30,\n      \"elapsed_ms\": 600\n    },\n    {\n      \"op\": \"assert_editor\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"placement_refused\": false\n      }\n    },\n    {\n      \"op\": \"wait\",\n      \"editing\": true\n    },\n    {\n      \"op\": \"editor_pick\",\n      \"input_player\": 0,\n      \"brain\": false,\n      \"class\": \"TerrainObject\",\n      \"preset\": \"Reinforced Concrete Fill\"\n    },\n    {\n      \"op\": \"editor_move\",\n      \"input_player\": 0,\n      \"relative_to\": \"bunker\",\n      \"offset_x\": -144,\n      \"offset_y\": -48\n    },\n    {\n      \"op\": \"wait\",\n      \"picker_open\": false,\n      \"player\": 1\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": true\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": false\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"sim_advanced\": 30,\n      \"elapsed_ms\": 600\n    },\n    {\n      \"op\": \"assert_editor\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"placement_refused\": false\n      }\n    },\n    {\n      \"op\": \"wait\",\n      \"editing\": true\n    },\n    {\n      \"op\": \"editor_pick\",\n      \"input_player\": 0,\n      \"brain\": false,\n      \"class\": \"TerrainObject\",\n      \"preset\": \"Reinforced Concrete Fill\"\n    },\n    {\n      \"op\": \"editor_move\",\n      \"input_player\": 0,\n      \"relative_to\": \"bunker\",\n      \"offset_x\": -144,\n      \"offset_y\": 48\n    },\n    {\n      \"op\": \"wait\",\n      \"picker_open\": false,\n      \"player\": 1\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": true\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": false\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"sim_advanced\": 30,\n      \"elapsed_ms\": 600\n    },\n    {\n      \"op\": \"assert_editor\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"placement_refused\": false\n      }\n    },\n    {\n      \"op\": \"wait\",\n      \"editing\": true\n    },\n    {\n      \"op\": \"editor_pick\",\n      \"input_player\": 0,\n      \"brain\": false,\n      \"class\": \"TerrainObject\",\n      \"preset\": \"Reinforced Concrete Fill\"\n    },\n    {\n      \"op\": \"editor_move\",\n      \"input_player\": 0,\n      \"relative_to\": \"bunker\",\n      \"offset_x\": 144,\n      \"offset_y\": -48\n    },\n    {\n      \"op\": \"wait\",\n      \"picker_open\": false,\n      \"player\": 1\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": true\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": false\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"sim_advanced\": 30,\n      \"elapsed_ms\": 600\n    },\n    {\n      \"op\": \"assert_editor\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"placement_refused\": false\n      }\n    },\n    {\n      \"op\": \"wait\",\n      \"editing\": true\n    },\n    {\n      \"op\": \"editor_pick\",\n      \"input_player\": 0,\n      \"brain\": false,\n      \"class\": \"TerrainObject\",\n      \"preset\": \"Reinforced Concrete Fill\"\n    },\n    {\n      \"op\": \"editor_move\",\n      \"input_player\": 0,\n      \"relative_to\": \"bunker\",\n      \"offset_x\": 144,\n      \"offset_y\": 48\n    },\n    {\n      \"op\": \"wait\",\n      \"picker_open\": false,\n      \"player\": 1\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": true\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": false\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"sim_advanced\": 30,\n      \"elapsed_ms\": 600\n    },\n    {\n      \"op\": \"assert_editor\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"placement_refused\": false\n      }\n    },\n    {\n      \"op\": \"wait\",\n      \"editing\": true\n    },\n    {\n      \"op\": \"editor_pick\",\n      \"input_player\": 0,\n      \"brain\": false,\n      \"class\": \"TerrainObject\",\n      \"preset\": \"Reinforced Concrete Fill\"\n    },\n    {\n      \"op\": \"editor_move\",\n      \"input_player\": 0,\n      \"relative_to\": \"bunker\",\n      \"offset_x\": 48,\n      \"offset_y\": 48\n    },\n    {\n      \"op\": \"wait\",\n      \"picker_open\": false,\n      \"player\": 1\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": true\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": false\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"sim_advanced\": 30,\n      \"elapsed_ms\": 600\n    },\n    {\n      \"op\": \"assert_editor\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"placement_refused\": false\n      }\n    },\n    {\n      \"op\": \"wait\",\n      \"editing\": true\n    },\n    {\n      \"op\": \"editor_pick\",\n      \"input_player\": 0\n    },\n    {\n      \"op\": \"editor_move\",\n      \"input_player\": 0,\n      \"x_fraction\": 0.7,\n      \"relative_to\": \"bunker\",\n      \"offset_x\": -48,\n      \"offset_y\": -48\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 5,\n      \"elapsed_ms\": 1000\n    },\n    {\n      \"op\": \"wait\",\n      \"setup_ready\": 1\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 2500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark valid-preview-joiner\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"valid-preview-joiner\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert_editor\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"screen_text\": \"Valid spot - click to INSTALL your brain\"\n      }\n    },\n    {\n      \"op\": \"assert_net_ui_clear\",\n      \"player\": 1\n    },\n    {\n      \"op\": \"assert_control\",\n      \"control\": \"LabelNetMatchStatus\",\n      \"text_contains\": \"1 of 2\",\n      \"fits\": true,\n      \"inside\": \"BoxNetMatchStatus\"\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": true\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": false\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"Return\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"Return\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"editing\": false,\n      \"paused\": false\n    },\n    {\n      \"op\": \"assert\",\n      \"equals\": {\n        \"setup_ready\": 2,\n        \"setup_humans\": 2,\n        \"local_actor_alive\": true\n      }\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"pan_scene\",\n      \"input_player\": 0,\n      \"y\": 600,\n      \"speed\": 8\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark playing-joiner\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"playing-joiner\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"pan_scene\",\n      \"input_player\": 0,\n      \"y\": 600,\n      \"speed\": 8\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2,\n        \"screen_text\": \"Select a body to switch control to...\"\n      }\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark ai-view-joiner\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"ai-view-joiner\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"wait\",\n      \"service\": \"Running\",\n      \"editing\": false,\n      \"paused\": false,\n      \"sim_advanced\": 10800,\n      \"within_ms\": 300000\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2\n      }\n    },\n    {\n      \"op\": \"signal\",\n      \"name\": \"fight-ticks-complete\"\n    },\n    {\n      \"op\": \"wait_file\",\n      \"path\": \"{PROBE_DIR_host}/fight-ticks-complete.json\"\n    },\n    {\n      \"op\": \"pan_scene\",\n      \"enabled\": false\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 90\n    },\n    {\n      \"op\": \"assert_scene\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"alive\": true,\n        \"brain_count\": 2,\n        \"actor_selection\": false\n      }\n    },\n    {\n      \"op\": \"signal\",\n      \"name\": \"end-checked\"\n    },\n    {\n      \"op\": \"wait\",\n      \"scope\": \"menu\",\n      \"screen\": \"MultiplayerScreen\",\n      \"control\": \"LabelMultiplayerStatus\",\n      \"text_contains\": \"Press Ready when you're ready to play\",\n      \"within_ms\": 90000\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark fight-ended-joiner\",\n      \"capture_screen\": \"MultiplayerScreen\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"fight-ended-joiner\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"assert_label LabelLastMatchSummary Match ended by host\"\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"assert_text_fits LabelLastMatchSummary\"\n    },\n    {\n      \"op\": \"signal\",\n      \"name\": \"done\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"finish\"\n    }\n  ],\n  \"activate_phase\": \"Running\",\n  \"sim_clock\": \"lockstep\"\n}\n"
+  },
+  "checklist": [
+    {
+      "id": "cpu-seats-host",
+      "peer": "host",
+      "mark": "cpu-seats-host",
+      "screen": "MultiplayerScreen",
+      "what": "Two held picks replace the open seats with CPU teams and remain selected after refresh.",
+      "events": [
+        "^combo_select ComboHostSeatType2 CPU pick \"CPU\" in ComboHostSeatType2 PASS$",
+        "^combo_select ComboHostSeatType3 CPU pick \"CPU\" in ComboHostSeatType3 PASS$",
+        "^assert_label ComboHostSeatType2 \"CPU\" text=\"CPU\" PASS$",
+        "^assert_label ComboHostSeatType3 \"CPU\" text=\"CPU\" PASS$"
+      ]
+    },
+    {
+      "id": "cpu-human-count-host",
+      "peer": "host",
+      "mark": "cpu-human-count-host",
+      "screen": "MultiplayerScreen",
+      "what": "The Human players count is two while both CPU seats remain selected.",
+      "events": [
+        "^combo_select ComboHostSeatPlayers 2 pick \"2\" in ComboHostSeatPlayers PASS$",
+        "^assert_label ComboHostSeatPlayers \"2\" text=\"2\" PASS$",
+        "^assert_label ComboHostSeatType2 \"CPU\" text=\"CPU\" PASS$",
+        "^assert_label ComboHostSeatType3 \"CPU\" text=\"CPU\" PASS$"
+      ]
+    },
+    {
+      "id": "host-bunker-preview-host",
+      "peer": "host",
+      "mark": "bunker-preview-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        7
+      ]
+    },
+    {
+      "id": "host-bunker-installed-host",
+      "peer": "host",
+      "mark": "bunker-installed-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        16
+      ]
+    },
+    {
+      "id": "host-valid-preview-host",
+      "peer": "host",
+      "mark": "valid-preview-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        114,
+        115,
+        116
+      ]
+    },
+    {
+      "id": "host-placed-host",
+      "peer": "host",
+      "mark": "placed-host",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        125,
+        126,
+        127,
+        133,
+        134
+      ]
+    },
+    {
+      "id": "host-fight-ended-host",
+      "peer": "host",
+      "mark": "fight-ended-host",
+      "screen": "MultiplayerScreen",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        164,
+        165
+      ]
+    },
+    {
+      "id": "shared-bunkers-host",
+      "peer": "host",
+      "mark": "playing-host",
+      "screen": "game",
+      "what": "Both bunkers, their ring of fill and the fill over each closed door reached the shared scene before the brains started playing.",
+      "log_regex": [
+        "\\[net-match\\] editor purchase applied: seat=0 preset=Base.rte/Brain Chamber Left 2x2 - 1 funds=",
+        "\\[net-match\\] editor purchase applied: seat=1 preset=Base.rte/Brain Chamber Left 2x2 - 1 funds=",
+        "\\[net-match\\] editor purchase applied: seat=0 preset=Base.rte/Reinforced Concrete Fill funds=",
+        "\\[net-match\\] editor purchase applied: seat=1 preset=Base.rte/Reinforced Concrete Fill funds="
+      ]
+    },
+    {
+      "id": "joiner-bunker-preview-joiner",
+      "peer": "joiner",
+      "mark": "bunker-preview-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        7
+      ]
+    },
+    {
+      "id": "joiner-bunker-installed-joiner",
+      "peer": "joiner",
+      "mark": "bunker-installed-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        16
+      ]
+    },
+    {
+      "id": "joiner-valid-preview-joiner",
+      "peer": "joiner",
+      "mark": "valid-preview-joiner",
+      "screen": "game",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        116,
+        117,
+        118,
+        128,
+        129
+      ]
+    },
+    {
+      "id": "joiner-fight-ended-joiner",
+      "peer": "joiner",
+      "mark": "fight-ended-joiner",
+      "screen": "MultiplayerScreen",
+      "what": "Captured real scene state, exact label text, panel bounds and the live player.",
+      "probe_steps": [
+        151,
+        152
+      ]
+    },
+    {
+      "id": "shared-bunkers-joiner",
+      "peer": "joiner",
+      "mark": "playing-joiner",
+      "screen": "game",
+      "what": "Both bunkers, their ring of fill and the fill over each closed door reached the shared scene before the brains started playing.",
+      "log_regex": [
+        "\\[net-match\\] editor purchase applied: seat=0 preset=Base.rte/Brain Chamber Left 2x2 - 1 funds=",
+        "\\[net-match\\] editor purchase applied: seat=1 preset=Base.rte/Brain Chamber Left 2x2 - 1 funds=",
+        "\\[net-match\\] editor purchase applied: seat=0 preset=Base.rte/Reinforced Concrete Fill funds=",
+        "\\[net-match\\] editor purchase applied: seat=1 preset=Base.rte/Reinforced Concrete Fill funds="
+      ]
+    },
+    {
+      "id": "running-ticks-host",
+      "peer": "host",
+      "mark": "fight-ended-host",
+      "screen": "game",
+      "what": "The living player completes at least 10800 running ticks before either peer ends the fight.",
+      "probe_steps": [
+        134,
+        144,
+        145,
+        146,
+        147
+      ],
+      "sim_progress": 10800
+    },
+    {
+      "id": "fight-hashes-host",
+      "peer": "host",
+      "mark": "fight-ended-host",
+      "screen": "MultiplayerScreen",
+      "what": "Every running tick has matching shared component hashes on both peers, with complete uninterrupted coverage.",
+      "gate": "fight-hashes"
+    },
+    {
+      "id": "running-ticks-joiner",
+      "peer": "joiner",
+      "mark": "fight-ended-joiner",
+      "screen": "game",
+      "what": "The living player completes at least 10800 running ticks before either peer ends the fight.",
+      "probe_steps": [
+        129,
+        139,
+        140,
+        141,
+        142
+      ],
+      "sim_progress": 10800
+    },
+    {
+      "id": "fight-hashes-joiner",
+      "peer": "joiner",
+      "mark": "fight-ended-joiner",
+      "screen": "MultiplayerScreen",
+      "what": "Every running tick has matching shared component hashes on both peers, with complete uninterrupted coverage.",
+      "gate": "fight-hashes"
+    },
+    {
+      "id": "ai-view-host",
+      "peer": "host",
+      "mark": "ai-view-host",
+      "screen": "game",
+      "what": "A held Next Actor key and real relative mouse motion look across the live fight, with the exact actor-selection message and two living brains.",
+      "probe_steps": [
+        139,
+        140
+      ]
+    },
+    {
+      "id": "ai-view-joiner",
+      "peer": "joiner",
+      "mark": "ai-view-joiner",
+      "screen": "game",
+      "what": "A held Next Actor key and real relative mouse motion look across the live fight, with the exact actor-selection message and two living brains.",
+      "probe_steps": [
+        134,
+        135
+      ]
+    },
+    {
+      "id": "door-resealed-host",
+      "peer": "host",
+      "mark": "fight-ended-host",
+      "screen": "game",
+      "log_regex": [
+        "\\[door-reseal\\] door=\\d+ team=\\d+ dug=[1-9]\\d* at_ms=\\d+",
+        "\\[door-reseal\\] door=\\d+ team=\\d+ resealed_after_ms=(\\d|[1-9]\\d|100)\\b"
+      ],
+      "forbidden_log_regex": [
+        "\\[door-reseal\\] door=\\d+ team=\\d+ resealed_after_ms=(10[1-9]|1[1-9]\\d|[2-9]\\d\\d|\\d{4,})\\b",
+        "\\[door-reseal\\] door=\\d+ team=\\d+ not resealed "
+      ],
+      "what": "A slit dug through a closed door is whole again within 100 sim ms on this player, as single player's path update leaves it."
+    },
+    {
+      "id": "door-resealed-joiner",
+      "peer": "joiner",
+      "mark": "fight-ended-joiner",
+      "screen": "game",
+      "log_regex": [
+        "\\[door-reseal\\] door=\\d+ team=\\d+ dug=[1-9]\\d* at_ms=\\d+",
+        "\\[door-reseal\\] door=\\d+ team=\\d+ resealed_after_ms=(\\d|[1-9]\\d|100)\\b"
+      ],
+      "forbidden_log_regex": [
+        "\\[door-reseal\\] door=\\d+ team=\\d+ resealed_after_ms=(10[1-9]|1[1-9]\\d|[2-9]\\d\\d|\\d{4,})\\b",
+        "\\[door-reseal\\] door=\\d+ team=\\d+ not resealed "
+      ],
+      "what": "A slit dug through a closed door is whole again within 100 sim ms on this player, as single player's path update leaves it."
+    }
+  ],
+  "fight_hash_gate": {
+    "peers": [
+      "host",
+      "joiner"
+    ],
+    "running_ticks": 10800
+  }
+}

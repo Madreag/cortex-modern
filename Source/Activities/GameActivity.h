@@ -911,6 +911,7 @@ namespace RTE {
 		std::string m_MatchEndPlayerReason;
 
 		bool LoadNetLocalGameState(std::string_view text);
+		std::string m_NetLocalUISeats; //!< The resolution, local seats, screens and teams the per-player menus were last built for.
 		bool CreateNetLocalUI();
 		/// Points a relaunch's pending marked-actor links at the marks as they stand, so its deferred rebinds keep them.
 		void RefreshCheckpointMarkedActorIDs();

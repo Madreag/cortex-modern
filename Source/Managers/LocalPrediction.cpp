@@ -612,7 +612,8 @@ namespace RTE {
 			g_MovableMan.HideForRender(resident, true);
 		}
 		s_Rendering = true;
-		if (std::getenv("CC_TRACE_RENDER_WINDOW")) {
+		static const bool s_TraceRenderWindow = std::getenv("CC_TRACE_RENDER_WINDOW") != nullptr;
+		if (s_TraceRenderWindow) {
 			std::cout << "[preview-hud] render-window begin tick=" << g_TimerMan.GetSimUpdateCount() << " frozen=" << (LuaMan::AreScriptsFrozen() ? 1 : 0) << " clones=";
 			for (const Preview& preview: s_Previews) {
 				std::cout << (preview.clone ? preview.clone->GetUniqueID() : 0) << " ";
@@ -623,7 +624,8 @@ namespace RTE {
 
 	void LocalPrediction::EndRender() {
 		if (s_Rendering) {
-			if (std::getenv("CC_TRACE_RENDER_WINDOW")) {
+			static const bool s_TraceRenderWindow = std::getenv("CC_TRACE_RENDER_WINDOW") != nullptr;
+			if (s_TraceRenderWindow) {
 				std::cout << "[preview-hud] render-window end tick=" << g_TimerMan.GetSimUpdateCount() << " frozen=" << (LuaMan::AreScriptsFrozen() ? 1 : 0) << std::endl;
 			}
 			Activity* activity = g_ActivityMan.GetActivity();

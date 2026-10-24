@@ -22,8 +22,10 @@
 #include <cmath>
 #include <cstring>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <string>
+#include <vector>
 
 namespace RTE {
 
@@ -52,15 +54,16 @@ namespace RTE {
 			out.push_back(static_cast<uint8_t>(value));
 		}
 
+		// Each value goes in with one insert: a push per byte checks the capacity for every byte.
 		void AppendU16LE(std::vector<uint8_t>& out, uint16_t value) {
-			out.push_back(static_cast<uint8_t>(value & 0xFFU));
-			out.push_back(static_cast<uint8_t>((value >> 8) & 0xFFU));
+			const uint8_t bytes[2] = {static_cast<uint8_t>(value & 0xFFU), static_cast<uint8_t>((value >> 8) & 0xFFU)};
+			out.insert(out.end(), std::begin(bytes), std::end(bytes));
 		}
 
 		void AppendU32LE(std::vector<uint8_t>& out, uint32_t value) {
-			for (int i = 0; i < 4; ++i) {
-				out.push_back(static_cast<uint8_t>((value >> (i * 8)) & 0xFFU));
-			}
+			uint8_t bytes[4];
+			for (int i = 0; i < 4; ++i) bytes[i] = static_cast<uint8_t>((value >> (i * 8)) & 0xFFU);
+			out.insert(out.end(), std::begin(bytes), std::end(bytes));
 		}
 
 		void AppendI16LE(std::vector<uint8_t>& out, int16_t value) {
@@ -68,9 +71,9 @@ namespace RTE {
 		}
 
 		void AppendU64LE(std::vector<uint8_t>& out, uint64_t value) {
-			for (int i = 0; i < 8; ++i) {
-				out.push_back(static_cast<uint8_t>((value >> (i * 8)) & 0xFFU));
-			}
+			uint8_t bytes[8];
+			for (int i = 0; i < 8; ++i) bytes[i] = static_cast<uint8_t>((value >> (i * 8)) & 0xFFU);
+			out.insert(out.end(), std::begin(bytes), std::end(bytes));
 		}
 
 		void AppendI64LE(std::vector<uint8_t>& out, int64_t value) {

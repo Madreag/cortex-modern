@@ -18088,7 +18088,7 @@ void LuaMan::StartAsyncGarbageCollection(uint64_t tick, bool everyState) {
 			    if (fullCollection) {
 				    const CheckpointLua::HeapOwner::CollectionScope collecting;
 				    const size_t inUse = static_cast<size_t>(G(state)->gc.total);
-				    const auto collectionBegan = reportSlowCollections ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+				    const auto collectionBegan = reportSlowCollections ? RTE::SteadyClock::now() : RTE::SteadyClock::time_point{};
 				    // A whole cycle, so the tick a dropped object dies on does not follow its state's heap size.
 				    if (G(state)->gc.state == GCSpause) {
 					    // From the pause one unlimited step is that cycle; LUA_GCCOLLECT would first sweep every object once for nothing.
@@ -18101,7 +18101,7 @@ void LuaMan::StartAsyncGarbageCollection(uint64_t tick, bool everyState) {
 				    }
 				    if (CheckpointNativeStorage::Enabled()) luaState->NoteFullCollection(inUse, static_cast<size_t>(G(state)->gc.total));
 				    if (reportSlowCollections) {
-					    const auto us = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - collectionBegan).count();
+					    const auto us = std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - collectionBegan).count();
 					    if (us > 2000) System::PrintDiagnosticLine(std::format("[gc-slow] tick={} slot={} us={} before_kb={} after_kb={}", tick, GetStateIndex(luaState), us, inUse >> 10, static_cast<size_t>(G(state)->gc.total) >> 10));
 				    }
 				    lua_gc(state, LUA_GCSTOP, 0);

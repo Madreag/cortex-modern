@@ -1589,6 +1589,8 @@ static long long s_paceFrameDrawUs = 0; //!< Time spent drawing and presenting t
 static long long s_paceMaxDrawUs = 0; //!< The longest single iteration's draw since the previous census line.
 static uint64_t s_paceSheddingIterations = 0; //!< Iterations a paced round began with its frame-shedding budget.
 
+static bool s_paceWindowLeftActivity = false; //!< The menus ran since the last present: the window's activity is over.
+
 // Per 60 simulation ticks, the frames this machine presented in a running activity - their rate on the steady clock and the
 // spread of the intervals between presents. A lockstep round always reports them; single player only under the test lever
 // CC_TEST_FRAME_PACE=1, which a run sets to compare the two.
@@ -1617,8 +1619,10 @@ static void NoteFramePresented() {
 	const double now = std::chrono::duration<double, std::milli>(RTE::SteadyClock::now().time_since_epoch()).count();
 	const uint64_t tick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
 	const bool lockstep = ScenarioRunner::IsLockstepControllerSyncActive();
-	// A window belongs to one running activity in one mode; the present that opens it is its first frame.
-	if (!g_ActivityMan.ActivityRunning() || (s_window.open && (s_window.lockstep != lockstep || tick < s_window.firstTick))) s_window = {};
+	// A window belongs to one running activity in one mode; the present that opens it is its first frame. A round left for the
+	// menus and come back to is another activity, though its ticks run on.
+	if (!g_ActivityMan.ActivityRunning() || s_paceWindowLeftActivity || (s_window.open && (s_window.lockstep != lockstep || tick < s_window.firstTick))) s_window = {};
+	s_paceWindowLeftActivity = false;
 	if (!g_ActivityMan.ActivityRunning()) return;
 	if (!s_window.open) {
 		s_window = {true, lockstep, tick, now, now, {}, {}, pace()};
@@ -4771,6 +4775,7 @@ static void BeginHarnessCostMenuStay();
 static void WriteHarnessCostMenuFrame();
 
 void RunMenuLoop() {
+	s_paceWindowLeftActivity = true;
 	g_MenuMan.SetIsInMenuScreen(true);
 	g_UInputMan.DisableKeys(false);
 	g_UInputMan.TrapMousePos(false);
@@ -4817,7 +4822,10 @@ void RunMenuLoop() {
 		g_WindowMan.GetScreenBuffer()->Begin();
 		g_MenuMan.Draw();
 		// A held seat loading its way back reads its own line over the menus as well, from its hold to its return.
-		if (ScenarioRunner::WorldCatchUpActive()) ScenarioRunner::DrawNetUiToasts();
+		if (ScenarioRunner::WorldCatchUpActive()) {
+			if (!NetModerationGUI::PostMatchLobbySurfaces()) g_MenuMan.DrawNetworkUI();
+			ScenarioRunner::DrawNetUiToasts();
+		}
 		g_ConsoleMan.Draw(g_FrameMan.GetBackBuffer32());
 		g_WindowMan.GetScreenBuffer()->End();
 		g_WindowMan.UploadFrame();
@@ -5977,19 +5985,25 @@ static bool UpdateResyncUI(uint32_t elapsedSeconds, bool heldRejoin = false, con
 	const std::string resyncTitle = heldRejoin ? (heldLine.empty() ? std::string("Rejoining the match...") : heldLine) : std::string("Restoring the shared match state...");
 	g_FrameMan.GetLargeFont(true)->DrawAligned(&bitmap, centerX, centerY - 12, resyncTitle, GUIFont::Centre);
 	MenuAutomation::NoteDrawnText(heldRejoin ? "RejoinOverlay" : "ResyncOverlay", resyncTitle);
-	// A held player's units are the AI's until the player is back; a repair pauses every player at once.
-	const std::string resyncLine = heldRejoin ? (ScenarioRunner::IsLockstepHoldNoticeVisible() ? NetReconnectUx::HeldSeatReturnNotice() : std::string())
-	                                          : "Every player waits while the match is reloaded  /  " + std::to_string(elapsedSeconds) + " s  /  F6: Players";
-	g_FrameMan.GetSmallFont(true)->DrawAligned(&bitmap, centerX, centerY + 8, resyncLine, GUIFont::Centre);
-	MenuAutomation::NoteDrawnText(heldRejoin ? "RejoinOverlay" : "ResyncOverlay", resyncLine);
+	// A held player's own line is the status line drawn below, as on every surface that shows its held seat; a repair pauses every player at once.
+	const std::string resyncLine = heldRejoin ? std::string() : "Every player waits while the match is reloaded  /  " + std::to_string(elapsedSeconds) + " s  /  F6: Players";
+	if (!resyncLine.empty()) {
+		g_FrameMan.GetSmallFont(true)->DrawAligned(&bitmap, centerX, centerY + 8, resyncLine, GUIFont::Centre);
+		MenuAutomation::NoteDrawnText("ResyncOverlay", resyncLine);
+	}
 	if (heldRejoin) {
 		const std::string controls = std::to_string(elapsedSeconds) + " s  /  F6: Players  /  Esc: pause menu";
 		g_FrameMan.GetSmallFont(true)->DrawAligned(&bitmap, centerX, centerY + 10 + g_FrameMan.GetSmallFont(true)->GetFontHeight(), controls, GUIFont::Centre);
 		MenuAutomation::NoteDrawnText("RejoinOverlay", controls);
 	}
+	auto* networkPanel = g_MenuMan.GetNetworkPanel();
+	if (networkPanel) networkPanel->SetHeldWaitScreen(heldRejoin);
 	g_MenuMan.DrawNetworkUI();
+	if (networkPanel) networkPanel->SetHeldWaitScreen(false);
 	ScenarioRunner::DrawNetUiToasts(resyncTitle);
 	ScenarioRunner::NoteResyncOverlayFrame();
+	// The wait is not a frame of the running round: the pace window starts afresh once the round draws again.
+	s_paceWindowLeftActivity = true;
 	g_MenuMan.DrawLocalPauseMenu();
 	g_WindowMan.UploadFrame();
 	if (FrameRecorder::Instance().Enabled()) {
@@ -8614,8 +8628,9 @@ void RunGameLoop() {
 				break;
 			}
 			const uint64_t nextSimTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) + 1;
+			const bool collectsEveryState = g_NetMatchService.IsNamedCaptureTick(nextSimTick);
 			if (ScenarioRunner::WorldCatchUpActive()) {
-				if (!ScenarioRunner::TakeWorldCatchUpGrant(nextSimTick)) {
+				if (!ScenarioRunner::TakeWorldCatchUpGrant(nextSimTick, collectsEveryState)) {
 					// A joiner that cannot advance still has to receive: the tail's next frame and the
 					// lockstep start both arrive on this pump, which otherwise runs per sim tick only.
 					g_NetMatchService.PumpSessionEvents();
@@ -8626,7 +8641,7 @@ void RunGameLoop() {
 					g_TimerMan.GrantSimUpdates(1);
 				}
 			} else if (!g_TimerMan.TimeForSimUpdate()) {
-				if (!ScenarioRunner::TakeOwnSeatCatchUpGrant(nextSimTick)) break;
+				if (!ScenarioRunner::TakeOwnSeatCatchUpGrant(nextSimTick, collectsEveryState)) break;
 				g_TimerMan.GrantSimUpdates(1);
 			}
 			if (!ScenarioRunner::WorldCatchUpActive() && !ScenarioRunner::PollLockstepSimulationTick(nextSimTick)) {
@@ -8695,7 +8710,8 @@ void RunGameLoop() {
 
 			const long long paceTickStartUs = g_TimerMan.GetAbsoluteTime();
 			const long long paceWaitStartUs = ScenarioRunner::GetLockstepWaitUs();
-			const bool heldTickDetails = std::getenv("CC_TEST_RETURN_INPUT_DETAILS") && ScenarioRunner::IsLockstepOwnSeatHeld();
+			static const bool returnInputDetails = std::getenv("CC_TEST_RETURN_INPUT_DETAILS") != nullptr;
+			const bool heldTickDetails = returnInputDetails && ScenarioRunner::IsLockstepOwnSeatHeld();
 			static const bool tickCostDetails = std::getenv("CC_TEST_TICK_COST_DETAILS") != nullptr;
 			const bool tickPhaseDetails = heldTickDetails || tickCostDetails;
 			long long heldBeforeWorldUs = 0, heldAfterWorldUs = 0, heldAfterHashUs = 0, heldAfterCollectionUs = 0;

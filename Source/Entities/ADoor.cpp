@@ -1,4 +1,5 @@
 #include "ADoor.h"
+#include "ActivityMan.h"
 #include "CheckpointNativeSnapshot.h"
 #include "Vector.h"
 #include "Timer.h"
@@ -13,12 +14,129 @@
 #include "PresetMan.h"
 #include "SettingsMan.h"
 #include "SoundContainer.h"
+#include "ScenarioRunner.h"
 
 #include "tracy/Tracy.hpp"
+
+#include <algorithm>
+#include <cmath>
+#include <cstdlib>
+#include <iostream>
+#include <unordered_map>
+#include <vector>
 
 using namespace RTE;
 
 ConcreteClassInfo(ADoor, Actor, 20);
+
+namespace {
+	// Single player's path update redraws each drawn door of an active team every 100 ms of sim time, so a dug door is whole again by then.
+	// A match's path updates land on each machine's own ticks, so there the redraw follows the shared sim clock and every peer makes it on the same tick.
+	bool MatchPathUpdateResealDue(int team) {
+		if (!ScenarioRunner::LockstepCoordinatorAttached() || !g_ActivityMan.ActivityRunning() || !g_ActivityMan.GetActivity()->TeamActive(team)) {
+			return false;
+		}
+		const long long period = g_TimerMan.GetTicksPerSecond() / 10;
+		const long long now = g_TimerMan.GetSimTickCount();
+		return now / period != (now - g_TimerMan.GetDeltaTimeTicks()) / period;
+	}
+
+	// CC_TEST_DOOR_DIG_AGE_MS=N: in a match, each closed door with its material drawn has a slit dug through it once it is N sim ms old,
+	// then says how many sim ms its material took to be whole again.
+	long long DoorDigAgeMs() {
+		static const long long ageMs = [] {
+			const char* value = std::getenv("CC_TEST_DOOR_DIG_AGE_MS");
+			return value ? std::atoll(value) : -1LL;
+		}();
+		return ageMs;
+	}
+
+	struct DoorDig {
+		long long dugAtMs = 0;
+		std::vector<std::pair<int, int>> pixels;
+		bool reported = false;
+	};
+
+	std::unordered_map<long, DoorDig>& DoorDigs() {
+		static std::unordered_map<long, DoorDig> digs;
+		return digs;
+	}
+
+	void DigDoorForTest(const ADoor& door) {
+		if (!ScenarioRunner::LockstepCoordinatorAttached() || !door.GetDoor() || !door.GetDoorMaterialDrawn() || door.GetDoorState() != ADoor::CLOSED ||
+		    static_cast<long long>(door.GetAge()) < DoorDigAgeMs() || DoorDigs().count(door.GetUniqueID()) != 0) {
+			return;
+		}
+		BITMAP* material = g_SceneMan.GetTerrain()->GetMaterialBitmap();
+		Box bounds = door.GetDoor()->GetBoundingBox();
+		bounds.Unflip();
+		const int left = std::max(0, static_cast<int>(std::floor(bounds.GetCorner().GetX())));
+		const int top = std::max(0, static_cast<int>(std::floor(bounds.GetCorner().GetY())));
+		const int right = std::min(material->w, static_cast<int>(std::ceil(bounds.GetCorner().GetX() + bounds.GetWidth())));
+		const int bottom = std::min(material->h, static_cast<int>(std::ceil(bounds.GetCorner().GetY() + bounds.GetHeight())));
+		if (right - left < 4 || bottom - top < 4) {
+			return;
+		}
+		// Only this door's own silhouette is cut: a neighbouring door's material inside the box comes back with that door, not this one.
+		BITMAP* silhouette = create_bitmap_ex(8, right - left, bottom - top);
+		clear_to_color(silhouette, g_MaterialAir);
+		const bool renderDraw = g_SceneMan.IsRenderDrawContext();
+		g_SceneMan.SetRenderDrawContext(true);
+		door.GetDoor()->Draw(silhouette, Vector(static_cast<float>(left), static_cast<float>(top)), g_DrawDoor, true);
+		g_SceneMan.SetRenderDrawContext(renderDraw);
+		int minX = silhouette->w;
+		int minY = silhouette->h;
+		int maxX = -1;
+		int maxY = -1;
+		for (int y = 0; y < silhouette->h; ++y) {
+			for (int x = 0; x < silhouette->w; ++x) {
+				if (silhouette->line[y][x] != g_MaterialAir) {
+					minX = std::min(minX, x);
+					maxX = std::max(maxX, x);
+					minY = std::min(minY, y);
+					maxY = std::max(maxY, y);
+				}
+			}
+		}
+		DoorDig& dig = DoorDigs()[door.GetUniqueID()];
+		dig.dugAtMs = g_TimerMan.GetSimTimeMS();
+		if (maxX >= 0) {
+			// Three pixels wide across the silhouette's short side, a quarter of the way from its end, so the slit parts the door the way a dig does.
+			const bool tall = maxY - minY >= maxX - minX;
+			const int along = tall ? minY + (maxY - minY) * 3 / 4 : minX + (maxX - minX) * 3 / 4;
+			for (int y = tall ? along : minY; y <= (tall ? std::min(along + 2, maxY) : maxY); ++y) {
+				for (int x = tall ? minX : along; x <= (tall ? maxX : std::min(along + 2, maxX)); ++x) {
+					if (silhouette->line[y][x] != g_MaterialAir && _getpixel(material, left + x, top + y) == g_MaterialDoor) {
+						_putpixel(material, left + x, top + y, g_MaterialAir);
+						dig.pixels.emplace_back(left + x, top + y);
+					}
+				}
+			}
+		}
+		destroy_bitmap(silhouette);
+		g_SceneMan.GetTerrain()->AddUpdatedMaterialArea(Box(Vector(static_cast<float>(left), static_cast<float>(top)), Vector(static_cast<float>(right), static_cast<float>(bottom))));
+		std::cout << "[door-reseal] door=" << door.GetUniqueID() << " team=" << door.GetTeam() << " dug=" << dig.pixels.size() << " at_ms=" << dig.dugAtMs << std::endl;
+	}
+
+	void NoteDoorResealForTest(const ADoor& door) {
+		const auto found = DoorDigs().find(door.GetUniqueID());
+		if (found == DoorDigs().end() || found->second.reported) {
+			return;
+		}
+		DoorDig& dig = found->second;
+		BITMAP* material = g_SceneMan.GetTerrain()->GetMaterialBitmap();
+		const long long afterMs = g_TimerMan.GetSimTimeMS() - dig.dugAtMs;
+		const auto whole = std::count_if(dig.pixels.begin(), dig.pixels.end(), [material](const std::pair<int, int>& pixel) { return _getpixel(material, pixel.first, pixel.second) == g_MaterialDoor; });
+		if (!dig.pixels.empty() && static_cast<size_t>(whole) == dig.pixels.size()) {
+			std::cout << "[door-reseal] door=" << door.GetUniqueID() << " team=" << door.GetTeam() << " resealed_after_ms=" << afterMs << std::endl;
+			dig.reported = true;
+		} else if (afterMs > 12000) {
+			std::cout << "[door-reseal] door=" << door.GetUniqueID() << " team=" << door.GetTeam() << " not resealed after_ms=" << afterMs << " whole=" << whole << "/" << dig.pixels.size()
+			          << " state=" << door.GetDoorState() << " drawn=" << door.GetDoorMaterialDrawn() << std::endl;
+			dig.reported = true;
+		}
+	}
+} // namespace
 
 ADoor::ADoor(const ADoor& source, CheckpointNativeSnapshot& snapshot) :
 	Actor(source, snapshot),
@@ -427,13 +545,88 @@ void ADoor::TempEraseOrRedrawDoorMaterial(bool erase) {
 	bool doorMaterialDrawnState = m_DoorMaterialDrawn;
 	if (erase && m_DoorMaterialDrawn && !m_DoorMaterialTempErased) {
 		m_DoorMaterialTempErased = erase;
-		EraseDoorMaterial(false);
+		// Each machine updates its paths on its own ticks, so in a match the override must leave the terrain exactly as it found it.
+		if (ScenarioRunner::LockstepCoordinatorAttached()) {
+			TempEraseDoorMaterialRestorably();
+		} else {
+			EraseDoorMaterial(false);
+		}
 		m_DoorMaterialDrawn = doorMaterialDrawnState;
 	} else if (!erase && m_DoorMaterialDrawn && m_DoorMaterialTempErased) {
 		m_DoorMaterialTempErased = erase;
-		DrawDoorMaterial(true, false);
+		if (m_TempErasedDoorMaterial) {
+			RestoreTempErasedDoorMaterial();
+		} else {
+			DrawDoorMaterial(true, false);
+		}
 		m_DoorMaterialDrawn = doorMaterialDrawnState;
 	}
+}
+
+void ADoor::TempEraseDoorMaterialRestorably() {
+	m_TempErasedDoorMaterial.emplace();
+	BITMAP* materialBitmap = g_SceneMan.GetTerrain()->GetMaterialBitmap();
+	const int fillX = m_LastDoorMaterialPos.GetFloorIntX();
+	const int fillY = m_LastDoorMaterialPos.GetFloorIntY();
+	if (!m_Door || fillX < 0 || fillY < 0 || fillX >= materialBitmap->w || fillY >= materialBitmap->h) {
+		return;
+	}
+	const unsigned char material = static_cast<unsigned char>(_getpixel(materialBitmap, fillX, fillY));
+	if (material == g_MaterialAir) {
+		return;
+	}
+
+	// The door's material lies inside its sprite bounds; the fill stops there instead of following connected terrain.
+	const float reach = std::ceil(m_Door->GetRadius() * std::max(1.0F, m_Door->GetScale())) + 1.0F;
+	const int left = std::max(0, static_cast<int>(std::floor(m_LastDoorMaterialPos.GetX() - reach)));
+	const int top = std::max(0, static_cast<int>(std::floor(m_LastDoorMaterialPos.GetY() - reach)));
+	const int right = std::min(materialBitmap->w, static_cast<int>(std::ceil(m_LastDoorMaterialPos.GetX() + reach)) + 1);
+	const int bottom = std::min(materialBitmap->h, static_cast<int>(std::ceil(m_LastDoorMaterialPos.GetY() + reach)) + 1);
+	const int width = right - left;
+	const int height = bottom - top;
+
+	BITMAP* footprint = create_bitmap_ex(8, width, height);
+	if (!footprint) {
+		return;
+	}
+	clear_to_color(footprint, g_MaterialAir);
+	// Drawn on each machine's own ticks, so the silhouette must stay out of the MOID grid.
+	const bool renderDraw = g_SceneMan.IsRenderDrawContext();
+	g_SceneMan.SetRenderDrawContext(true);
+	m_Door->Draw(footprint, Vector(static_cast<float>(left), static_cast<float>(top)) + m_Door->GetPos() - m_LastDoorMaterialPos, g_DrawDoor, true);
+	g_SceneMan.SetRenderDrawContext(renderDraw);
+
+	// Only the door's own shape opens: the terrain is copied inside it and walled off with air outside it.
+	std::vector<bool> inside(static_cast<size_t>(width) * height);
+	for (int y = 0; y < height; ++y) {
+		unsigned char* row = footprint->line[y];
+		const unsigned char* terrain = materialBitmap->line[top + y] + left;
+		for (int x = 0; x < width; ++x) {
+			inside[static_cast<size_t>(y) * width + x] = row[x] != g_MaterialAir;
+			row[x] = row[x] != g_MaterialAir ? terrain[x] : g_MaterialAir;
+		}
+	}
+	floodfill(footprint, fillX - left, fillY - top, g_MaterialAir);
+
+	m_TempErasedDoorMaterial->material = material;
+	for (int y = 0; y < height; ++y) {
+		const unsigned char* row = footprint->line[y];
+		for (int x = 0; x < width; ++x) {
+			if (inside[static_cast<size_t>(y) * width + x] && row[x] != _getpixel(materialBitmap, left + x, top + y)) {
+				_putpixel(materialBitmap, left + x, top + y, g_MaterialAir);
+				m_TempErasedDoorMaterial->pixels.emplace_back(left + x, top + y);
+			}
+		}
+	}
+	destroy_bitmap(footprint);
+}
+
+void ADoor::RestoreTempErasedDoorMaterial() {
+	BITMAP* materialBitmap = g_SceneMan.GetTerrain()->GetMaterialBitmap();
+	for (const auto& [x, y]: m_TempErasedDoorMaterial->pixels) {
+		_putpixel(materialBitmap, x, y, m_TempErasedDoorMaterial->material);
+	}
+	m_TempErasedDoorMaterial.reset();
 }
 
 void ADoor::GibThis(const Vector& impactImpulse, MovableObject* movableObjectToIgnore) {
@@ -558,6 +751,10 @@ void ADoor::Update() {
 
 		UpdateDoorAttachableActions();
 
+		if (DoorDigAgeMs() >= 0) {
+			DigDoorForTest(*this);
+		}
+
 		bool shouldDrawDoorMaterial = ((m_DrawMaterialLayerWhenOpen && m_DoorState == OPEN) ||
 		                               (m_DrawMaterialLayerWhenClosed && m_DoorState == CLOSED) ||
 		                               ((m_DrawMaterialLayerWhenOpen || m_DrawMaterialLayerWhenClosed) && m_DoorState == STOPPED)) &&
@@ -565,6 +762,12 @@ void ADoor::Update() {
 		if (shouldDrawDoorMaterial) {
 			DrawDoorMaterial(true);
 			m_DoorMaterialRedrawTimer.Reset();
+		} else if (m_DoorMaterialDrawn && MatchPathUpdateResealDue(m_Team)) {
+			DrawDoorMaterial(true, false);
+		}
+
+		if (DoorDigAgeMs() >= 0) {
+			NoteDoorResealForTest(*this);
 		}
 	}
 

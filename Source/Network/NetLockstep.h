@@ -1412,6 +1412,8 @@ namespace RTE {
 		/// The handover's vote as this peer last saw it: the successor's own tally, or the one its roll call told a voter.
 		NetHostMigrationReach GetMigrationReach() const { NET_PLANE_CHECK(); return m_MigrationReach; }
 		bool BeginHostMigrationAfterHeal(uint64_t nowMs);
+		/// Leaves the retained links to the session wire while this stopped round waits unpumped as a heal's fallback.
+		void ReleasePeerFrameReader();
 		/// Whether the host's end of the round is here: its Complete stop waits on this peer's ticks, or this peer ran its last frame.
 		bool HostEndOfRoundReached() const;
 		/// Ends the round on the host's close once its end is here, as its Complete stop would.

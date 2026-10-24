@@ -371,6 +371,25 @@ def saver_delay_ms(who: str) -> int:
     return CLIENT_SAVER_DELAY_MS if who == "client" and CLIENT_SAVER_DELAY_MS else SAVER_DELAY_MS
 
 
+# A host prints one of these as it opens its session, a resumed host too, before any client can reach it.
+HOST_LISTENS = re.compile(r"^\[net-auth\] (?:reconnect-auth epoch armed|crypto unavailable - reconnect auth disabled)$", re.MULTILINE)
+
+
+def pair_env(**extra: str) -> dict:
+    """The environment of each peer of a two-peer e2e match: the host asks to start only once its client is seated and ready,
+    so a round never forms on the host alone however late its client arrives."""
+    return {"CCCP_HEADLESS": "1", "CC_TEST_NET_MATCH_E2E_WAIT_PEERS": "1", **extra}
+
+
+def start_host_then_client(threads: list, root: Path) -> None:
+    """Starts the host, then the client once the host's session is open: the client dials a lobby that is already waiting, as a
+    player joining a hosted match does, so a host that would start its round without its client does so on every box."""
+    threads[0].start()
+    while threads[0].is_alive() and not HOST_LISTENS.search(peer_log(root, "host")):
+        threading.Event().wait(0.1)
+    threads[1].start()
+
+
 def run_pair(repo: Path, root: Path, port: int, ticks: int, seconds: int, extra: dict, settings: dict | None = None, load_objects: int = 0) -> dict:
     """Two peers of one match, each with the arm's own extra flags and Settings.ini values."""
     if box_facts.held("verification"):
@@ -387,9 +406,7 @@ def run_pair(repo: Path, root: Path, port: int, ticks: int, seconds: int, extra:
                 "-net-match-report", str(root / f"{who}_report.json")]
         args += ["-net-host"] if who == "host" else ["-net-join", "127.0.0.1"]
         args += extra.get(who, []) + fullstate_args()
-        env = {"CCCP_HEADLESS": "1"}
-        if delay := saver_delay_ms(who):
-            env["CC_TEST_SAVER_DELAY_MS"] = str(delay)
+        env = pair_env(**({"CC_TEST_SAVER_DELAY_MS": str(delay)} if (delay := saver_delay_ms(who)) else {}))
         runs[who] = make_run(repo, args, root / who, 420, env=env)
         stage_baseline(runs[who], ticks, load_objects=load_objects)
         if settings and settings.get(who):
@@ -403,9 +420,7 @@ def run_pair(repo: Path, root: Path, port: int, ticks: int, seconds: int, extra:
 
     threads = [threading.Thread(target=drive, args=(who,)) for who in runs]
     try:
-        threads[0].start()
-        threading.Event().wait(1)
-        threads[1].start()
+        start_host_then_client(threads, root)
         for thread in threads:
             thread.join()
     finally:
@@ -473,6 +488,7 @@ def checkpoints(root: Path, who: str) -> dict:
 AUTOSAVE_COALESCED = re.compile(r"^\[autosave-coalesced\] tick=\d+ replaced=(\d+) ", re.MULTILINE)
 # A capture the match named that this peer did not take (it was catching up on a held seat).
 AUTOSAVE_NOT_TAKEN = re.compile(r"^\[autosave\] named tick=(\d+) not taken: ", re.MULTILINE)
+NEW_PLAN = re.compile(r"^\[autosave\] named tick=\d+ (?:taken|not taken) after a new plan in .*$", re.MULTILINE)
 # An arm that needs N checkpoints written waits for them: a run that writes fewer (the saver is slower than the 2 s cadence,
 # and the host names no capture while the last one is still being written) runs again with its whole schedule doubled,
 # up to this many ticks. N is never lowered.
@@ -935,8 +951,13 @@ def arm_park(repo: Path, root: Path, port: int) -> dict:
     return details
 
 
-def arm_resume(repo: Path, root: Path, port: int, client_stall: str = "") -> dict:
+def arm_resume(repo: Path, root: Path, port: int, client_stall: str = "", client_outgrows: bool = False) -> dict:
     """A match whose host process is killed is restarted from its own checkpoint, and the client rejoins.
+
+    With client_outgrows the resumed client's world outgrows each capture's plan just before its arm
+    (CCCP_TEST_CAPTURE_OUTGROWN), as a tick that takes a new native buffer does, its round runs 3000 ticks, and
+    the arm passes only when the client wrote every save the host wrote but the last, which may still be in
+    flight when the round ends.
 
     The kill is the runner's own termination, never a leave: the client keeps its ticket and the host
     keeps every checkpoint and manifest it published. The second round is started with
@@ -951,7 +972,9 @@ def arm_resume(repo: Path, root: Path, port: int, client_stall: str = "") -> dic
     root.mkdir(parents=True, exist_ok=False)
     first, second = root / "died", root / "resumed"
     first.mkdir(parents=True, exist_ok=False)
-    kill_tick, resume_ticks = 400, 600
+    kill_tick, resume_ticks = 400, 3000 if client_outgrows else 600
+    # The fixture's duel ends with its window, which the saved world carries into the resumed round: a long one leaves room for several saves.
+    window = 6000 if client_outgrows else 1200
 
     # Round one: a two-peer match that keeps checkpoints every simulated second. The host is killed
     # once it has published a checkpoint past the kill tick; the client is left to lose it.
@@ -967,8 +990,8 @@ def arm_resume(repo: Path, root: Path, port: int, client_stall: str = "") -> dic
         args += fullstate_args()
         if who == 'client':
             args += stall_args(client_stall)
-        runs[who] = make_run(repo, args, first / who, 420, env={"CCCP_HEADLESS": "1"})
-        stage_baseline(runs[who], 1200)
+        runs[who] = make_run(repo, args, first / who, 420, env=pair_env())
+        stage_baseline(runs[who], window)
 
     def drive(who: str) -> None:
         try:
@@ -979,9 +1002,7 @@ def arm_resume(repo: Path, root: Path, port: int, client_stall: str = "") -> dic
     threads = [threading.Thread(target=drive, args=(who,)) for who in ("host", "client")]
     killed = False
     try:
-        threads[0].start()
-        threading.Event().wait(1)
-        threads[1].start()
+        start_host_then_client(threads, first)
         deadline = threading.Event()
         for _ in range(4200):  # 420 s at the poll below, the runner's own budget.
             deadline.wait(0.1)
@@ -1028,8 +1049,9 @@ def arm_resume(repo: Path, root: Path, port: int, client_stall: str = "") -> dic
         if who == 'client' and client_stall:
             stall_tick, stall_ms = map(int, client_stall.split(':'))
             args += stall_args(f'{resume_tick + stall_tick}:{stall_ms}')
-        resumed[who] = make_run(repo, args, second / who, 420, env={"CCCP_HEADLESS": "1"})
-        stage_baseline(resumed[who], 1200)
+        env = pair_env(**({"CCCP_TEST_CAPTURE_OUTGROWN": "1"} if who == "client" and client_outgrows else {}))
+        resumed[who] = make_run(repo, args, second / who, 420, env=env)
+        stage_baseline(resumed[who], window)
         # What a restarted process finds on its own disk: its checkpoints, its manifests, its admission
         # file and its ticket. Copied, never moved: the first round's evidence stays where it was.
         source = first / who / "runtime/Autosaves"
@@ -1056,9 +1078,7 @@ def arm_resume(repo: Path, root: Path, port: int, client_stall: str = "") -> dic
 
     threads = [threading.Thread(target=drive_resumed, args=(who,)) for who in ("host", "client")]
     try:
-        threads[0].start()
-        threading.Event().wait(1)
-        threads[1].start()
+        start_host_then_client(threads, second)
         for thread in threads:
             thread.join()
     finally:
@@ -1084,9 +1104,19 @@ def arm_resume(repo: Path, root: Path, port: int, client_stall: str = "") -> dic
     resumed_hold = forced_hold_evidence(second, client_stall, offset=resume_tick)
     compared = compare_live_window(second, resume_tick + 1, resume_tick + resume_ticks)
     reached = max(int(row[0]) for row in CAPTURE.findall(host_log)) if CAPTURE.search(host_log) else 0
+    # Every save of the resumed round on both peers: a client that cannot save after a resume loses its players' progress.
+    written = {who: sorted({int(row[0]) for row in CAPTURE.findall(log)}) for who, log in (("host", host_log), ("client", client_log))}
+    refusals = re.findall(r"^\[autosave\] (?:named tick=\d+ not taken: .*|failed .*)$", client_log, re.M)
+    saves = {"written": written, "client_refusals": refusals[:12], "client_new_plans": NEW_PLAN.findall(client_log)[:12]}
+    if client_outgrows:
+        owed = written["host"][:-1]
+        missing = [tick for tick in owed if tick not in written["client"]]
+        assert len(owed) >= 3, f"the resumed host wrote only {written['host']} in {resume_ticks} ticks"
+        assert not missing and not refusals, (f"the resumed client wrote {written['client']} of the host's {owed}, missing {missing}; "
+                                             f"its refusals: {refusals[:3]}")
     return {"match_id": match_id, "kill_tick": kill_tick, "resume_tick": resume_tick,
             "client_held_the_archive": held_locally, "manifests": [path.name for path in manifests],
-            "resumed_captures_to": reached, "peer_comparison": compared,
+            "resumed_captures_to": reached, "peer_comparison": compared, "resumed_saves": saves,
             "forced_hold": {'died': died_hold, 'resumed': resumed_hold}}
 
 
@@ -2594,6 +2624,47 @@ class WorldRestartOracleTests(unittest.TestCase):
         finally:
             FULLSTATE_EVERY = every
 
+
+class PairStartTests(unittest.TestCase):
+    """A two-peer arm's host asks to start only once its client is seated and ready, and the client dials a host that is already
+    listening, so a round that would form on the host alone forms so on every box, never only on a slow one."""
+
+    def test_the_host_waits_for_a_client_that_dials_after_it_listens(self):
+        import sys
+        from unittest import mock
+        module = sys.modules[__name__]
+        launched, order = {}, []
+
+        class FakeRun:
+            def __init__(self, root: Path, env: dict):
+                self.root, self.env, self.cwd = root, env, str(root / "runtime")
+
+            def start(self):
+                order.append((self.root.name, bool(HOST_LISTENS.search(peer_log(self.root.parent, "host")))))
+                if self.root.name == "host":
+                    # The host's session opens a while after its process starts, as a real engine's does after its data loads.
+                    threading.Event().wait(1.5)
+                    (self.root / "stdout.log").write_text("[net-auth] reconnect-auth epoch armed\n", encoding="utf-8")
+                return self
+
+            def finish(self):
+                return {"exit_code": 0}
+
+            def close(self):
+                pass
+
+        def fake_make_run(repo, args, root, timeout, env=None):
+            root.mkdir(parents=True)
+            launched[root.name] = FakeRun(root, env or {})
+            return launched[root.name]
+
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(module, "make_run", fake_make_run), \
+                mock.patch.object(module, "stage_baseline", lambda *_, **__: None):
+            run_pair(Path(directory), Path(directory) / "pair", 48720, 800, 2, {})
+        for who in ("host", "client"):
+            self.assertEqual(launched[who].env.get("CC_TEST_NET_MATCH_E2E_WAIT_PEERS"), "1", f"the {who} does not hold the start for its peers")
+        self.assertEqual(order, [("host", False), ("client", True)], "the client dialed before the host's session was open")
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, default=Path(__file__).resolve().parents[1])
@@ -2620,6 +2691,9 @@ def main() -> int:
     parser.add_argument("--client-saver-delay-ms", type=int, default=0,
                         help="the client's archive writer alone pauses this long before each task, so a heal can come while the host's "
                         "newest checkpoint is still unpublished on the client")
+    parser.add_argument("--resumed-client-outgrows", action="store_true",
+                        help="resume only: the resumed client's world outgrows each capture's plan before its arm, and every save the host "
+                        "wrote but the last must be written by the client too")
     parser.add_argument("--slow-peers", action="store_true",
                         help="anchor only: the default policy with the host's largest slow-player bound (120 ticks), so a sanitizer build's slow client stays live and its heal lands")
     args = parser.parse_args()
@@ -2647,7 +2721,7 @@ def main() -> int:
     arms = {"restore": lambda repo, root, port: arm_restore(repo, root, port, args.client_stall),
             "retention": lambda repo, root, port: arm_retention(repo, root, port, args.client_stall),
             "anchor": lambda repo, root, port: arm_anchor(repo, root, port, args.slow_peers, args.anchor_client_stall or args.client_stall),
-            "resume": lambda repo, root, port: arm_resume(repo, root, port, args.client_stall),
+            "resume": lambda repo, root, port: arm_resume(repo, root, port, args.client_stall, args.resumed_client_outgrows),
             "world-restart": lambda repo, root, port: arm_world_restart(repo, root, port, args.client_stall, args.round_ticks,
                                                                         args.client_lacks_checkpoint, args.rejoin_from_first_capture,
                                                                         args.world_host_stall),

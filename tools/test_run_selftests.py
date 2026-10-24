@@ -5,6 +5,7 @@ import contextlib
 import json
 import io
 import tempfile
+import types
 import unittest
 from pathlib import Path
 
@@ -134,6 +135,39 @@ class SanitizerRowTimeout(unittest.TestCase):
     def test_tsan_script_graph_gets_its_own_cap_and_an_ordinary_build_keeps_the_suite_cap(self):
         self.assertGreater(runner.SANITIZER_ROW_TIMEOUT["script-graph"]["tsan"], 1800)
         self.assertNotIn(None, runner.SANITIZER_ROW_TIMEOUT["script-graph"])
+
+
+class SlowestBoxRowTimeout(unittest.TestCase):
+    """The cap a row is launched with: twice its time on the slowest box where measured, else the suite's cap."""
+
+    def launched_budget(self, name, timeout=300):
+        budgets = []
+
+        class Run:
+            def start(self):
+                return self
+
+            def finish(self):
+                return {"exit_code": 0, "timed_out": False, "exe_sha256": "0"}
+
+            def close(self):
+                pass
+
+        def make_run(repo, args, case, budget, **kwargs):
+            budgets.append(budget)
+            return Run()
+
+        options = types.SimpleNamespace(repo=Path("."), timeout=timeout, _planned_rows=())
+        with tempfile.TemporaryDirectory() as directory:
+            runner.run_row_in_mode(options, make_run, name, Path(directory), None)
+        return budgets[0]
+
+    def test_the_session_plane_row_gets_twice_its_slowest_box_time(self):
+        self.assertGreaterEqual(self.launched_budget("net-session-plane"), 2 * 272)
+
+    def test_an_unmeasured_row_and_a_longer_suite_cap_are_unchanged(self):
+        self.assertEqual(self.launched_budget("net-lockstep"), 300)
+        self.assertEqual(self.launched_budget("net-session-plane", timeout=7200), 7200)
 
 
 class ScoreStdoutSanitizer(unittest.TestCase):

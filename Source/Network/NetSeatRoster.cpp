@@ -295,6 +295,8 @@ namespace RTE {
 				case NetRosterEventKind::TransferAborted: {
 					if (!seat || (seat->phase != NetSeatPhase::RejoinImage && seat->phase != NetSeatPhase::RejoinCatchUp)) return refuse("no return is in transfer to the seat");
 					FailReturn(*seat, event.nowMs, next.stage, next.hostSeat, !event.excused);
+					// A return the round holds again while its link stays up is held in place: the seat comes back by playing again.
+					if (event.cause != NetSeatHoldCause::None && seat->phase == NetSeatPhase::Held && seat->link == NetSeatLink::Connected) seat->holdCause = event.cause;
 					return commit("Could not rejoin - retrying");
 				}
 				case NetRosterEventKind::LivenessPassed: {
@@ -968,6 +970,25 @@ namespace RTE {
 			    after->failedReturns == before.failedReturns + 1 && after->returnAfterMs == aborted.nowMs + c_RosterReturnBackoffMs;
 			check("seq return failure stage held=" + std::to_string(wasHeld) + " image_accepted=" + std::to_string(imageAccepted), ok,
 			      "cause=" + std::string(after ? NetSeatHoldCauseName(after->holdCause) : "missing"));
+		}
+		{
+			// A return the round holds again during its catch-up while its link stays up is held in place, and comes back by playing.
+			NetSeatRoster roster = RosterForRow(5);
+			roster.Find(2)->holdCause = NetSeatHoldCause::LinkDrop;
+			NetRosterEvent loaded; loaded.kind = NetRosterEventKind::ImageLoaded; loaded.seat = 2;
+			roster = ApplyRosterEvent(roster, loaded).roster;
+			NetRosterEvent aborted; aborted.kind = NetRosterEventKind::TransferAborted; aborted.seat = 2; aborted.nowMs = 10000; aborted.cause = NetSeatHoldCause::LateStream;
+			const NetRosterResult held = ApplyRosterEvent(roster, aborted);
+			const NetRosterSeat* after = held.roster.Find(2);
+			bool ok = !held.refused && after && after->phase == NetSeatPhase::Held && after->holdCause == NetSeatHoldCause::LateStream && after->link == NetSeatLink::Connected;
+			NetRosterEvent back; back.kind = NetRosterEventKind::Returned; back.seat = 2; back.ticket = 0x7002; back.keptWorld = true;
+			back.nowMs = after ? after->returnAfterMs : 0;
+			const NetRosterResult returned = ApplyRosterEvent(held.roster, back);
+			NetRosterEvent played; played.kind = NetRosterEventKind::CaughtUp; played.seat = 2;
+			const NetRosterResult running = ApplyRosterEvent(returned.roster, played);
+			ok = ok && !returned.refused && phaseOf(returned.roster, 2) == NetSeatPhase::RejoinCatchUp && !running.refused && phaseOf(running.roster, 2) == NetSeatPhase::Running;
+			check("seq a return held again in place plays its seat again", ok,
+			      "cause=" + std::string(after ? NetSeatHoldCauseName(after->holdCause) : "missing") + " back=" + returned.reason + " running=" + running.reason);
 		}
 		{
 			// Failed returns back off and never remove the seat; past the bound the return is still offered at the longest backoff.

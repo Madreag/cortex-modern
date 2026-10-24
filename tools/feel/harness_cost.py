@@ -68,7 +68,8 @@ def window_coverage(scopes, first_frame, last_frame):
     return False, best
 
 
-def reduce_costs(paths, *, first_frame=None, last_frame=None):
+def reduce_costs(paths, *, first_frame=None, last_frame=None, stopped=None):
+    """stopped: (tick, ms) of a scene's whole-process stop of this engine; the frame it landed in carries the stop, and is named."""
     samples = {name: [] for name in INSTRUMENTS}
     receipts = {tag: [] for tag in TAGS}
     errors = []
@@ -121,7 +122,7 @@ def reduce_costs(paths, *, first_frame=None, last_frame=None):
                            version=receipt['version'], first_frame=receipt['first_frame'], last_frame=last, instruments=receipt['instruments'], closed=bool(close),
                            line=receipt['line'], valid=True, frames=set()))
     used = {key(scope) for scope in scopes}
-    covered, aggregate = defaultdict(list), []
+    covered, aggregate, held = defaultdict(list), [], []
     for scope in scopes:
         identity, start, end, enabled = key(scope), scope['first_frame'], scope['last_frame'], scope['instruments']
         expected = {name for name, active in enabled.items() if active}
@@ -142,6 +143,9 @@ def reduce_costs(paths, *, first_frame=None, last_frame=None):
             if not measured:
                 errors.append(f'{row["path"]}:{row["line"]}: invalid, duplicated or unpartitioned frame costs'); scope['valid'] = False; continue
             by_frame[frame] = row
+            if stopped and stopped[0] <= frame <= stopped[0] + 60 and sum(costs.values()) >= 0.9 * stopped[1]:
+                held.append(dict(frame=frame, total_ms=sum(costs.values()), path=row['path'], line=row['line']))
+                continue
             # A frame that waited on its peers carries every frame presented meanwhile, none of which took their sum from the screen: it
             # is judged by the costliest of them or by its own work after the last of them. Version 3 counted a presented frame from the
             # one before it, so its first could hold the frame before's work and is taken only when smaller. A frame that spans one
@@ -244,7 +248,7 @@ def reduce_costs(paths, *, first_frame=None, last_frame=None):
                 over_budget_instruments=over_instruments, budget_ms=FRAME_BUDGET_MS,
                 measured_total_ms=sum(row['total_ms'] for row in aggregate) if aggregate else None,
                 instruments=instruments, scope_receipts=[{k: v for k, v in scope.items() if k != 'frames'} for scope in scopes],
-                outside_frames=outside_rows, measured_frames=len(aggregate), reason=reason, table=cost_table(instruments, peak_text, maximum),
+                outside_frames=outside_rows, measured_frames=len(aggregate), stopped_frames=held, reason=reason, table=cost_table(instruments, peak_text, maximum),
                 rule=RULE,
                 subtraction_ms=0, accounting='Only native partitioned frame costs are added. Summary-only costs remain partial; cumulative preview '
                 'totals are not summed across snapshots. Work receipted before a run of frames began is listed per instrument, outside every frame.')

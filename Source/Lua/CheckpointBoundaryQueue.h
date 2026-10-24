@@ -109,6 +109,7 @@ namespace RTE::CheckpointLua {
 		}
 		template<class Fill> bool TryCapture(std::shared_future<bool>& result, const Fill& fill) {
 			static_assert(std::is_nothrow_invocable_v<Fill, Header&>);
+			m_ArmRefusal = nullptr; m_ArmStale = false;
 			State expected = State::Ready;
 			if (!m_State.compare_exchange_strong(expected, State::Claimed, std::memory_order_acq_rel)) return false;
 			try {
@@ -126,12 +127,25 @@ namespace RTE::CheckpointLua {
 					Publish(State::Armed); Wake();
 					return true;
 				}
+				m_ArmRefusal = m_Plan->boundary->Refusal(); m_ArmStale = m_Plan->boundary->RefusedStale();
 			} catch (...) {
 				Publish(State::Rebuild); Wake();
 				throw;
 			}
 			Publish(State::Rebuild); Wake();
 			return false;
+		}
+		/// Why the last capture's arm refused its plan, null when no plan was armed; and whether the world outgrew that plan.
+		const char* ArmRefusal() const noexcept { return m_ArmRefusal; }
+		bool ArmRefusedStale() const noexcept { return m_ArmStale; }
+		/// Waits, the game lending the saver its time at the game's priority, for the plan a capture refused at this tick needs:
+		/// one prepared again for a world that outgrew the last, or one still being prepared. False when none comes: the saver
+		/// is still writing, or has stopped or failed.
+		bool WaitForNewPlan() const {
+			const State state = m_State.load(std::memory_order_acquire);
+			if (state != State::Preparing && state != State::Rebuild && state != State::Ready) return false;
+			const SaverThreads::Await await;
+			return WaitUntilPrepared();
 		}
 
 	private:
@@ -156,6 +170,8 @@ namespace RTE::CheckpointLua {
 		std::atomic<RTE::SteadyClock::rep> m_WarmAskedAt{0}; //!< When a capture last became near, for the arm's line.
 		std::atomic<int64_t> m_LastWarmUs{0}; //!< How long the worker's last finished warm took.
 		std::atomic<bool> m_Releasing{false}; //!< The last capture's plan is being torn down before the next preparation.
+		const char* m_ArmRefusal = nullptr; //!< The capturing thread's: why its last arm refused.
+		bool m_ArmStale = false;
 		std::atomic<uint64_t> m_Preparations{0}, m_LastReleaseUs{0}, m_LastPrepareUs{0}; //!< Finished preparations and what the last one cost.
 		std::atomic<uint64_t> m_Refusals{0}; //!< Preparations refused since the last one that finished; each is tried again at the next tick.
 		/// How often and how slowly the inventory has been prepared, for a capture that found it not ready.

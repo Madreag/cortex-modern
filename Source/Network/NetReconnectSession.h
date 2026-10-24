@@ -27,6 +27,8 @@ namespace RTE {
 
 	/// The refusal key of a return the host will take later with the same ticket (a backoff, a host change): its client retries, never joins anew.
 	constexpr const char* c_ReturnRetryKey = "return_retry";
+	/// The refusal key of a return whose seat the host still sees played by an earlier connection: its client asks again until that closes.
+	constexpr const char* c_SeatInUseKey = "seat_in_use";
 
 	/// One admission reply the session owes a connection.
 	struct NetH4Outbound {
@@ -508,7 +510,8 @@ namespace RTE {
 		std::vector<uint8_t> HeldInPlacePeers() const;
 		/// A returning seat's transfer was abandoned: the AI keeps the seat and the return is offered again after the roster's backoff.
 		/// A return ended before its seat played; only one the returner's own failure ended counts toward its attempts.
-		void NoteReturnAborted(uint8_t lockstepPeerId, bool returnerFailed = true);
+		/// @param inPlace The round's cause when it holds the returner again with its link up, so the seat comes back by playing; None otherwise.
+		void NoteReturnAborted(uint8_t lockstepPeerId, bool returnerFailed = true, NetSeatHoldCause inPlace = NetSeatHoldCause::None);
 		/// The lockstep peers whose seats are on their way back, through the image or the catch-up.
 		std::vector<uint8_t> ReturningPeers() const;
 		/// A seat whose return failed while its player stayed connected: true when the return is offered again now (its backoff over,
@@ -892,7 +895,8 @@ namespace RTE {
 		/// The host refused the transaction. A refused RECLAIM falls back to one fresh join (the ticket
 		/// was for a session that is gone), which is exactly what a ticketless client would have sent.
 		/// A seat the host says was REASSIGNED is gone for good, so that one is never retried. A return
-		/// the host takes later (the key c_ReturnRetryKey) is asked again with the same ticket after a backoff.
+		/// the host takes later (the key c_ReturnRetryKey) or whose earlier connection the host still holds (c_SeatInUseKey) is asked
+		/// again with the same ticket after a backoff.
 		/// @return Whether the refusal was absorbed; false means the session should fail on it.
 		bool AbsorbRejection(uint64_t nowMs, NetRejectReason reason = NetRejectReason::HostNotAccepting, const std::string& key = {});
 

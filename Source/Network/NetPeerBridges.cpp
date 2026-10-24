@@ -329,7 +329,7 @@ namespace RTE {
 		if (!UsesPeerFrameGroups() || WaitsForPlacement() || frame != m_Stats.nextFrame) return false;
 		// Under the details lever, a consumer past its bound whose hold this function never reaches says why, once per frame.
 		const auto exited = [&](const char* why) {
-			if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS") && m_ConsumerWaitingFrame == frame && nowMs >= m_ConsumerWaitStartMs &&
+			if (ReturnInputDetails() && m_ConsumerWaitingFrame == frame && nowMs >= m_ConsumerWaitStartMs &&
 			    nowMs - m_ConsumerWaitStartMs >= static_cast<uint64_t>(std::ceil(m_Config.slowPlayerBoundTicks * m_Config.simTickMs)) && m_ExitedHoldFrame != frame) {
 				m_ExitedHoldFrame = frame;
 				DiagnosticLine() << "[net-peer-hold-exit] local=" << static_cast<int>(m_Config.localPeerId) << " frame=" << frame << " why=" << why << " now_ms=" << nowMs << std::endl;
@@ -611,7 +611,7 @@ namespace RTE {
 		}
 		// Past the bound, a hold this seat does not propose names why under the details lever, once per frame.
 		const auto refused = [&](const char* why) {
-			if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS") && m_ConsumerWaitingFrame == frame && nowMs >= m_ConsumerWaitStartMs &&
+			if (ReturnInputDetails() && m_ConsumerWaitingFrame == frame && nowMs >= m_ConsumerWaitStartMs &&
 			    nowMs - m_ConsumerWaitStartMs >= static_cast<uint64_t>(std::ceil(m_Config.slowPlayerBoundTicks * m_Config.simTickMs)) && m_RefusedHoldFrame != frame) {
 				m_RefusedHoldFrame = frame;
 				std::string members;
@@ -676,7 +676,7 @@ namespace RTE {
 				    << " delay_ticks=" << delay << " neutral_through=" << proposal.frame + neutral << std::endl;
 			}
 		}
-		if (invitation && std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) DiagnosticLine() << "[net-peer-hold-invitation] local=" << static_cast<int>(m_Config.localPeerId)
+		if (invitation && ReturnInputDetails()) DiagnosticLine() << "[net-peer-hold-invitation] local=" << static_cast<int>(m_Config.localPeerId)
 		    << " peer=" << static_cast<int>(proposal.members.front()) << " frame=" << proposal.frame << " now_ms=" << nowMs << std::endl;
 		if (proposal.preparedFrame == 0 && !invitation) {
 			for (uint8_t peer: proposal.members) {
@@ -711,7 +711,7 @@ namespace RTE {
 				DiagnosticLine() << "[net-lockstep] slow machine peer " << static_cast<int>(peer) << " at frame " << proposal.frame << " cost " << slowCost
 				                 << " ticks/s against this machine's " << OwnCapacityTps() << "; the AI takes its seat" << std::endl;
 			}
-			if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) {
+			if (ReturnInputDetails()) {
 				DiagnosticLine detail;
 				detail << "[net-peer-hold-vote] local=" << static_cast<int>(m_Config.localPeerId) << " frame=" << frame
 				    << " displayed=" << m_LastCompletedSimulationTick.value_or(0) << " reference=" << static_cast<int>(m_PeerPaceReference)
@@ -815,7 +815,7 @@ namespace RTE {
 		const auto refused = [&](const char* reason) {
 			if (std::string_view(reason) == "certificate") ++m_Stats.decisionsRefusedForAuthority;
 			if (std::string_view(reason) == "not held") ++m_Stats.returnsRefusedNotHeld;
-			if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) DiagnosticLine() << "[net-peer-decision-refused] local=" << static_cast<int>(m_Config.localPeerId)
+			if (ReturnInputDetails()) DiagnosticLine() << "[net-peer-decision-refused] local=" << static_cast<int>(m_Config.localPeerId)
 				<< " frame=" << certificate.frame << " kind=" << static_cast<int>(DecisionKind(certificate)) << " reason=" << reason << " next=" << m_Stats.nextFrame
 				<< " displayed=" << m_LastCompletedSimulationTick.value_or(0) << " now_ms=" << nowMs << std::endl;
 		};
@@ -929,7 +929,7 @@ namespace RTE {
 			    delay > NetLockstepCodec::c_MaxPeerInputDelayFrames || neutral < delay || neutral > NetLockstepCodec::c_MaxFutureFrameSkew || agreed.frame > UINT64_MAX - neutral) { refused("runway"); return; }
 			returnDelays[peer] = {static_cast<uint16_t>(delay), agreed.frame + neutral, incarnation};
 		}
-		if (agreed.preparedFrame == 0 && certificate.frame < m_Stats.nextFrame && std::getenv("CC_TEST_RETURN_INPUT_DETAILS"))
+		if (agreed.preparedFrame == 0 && certificate.frame < m_Stats.nextFrame && ReturnInputDetails())
 			DiagnosticLine() << "[net-peer-hold-past] local=" << static_cast<int>(m_Config.localPeerId) << " frame=" << certificate.frame << " next=" << m_Stats.nextFrame
 			    << " members_here=" << PeerFrameMembersAt(agreed.frame) << " connected=" << agreed.connectedMask << " voters=" << voters
 			    << " held_here=" << PeerHeldSeatsAt(agreed.frame) << " retained=" << PeerRetainedSeatsAt(agreed.frame) << " resume=" << GetResumeFrame()
@@ -1062,7 +1062,7 @@ namespace RTE {
 			// Retain the surviving display clock even when a certificate arrives after preparation.
 			if ((m_FrameGroupMembers & SeatBit(m_PeerPaceReference)) == 0)
 				m_PeerPaceReference = static_cast<uint8_t>(std::countr_zero(m_FrameGroupMembers) + 1);
-			if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) DiagnosticLine() << "[net-peer-pace] local=" << static_cast<int>(m_Config.localPeerId)
+			if (ReturnInputDetails()) DiagnosticLine() << "[net-peer-pace] local=" << static_cast<int>(m_Config.localPeerId)
 				<< " frame=" << agreed.frame << " members=" << agreed.connectedMask << " reference=" << static_cast<int>(m_PeerPaceReference) << std::endl;
 		}
 		uint32_t owners = 0;
@@ -1149,7 +1149,7 @@ namespace RTE {
 		// played it, settles that frame as they played it.
 		for (const auto& [key, kept]: m_PendingPeerDecisions) if (key.first <= m_Stats.nextFrame) {
 			if (m_PeerCommittedTail.contains(m_Stats.nextFrame)) return false;
-			if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) DiagnosticLine() << "[net-peer-decision-wait] local=" << static_cast<int>(m_Config.localPeerId)
+			if (ReturnInputDetails()) DiagnosticLine() << "[net-peer-decision-wait] local=" << static_cast<int>(m_Config.localPeerId)
 			    << " frame=" << key.first << " kind=" << static_cast<int>(key.second) << " cause=unproven next=" << m_Stats.nextFrame << " now_ms=" << nowMs << std::endl;
 			RequestPeerCommittedTail(nowMs);
 			return true;
@@ -1197,7 +1197,7 @@ namespace RTE {
 			if (basis.preparedFrame != 3 && !PeerGroupHasAuthority(signers, votes->first.first)) continue;
 			// The frame's committed record settles what this peer still waits on: it carries the decision if any peer certified it.
 			if (m_PeerCommittedTail.contains(m_Stats.nextFrame)) return false;
-			if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) DiagnosticLine() << "[net-peer-decision-wait] local=" << static_cast<int>(m_Config.localPeerId)
+			if (ReturnInputDetails()) DiagnosticLine() << "[net-peer-decision-wait] local=" << static_cast<int>(m_Config.localPeerId)
 			    << " frame=" << votes->first.first << " kind=" << static_cast<int>(votes->first.second) << " cause=open_vote required=" << required
 			    << " voted=" << std::accumulate(votes->second.begin(), votes->second.end(), 0U, [](uint32_t mask, const auto& vote) { return mask | (1U << (vote.first - 1)); })
 			    << " connected=" << basis.connectedMask << " held=" << PeerHeldSeatsAt(votes->first.first) << " own_gap=" << IsSeatReclaimGap(m_Config.localPeerId, votes->first.first)

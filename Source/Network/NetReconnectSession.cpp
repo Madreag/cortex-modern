@@ -807,6 +807,13 @@ namespace RTE {
 		return own;
 	}
 
+	namespace {
+		bool IsInPlaceCause(NetSeatHoldCause cause) {
+			return cause == NetSeatHoldCause::Capacity || cause == NetSeatHoldCause::LateStream || cause == NetSeatHoldCause::Quiet || cause == NetSeatHoldCause::TimingAck || cause == NetSeatHoldCause::OwnSeat ||
+			       cause == NetSeatHoldCause::Leave;
+		}
+	}
+
 	void NetReconnectHost::NoteReturnWorldReady(uint8_t lockstepPeerId) {
 		const SeatState* seat = SeatOfPeer(lockstepPeerId);
 		if (const NetRosterSeat* held = seat ? RosterSeatOf(*seat) : nullptr; held && held->phase == NetSeatPhase::RejoinImage) ApplySeatEvent(*seat, NetRosterEventKind::ImageLoaded);
@@ -821,23 +828,16 @@ namespace RTE {
 		ApplySeatEvent(*seat, NetRosterEventKind::CaughtUp);
 	}
 
-	void NetReconnectHost::NoteReturnAborted(uint8_t lockstepPeerId, bool returnerFailed) {
+	void NetReconnectHost::NoteReturnAborted(uint8_t lockstepPeerId, bool returnerFailed, NetSeatHoldCause inPlace) {
 		const SeatState* seat = SeatOfPeer(lockstepPeerId);
 		const NetRosterSeat* held = seat ? RosterSeatOf(*seat) : nullptr;
 		if (held && (held->phase == NetSeatPhase::RejoinImage || held->phase == NetSeatPhase::RejoinCatchUp))
-			ApplySeatEvent(*seat, NetRosterEventKind::TransferAborted, false, false, NetSeatHoldCause::None, !returnerFailed);
+			ApplySeatEvent(*seat, NetRosterEventKind::TransferAborted, false, false, IsInPlaceCause(inPlace) ? inPlace : NetSeatHoldCause::None, !returnerFailed);
 	}
 
 	bool NetReconnectHost::RosterHoldsSeat(const SeatState& seat) const {
 		const NetRosterSeat* held = RosterSeatOf(seat);
 		return held && held->owner != 0 && (held->phase == NetSeatPhase::Held || held->phase == NetSeatPhase::RoundEnd || held->phase == NetSeatPhase::Relaunching);
-	}
-
-	namespace {
-		bool IsInPlaceCause(NetSeatHoldCause cause) {
-			return cause == NetSeatHoldCause::Capacity || cause == NetSeatHoldCause::LateStream || cause == NetSeatHoldCause::Quiet || cause == NetSeatHoldCause::TimingAck || cause == NetSeatHoldCause::OwnSeat ||
-			       cause == NetSeatHoldCause::Leave;
-		}
 	}
 
 	void NetReconnectHost::NoteSeatHeldInPlace(uint8_t lockstepPeerId, NetSeatHoldCause cause) {
@@ -1464,7 +1464,7 @@ namespace RTE {
 				return;
 			}
 			if (seat->activeConnection != c_InvalidNetPeerId && seat->activeConnection != connection && !IsHolderAway(*seat)) {
-				Send(connection, NetJoinRejected{NetRejectReason::HostNotAccepting, seat->holderName + " is still playing. The original keeps the seat; close that connection before rejoining.", "seat_in_use", "", ""});
+				Send(connection, NetJoinRejected{NetRejectReason::HostNotAccepting, seat->holderName + " is still playing. The original keeps the seat; close that connection before rejoining.", c_SeatInUseKey, "", ""});
 				return;
 			}
 		}
@@ -3220,14 +3220,15 @@ namespace RTE {
 		if (!m_UsedStoredTicket || m_FellBackToNewJoin || m_State == NetH4ClientState::Joined) {
 			return false;
 		}
-		if (key == c_ReturnRetryKey && m_HasRecord) {
-			// The seat is still this ticket's: a fresh join would trade it for a new seat, so the return is asked again.
+		// The seat is still this ticket's: a fresh join would trade it for a new seat, so the return is asked again - once the host takes
+		// returns again, or once the connection this player had before, which a restart leaves open at the host until it times out, closes.
+		if ((key == c_ReturnRetryKey || key == c_SeatInUseKey) && m_HasRecord) {
 			m_ReturnRetryDelayMs = std::min(m_ReturnRetryDelayMs == 0 ? c_RosterReturnBackoffMs : m_ReturnRetryDelayMs * 2, c_RosterReturnBackoffMs << (c_RosterReturnAttempts - 1));
 			m_ReturnRetryAtMs = nowMs + m_ReturnRetryDelayMs;
 			m_HasPendingRequest = false;
 			m_State = NetH4ClientState::Reclaiming;
 			++m_Stats.returnRetries;
-			m_Error = "the host put the return off; asking again";
+			m_Error = key == c_SeatInUseKey ? "the host still holds this seat's earlier connection; asking again" : "the host put the return off; asking again";
 			return true;
 		}
 		// The stored ticket named a hosted session that is gone (or a seat this host no longer knows).

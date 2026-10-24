@@ -26,6 +26,8 @@ import time
 DIRECTORY_TEST_PYTHON = os.environ.get("CCCP_DIRECTORY_TEST_PYTHON") or sys.executable
 # The directory's test file takes 110-180 s on the slowest box and 400 s with its CPUs oversubscribed twice.
 DIRECTORY_TEST_TIMEOUT_S = 900
+# A row's own cap is twice its time on the slowest box: the session plane's fixed catalogue takes 260-272 s there alone.
+ROW_TIMEOUT_S = {"net-session-plane": 2 * 272}
 
 SELFTEST_FIXTURES = {
     "mod-api-shims": ["mod-api-shims.lua"],
@@ -556,13 +558,13 @@ def run_row_in_mode(options, make_run, name, case, sanitizer):
         scored["binary"] = scored.get("exe_sha256")
     else:
         walk = name == "preview-binding-exhaustive"
-        budget = max(options.timeout, BINDING_WALK_SANITIZER_TIMEOUT.get(sanitizer, BINDING_WALK_TIMEOUT)) if walk else options.timeout
+        budget = max(options.timeout, BINDING_WALK_SANITIZER_TIMEOUT.get(sanitizer, BINDING_WALK_TIMEOUT)) if walk else max(options.timeout, ROW_TIMEOUT_S.get(name, 0))
         row_env = None
         plane = name in ("net-session-plane", "net-session-plane-hold-schedules")
         driver = name == "net-session-plane-hold-schedules"
         native_name = "net-session-plane" if plane else name
         if plane:
-            # Keep every fixture and every requested seed, in separate 300 s suite rows.
+            # Keep every fixture and every requested seed, in separate suite rows with their own caps.
             # Cap the fixed pool at four for its long sequential host-change arm.
             # Independent schedules use the original CPU-count-minus-one pool.
             default_workers = max(1, (os.cpu_count() or 1) - 1) if driver else min(4, os.cpu_count() or 1)
