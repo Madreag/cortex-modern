@@ -213,9 +213,25 @@ def clean_ice_servers(value: Any) -> list[dict[str, Any]]:
     return result
 
 
+def relay_fingerprint(backend: str, *material: Any) -> str:
+    """Names the account a relay login comes from without carrying its secret."""
+    digest = hashlib.sha256(json.dumps([backend, *material], sort_keys=True, default=str).encode()).hexdigest()
+    return f"{backend}:{digest[:16]}"
+
+
+def fixed_relay_fingerprint(offer: dict[str, Any]) -> str:
+    return relay_fingerprint("fixed", offer.get("iceServers"))
+
+
 class TurnCredentialProvider:
     def __init__(self, config: Optional[dict[str, Any]] = None) -> None:
         self._config = dict(config or {})
+
+    def fingerprint(self) -> str:
+        """Changes with the backend or its key, so a login minted before a rotation is never handed out after it."""
+        backend = self._config.get("backend", "cloudflare")
+        fields = {"coturn": ("static_auth_secret", "relay_urls"), "cloudflare": ("turn_key_id", "api_token")}.get(backend, ())
+        return relay_fingerprint(backend, *(self._config.get(field) for field in fields))
 
     def mint(self, match_id: str, ttl: int, now: int) -> dict[str, Any]:
         backend = self._config.get("backend", "cloudflare")
@@ -772,15 +788,21 @@ class SessionDirectory:
                 state=sess.state, name=sess.fields["name"], session=sess.as_list_row(now), relay_enabled=sess.ice_offer is not None,
                 host_retry_after_s=max(0, int(sess.host_signal_retry_until - now + .999)), directory_time=int(time.time()))
 
+    def _relay_fingerprint(self, sess: Session) -> str:
+        """The account a seat login of this match must come from now: the host's fixed one or the directory's."""
+        return fixed_relay_fingerprint(sess.ice_offer) if sess.ice_fixed and sess.ice_offer is not None else self.turn_provider.fingerprint()
+
     def connection_request(self, session_id: str, data: dict[str, Any], now: float, install_key: str) -> dict[str, Any]:
         connection_version(data)
         operation = data.get("operation")
         wall = time.time()
         if operation == "frame-tie":
             with self._lock:
-                if self._signalling(session_id, now) is None:
+                sess = self._signalling(session_id, now)
+                if sess is None:
                     self.missing_match(session_id)
-            return self.connections.frame_tie(session_id, data, wall)
+                fingerprint = self._relay_fingerprint(sess)
+            return self.connections.frame_tie(session_id, data, wall, fingerprint)
         with self._lock:
             sess = self._signalling(session_id, now)
             if sess is None:
@@ -792,7 +814,7 @@ class SessionDirectory:
                 if data.get("host_generation") != sess.migration_gen:
                     raise Superseded("superseded", sess.migration_gen)
                 self._persist_session(sess, now)
-                return self.connections.issue(session_id, data, wall) if operation == "issue" else self.connections.remove(session_id, data, wall)
+                return self.connections.issue(session_id, data, wall, self._relay_fingerprint(sess)) if operation == "issue" else self.connections.remove(session_id, data, wall)
             if operation == "host-change":
                 answer = self.connections.host_change(session_id, data, wall,
                     wall - max(0, now - sess.last_beat),
@@ -813,7 +835,7 @@ class SessionDirectory:
                 return answer
             if operation != "check-in":
                 raise ConnectionErrorReply(400, "connection_request", "The connection request was incomplete. Cancel and join again.")
-            answer, renew, host_claim = self.connections.check_in(session_id, data, wall)
+            answer, renew, host_claim = self.connections.check_in(session_id, data, wall, self._relay_fingerprint(sess))
             hosting = bool(host_claim and host_claim["generation"] == sess.migration_gen and tokens_equal(host_claim["token"], sess.token))
             if hosting:
                 sess.last_beat = now
@@ -841,6 +863,8 @@ class SessionDirectory:
             answer["relay_current"] = not renew
             # A fixed credential keeps the expiry the host supplied.
             fixed = sess.ice_offer if sess.ice_fixed else None
+            provider = self.turn_provider
+            fingerprint = fixed_relay_fingerprint(fixed) if fixed is not None else provider.fingerprint()
             relay_enabled = sess.ice_offer is not None
             if not renew or not relay_enabled:
                 return answer
@@ -855,13 +879,13 @@ class SessionDirectory:
                     raise TurnError(503, "relay_credential_expired")
                 offer = dict(fixed)
             else:
-                offer = self.turn_provider.mint(session_id, self.turn_max_ttl, int(wall))
+                offer = provider.mint(session_id, self.turn_max_ttl, int(wall))
         except TurnError as error:
             answer["relay_error"] = error.body["error"]
             answer["relay_retry_after_s"] = 5
             return answer
         with self._lock:
-            if self.connections.set_relay(session_id, answer["seat"], answer["generation"], offer, time.time()):
+            if self.connections.set_relay(session_id, answer["seat"], answer["generation"], offer, time.time(), fingerprint):
                 answer["relay"] = offer
                 answer["relay_current"] = True
                 LOGGER.info('relay_seat_offer_issued %s', json.dumps(dict(seat=answer["seat"],
@@ -1532,19 +1556,22 @@ class SessionDirectory:
                 raise PermissionError("forbidden")
             wall = int(time.time())
             ttl = min(BOOTSTRAP_RELAY_TTL, self.turn_max_ttl)
+            provider = self.turn_provider
+            fingerprint = provider.fingerprint()
             held = sess.lent_logins.get(install_key)
-            # A re-dial takes the requester's own login again while half its life remains; only a login it lacks spends the allowance.
-            if held and held["expires_at"] - wall > ttl // 2:
-                LOGGER.info('relay_bootstrap_offer_reused %s', json.dumps(dict(session_id=session_id, expires_at=held['expires_at']), sort_keys=True))
-                return dict(held)
+            # Re-dials inside the allowance's minute share the requester's login; a later dial, or one after the account
+            # changed, gets a new one, so a dial never starts on a login past its first minute.
+            if held and held["fingerprint"] == fingerprint and held["offer"]["expires_at"] - wall > ttl - RATE_WINDOW_S:
+                LOGGER.info('relay_bootstrap_offer_reused %s', json.dumps(dict(session_id=session_id, expires_at=held['offer']['expires_at']), sort_keys=True))
+                return dict(held["offer"])
             limited = self.turn_limiter.probe(install_key, now, False)
             if limited:
                 raise TurnError(429, "rate_limited_key", limited[1]["retry_after_s"], "relay")
             self.turn_limiter.commit(install_key, now, False)
-        offer = self.turn_provider.mint(session_id, ttl, wall)
+        offer = provider.mint(session_id, ttl, wall)
         with self._lock:
-            sess.lent_logins = {key: login for key, login in sess.lent_logins.items() if login["expires_at"] > wall}
-            sess.lent_logins[install_key] = offer
+            sess.lent_logins = {key: login for key, login in sess.lent_logins.items() if login["offer"]["expires_at"] > wall}
+            sess.lent_logins[install_key] = dict(offer=offer, fingerprint=fingerprint)
         LOGGER.info('relay_bootstrap_offer_issued %s', json.dumps(dict(session_id=session_id,
             provider=self.turn_provider._config.get('backend', 'cloudflare'), expires_at=offer['expires_at'],
             server_count=len(offer['iceServers'])), sort_keys=True))

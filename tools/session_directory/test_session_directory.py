@@ -274,6 +274,23 @@ class DirectoryTests(unittest.TestCase):
         self.assertNotEqual(renewed["iceServers"][0]["username"], first["iceServers"][0]["username"], "a login past half its life was lent again")
         self.assertEqual(renewed["expires_at"], 1000 + session_directory.BOOTSTRAP_RELAY_TTL // 2 + 1 + session_directory.BOOTSTRAP_RELAY_TTL)
 
+    def test_a_dial_starts_with_most_of_its_bootstrap_login(self) -> None:
+        """Re-dials inside the allowance's minute share a login; a later dial starts on one with all but that minute left."""
+        store = session_directory.SessionDirectory(300, 5, turn_config={
+            "backend": "coturn", "static_auth_secret": "server-only-secret", "relay_urls": ["turn:relay.example:3478?transport=udp"]})
+        joiner, window = "joiner0123456789", int(session_directory.RATE_WINDOW_S)
+        row = store.register(sample_register(), "192.0.2.1", 10, INSTALL_KEY)
+        store.mint_ice_servers(row["session_id"], {"token": row["token"], "match_id": "match:floor", "ttl": 3600}, INSTALL_KEY, 10)
+        lend = lambda wall: mock.patch.object(session_directory.time, "time", return_value=wall)
+        with lend(1000):
+            first = store.get_ice_servers(row["session_id"], joiner, 11)
+        with lend(1000 + window - 1):
+            self.assertEqual(store.get_ice_servers(row["session_id"], joiner, 11 + window - 1), first, "a re-dial inside the minute minted a login")
+        with lend(1000 + 2 * window):
+            later = store.get_ice_servers(row["session_id"], joiner, 11 + 2 * window)
+        self.assertGreaterEqual(later["expires_at"] - (1000 + 2 * window), session_directory.BOOTSTRAP_RELAY_TTL - window,
+                                "a dial started on a login past its first minute")
+
     def test_unexpired_relay_offer_survives_listing_gap_and_host_resume(self) -> None:
         store = session_directory.SessionDirectory(15, 5, turn_config={
             "backend": "coturn", "static_auth_secret": "server-only-secret", "relay_urls": ["turn:relay.example:3478?transport=udp"]})
@@ -4030,6 +4047,46 @@ class ConnectionAuthorityTests(unittest.TestCase):
         # A request signed on the time the refusal named is accepted.
         signed = self.envelope(sent_at=refused.exception.body["directory_time"])
         self.assertEqual(self.store.connection_request(self.sid, signed, self.now, INSTALL_KEY)["seat"], 1)
+
+    def test_a_rotated_relay_key_replaces_every_held_login(self) -> None:
+        """A directory restarted on a new relay key gives seats and requesters logins from that key, not the dead key's."""
+        joiner = "joiner0123456789"
+        seated = self.check()
+        old_login = seated["relay"]["iceServers"][0]["username"]
+        self.store.stop()
+        self.options["turn_config"] = dict(self.options["turn_config"], static_auth_secret="rotated-secret")
+        self.store = session_directory.SessionDirectory(15, 5, **self.options)
+        self.wall += 5; self.now += 5
+        lease = self.store.connection_request(self.sid, dict(self.issue, generation=2), self.now, INSTALL_KEY)
+        self.assertNotIn("relay", lease, "a player seated again after a key rotation carried the old key's login")
+        renewed = self.check(token=lease["seat_token"], instance="40" * 16)
+        login = renewed.get("relay", {}).get("iceServers", [{}])[0]
+        self.assertNotEqual(login.get("username"), old_login, "a check-in after a key rotation kept the old key's seat login")
+        expected = base64.b64encode(hmac.new(b"rotated-secret", login["username"].encode(), hashlib.sha1).digest()).decode()
+        self.assertEqual((renewed["relay_current"], login["credential"]), (True, expected), "the renewed seat login was not the new key's")
+        dial = self.store.get_ice_servers(self.sid, joiner, self.now)
+        # An account changed while the directory runs reaches the requesters' held logins too.
+        self.store.turn_provider = session_directory.TurnCredentialProvider(dict(self.options["turn_config"], static_auth_secret="third-secret"))
+        self.wall += 5; self.now += 5
+        again = self.store.get_ice_servers(self.sid, joiner, self.now)["iceServers"][0]
+        self.assertNotEqual(again["username"], dial["iceServers"][0]["username"], "a re-dial after a key change was lent the old key's login")
+        self.assertEqual(again["credential"], base64.b64encode(hmac.new(b"third-secret", again["username"].encode(), hashlib.sha1).digest()).decode())
+
+    def test_a_hosts_new_fixed_relay_replaces_the_seats_copies(self) -> None:
+        """A host that publishes another fixed relay account moves every seat onto it at the next check-in."""
+        fixed = lambda name: {"urls": ["turn:private.example:3478?transport=udp"], "username": name, "credential": name + "-password"}
+        post = lambda name: self.store.mint_ice_servers(self.sid, {"token": self.row["token"], "match_id": "fixed:" + name, "ttl": 600,
+                                                                    "iceServers": [fixed(name)]}, INSTALL_KEY, self.now)
+        # The player checks in on its own install key; the host's posts spend the host's.
+        check = lambda: self.store.connection_request(self.sid, self.envelope(), self.now, "player0123456789")
+        post("first-account")
+        self.assertEqual(check()["relay"]["iceServers"][0]["username"], "first-account")
+        self.wall += 5; self.now += 5
+        post("second-account")
+        self.wall += 5; self.now += 5
+        renewed = check()
+        self.assertEqual(renewed.get("relay", {}).get("iceServers", [{}])[0].get("username"), "second-account",
+                         "a seat kept the host's replaced fixed relay account")
 
     def test_a_fetch_lends_its_own_login_never_a_seat_one(self) -> None:
         seat = self.check(host={"token": self.row["token"], "generation": 0})

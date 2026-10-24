@@ -301,7 +301,13 @@ class ConnectionAuthority:
         except (ValueError, InvalidSignature, TypeError):
             raise ConnectionErrorReply(403, "seat_unproven", "This seat token could not be verified. Rejoin from the device that owns the seat.") from None
 
-    def issue(self, sid: str, data: dict[str, Any], now: float) -> dict[str, Any]:
+    @staticmethod
+    def _relay_current(seat: dict[str, Any], now: float, fingerprint: str, margin: float = 0) -> bool:
+        """Whether the seat holds a login from the account the match uses now with more than margin seconds left."""
+        relay = seat.get("relay")
+        return bool(relay) and seat.get("relay_fingerprint", "") == fingerprint and relay.get("expires_at", 0) - now > margin
+
+    def issue(self, sid: str, data: dict[str, Any], now: float, relay_fingerprint: str = "") -> dict[str, Any]:
         """Called only after SessionDirectory verifies the current host's token."""
         connection_version(data)
         participant = bounded_hex(data, "participant", 32).hex()
@@ -327,15 +333,16 @@ class ConnectionAuthority:
                     if now - seat["lease_issued"] >= SEAT_TOKEN_SECONDS // 2:
                         seat["lease_issued"] = int(now)
                         self._save(sid, record)
-                    return self._reply(sid, record, seat, now)
-            # A player seated again keeps the relay login it still holds in this match.
-            relay = next((held["relay"] for held in record["seats"].values() if held["participant"] == participant and held["relay"]
-                          and held["relay"].get("expires_at", 0) - now > SEAT_TOKEN_SECONDS), None)
-            seat = dict(seat=seat_id, generation=generation, participant=participant, name=name, epoch=epoch, host_session=host_session, network_protocol=protocol, credential=credential, lease_issued=int(now), instance="", last_check_in=0, route={}, recent_requests={}, relay=relay)
+                    return self._reply(sid, record, seat, now, relay_fingerprint)
+            # A player seated again keeps the relay login it still holds from the match's current account.
+            relay = next((held["relay"] for held in record["seats"].values() if held["participant"] == participant
+                          and self._relay_current(held, now, relay_fingerprint, SEAT_TOKEN_SECONDS)), None)
+            seat = dict(seat=seat_id, generation=generation, participant=participant, name=name, epoch=epoch, host_session=host_session, network_protocol=protocol, credential=credential, lease_issued=int(now), instance="", last_check_in=0, route={}, recent_requests={}, relay=relay,
+                        relay_fingerprint=relay_fingerprint if relay else "")
             record["seats"][str(seat_id)] = seat
             record["retain_until"] = now + MATCH_RETENTION_SECONDS
             self._save(sid, record)
-            return self._reply(sid, record, seat, now)
+            return self._reply(sid, record, seat, now, relay_fingerprint)
 
     def remove(self, sid: str, data: dict[str, Any], now: float) -> dict[str, Any]:
         connection_version(data)
@@ -355,7 +362,7 @@ class ConnectionAuthority:
             self._save(sid, record)
             return {"ok": True, "connection_protocol": CONNECTION_PROTOCOL}
 
-    def check_in(self, sid: str, envelope: dict[str, Any], now: float) -> tuple[dict[str, Any], bool, Optional[dict[str, Any]]]:
+    def check_in(self, sid: str, envelope: dict[str, Any], now: float, relay_fingerprint: str = "") -> tuple[dict[str, Any], bool, Optional[dict[str, Any]]]:
         connection_version(envelope)
         participant = bounded_hex(envelope, "participant", 32)
         signature = bounded_hex(envelope, "signature", 64)
@@ -427,12 +434,12 @@ class ConnectionAuthority:
                 record["route_revision"] += 1
             record["retain_until"] = now + MATCH_RETENTION_SECONDS
             self._save(sid, record)
-            # A relay login is not bound to a route: the seat's lasts its life whatever path the player moves to.
-            needs_relay = not seat["relay"] or seat["relay"].get("expires_at", 0) - now <= SEAT_TOKEN_SECONDS
-            return self._reply(sid, record, seat, now), needs_relay, dict(host_claim, route=route) if host_claim else None
+            # A relay login is bound to the account that minted it, not to a route: it lasts its life whatever path the player moves to.
+            needs_relay = not self._relay_current(seat, now, relay_fingerprint, SEAT_TOKEN_SECONDS)
+            return self._reply(sid, record, seat, now, relay_fingerprint), needs_relay, dict(host_claim, route=route) if host_claim else None
 
-    def frame_tie(self, sid: str, envelope: dict[str, Any], now: float) -> dict[str, Any]:
-        answer, _renew, _host_claim = self.check_in(sid, envelope, now)
+    def frame_tie(self, sid: str, envelope: dict[str, Any], now: float, relay_fingerprint: str = "") -> dict[str, Any]:
+        answer, _renew, _host_claim = self.check_in(sid, envelope, now, relay_fingerprint)
         data = json.loads(base64.b64decode(envelope["signed_request"], validate=True))
         request = data.get("frame_tie")
         if not isinstance(request, dict):
@@ -656,19 +663,20 @@ class ConnectionAuthority:
             return (decision.get("generation") == generation and isinstance(token, str)
                     and hmac.compare_digest(token, record.get("session", {}).get("token", "")))
 
-    def set_relay(self, sid: str, seat_id: int, generation: int, offer: dict[str, Any], now: float) -> bool:
+    def set_relay(self, sid: str, seat_id: int, generation: int, offer: dict[str, Any], now: float, fingerprint: str = "") -> bool:
         with self._lock:
             record = self._match(sid, now)
             seat = record["seats"].get(str(seat_id))
             if not seat or seat["generation"] != generation:
                 return False
             seat["relay"] = offer
+            seat["relay_fingerprint"] = fingerprint
             self._save(sid, record)
             return True
 
-    def _reply(self, sid: str, record: dict[str, Any], seat: dict[str, Any], now: float) -> dict[str, Any]:
+    def _reply(self, sid: str, record: dict[str, Any], seat: dict[str, Any], now: float, relay_fingerprint: str = "") -> dict[str, Any]:
         peers = [dict(seat=item["seat"], name=item["name"], route=item["route"]) for item in record["seats"].values() if item["participant"] not in record["removed"]]
         result = dict(connection_protocol=CONNECTION_PROTOCOL, authority_key=self.public_key, seat_token=self._token(sid, seat, seat["lease_issued"]), seat=seat["seat"], generation=seat["generation"], expires_at=seat["lease_issued"] + SEAT_TOKEN_SECONDS, check_in_s=CHECK_IN_SECONDS, route_revision=record["route_revision"], peers=peers, directory_time=int(now))
-        if seat["relay"] and seat["relay"].get("expires_at", 0) > now:
+        if self._relay_current(seat, now, relay_fingerprint):
             result["relay"] = seat["relay"]
         return result
