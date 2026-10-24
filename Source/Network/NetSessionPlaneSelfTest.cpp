@@ -968,7 +968,8 @@ namespace RTE {
 				}
 			};
 			mutable std::map<NetPeerId, LinkPing> linkPings;
-			struct Event { uint64_t at; NetTransportEvent value; bool crossesFault = false; };
+			// A delivered packet keeps the message its send authenticated, so observing it on arrival reads that one.
+			struct Event { uint64_t at; NetTransportEvent value; bool crossesFault = false; std::shared_ptr<const NetHostMigrationMessage> sent; };
 			std::vector<Event> events;
 			bool keepReturnCertificates = false;
 			std::map<uint64_t, NetHostMigrationMessage> receivedReturnCertificates;
@@ -1142,6 +1143,18 @@ namespace RTE {
 					if (*peeked) into = read;
 					return *peeked;
 				};
+				// The delivered packet's message, when it is still the one sent.
+				std::shared_ptr<const NetHostMigrationMessage> sent;
+				const auto sentMessage = [&]() -> std::shared_ptr<const NetHostMigrationMessage> {
+					if (delivered != bytes) return nullptr;
+					if (!peeked) peeked = NetHostMigrationCodec::Decode(bytes, key, read);
+					if (*peeked && !sent) sent = std::make_shared<const NetHostMigrationMessage>(read);
+					return sent;
+				};
+				const auto observeSent = [&](uint8_t receiver, bool impaired) {
+					if (const auto message = sentMessage()) hub.ObserveInput(*message, receiver, impaired);
+					else ObserveInputWire(delivered, receiver, impaired);
+				};
 				if (hub.row.laterSessionMessageFirst && owner == 2 && NetHostMigrationCodec::Decode(bytes, key, decision) &&
 				    decision.type == NetHostMigrationMessageType::PeerSession) {
 					const auto decoded = NetProtocol::Decode(decision.bytes);
@@ -1224,10 +1237,10 @@ namespace RTE {
 					if (NetHostMigrationCodec::Decode(bytes, key, packet)) asymmetric = DelayAsymmetricInput(packet, *other, remote, lane, bytes);
 				}
 				TraceInputWindow(delivered, "send", other->owner);
-				if (asymmetric == 1 || (asymmetric != 2 && hub.Split(owner, other->owner))) { ObserveInputWire(delivered, other->owner, true); return true; }
+				if (asymmetric == 1 || (asymmetric != 2 && hub.Split(owner, other->owner))) { observeSent(other->owner, true); return true; }
 				const uint32_t ordinal = ++sends;
 				if (lane == NetTransportLane::InputUnreliable && hub.DuringFault() && hub.row.lossPercent &&
-				    (owner == hub.row.subject || other->owner == hub.row.subject) && ordinal % 100 < hub.row.lossPercent) { ObserveInputWire(delivered, other->owner, true); return true; }
+				    (owner == hub.row.subject || other->owner == hub.row.subject) && ordinal % 100 < hub.row.lossPercent) { observeSent(other->owner, true); return true; }
 				if (hub.schedule) {
 					// Jitter delays each packet on its own; a lossy link drops an unreliable packet and resends a reliable one a round trip late.
 					const uint32_t rtt = hub.schedule->Rtt(owner, other->owner), jitter = hub.schedule->jitterMs[owner][other->owner], loss = hub.schedule->LossPercent(owner, other->owner, hub.now);
@@ -1237,11 +1250,11 @@ namespace RTE {
 					uint64_t at = hub.now + hub.Delay(owner, other->owner) + lateMs + sessionDelay + outboundJitter;
 					bool retransmitted = false;
 					for (unsigned resend = 0; loss && resend < 4 && hub.Next() % 100 < loss; ++resend) {
-						if (!reliable) { ObserveInputWire(delivered, other->owner, true); return true; }
+						if (!reliable) { observeSent(other->owner, true); return true; }
 						retransmitted = true;
 						at += std::max<uint32_t>(200, rtt + rtt / 2);
 					}
-					if (retransmitted || lateMs) ObserveInputWire(delivered, other->owner, true);
+					if (retransmitted || lateMs) observeSent(other->owner, true);
 					if (jitter && !retransmitted) {
 						auto& ping = linkPings[id];
 						(void)ping.Read(hub.now, static_cast<uint32_t>(2 * hub.Delay(owner, other->owner)));
@@ -1257,7 +1270,8 @@ namespace RTE {
 					    decision.frame == std::strtoull(watched, nullptr, 10))
 						DiagnosticLine() << "[session-plane-input-delivery] sender=" << unsigned(owner) << " receiver=" << unsigned(other->owner)
 						    << " frame=" << decision.frame << " sent_ms=" << hub.now << " arrival_ms=" << at << " reliable=" << reliable << " bytes=" << delivered.size() << std::endl;
-					other->events.push_back({at, {NetTransportEventType::PacketReceived, remote, lane, std::move(delivered), {}}, false}); return true;
+					auto message = sentMessage();
+					other->events.push_back({at, {NetTransportEventType::PacketReceived, remote, lane, std::move(delivered), {}}, false, std::move(message)}); return true;
 				}
 #if __has_include("NetPeerSessionWire.h")
 				if (hub.row.receiptGap && NetHostMigrationCodec::Decode(delivered, key, decision)) {
@@ -1268,7 +1282,8 @@ namespace RTE {
 							other->events.push_back({hub.now + hub.Delay(owner, other->owner), {NetTransportEventType::PacketReceived, remote, lane, delivered, {}}, false});
 				}
 #endif
-				other->events.push_back({hub.now + hub.Delay(owner, other->owner) + sessionDelay, {NetTransportEventType::PacketReceived, remote, lane, std::move(delivered), {}}, asymmetric == 2}); return true;
+				auto message = sentMessage();
+				other->events.push_back({hub.now + hub.Delay(owner, other->owner) + sessionDelay, {NetTransportEventType::PacketReceived, remote, lane, std::move(delivered), {}}, asymmetric == 2, std::move(message)}); return true;
 			}
 			void Disconnect(NetPeerId id, const std::string& reason) override {
 				const auto found = connections.find(id); if (found == connections.end()) return;
@@ -1290,7 +1305,10 @@ namespace RTE {
 					}
 					if (event.crossesFault || !hub.Split(connections.contains(event.value.peerId) ? connections.at(event.value.peerId).first->owner : owner, owner)) {
 						if (event.value.type == NetTransportEventType::PacketReceived) TraceInputWindow(event.value.bytes, "deliver", owner);
-						if (event.value.type == NetTransportEventType::PacketReceived) ObserveInputWire(event.value.bytes, owner, false);
+						if (event.value.type == NetTransportEventType::PacketReceived) {
+							if (event.sent) hub.ObserveInput(*event.sent, owner, false);
+							else ObserveInputWire(event.value.bytes, owner, false);
+						}
 						// FLAGGED fixture departure: the private image service consumes its transported world-tail chunks before
 						// the live coordinator polls this link. A donor's in-memory record is never a received replay frame.
 						if (keepImageTail && event.value.type == NetTransportEventType::PacketReceived) {
