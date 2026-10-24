@@ -205,6 +205,10 @@ endif
 
 if get_option('tracy_enable')
   add_global_arguments('-DTRACY_ENABLE', language:'cpp')
+  if not get_option('debug')
+    # A Final build never starts the kernel trace: as root or under a permissive perf_event_paranoid it samples every CPU and records every context switch.
+    add_global_arguments('-DTRACY_NO_SYSTEM_TRACING', language:'cpp')
+  endif
 endif
 if get_option('tracy_callstack') > 0
   add_global_arguments('-DTRACY_CALLSTACK='+get_option('tracy_callstack').to_string(), language:'cpp')
