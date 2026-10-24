@@ -771,24 +771,109 @@ class KillAndRestartTest(unittest.TestCase):
         peers.check_scene(peers.scene("mp-host-hang"))
 
     def test_a_player_restarts_only_from_its_own_earlier_runtime(self):
-        for reference in ({"run": "died", "peer": "host"}, {"run": "resumed", "peer": "client"}):
-            with self.assertRaisesRegex(ValueError, "its own runtime of an earlier run"):
-                peers.check_scene(self.edited("resumed", "client", retain_runtime_from=reference))
+        with self.assertRaisesRegex(ValueError, "its own runtime of an earlier run"):
+            peers.check_scene(self.edited("resumed", "client", retain_runtime_from={"run": "died", "peer": "host"}))
+        with self.assertRaisesRegex(ValueError, "an earlier player of its run only once that player has ended"):
+            peers.check_scene(self.edited("resumed", "client", retain_runtime_from={"run": "resumed", "peer": "client"}))
 
     def test_the_host_never_waits_to_start_on_another_player(self):
         with self.assertRaisesRegex(ValueError, "the host starts first"):
             peers.check_scene(self.edited("died", "host", start_when={"peer": "client", "event": "video_mark resume-client-lobby"}))
 
-    def test_a_gate_on_another_players_end_is_refused(self):
-        with self.assertRaisesRegex(ValueError, "another player's end"):
-            peers.check_scene(self.edited("died", "host", kill_when={"peer": "client", "ended": True}))
+    def test_a_gate_on_another_players_end_is_met_by_the_end_its_box_reports(self):
+        document = self.edited("died", "host", kill_when={"peer": "client", "ended": True})
+        peers.check_scene(document)
+        wanted = peers.gate_facts(document, document["runs"][0])["client"]
+        self.assertIn({"peer": "client", "ended": True}, wanted)
+        request = self.request("client", gate_facts=wanted)
+        self.assertNotIn(peers.fact_key({"peer": "client", "ended": True}), peers.read_player_files(request)["facts"])
+        ended = self.root / "client" / "died" / "client" / peers.video.PEER_ENDED
+        ended.parent.mkdir(parents=True)
+        ended.write_text(json.dumps({"exit_code": 137}), encoding="utf-8")
+        self.assertIn(peers.fact_key({"peer": "client", "ended": True}), peers.read_player_files(request)["facts"])
+
+    def reconnect(self, **values):
+        document = copy.deepcopy(peers.scene("mp-reconnect-relay"))
+        next(peer for peer in document["runs"][0]["peers"] if peer["name"] == "rejoined").update(values)
+        return document
+
+    def test_a_player_restarted_in_its_run_plays_the_seat_of_the_player_it_restarts_from(self):
+        document = self.reconnect()
+        peers.check_scene(document)
+        self.assertEqual(peers.player_seats(document), {"host": "host", "dropped": "dropped", "rejoined": "dropped"})
+        self.assertEqual(peers.gate_facts(document, document["runs"][0])["dropped"], [{"peer": "dropped", "ended": True}])
+        with self.assertRaisesRegex(ValueError, "only once that player has ended"):
+            peers.check_scene(self.reconnect(start_when={"peer": "dropped", "event": "video_mark playing"}))
+        reordered = self.reconnect()
+        reordered["runs"][0]["peers"].reverse()
+        with self.assertRaisesRegex(ValueError, "only once that player has ended"):
+            peers.check_scene(reordered)
+
+    def test_a_restarted_player_plays_on_the_box_of_the_player_it_restarts_from(self):
+        boxes = self.root / "boxes.json"
+        boxes.write_text(json.dumps({"boxes": [
+            dict(name=name, ssh=name.lower(), os=system, hostname=name.lower() + "-host", repo="/repo", scratch="/scratch", python="python",
+                 build_receipt="/receipt.json", binary="build/CortexCommand", session_dir="C:/session", task="task")
+            for name, system in (("Host box", "win32"), ("Joiner box", "linux"), ("Other box", "darwin"))]}), encoding="utf-8")
+        seats = peers.player_seats(self.reconnect())
+        chosen = peers.selected_boxes("host=Host box,dropped=Joiner box,rejoined=Joiner box", boxes, seats=seats)
+        self.assertEqual(chosen["rejoined"]["name"], "Joiner box")
+        with self.assertRaisesRegex(ValueError, "plays on the box of the player it restarts from"):
+            peers.selected_boxes("host=Host box,dropped=Joiner box,rejoined=Other box", boxes, seats=seats)
+        with self.assertRaisesRegex(ValueError, "a different box for each player"):
+            peers.selected_boxes("host=Joiner box,dropped=Joiner box,rejoined=Joiner box", boxes, seats=seats)
+        with self.assertRaisesRegex(ValueError, "a different box for each player"):
+            peers.selected_boxes("host=Host box,dropped=Joiner box,rejoined=Joiner box", boxes)
+
+    def test_the_spread_check_reads_a_restarted_player_as_its_seat(self):
+        records = {"host": ("Host box", "host-computer"), "dropped": ("Joiner box", "joiner-computer"),
+                   "rejoined": ("Joiner box", "joiner-computer")}
+        run = dict(name="reconnect", peer_boxes={role: box for role, (box, _) in records.items()}, peers=[])
+        for role, (box, host) in records.items():
+            root = self.root / role
+            root.mkdir()
+            record = dict(pid=42, exe_sha256="binary", box=box, engine_hostname=host, source_commit="tip", scene_sha256="hash")
+            (root / "launch.json").write_text(json.dumps(record), encoding="utf-8")
+            run["peers"].append(dict(peer=role, box=box, box_hostname=host, root=str(root), record=record))
+        capture = dict(topology="spread", source={"tip": "tip"}, scene_sha256="hash", runs=[run], scenario_definition=self.reconnect())
+        self.assertEqual(peers.spread_check(capture)["reasons"], [])
+        alone = copy.deepcopy(capture)
+        alone.pop("scenario_definition")
+        self.assertIn("reconnect: peers ran on one named box", peers.spread_check(alone)["reasons"])
+
+    def test_a_player_restarted_in_its_run_starts_from_the_runtime_its_box_kept(self):
+        root = self.root / "dropped" / "reconnect"
+        runtime = peers.video.retained_runtime({"run": "reconnect", "peer": "dropped"}, root, {}, [])
+        self.assertEqual(runtime, (root / "dropped" / "runtime").resolve())
+        local = SimpleNamespace(cwd=str(self.root / "elsewhere"))
+        self.assertEqual(peers.video.retained_runtime({"run": "reconnect", "peer": "dropped"}, root, {"dropped": local}, []),
+                         (self.root / "elsewhere").resolve())
+        earlier = [{"name": "died", "peers": [{"peer": "dropped", "root": str(self.root / "died"), "runtime": str(self.root / "kept")}]}]
+        self.assertEqual(peers.video.retained_runtime({"run": "died", "peer": "dropped"}, root, {}, earlier), (self.root / "kept").resolve())
+
+    def test_a_restarted_player_packs_only_its_own_files_beside_its_earlier_player(self):
+        request = self.request("rejoined", run="reconnect", box=dict(repo=str(Path(peers.__file__).resolve().parents[1])),
+                               scene_relative="tools/e2e/mp-reconnect-relay.json", scene_out=str(self.root / "seat"))
+        played = self.root / "seat" / "reconnect"
+        for relative in ("dropped/stdout.log", "dropped/video/frames.jsonl", "dropped-capture.json", "dropped.ticket", "dropped_trace.json",
+                         "dropped/runtime/Userdata/Settings.ini", "rejoined/stdout.log", "rejoined-stage/probe/net-ui-result.json",
+                         "rejoined-capture.json", "rejoined-match.json"):
+            (played / relative).parent.mkdir(parents=True, exist_ok=True)
+            (played / relative).write_text("{}", encoding="utf-8")
+        with mock.patch("builtins.print"):
+            peers.pack(request)
+        import tarfile
+        with tarfile.open(Path(json.loads(request.read_text())["out"]).with_suffix(".tgz")) as archive:
+            names = sorted(archive.getnames())
+        self.assertEqual(names, ["reconnect/rejoined-capture.json", "reconnect/rejoined-match.json",
+                                 "reconnect/rejoined-stage/probe/net-ui-result.json", "reconnect/rejoined/stdout.log"])
 
     def request(self, role, run="died", **values):
         runner = self.root / role / (run + ".runner")
         runner.mkdir(parents=True, exist_ok=True)
         path = runner / "request.json"
-        path.write_text(json.dumps(dict(out=str(runner), scene_out=str(self.root / role), role=role, run_name=run, run_index=0,
-                                        signal_files=[], **values)), encoding="utf-8")
+        fields = dict(out=str(runner), scene_out=str(self.root / role), role=role, run_name=run, run_index=0, signal_files=[])
+        path.write_text(json.dumps({**fields, **values}), encoding="utf-8")
         return path
 
     def test_a_players_gate_on_the_other_box_is_met_by_the_fact_that_box_reports(self):

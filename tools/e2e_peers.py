@@ -185,8 +185,14 @@ def check_process_control(document, run, index, names):
             raise ValueError("a run may wait for or resume from an earlier run only")
     for peer in run.get("peers", document.get("peers", [])):
         reference = peer.get("retain_runtime_from")
-        if reference and (reference.get("run") not in earlier or reference.get("peer") != peer["name"]):
-            raise ValueError("a player restarts only from its own runtime of an earlier run; its save stays on its own box")
+        if reference and reference.get("run") == run.get("name", "run" + str(index)):
+            # A player restarted in its own run takes over an earlier player's runtime, on that player's box, once it has ended.
+            if reference.get("peer") not in names or names.index(reference["peer"]) >= names.index(peer["name"]) or \
+                    peer.get("start_when") != {"peer": reference["peer"], "ended": True}:
+                raise ValueError("a player restarts from an earlier player of its run only once that player has ended")
+        elif reference and (reference.get("run") not in earlier or reference.get("peer") != peer["name"]):
+            raise ValueError("a player restarts only from its own runtime of an earlier run, or an earlier player's in its own run; "
+                             "its save stays on its box")
         for key in GATE_KEYS:
             for gate in gate_list(peer.get(key)):
                 for part in video.gate_parts(gate):
@@ -195,10 +201,19 @@ def check_process_control(document, run, index, names):
                             raise ValueError("a player may wait for an earlier run only")
                     elif part.get("peer") not in names:
                         raise ValueError("a gate names a player the run does not have")
-                    elif part["peer"] != peer["name"] and part.get("ended"):
-                        raise ValueError("a gate on another player's end needs that player's box; this launcher cannot run it")
                     elif part["peer"] != peer["name"] and key == "start_when" and peer["name"] == "host":
                         raise ValueError("the host starts first; its start cannot wait for another player")
+
+
+def player_seats(document):
+    """The seat each player plays: a player restarted in its run from an earlier player's runtime plays that player's seat, on its box."""
+    seats = {}
+    for index, run in enumerate(scene_runs(document) if document.get("runs") or document.get("peers") else []):
+        for peer in run.get("peers", document.get("peers", [])):
+            reference = peer.get("retain_runtime_from") or {}
+            same_run = reference.get("run") == run.get("name", "run" + str(index))
+            seats[peer["name"]] = seats.get(reference["peer"], reference["peer"]) if same_run else seats.get(peer["name"], peer["name"])
+    return seats
 
 
 def check_scene(document):
@@ -382,8 +397,10 @@ def spread_check(capture):
     runs = capture.get("runs", [])
     if not runs:
         reasons.append("capture has no runs")
+    # A player restarted from another player's runtime plays that player's seat on its box; every seat has its own box.
+    seats = player_seats(capture["scenario_definition"]) if capture.get("scenario_definition") else {}
     for run in runs:
-        boxes, hosts = [], []
+        placed = {}
         peers = run.get("peers", [])
         roles = set(run.get("peer_boxes", {}))
         if "host" not in roles or len(roles) < 2 or len(peers) != len(roles) or {peer.get("peer") for peer in peers} != roles:
@@ -394,8 +411,7 @@ def spread_check(capture):
             path = Path(peer["root"]) / "launch.json"
             record = read(path) if path.is_file() else {}
             host = record.get("engine_hostname")
-            boxes.append(str(box or "").casefold())
-            hosts.append(str(host or "").casefold())
+            placed.setdefault(seats.get(peer["peer"], peer["peer"]), set()).add((str(box or "").casefold(), str(host or "").casefold()))
             if not box or record.get("box") != box or run.get("peer_boxes", {}).get(peer["peer"]) != box:
                 reasons.append(label + ": box name disagrees with the engine record")
             if not host or host.casefold() != str(peer.get("box_hostname", "")).casefold():
@@ -408,9 +424,11 @@ def spread_check(capture):
             observed.append({"run": run["name"], "peer": peer["peer"], "box": box, "engine_hostname": host,
                              "pid": record.get("pid"), "engine_pid": (record.get("hop") or {}).get("engine_pid", record.get("pid")),
                              "record": str(path)})
-        if len(set(boxes)) != len(peers):
+        if any(len(spots) != 1 for spots in placed.values()):
+            reasons.append(run["name"] + ": a restarted player ran on another box than the player it restarts from")
+        if len({box for spots in placed.values() for box, _ in spots}) != len(placed):
             reasons.append(run["name"] + ": peers ran on one named box")
-        if len(set(hosts)) != len(peers):
+        if len({host for spots in placed.values() for _, host in spots}) != len(placed):
             reasons.append(run["name"] + ": peers ran on one engine host")
     return {"schema": 1, "passed": not reasons, "reasons": reasons, "peers": observed}
 
@@ -438,12 +456,17 @@ def pack(request_path):
     document = scene(str(Path(request["box"]["repo"]) / request["scene_relative"]))
     run = scene_runs(document)[request["run_index"]]
     run_name = run.get("name", "run" + str(request["run_index"]))
-    # Every other player brings its own stage; this player packs only what it wrote. A runtime, and the save in it, stays here.
-    skipped = {"runtime"} | {other + "-stage" for other in scene_roles(document, run) if other != request["role"]}
+    # Every other player brings its own files, a restarted one sharing this folder too; this player packs only what it wrote.
+    # A runtime, and the save in it, stays here.
+    others = [other for other in scene_roles(document, run) if other != request["role"]]
+    theirs = re.compile("(?:" + "|".join(map(re.escape, others)) + r")(?:$|[-._])") if others else None
     # A twenty-minute fight's tick history is mostly repeated hashes; compressed, the player's files cross the relay box's link faster.
     with tarfile.open(archive, "w:gz", compresslevel=6) as output:
         for directory, folders, files in os.walk(scene_out / run_name, followlinks=False):
-            folders[:] = [name for name in folders if name not in skipped and not video.is_link(Path(directory) / name)]
+            top = Path(directory) == scene_out / run_name
+            folders[:] = [name for name in folders if name != "runtime" and not video.is_link(Path(directory) / name) and
+                          not (top and theirs and theirs.match(name))]
+            files = [name for name in files if not (top and theirs and theirs.match(name))]
             for name in files:
                 path = Path(directory) / name
                 if not video.is_link(path) and stat.S_ISREG(path.stat().st_mode):
@@ -614,12 +637,19 @@ def box_runner_env(box):
     return dict(settings)
 
 
-def selected_boxes(value, path, one_box=False):
-    """Each player's box. One box plays every player only as a detector: the players still split the way the runners split them."""
+def selected_boxes(value, path, one_box=False, seats=None):
+    """Each player's box. One box plays every player only as a detector: the players still split the way the runners split them.
+    A player restarted from another player's runtime plays that player's seat, so it plays on that player's box."""
     assignments = dict(part.split("=", 1) for part in value.split(","))
     roles = ["host"] + [role for role in assignments if role != "host"]
-    if "host" not in assignments or len(assignments) < 2 or \
-            (not one_box and len(set(name.casefold() for name in assignments.values())) != len(assignments)):
+    seats = {role: (seats or {}).get(role, role) for role in assignments}
+    placed = {}
+    for role, name in assignments.items():
+        placed.setdefault(seats[role], set()).add(name.casefold())
+    if not one_box and any(len(names) != 1 for names in placed.values()):
+        raise ValueError("a restarted player plays on the box of the player it restarts from")
+    if "host" not in assignments or len(placed) < 2 or \
+            (not one_box and len({next(iter(names)) for names in placed.values()}) != len(placed)):
         raise ValueError("name a host and a different box for each player")
     entries = {box["name"].casefold(): box for box in read(path)["boxes"]}
     result = {role: entries[assignments[role].casefold()] for role in roles}
@@ -631,7 +661,7 @@ def selected_boxes(value, path, one_box=False):
         return result
     if result["host"]["os"] != "win32" or any(box["os"] not in PLAYER_SYSTEMS for box in result.values()):
         raise ValueError("this scene launcher needs a Windows host and Windows, Mac or Linux joiners")
-    if len({box["hostname"].casefold() for box in result.values()}) != len(result):
+    if len({result[role]["hostname"].casefold() for role in roles}) != len(placed):
         raise ValueError("two assignments name one engine host")
     return result
 
@@ -702,7 +732,7 @@ def capture_scene(args):
     document = scene(args.scenario)
     check_scene(document)
     one_box = getattr(args, "one_box", False)
-    boxes = selected_boxes(args.peer_boxes, args.boxes_file, one_box)
+    boxes = selected_boxes(args.peer_boxes, args.boxes_file, one_box, player_seats(document))
     port = scene_port(document, getattr(args, "port", None))
     engine_env = engine_levers(getattr(args, "engine_env", None))
     runner_env = {role: box_runner_env(box) for role, box in boxes.items()}
@@ -730,8 +760,10 @@ def capture_scene(args):
                "scratch_limit_bytes": video.SCRATCH_LIMIT, "topology": "single-box" if one_box else "spread", "proof": False, "runs": [],
                "engine_env": engine_env, "runner_env": runner_env, "port": port}
     video.write_json(out / "capture.json", capture)
-    # One folder per player for the whole scene: a player restarted in a later run finds its own runtime and save there.
-    scene_outs = {role: box["scratch"].rstrip("/") + "/" + scene_folder(out.name, uuid.uuid4().hex[:8]) for role, box in boxes.items()}
+    # One folder per seat for the whole scene: a player restarted later, in its run or a later one, finds the runtime and save there.
+    seats = player_seats(document)
+    unique = {seat: uuid.uuid4().hex[:8] for seat in set(seats.values())}
+    scene_outs = {role: box["scratch"].rstrip("/") + "/" + scene_folder(out.name, unique[seats[role]]) for role, box in boxes.items()}
     requests = {}
     for index, run in enumerate(scene_runs(document)):
         name = run.get("name", "run" + str(index))
@@ -757,7 +789,7 @@ def capture_scene(args):
             require_free_port(run_directory(document, run), port)
             for role in roles:
                 box = boxes[role]
-                remote_out = scene_outs[role] + "/" + name + ".runner"
+                remote_out = scene_outs[role] + "/" + name + "-" + role + ".runner"
                 request = dict(box=box, role=role, run_index=index, out=remote_out, scene_out=scene_outs[role], commit=source["tip"],
                                engine_env=engine_env, scene_relative=relative, scene_sha256=scene_hash, fps=video.DEFAULT_FPS,
                                sheet_every=15, port=port, completed_runs=earlier, resume_tokens=resume_tokens,

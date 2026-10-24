@@ -374,6 +374,15 @@ def cross_run_ready(captures, condition):
     return all(any(peer["peer"] == name and peer["record"].get("exit_code") is not None for peer in run["peers"]) for name in names)
 
 
+def retained_runtime(reference, root, runs, completed_runs):
+    """The runtime a restarted peer starts from: its own of an earlier run, or an earlier peer's of this run. In a player run
+    another player run on this box played that peer, and its runtime stays in this run's folder."""
+    if reference["run"] != Path(root).name:
+        previous = prior_peer(completed_runs, reference)
+        return Path(previous.get("runtime", Path(previous["root"]) / "runtime")).resolve()
+    return Path(runs[reference["peer"]].cwd if reference["peer"] in runs else Path(root) / reference["peer"] / "runtime").resolve()
+
+
 def checkpoint_tokens(peer):
     runtime = Path(peer.get("runtime", Path(peer["root"]) / "runtime"))
     store = runtime / "Autosaves"
@@ -1587,8 +1596,10 @@ def completed_probe(path):
 
 
 def peer_gate_met(gate, root):
-    """One peer's own fact, read from its files under the run root: a finished probe, a log line, a recorded tick or an event."""
+    """One peer's own fact, read from its files under the run root: its end, a finished probe, a log line, a recorded tick or an event."""
     name, root = gate["peer"], Path(root)
+    if gate.get("ended"):
+        return (root / name / PEER_ENDED).is_file()
     if gate.get("probe_complete"):
         return completed_probe(root / f"{name}-stage" / "probe" / "net-ui-result.json")
     if gate.get("log"):
@@ -2203,6 +2214,7 @@ def stage_peer(scenario, peer, root, tokens):
 
 
 SUSPEND_RECEIPT = "injected-suspend.json"
+PEER_ENDED = "ended.json"
 
 
 def hang_peer(handle, seconds, stop):
@@ -2409,7 +2421,7 @@ def _run_one(options, scenario, run, run_index, out, case_root=None):
         retained = None
         if reference:
             previous = prior_peer(getattr(options, "completed_runs", []), reference)
-            retained = Path(runs[reference["peer"]].cwd).resolve() if reference["run"] == root.name else Path(previous.get("runtime", Path(previous["root"]) / "runtime")).resolve()
+            retained = retained_runtime(reference, root, runs, getattr(options, "completed_runs", []))
             if not retained.is_relative_to(Path(out).resolve()):
                 raise ValueError(f"Retained runtime leaves this capture: {retained}")
             console = retained / "LogConsole.txt"
@@ -2488,6 +2500,9 @@ def _run_one(options, scenario, run, run_index, out, case_root=None):
             with inherited_environment(private_environments[name]):handle.start()
             launched[name].set()
             record=handle.finish()
+            # A player another box restarts from this one's runtime waits on this end, which that box reads as a fact.
+            if record.get("exit_code") is not None:
+                write_json(Path(handle.out) / PEER_ENDED, {"exit_code": record["exit_code"], "ended": stamp()})
             if getattr(options,'relay_book',None) and not getattr(options,'remote_capture',None):
                 from acceptance_relay_policy import sweep_retained
                 scan=sweep_retained(handle.out,options.relay_book)
@@ -2522,11 +2537,11 @@ def _run_one(options, scenario, run, run_index, out, case_root=None):
         if gate.get("directory_listed") and not directory_session(shared.get("DIRECTORY_ROOT"), port):
             return False
         name = gate["peer"]
-        if gate.get("ended"):
-            return name in records and records[name].get("exit_code") is not None
         # A peer another box plays is known here only by the facts that box reports.
         if name not in runs and hasattr(getattr(options, "remote_capture", None), "peer_fact"):
             return options.remote_capture.peer_fact(gate)
+        if gate.get("ended"):
+            return name in records and records[name].get("exit_code") is not None
         return peer_gate_met(gate, root)
 
     def kill_at_tick(name, tick):
