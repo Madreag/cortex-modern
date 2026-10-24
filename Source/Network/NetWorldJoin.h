@@ -226,6 +226,9 @@ namespace RTE {
 		static constexpr uint32_t c_JournalPendingDeleteFiles = 32;     //!< Failed files keep bounded paths, not frame indexes.
 		static constexpr uint32_t c_JournalDeleteAttempts = 8;          //!< Brief locks get retries; permanent refusals become explicit cleanup files.
 		static constexpr uint32_t c_JournalInventoryBatchFiles = 64;    //!< Stranded files do not grow one inventory pass without bound.
+		static constexpr size_t c_JournalReadFrames = 600;              //!< One read of the journal: many of a reader's datagrams come from it.
+		static constexpr uint64_t c_JournalReadBytes = 1024ULL * 1024;
+		static constexpr size_t c_JournalReads = 8;                     //!< The reads kept for the readers asking again; the least recently used goes first.
 
 		/// The frames a peer's record of its round keeps: the slow-player bound, the delay margin and one capture interval of frames.
 		static size_t RingFrames(uint32_t boundTicks, uint32_t delayMarginFrames, uint64_t captureIntervalMs, double tickMs);

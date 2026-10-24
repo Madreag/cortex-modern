@@ -1,0 +1,362 @@
+{
+  "schema": 1,
+  "name": "mp-resume-from-disk-relay",
+  "port_base": 49402,
+  "size": "960x540",
+  "timeout_s": 240,
+  "title": "Autosave on, both players' processes killed on their own machines, the match resumed from disk there and played on over the relay",
+  "runs": [
+    {
+      "name": "died",
+      "peers": [
+        {
+          "name": "host",
+          "args": [
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-reconnect-ticket",
+            "{OUT}/host.ticket",
+            "-tick-hashes",
+            "-out",
+            "{OUT}/host_trace.json",
+            "-net-match-report",
+            "{OUT}/host-match.json",
+            "-net-autosave-seconds",
+            "1",
+            "-max-ticks",
+            "1200"
+          ],
+          "menu_script": "died.host.menu",
+          "input_script": "mp-resume-from-disk.input.txt",
+          "probe": "mp-resume-from-disk.before.probe.json",
+          "kill_when": {
+            "all": [
+              {
+                "peer": "host",
+                "sim_tick": 601
+              },
+              {
+                "peer": "host",
+                "log": "^\\[autosave\\] retained tick="
+              },
+              {
+                "peer": "client",
+                "log": "^\\[autosave\\] retained tick="
+              }
+            ]
+          },
+          "observe_after_failure": true,
+          "settings": {
+            "NetworkDisplayName": "Host",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always",
+            "NetworkAutosavesKept": "2",
+            "SessionDirectoryUrl": "directory.broserver.com",
+            "NetworkHostRelayMode": "Directory",
+            "NetworkConnectionMode": "RelayOnly",
+            "NetworkIceEnable": 1,
+            "NetworkPortMapEnable": 0
+          }
+        },
+        {
+          "name": "client",
+          "args": [
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-reconnect-ticket",
+            "{OUT}/client.ticket",
+            "-tick-hashes",
+            "-out",
+            "{OUT}/client_trace.json",
+            "-net-match-report",
+            "{OUT}/client-match.json",
+            "-net-autosave-seconds",
+            "1",
+            "-max-ticks",
+            "1200"
+          ],
+          "menu_script": "died.client.menu",
+          "input_script": "mp-resume-from-disk.input.txt",
+          "probe": "mp-resume-from-disk.before.probe.json",
+          "kill_when": {
+            "all": [
+              {
+                "peer": "client",
+                "sim_tick": 601
+              },
+              {
+                "peer": "host",
+                "log": "^\\[autosave\\] retained tick="
+              },
+              {
+                "peer": "client",
+                "log": "^\\[autosave\\] retained tick="
+              }
+            ]
+          },
+          "observe_after_failure": true,
+          "settings": {
+            "NetworkDisplayName": "Joiner",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always",
+            "NetworkAutosavesKept": "2",
+            "SessionDirectoryUrl": "directory.broserver.com",
+            "NetworkHostRelayMode": "Directory",
+            "NetworkConnectionMode": "RelayOnly",
+            "NetworkIceEnable": 1,
+            "NetworkPortMapEnable": 0
+          },
+          "start_when": {
+            "peer": "host",
+            "event": "video_mark resume-host-listening",
+            "timeout_s": 90
+          }
+        }
+      ]
+    },
+    {
+      "name": "resumed",
+      "start_when": {
+        "run": "died",
+        "peers": [
+          "host",
+          "client"
+        ],
+        "ended": true
+      },
+      "peers": [
+        {
+          "name": "host",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "2",
+            "-net-match-ticks",
+            "1200",
+            "-net-match-input-delay",
+            "3",
+            "-net-autosave-seconds",
+            "1",
+            "-net-match-e2e-resync",
+            "-tick-hashes",
+            "-out",
+            "{OUT}/host_trace.json",
+            "-net-reconnect-ticket",
+            "{OUT}/../died/host.ticket",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/host-match.json",
+            "-net-host",
+            "-net-resume-match",
+            "{RESUME_MATCH}",
+            "-net-resume-tick",
+            "{RESUME_TICK}"
+          ],
+          "start_when": {
+            "run": "died",
+            "peer": "host",
+            "ended": true
+          },
+          "input_script": "mp-resume-from-disk.input.txt",
+          "probe": "mp-resume-from-disk.after.probe.json",
+          "observe_after_failure": true,
+          "settings": {
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always",
+            "NetworkAutosavesKept": "2",
+            "SessionDirectoryUrl": "directory.broserver.com",
+            "NetworkHostRelayMode": "Directory",
+            "NetworkConnectionMode": "RelayOnly",
+            "NetworkIceEnable": 1,
+            "NetworkPortMapEnable": 0
+          },
+          "retain_runtime_from": {
+            "run": "died",
+            "peer": "host"
+          }
+        },
+        {
+          "name": "client",
+          "args": [
+            "-net-autosave-seconds",
+            "1",
+            "-tick-hashes",
+            "-out",
+            "{OUT}/client_trace.json",
+            "-net-reconnect-ticket",
+            "{OUT}/../died/client.ticket",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/client-match.json",
+            "-max-ticks",
+            "1200"
+          ],
+          "start_when": {
+            "run": "died",
+            "peer": "client",
+            "ended": true
+          },
+          "input_script": "mp-resume-from-disk.input.txt",
+          "probe": "mp-resume-from-disk.after.probe.json",
+          "observe_after_failure": true,
+          "settings": {
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always",
+            "NetworkAutosavesKept": "2",
+            "SessionDirectoryUrl": "directory.broserver.com",
+            "NetworkHostRelayMode": "Directory",
+            "NetworkConnectionMode": "RelayOnly",
+            "NetworkIceEnable": 1,
+            "NetworkPortMapEnable": 0
+          },
+          "retain_runtime_from": {
+            "run": "died",
+            "peer": "client"
+          },
+          "start_delay_s": 2,
+          "menu_script": "resumed.client.menu"
+        }
+      ],
+      "resume_from": {
+        "run": "died",
+        "peer": "host"
+      }
+    }
+  ],
+  "checklist": [
+    {
+      "id": "resume-autosave-options",
+      "run": "died",
+      "peer": "host",
+      "mark": "resume-autosave-options",
+      "screen": "MultiplayerScreen",
+      "what": "Recovery visibly keeps Autosave on; a typed one-second interval clamps to the shortest valid interval, sixty seconds. The one-second stress cadence is the run's test lever (-net-autosave-seconds 1).",
+      "events": [
+        "assert_checked CheckHostRecAutosave expected=1 actual=1 PASS",
+        "assert_label ComboHostRecAutosaveInterval \"1 second\" text=\"1 second\" PASS"
+      ]
+    },
+    {
+      "id": "resume-original-play-host",
+      "run": "died",
+      "peer": "host",
+      "mark": "resume-play-before-drop",
+      "screen": "game",
+      "what": "The peer plays the original match before either process is killed."
+    },
+    {
+      "id": "resume-two-autosaves-host",
+      "run": "died",
+      "peer": "host",
+      "mark": "resume-two-checkpoints",
+      "screen": "game",
+      "what": "The original match keeps playing after two distinct autosaves at the test lever's one-second cadence have been published.",
+      "log_regex": [
+        "^\\[autosave\\] tick=\\d+ capture_ms=",
+        "^\\[autosave\\] retained tick=\\d+ keep=\\d+ "
+      ]
+    },
+    {
+      "id": "resume-process-drop-host",
+      "run": "died",
+      "peer": "host",
+      "screen": "game",
+      "sim_ticks": [
+        600,
+        650
+      ],
+      "what": "The video ends at the recorded process kill after tick 600, with the disk state retained.",
+      "drop_tick": 601
+    },
+    {
+      "id": "resume-reloaded-host",
+      "run": "resumed",
+      "peer": "host",
+      "mark": "resume-reloaded",
+      "screen": "game",
+      "what": "The relaunched peer displays the restored match and checkpoint tick.",
+      "log_regex": [
+        "\\[autosave\\] resuming match=\\S+ tick=\\d+ activity=.* peers=\\d+ directory=\\S+"
+      ]
+    },
+    {
+      "id": "resume-advances-host",
+      "run": "resumed",
+      "peer": "host",
+      "mark": "resume-play-continued",
+      "screen": "game",
+      "what": "The restored world continues beyond its saved tick with at least 120 further simulation updates.",
+      "sim_progress": 120,
+      "log_regex": [
+        "\\[autosave\\] tick=\\d+ capture_ms="
+      ],
+      "assert": "the resumed round's committed frames across the marked window, which closes on the round's own frame 850 (and no sooner than 5 s), so a loaded box stretches the window instead of thinning it"
+    },
+    {
+      "id": "resume-original-play-client",
+      "run": "died",
+      "peer": "client",
+      "mark": "resume-play-before-drop",
+      "screen": "game",
+      "what": "The peer plays the original match before either process is killed."
+    },
+    {
+      "id": "resume-two-autosaves-client",
+      "run": "died",
+      "peer": "client",
+      "mark": "resume-two-checkpoints",
+      "screen": "game",
+      "what": "The original match keeps playing after two distinct autosaves at the test lever's one-second cadence have been published.",
+      "log_regex": [
+        "^\\[autosave\\] tick=\\d+ capture_ms=",
+        "^\\[autosave\\] retained tick=\\d+ keep=\\d+ "
+      ]
+    },
+    {
+      "id": "resume-process-drop-client",
+      "run": "died",
+      "peer": "client",
+      "screen": "game",
+      "sim_ticks": [
+        600,
+        650
+      ],
+      "what": "The video ends at the recorded process kill after tick 600, with the disk state retained.",
+      "drop_tick": 601
+    },
+    {
+      "id": "resume-reloaded-client",
+      "run": "resumed",
+      "peer": "client",
+      "mark": "resume-reloaded",
+      "screen": "game",
+      "what": "The relaunched peer displays the restored match and checkpoint tick.",
+      "log_regex": [
+        "\\[autosave\\] resume offer match=\\S+ tick=\\d+ (held locally|not held: .*)"
+      ]
+    },
+    {
+      "id": "resume-advances-client",
+      "run": "resumed",
+      "peer": "client",
+      "mark": "resume-play-continued",
+      "screen": "game",
+      "what": "The restored world continues beyond its saved tick with at least 120 further simulation updates.",
+      "sim_progress": 120,
+      "log_regex": [
+        "\\[autosave\\] tick=\\d+ capture_ms="
+      ],
+      "assert": "the resumed round's committed frames across the marked window, which closes on the round's own frame 850 (and no sooner than 5 s), so a loaded box stretches the window instead of thinning it"
+    }
+  ],
+  "public_directory": true,
+  "scripts": {
+    "died.host.menu": "wait_ms 1800\nactivate ButtonMainToMultiplayer\nwait_ms 600\nsettext TextMultiplayerName Host\nactivate ButtonMultiplayerHostGame\nwait_ms 600\ncombo_select ComboHostActivity P4 Alpha Duel\nsetup_host_port {PORT}\ncombo_select ComboHostPlayers 2\nactivate ButtonHostOptions\nwait_ms 600\nactivate TabHostPageRecovery\nvideo_mark resume-autosave-options\nwait_ms 900\nassert_visible CollectionBoxHostPageRecovery 1\nsetcheck CheckHostRecAutosave 1\nwait_ms 600\nobserve assert_checked CheckHostRecAutosave 1\nobserve assert_enabled ComboHostRecAutosaveInterval 1\nwait_ms 600\nobserve assert_label ComboHostRecAutosaveInterval 1 second\nobserve assert_enabled ButtonHostOptApply 0\nwait_ms 900\nactivate TabHostPageConnection\ncombo_select ComboHostNetVisibility Public (default)\ncombo_select ComboHostNetRelay Game service (default)\nassert_label ComboHostNetVisibility Public (default)\nassert_label ComboHostNetRelay Game service (default)\ndump_host_options\nactivate ButtonHostOptBack\nwait_ms 600\nactivate ButtonMultiplayerCreate\nwait_substate Lobby 90\nwrite_lobby {PROBE_DIR}/lobby.json 90\nassert_substate Lobby\nvideo_mark resume-host-listening\nwait_connected 2 90\nwait_remote_ready 90\nvideo_mark resume-ready-start\ndump_lobby\nassert_enabled ButtonMultiplayerStart 1\nactivate ButtonMultiplayerStart\nwait_file {PROBE_DIR}/ready-to-drop.json 120\nwait_ms 120000\n",
+    "died.client.menu": "wait_ms 1800\nactivate ButtonMainToMultiplayer\nwait_ms 600\nsettext TextMultiplayerName Joiner\nactivate ButtonMultiplayerJoinGame\nwait_ms 600\nassert_substate JoinSetup\nwait_file {PROBE_DIR_host}/lobby.json 120\nwait_row PublicGameRowLobby:{PROBE_DIR_host}/lobby.json 120\nclick_row PublicGameRowLobby:{PROBE_DIR_host}/lobby.json\nassert_label LabelJoinSelected internet\nassert_enabled ButtonMultiplayerConnect 1\nactivate ButtonMultiplayerConnect\nwait_connected 2 120\nwait_substate Lobby 60\nwait_ms 900\nassert_substate Lobby\nvideo_mark resume-client-lobby\ndump_lobby\nactivate ButtonMultiplayerReady\nwait_file {PROBE_DIR}/ready-to-drop.json 120\nwait_ms 120000\n",
+    "resumed.client.menu": "wait_ms 1800\nassert_substate Landing\nassert_label ButtonMultiplayerReconnect Rejoin Match\nactivate ButtonMultiplayerReconnect\nwait_connected 2 120\nwait_substate Lobby 60\nwait_ms 900\nactivate ButtonMultiplayerReady\nwait_round_end 300\nwait_ms 1500\nexit\n"
+  }
+}

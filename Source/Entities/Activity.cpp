@@ -11,6 +11,8 @@
 #include "CaptureSentinel.h"
 #include "GameActivity.h"
 
+#include <utility>
+
 #include "CameraMan.h"
 #include "PresetMan.h"
 #include "MovableMan.h"
@@ -1915,9 +1917,12 @@ bool Activity::AdoptNetLocalSeat(const NetMatchConfig& config, uint8_t localPeer
 }
 
 bool Activity::RestoreReturningLocalSeat(Activity& activity, const NetGamePlayerBindings* agreed, const NetMatchConfig* config, uint8_t localPeer) {
-	if (agreed) return activity.ApplyNetPlayerBindings(*agreed);
+	// Its image's load built this seat's menus; the frame it plays the seat again in does not build them a second time.
+	const bool kept = std::exchange(activity.m_KeepNetLocalUI, true);
 	// A seat held since its round began has no agreed binding; a fresh binding would reset every seat's shared state.
-	return config && activity.AdoptNetLocalSeat(*config, localPeer);
+	const bool restored = agreed ? activity.ApplyNetPlayerBindings(*agreed) : config && activity.AdoptNetLocalSeat(*config, localPeer);
+	activity.m_KeepNetLocalUI = kept;
+	return restored;
 }
 
 bool Activity::RunNetLocalPlayerStateSelfTest() {

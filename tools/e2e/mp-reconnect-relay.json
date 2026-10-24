@@ -1,0 +1,200 @@
+{
+  "schema": 1,
+  "name": "mp-reconnect-relay",
+  "port_base": 49475,
+  "size": "960x540",
+  "timeout_s": 480,
+  "title": "A player's game is stopped on its own machine and started again there; it rejoins its running round over the relay",
+  "public_directory": true,
+  "scripts": {
+    "dropped.menu": "wait_ms 1800\nactivate ButtonMainToMultiplayer\nwait_ms 600\nassert_substate Landing\nsettext TextMultiplayerName Joiner\nactivate ButtonMultiplayerJoinGame\nwait_ms 600\nassert_substate JoinSetup\nwait_file {PROBE_DIR_host}/lobby.json 120\nwait_row PublicGameRowLobby:{PROBE_DIR_host}/lobby.json 120\nclick_row PublicGameRowLobby:{PROBE_DIR_host}/lobby.json\nassert_label LabelJoinSelected internet\nassert_enabled ButtonMultiplayerConnect 1\nactivate ButtonMultiplayerConnect\nwait_connected 1 120\nwait_substate Lobby 120\nwait_ms 1200\nactivate ButtonMultiplayerReady\nwait_round_end 900\nexit\n",
+    "rejoined.menu": "wait_ms 1800\nassert_substate Landing\nassert_label ButtonMultiplayerReconnect Rejoin Match\nactivate ButtonMultiplayerReconnect\nwait_round_end 900\nexit\n",
+    "dropped.probe": "{\n  \"schema\": 1,\n  \"timeout_ms\": 300000,\n  \"steps\": [\n    {\n      \"op\": \"wait\",\n      \"editing\": true,\n      \"within_ms\": 180000\n    },\n    {\n      \"op\": \"editor_pick\",\n      \"input_player\": 0\n    },\n    {\n      \"op\": \"editor_move\",\n      \"input_player\": 0,\n      \"x_fraction\": 0.65\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 5,\n      \"elapsed_ms\": 1000\n    },\n    {\n      \"op\": \"assert_editor\",\n      \"input_player\": 0,\n      \"equals\": {\n        \"screen_text\": \"Valid spot - click to INSTALL your brain\"\n      }\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": true\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"game_mouse\",\n      \"button\": \"left\",\n      \"down\": false\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"key_down\",\n      \"key\": \"Return\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3,\n      \"sim_advanced\": 2\n    },\n    {\n      \"op\": \"key_up\",\n      \"key\": \"Return\"\n    },\n    {\n      \"op\": \"wait\",\n      \"renders\": 3\n    },\n    {\n      \"op\": \"wait\",\n      \"editing\": false,\n      \"paused\": false,\n      \"within_ms\": 60000\n    },\n    {\n      \"op\": \"assert\",\n      \"equals\": {\n        \"local_actor_alive\": true\n      }\n    },\n    {\n      \"op\": \"wait\",\n      \"service\": \"Running\",\n      \"within_ms\": 180000\n    },\n    {\n      \"op\": \"wait\",\n      \"service\": \"Running\",\n      \"lockstep_frame_at_least\": 1200,\n      \"ai_held_peer_ids\": [],\n      \"within_ms\": 180000\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark dropped-playing\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 1200,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"dropped-playing\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"finish\"\n    }\n  ]\n}\n",
+    "rejoined.probe": "{\n  \"schema\": 1,\n  \"timeout_ms\": 360000,\n  \"steps\": [\n    {\n      \"op\": \"wait\",\n      \"service\": \"Running\",\n      \"within_ms\": 300000\n    },\n    {\n      \"op\": \"wait\",\n      \"service\": \"Running\",\n      \"control\": \"LabelNetMatchStatus\",\n      \"text_contains\": \"Everyone is connected\",\n      \"equals\": {\n        \"visible\": true\n      },\n      \"within_ms\": 300000\n    },\n    {\n      \"op\": \"wait\",\n      \"service\": \"Running\",\n      \"elapsed_ms\": 3000,\n      \"ai_held_peer_ids\": [],\n      \"within_ms\": 120000\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark rejoined-playing\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 6000,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"rejoined-playing\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert\",\n      \"equals\": {\n        \"service\": \"Running\",\n        \"local_actor_alive\": true\n      }\n    },\n    {\n      \"op\": \"finish\"\n    }\n  ]\n}\n"
+  },
+  "runs": [
+    {
+      "name": "reconnect",
+      "peers": [
+        {
+          "name": "host",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-dedicated",
+            "-net-match-service-preset",
+            "Test Activity",
+            "-net-match-service-module",
+            "Base.rte",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "2",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-net-match-ticks",
+            "30000",
+            "-max-ticks",
+            "30000",
+            "-net-match-report",
+            "{OUT}/host-match.json"
+          ],
+          "lobby_file": "{PROBE_DIR}/lobby.json",
+          "settings": {
+            "SessionDirectoryUrl": "directory.broserver.com",
+            "NetworkHostRelayMode": "Directory",
+            "NetworkConnectionMode": "RelayOnly",
+            "NetworkIceEnable": 1,
+            "NetworkPortMapEnable": 0,
+            "NetworkMatchStatusMode": "Always",
+            "NetworkDisplayName": "Server"
+          },
+          "env": {
+            "CC_TEST_NET_MATCH_E2E_WAIT_PEERS": "1"
+          },
+          "kill_when": {
+            "peer": "rejoined",
+            "probe_complete": true
+          },
+          "observe_after_failure": true
+        },
+        {
+          "name": "dropped",
+          "args": [
+            "-net-reconnect-ticket",
+            "{OUT}/dropped.ticket",
+            "-max-ticks",
+            "30000"
+          ],
+          "menu_script": "dropped.menu",
+          "probe": "dropped.probe",
+          "settings": {
+            "SessionDirectoryUrl": "directory.broserver.com",
+            "NetworkHostRelayMode": "Directory",
+            "NetworkConnectionMode": "RelayOnly",
+            "NetworkIceEnable": 1,
+            "NetworkPortMapEnable": 0,
+            "NetworkMatchStatusMode": "Always",
+            "NetworkDisplayName": "Joiner"
+          },
+          "kill_at_tick": 2400
+        },
+        {
+          "name": "rejoined",
+          "args": [
+            "-net-reconnect-ticket",
+            "{OUT}/dropped.ticket",
+            "-max-ticks",
+            "30000"
+          ],
+          "menu_script": "rejoined.menu",
+          "probe": "rejoined.probe",
+          "settings": {
+            "SessionDirectoryUrl": "directory.broserver.com",
+            "NetworkHostRelayMode": "Directory",
+            "NetworkConnectionMode": "RelayOnly",
+            "NetworkIceEnable": 1,
+            "NetworkPortMapEnable": 0,
+            "NetworkMatchStatusMode": "Always",
+            "NetworkDisplayName": "Joiner"
+          },
+          "start_when": {
+            "peer": "dropped",
+            "ended": true
+          },
+          "after_gate_delay_s": 2,
+          "retain_runtime_from": {
+            "run": "reconnect",
+            "peer": "dropped"
+          },
+          "kill_when": {
+            "peer": "rejoined",
+            "probe_complete": true
+          }
+        }
+      ]
+    }
+  ],
+  "checklist": [
+    {
+      "id": "rc-playing",
+      "run": "reconnect",
+      "peer": "dropped",
+      "mark": "dropped-playing",
+      "screen": "game",
+      "what": "The player plays its seat of the round over the relay before its game is stopped."
+    },
+    {
+      "id": "rc-drop-seen",
+      "run": "reconnect",
+      "peer": "host",
+      "peer_drop": {
+        "peer": "dropped",
+        "tick": 2400
+      },
+      "screen": "game",
+      "sim_ticks": [
+        2400,
+        3100
+      ],
+      "what": "The round plays on while the player's game is stopped on its box.",
+      "assert": "the dropped player's runner record carries injected_termination"
+    },
+    {
+      "id": "rc-dropped-index-kept",
+      "run": "reconnect",
+      "peer": "dropped",
+      "drop_tick": 2400,
+      "what": "The stopped game's recording is collected up to its stop.",
+      "assert": "frames.jsonl is flushed per frame; the manifest is absent on a killed peer, which is expected"
+    },
+    {
+      "id": "rc-rejoin",
+      "run": "reconnect",
+      "peer": "rejoined",
+      "mark": "rejoined-playing",
+      "screen": "game",
+      "service_state": "Running",
+      "ownership_reclaim": {
+        "native": true
+      },
+      "sim_progress": 120,
+      "probe_steps": [
+        2,
+        3,
+        4,
+        5,
+        6
+      ],
+      "what": "Started again on its own box from the stopped game's files, the player presses Rejoin Match and plays its own seat again."
+    },
+    {
+      "id": "rc-relay-dropped",
+      "run": "reconnect",
+      "peer": "dropped",
+      "mark": "dropped-playing",
+      "screen": "game",
+      "what": "Every connection this player makes to its host goes through the relay.",
+      "log_regex": [
+        "^\\[net-ice\\] connected connection=\\d+ after_ms=\\d+ route=relay$"
+      ],
+      "forbidden_log_regex": [
+        "^\\[net-ice\\] connected connection=\\d+ after_ms=\\d+ route=(?!relay$)"
+      ]
+    },
+    {
+      "id": "rc-relay-rejoined",
+      "run": "reconnect",
+      "peer": "rejoined",
+      "mark": "rejoined-playing",
+      "screen": "game",
+      "what": "Every connection this player makes to its host goes through the relay.",
+      "log_regex": [
+        "^\\[net-ice\\] connected connection=\\d+ after_ms=\\d+ route=relay$"
+      ],
+      "forbidden_log_regex": [
+        "^\\[net-ice\\] connected connection=\\d+ after_ms=\\d+ route=(?!relay$)"
+      ]
+    }
+  ]
+}

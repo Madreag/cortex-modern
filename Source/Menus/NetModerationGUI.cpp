@@ -1643,14 +1643,15 @@ bool NetModerationGUI::AutomationWrapLines(const std::string& text, std::string&
 }
 
 bool NetModerationGUI::MatchStatusWanted() const {
-	if (g_SettingsMan.GetNetworkShowDiagnostics() || ScenarioRunner::IsLockstepLocalMachineSlow() || OwnRosterSeatHeld() || ScenarioRunner::IsLockstepOwnSeatHeld()) return true;
+	const auto snapshot = g_NetMatchService.GetLobbySnapshot();
+	// The seat on its way back shows its line from the hold on, before its catch-up replays a frame that reads the seat held.
+	if (g_SettingsMan.GetNetworkShowDiagnostics() || ScenarioRunner::IsLockstepLocalMachineSlow() || NetPlayerPresentation::OwnSeatAway(snapshot)) return true;
 	switch (g_SettingsMan.GetNetworkMatchStatusMode()) {
 		case SettingsMan::NetworkMatchStatusMode::Off: return false;
 		case SettingsMan::NetworkMatchStatusMode::Always: return true;
 		default: break;
 	}
 	// The countdown is still a pause state, so it must not blink the widget off.
-	const auto snapshot = g_NetMatchService.GetLobbySnapshot();
 	bool active = m_Open || snapshot.statusText.starts_with("Host lost") || g_NetMatchService.IsMatchResyncing() || ScenarioRunner::IsLockstepPaused() || ScenarioRunner::GetLockstepResumeCountdown() > 0;
 	if (!active) {
 		// The seats placing their brains hold the world too, and the player is waiting on exactly that.
@@ -1765,7 +1766,8 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	// This player's own seat on its way back, and the other seats the AI plays while their players are away.
 	const bool ownRejoin = !menuLobby && !hostLost && (resyncing || ScenarioRunner::WorldCatchUpActive()) &&
 	                       (OwnRosterSeatHeld() || ScenarioRunner::IsLockstepOwnSeatHeld());
-	const bool ownHeld = !menuLobby && !hostLost && (OwnRosterSeatHeld() || ScenarioRunner::IsLockstepOwnSeatHeld());
+	// A seat on its way back reads held through its catch-up and the lobby its return passes, as the screen watch judges it.
+	const bool ownHeld = !hostLost && NetPlayerPresentation::OwnSeatAway(snapshot);
 	std::string ownHeldCause;
 	if (ownHeld) {
 		if (const auto view = g_NetMatchService.GetSeatView(snapshot.localPeerId)) {
@@ -1802,10 +1804,10 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 			for (const std::string& name: names) fitted.push_back(fit(name));
 			return NamesInWords(fitted);
 		};
-		if (menuLobby) return "In the lobby";
-		if (hostLost) return snapshot.statusText.starts_with("Changing hosts") ? "Changing hosts - the match picks up in a moment" : "Host lost - contacting the next host...";
 		// The toast band suppresses this sentence when the status box already shows it.
 		if (ownHeld) return NetPlayerPresentation::PlayingSummary(true, 0, {});
+		if (menuLobby) return "In the lobby";
+		if (hostLost) return snapshot.statusText.starts_with("Changing hosts") ? "Changing hosts - the match picks up in a moment" : "Host lost - contacting the next host...";
 		if (resyncing) return "Match repair in progress";
 		if (placing) {
 			if (localUnplaced) return "Place your brain";

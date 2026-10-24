@@ -374,6 +374,15 @@ def cross_run_ready(captures, condition):
     return all(any(peer["peer"] == name and peer["record"].get("exit_code") is not None for peer in run["peers"]) for name in names)
 
 
+def retained_runtime(reference, root, runs, completed_runs):
+    """The runtime a restarted peer starts from: its own of an earlier run, or an earlier peer's of this run. In a player run
+    another player run on this box played that peer, and its runtime stays in this run's folder."""
+    if reference["run"] != Path(root).name:
+        previous = prior_peer(completed_runs, reference)
+        return Path(previous.get("runtime", Path(previous["root"]) / "runtime")).resolve()
+    return Path(runs[reference["peer"]].cwd if reference["peer"] in runs else Path(root) / reference["peer"] / "runtime").resolve()
+
+
 def checkpoint_tokens(peer):
     runtime = Path(peer.get("runtime", Path(peer["root"]) / "runtime"))
     store = runtime / "Autosaves"
@@ -402,15 +411,18 @@ def gate_parts(gate):
 def run_preflight(scenario, run, captures, tokens):
     peers = run.get("peers") or scenario.get("peers", [])
     for node in [run, *peers]:
-        kill_gate = node.get("kill_when")
-        # A list of gates drops the peer at the first one met.
-        for gate in (kill_gate if isinstance(kill_gate, list) else [kill_gate] if kill_gate else []):
-            parts = gate_parts(gate)
-            if not isinstance(parts, list) or not parts or any(
-                    not isinstance(part, dict) or part.get("peer") not in {peer["name"] for peer in peers} or
-                    [bool(part.get("event")), part.get("probe_complete") is True, bool(part.get("log")), "sim_tick" in part].count(True) != 1
-                    for part in parts):
-                return {"class": "harness", "reason": "A process-drop gate must name a peer and one of an event, a completed probe, a log line or a sim tick"}
+        # A list of gates drops (or hangs) the peer at the first one met.
+        for key in ("kill_when", "suspend_when"):
+            kill_gate = node.get(key)
+            for gate in (kill_gate if isinstance(kill_gate, list) else [kill_gate] if kill_gate else []):
+                parts = gate_parts(gate)
+                if not isinstance(parts, list) or not parts or any(
+                        not isinstance(part, dict) or part.get("peer") not in {peer["name"] for peer in peers} or
+                        [bool(part.get("event")), part.get("probe_complete") is True, bool(part.get("log")), "sim_tick" in part].count(True) != 1
+                        for part in parts):
+                    return {"class": "harness", "reason": "A process-drop gate must name a peer and one of an event, a completed probe, a log line or a sim tick"}
+        if node.get("suspend_when") and not (isinstance(node.get("suspend_s"), (int, float)) and node["suspend_s"] > 0):
+            return {"class": "harness", "reason": "A process hang needs suspend_s, the seconds the peer stays stopped"}
         condition = node.get("start_when", {})
         if condition.get("run") and not cross_run_ready(captures, condition):
             return {"class": "harness", "reason": f"Previous run has not ended: {condition}"}
@@ -629,6 +641,20 @@ def running_stills(spans, rows, minimum_s=1.0, capped_stop_ms=None, allowed=None
     return stills
 
 
+def stopped_by_scene(peer):
+    """The scene's own whole-process stop of this peer, from the receipt its hang lever wrote: the tick it stopped at and the span
+    on the recorder's clock it drew nothing in."""
+    try:
+        receipt = json.loads((Path(peer.get("probe_dir") or "") / SUSPEND_RECEIPT).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    frame = receipt.get("last_recorded_frame") or {}
+    if receipt.get("error") or "sim_tick" not in frame or "wall_ms" not in frame:
+        return None
+    return {"tick": frame["sim_tick"], "from_ms": frame["wall_ms"], "to_ms": frame["wall_ms"] + receipt.get("suspended_ms", 0),
+            "reason": f"the scene stopped this peer's whole process for {receipt.get('seconds')} s"}
+
+
 def named_still_windows(scenario, run_name, peer, video_dir):
     """The scenario's still states for this peer as recorder-clock windows: from a first mark to its closing mark, or from the
     first picture of a tick window to its last."""
@@ -735,7 +761,7 @@ def freeze_scan(ffmpeg, video, rows, video_dir=None, allowed=None, named=None):
     return stills
 
 
-def recording_health(video_dir, minimum_share=0.9, minimum_duration_s=None):
+def recording_health(video_dir, minimum_share=0.9, minimum_duration_s=None, quiet=()):
     """The recorder's own account of a capture, judged against what it was given: of the frames the engine presented at the
     capture rate (saved, failed to write, or turned away by a full queue), the share it saved, and the longest wait between two
     saved frames that holds a frame it turned away. The engine's own presented rate is reported beside it, never judged here:
@@ -768,6 +794,9 @@ def recording_health(video_dir, minimum_share=0.9, minimum_duration_s=None):
     if drops is not None:
         recorder_gap_ms = 0
         for earlier, later in zip(saved, saved[1:]):
+            # A gap inside a window the scene stopped this engine in is the stop, not the recorder's queue.
+            if any(begin <= earlier and later <= end for begin, end in quiet):
+                continue
             if later - earlier > recorder_gap_ms and bisect.bisect_right(drops, earlier) < bisect.bisect_left(drops, later):
                 recorder_gap_ms = later - earlier
     # More than two slots in a row lost to the queue shows as a still of the recorder's own making.
@@ -1241,12 +1270,14 @@ def capture_evidence_items(scenario, capture, peer):
                     **details, **(dict(finding=dict(class_='harness', reason=error, launch=None, errors=[])) if error else {}))
     output = []
     from feel.harness_cost import reduce_costs
-    cost = reduce_costs([Path(peer['root']) / 'stdout.log'])
+    stopped = stopped_by_scene(peer)
+    cost = reduce_costs([Path(peer['root']) / 'stdout.log'], stopped=(stopped['tick'], stopped['to_ms'] - stopped['from_ms']) if stopped else None)
     output.append(item(f'harness-cost-{name}', cost['rule'], cost['reason'] if cost['status'] != 'PASS' else '',
                        incomplete=cost['status'] == 'INCOMPLETE', instrumentation=cost))
     health, error = None, ''
     try:
-        health = recording_health(peer['video_dir'], minimum_duration_s=minimum) if peer.get('video_dir') else None
+        health = recording_health(peer['video_dir'], minimum_duration_s=minimum,
+                                  quiet=[(stopped['from_ms'] - 1000, stopped['to_ms'] + 2000)] if stopped else ()) if peer.get('video_dir') else None
     except (OSError, ValueError, TypeError) as failed:
         error = f'recording metadata: {type(failed).__name__}: {failed}'
     if health is None: error = error or 'recorder manifest is absent'
@@ -1260,6 +1291,8 @@ def capture_evidence_items(scenario, capture, peer):
     text = log.read_text(encoding='utf-8', errors='replace') if log.is_file() else ''
     # A scene's own lever may freeze a peer's screen on purpose (its stalled host); those windows are named, with the reason, not judged.
     excluded = [spec for spec in scenario.get('drawn_frames_exclude', []) if spec.get('peer') == name]
+    if stopped:
+        excluded.append(dict(peer=name, first_tick=stopped['tick'], last_tick=stopped['tick'] + 1, reason=stopped['reason']))
     exclude = [(spec['first_tick'], spec['last_tick']) for spec in excluded]
     drawn = frame_pace.check(text, 'lockstep', exclude=exclude)
     if drawn['status'] == 'NONE':
@@ -1268,8 +1301,10 @@ def capture_evidence_items(scenario, capture, peer):
     allowed, stills, error = [], None, ''
     ffmpeg = find_ffmpeg()
     try:
+        # The picture a stopped peer leaves on its screen holds from its last frame until it draws again.
+        held = [(stopped['from_ms'] - 1000, stopped['to_ms'] + 2000, stopped['reason'])] if stopped else []
         stills = freeze_scan(ffmpeg, peer.get('video'), read_index(peer['video_dir']) if peer.get('video_dir') else [],
-                             peer.get('video_dir'), allowed, named_still_windows(scenario, capture['name'], name, peer.get('video_dir')))
+                             peer.get('video_dir'), allowed, named_still_windows(scenario, capture['name'], name, peer.get('video_dir')) + held)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as failed:
         error = f'still scan: {type(failed).__name__}: {failed}'
     if stills is None:
@@ -1451,12 +1486,129 @@ def drop_evidence(record, tick):
     return {"path": str(path), "receipt": receipt, "pass": passed}
 
 
+def probe_rejoin_steps(record):
+    """The player's probe from the step that saw its landing's reason to its Rejoin Match press: each step's service, and the press."""
+    try:
+        result = json.loads((Path(record.get("probe_dir") or "") / "net-ui-result.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return [], None
+    script = result.get("script", {}).get("steps", [])
+    observed = {step.get("index"): step.get("observed", {}) for step in result.get("steps", [])}
+    reason = next((index for index, step in enumerate(script) if step.get("control") == "LabelMultiplayerLandingStatus" and step.get("op") == "wait"), None)
+    press = next((index for index, step in enumerate(script) if step.get("command") == "activate ButtonMultiplayerReconnect"), None)
+    if reason is None or press is None:
+        return [], None
+    landed = [{"step": index, "service": observed[index].get("service"), "text": (observed[index].get("control") or {}).get("text")}
+              for index in range(reason, press) if index in observed]
+    return landed, press if press in observed else None
+
+
+HOST_UNRESPONSIVE = re.compile(r"(?m)^\[net-lockstep\] host unresponsive (\d+)ms: the round ends at frame (\d+)")
+HOST_SILENT = re.compile(r"(?m)^\[net-lockstep\] host silent (\d+)ms against ")
+
+
+def host_hang_evidence(record, host, spec):
+    """A player whose host stopped answering past the hold window, each fact on one machine's own clock: the host's stop
+    receipt, the player's round ending at the window with the reason in its console, no silence it sat through past the
+    window, and its first multiplayer-menu frame after its last game frame."""
+    window, grace = int(spec["window_ms"]), int(spec.get("grace_ms", 1000))
+    path = Path(host["probe_dir"]) / SUSPEND_RECEIPT if host else None
+    try:
+        receipt = json.loads(path.read_text(encoding="utf-8")) if path else {}
+    except (OSError, ValueError):
+        receipt = {}
+    root = Path(record["root"])
+    text = (root / "stdout.log").read_text(encoding="utf-8", errors="replace") if (root / "stdout.log").is_file() else ""
+    console = (root / "console.log").read_text(encoding="utf-8", errors="replace") if (root / "console.log").is_file() else ""
+    ended = HOST_UNRESPONSIVE.search(text)
+    silent = [int(value) for value in HOST_SILENT.findall(text)]
+    rows = [row for row in record.get("index", []) if isinstance(row.get("wall_ms"), (int, float))]
+    played = next((index for index, row in enumerate(rows) if row.get("screen") == "game"), None)
+    menu = next((index for index in range(played or 0, len(rows)) if played is not None and rows[index].get("screen") == "MultiplayerScreen"), None)
+    last_game = max((index for index in range(menu or 0) if rows[index].get("screen") == "game"), default=None) if menu else None
+    menu_ms = rows[menu]["wall_ms"] - rows[last_game]["wall_ms"] if menu is not None and last_game is not None else None
+    ended_ms = int(ended[1]) if ended else None
+    # From the reason on its landing until it presses Rejoin Match, the player's service makes no attempt at the silent host.
+    landed, asked = probe_rejoin_steps(record)
+    attempts = [step for step in landed if step["service"] in ("Starting", "ReadyToLaunch", "Running")]
+    reconnect = attempts[0] if attempts else None
+    return_ms = ended_ms + menu_ms if ended_ms is not None and menu_ms is not None else None
+    limit = int(spec.get("return_ms", window + 2 * grace))
+    reasons = [text for failed, text in (
+        (not receipt or receipt.get("error"), f"the host's box recorded no whole-process stop ({path})"),
+        (receipt and receipt.get("suspended_ms", 0) <= window, f"the host was stopped {receipt.get('suspended_ms')} ms, not past the {window} ms window"),
+        (ended is None, "the player's round never ended on the host's silence"),
+        (ended_ms is not None and not window <= ended_ms <= window + grace, f"the round ended {ended_ms} ms into the host's silence"),
+        (silent and max(silent) >= window + grace, f"the player sat through {max(silent or [0])} ms of the host's silence"),
+        # The landing's own label, as the probe read it when it showed the reason; a console a killed engine never flushed may lack it.
+        (spec.get("line") and not (landed and landed[0]["text"] == spec["line"]) and "NETWORK: " + spec["line"] not in console,
+         "the reason is not on the player's landing or in its console word for word"),
+        (not landed or asked is None, "the probe never reached the landing's reason and the player's Rejoin Match"),
+        (reconnect is not None, "the player was put back to waiting on the silent host before it asked to rejoin"),
+        (return_ms is None, "no multiplayer-menu frame after the player's last game frame"),
+        (return_ms is not None and return_ms > limit, f"the player was back on the multiplayer menu {return_ms} ms into the host's silence")) if failed]
+    return {"receipt": receipt, "receipt_path": str(path) if path else None, "round_ended_ms": ended_ms,
+            "round_end_frame": int(ended[2]) if ended else None, "longest_silence_reported_ms": max(silent) if silent else None,
+            "menu_after_last_game_frame_ms": menu_ms, "return_ms": return_ms, "return_limit_ms": limit, "window_ms": window,
+            "reconnected_before_asked": reconnect is not None, "landing_services": [step["service"] for step in landed],
+            "pass": not reasons, "reason": "; ".join(reasons) or None}
+
+
+HOST_AUTOSAVE = re.compile(r"(?m)^\[autosave\] tick=(\d+) capture_ms=")
+CATCH_UP = re.compile(r"(?m)^(?:\[net-world\] catch-up complete peer=\d+ at=|\[net-match\] private catch-up complete frame=)(\d+) ")
+
+
+def world_return_evidence(record, host):
+    """A player back in its host's world after the host stopped answering: the host's last save before it stopped (its own
+    log and stop receipt), and the tick the player's return stands on (its own log, after it pressed Rejoin Match)."""
+    path = Path(host["probe_dir"]) / SUSPEND_RECEIPT if host else None
+    try:
+        receipt = json.loads(path.read_text(encoding="utf-8")) if path else {}
+    except (OSError, ValueError):
+        receipt = {}
+    hung_at = (receipt.get("last_recorded_frame") or {}).get("sim_tick")
+    host_log = Path(host["root"]) / "stdout.log" if host else None
+    saves = [int(tick) for tick in HOST_AUTOSAVE.findall(host_log.read_text(encoding="utf-8", errors="replace"))] if host_log and host_log.is_file() else []
+    before = max((tick for tick in saves if hung_at is not None and tick <= hung_at), default=None)
+    text = (Path(record["root"]) / "stdout.log").read_text(encoding="utf-8", errors="replace") if (Path(record["root"]) / "stdout.log").is_file() else ""
+    # Nothing reconnected before the press (the hang's own check), so the first return after the round's end is the pressed one.
+    ended = HOST_UNRESPONSIVE.search(text)
+    _, asked = probe_rejoin_steps(record)
+    returns = [int(tick) for tick in CATCH_UP.findall(text[ended.end():])] if ended else []
+    back_at = returns[0] if returns else None
+    reasons = [text for failed, text in (
+        (hung_at is None, f"the host's box recorded no stop with its last frame ({path})"),
+        (before is None, "the host saved nothing before it stopped answering"),
+        (ended is None, "the player's round never ended on the host's silence"),
+        (asked is None, "the player never pressed Rejoin Match"),
+        (back_at is None, "the player's return never caught up with the world"),
+        (back_at is not None and before is not None and back_at < before, f"the player came back at tick {back_at}, before the host's last save at {before}")) if failed]
+    return {"host_stopped_at_tick": hung_at, "host_saves": saves[:50], "last_save_before_stop": before, "player_back_at_tick": back_at,
+            "pass": not reasons, "reason": "; ".join(reasons) or None}
+
+
 def completed_probe(path):
     try:
         result = json.loads(Path(path).read_text(encoding="utf-8"))
         return isinstance(result, dict) and result.get("complete") is True and result.get("pass") is True
     except (OSError, ValueError):
         return False
+
+
+def peer_gate_met(gate, root):
+    """One peer's own fact, read from its files under the run root: its end, a finished probe, a log line, a recorded tick or an event."""
+    name, root = gate["peer"], Path(root)
+    if gate.get("ended"):
+        return (root / name / PEER_ENDED).is_file()
+    if gate.get("probe_complete"):
+        return completed_probe(root / f"{name}-stage" / "probe" / "net-ui-result.json")
+    if gate.get("log"):
+        return log_line_seen(root / name / "stdout.log", gate["log"])
+    video = root / name / "video"
+    if "sim_tick" in gate:
+        return any(row.get("screen") == "game" and row.get("sim_tick", 0) >= gate["sim_tick"] for row in read_index(video))
+    path = video / "events.jsonl"
+    return path.is_file() and gate["event"] in path.read_text(encoding="utf-8", errors="replace")
 
 
 def window_progress(observed, required):
@@ -1891,6 +2043,17 @@ def review(scenario, capture, out):
                 assertions["peer_drop"] = {"peer": required["peer"], **drop_evidence(witness, required["tick"])}
                 if not assertions["peer_drop"]["pass"]:
                     assertions.update(probe="fail", reason="The other peer has no matching recorded process drop")
+            if item.get("world_return"):
+                host = next((row for row in capture["peers"] if row["peer"] == item["world_return"]["host"]), None)
+                assertions["world_return"] = {"host": item["world_return"]["host"], **world_return_evidence(record, host)}
+                if not assertions["world_return"]["pass"]:
+                    assertions.update(probe="fail", reason=assertions["world_return"]["reason"])
+            if item.get("host_hang"):
+                required = item["host_hang"]
+                host = next((row for row in capture["peers"] if row["peer"] == required["host"]), None)
+                assertions["host_hang"] = {"host": required["host"], **host_hang_evidence(record, host, required)}
+                if not assertions["host_hang"]["pass"]:
+                    assertions.update(probe="fail", reason=assertions["host_hang"]["reason"])
             video_frames = found if record.get("video") else None
             encode_result = record.get("encode", {})
             seconds = None
@@ -2050,6 +2213,49 @@ def stage_peer(scenario, peer, root, tokens):
     return environment
 
 
+SUSPEND_RECEIPT = "injected-suspend.json"
+PEER_ENDED = "ended.json"
+
+
+def hang_peer(handle, seconds, stop):
+    """Stops every thread of a peer's engine for the given seconds, then lets it run on: a machine that stops answering.
+    A stalled simulation is not this; its network thread still answers."""
+    started, receipt = time.monotonic(), {"suspended": stamp(), "seconds": seconds}
+    if hasattr(handle, "suspend"):
+        receipt["method"] = "runner suspend"
+        stop_process, continue_process = handle.suspend, handle.resume
+    elif sys.platform == "win32":
+        import ctypes
+        ntdll, process = ctypes.WinDLL("ntdll"), ctypes.c_void_p(handle.process)
+        receipt["method"] = "NtSuspendProcess"
+
+        def native(call):
+            status = call(process)
+            if status:
+                raise RuntimeError(f"process suspension failed with native status {status}")
+
+        stop_process, continue_process = (lambda: native(ntdll.NtSuspendProcess)), (lambda: native(ntdll.NtResumeProcess))
+    else:
+        import signal
+        # The engine leads its own process group, on the far side of a local hop too.
+        group = handle.engine_pid
+        receipt.update(method="SIGSTOP", group=group)
+        stop_process, continue_process = (lambda: os.killpg(group, signal.SIGSTOP)), (lambda: os.killpg(group, signal.SIGCONT))
+    try:
+        stop_process()
+    except (ProcessLookupError, RuntimeError, OSError) as error:
+        return {**receipt, "error": f"{type(error).__name__}: {error}", "suspended_ms": 0}
+    try:
+        # A capture that stops early lets the peer run on at once, so its runner can end it.
+        stop.wait(seconds)
+    finally:
+        try:
+            continue_process()
+        except (ProcessLookupError, RuntimeError, OSError) as error:
+            receipt["resume_error"] = f"{type(error).__name__}: {error}"
+    return {**receipt, "resumed": stamp(), "suspended_ms": round((time.monotonic() - started) * 1000)}
+
+
 def drop_peer(handle, reason="scenario drop"):
     """Kills one peer through its runner. A peer that already finished is not a failure here."""
     try:
@@ -2063,6 +2269,24 @@ def peer_arguments(peer, tokens, fps):
     if peer.get("menu_script"):
         args += ["-menu-script", str(tokens["MENU_SCRIPT"])]
     return args + [str(value) for value in substitute(peer.get("args", []), tokens)]
+
+
+LISTED_SESSION = re.compile(r"(?m)^\[net-directory\] registered session_id=(\S+) heartbeat_s=\d+")
+
+
+def write_listed_lobby(log, path):
+    """A host without a menu names its listed lobby as a menu's write_lobby does, from its own registered-session line;
+    a host that lists again under a new session names the new one."""
+    found = LISTED_SESSION.findall(log.read_text(encoding="utf-8", errors="replace")) if log.is_file() else []
+    if not found:
+        return
+    text = json.dumps({"session_id": found[-1]}) + "\n"
+    if path.is_file() and path.read_text(encoding="utf-8") == text:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    partial = path.with_name(path.name + ".part")
+    partial.write_text(text, encoding="utf-8")
+    os.replace(partial, path)
 
 
 def gameplay_signals(video, stage, epochs=1):
@@ -2113,7 +2337,8 @@ def _run_one(options, scenario, run, run_index, out, case_root=None):
         if Path(case_root).resolve() != root.resolve() or not root.is_dir():
             raise ValueError("named case does not own this scenario run root")
     elif not dry:
-        root.mkdir(parents=True, exist_ok=False)
+        # Two players of one seat, each in its own player run, share the run's folder on their box.
+        root.mkdir(parents=True, exist_ok=getattr(options, "shared_run_root", False))
     size = options.size or run.get("size") or scenario.get("size") or DEFAULT_SIZE
     width, height = (int(part) for part in size.split("x"))
     port = port_for(run_index, options.port)
@@ -2197,7 +2422,7 @@ def _run_one(options, scenario, run, run_index, out, case_root=None):
         retained = None
         if reference:
             previous = prior_peer(getattr(options, "completed_runs", []), reference)
-            retained = Path(runs[reference["peer"]].cwd).resolve() if reference["run"] == root.name else Path(previous.get("runtime", Path(previous["root"]) / "runtime")).resolve()
+            retained = retained_runtime(reference, root, runs, getattr(options, "completed_runs", []))
             if not retained.is_relative_to(Path(out).resolve()):
                 raise ValueError(f"Retained runtime leaves this capture: {retained}")
             console = retained / "LogConsole.txt"
@@ -2261,6 +2486,8 @@ def _run_one(options, scenario, run, run_index, out, case_root=None):
                         "stage": str(stage), "probe_dir": str(stage / "probe"),
                         "gameplay_signal": str(stage / "gameplay-started.json"),
                         "start_delay_s": peer.get("start_delay_s", 0)}
+        if peer.get("lobby_file"):
+            staged[name]["lobby_file"] = str(substitute(peer["lobby_file"], tokens))
 
     if dry:
         return {"name": root.name, "root": str(root), "size": size, "port": port, "peers": list(staged.values())}
@@ -2274,6 +2501,9 @@ def _run_one(options, scenario, run, run_index, out, case_root=None):
             with inherited_environment(private_environments[name]):handle.start()
             launched[name].set()
             record=handle.finish()
+            # A player another box restarts from this one's runtime waits on this end, which that box reads as a fact.
+            if record.get("exit_code") is not None:
+                write_json(Path(handle.out) / PEER_ENDED, {"exit_code": record["exit_code"], "ended": stamp()})
             if getattr(options,'relay_book',None) and not getattr(options,'remote_capture',None):
                 from acceptance_relay_policy import sweep_retained
                 scan=sweep_retained(handle.out,options.relay_book)
@@ -2308,17 +2538,12 @@ def _run_one(options, scenario, run, run_index, out, case_root=None):
         if gate.get("directory_listed") and not directory_session(shared.get("DIRECTORY_ROOT"), port):
             return False
         name = gate["peer"]
+        # A peer another box plays is known here only by the facts that box reports.
+        if name not in runs and hasattr(getattr(options, "remote_capture", None), "peer_fact"):
+            return options.remote_capture.peer_fact(gate)
         if gate.get("ended"):
             return name in records and records[name].get("exit_code") is not None
-        if gate.get("probe_complete"):
-            return completed_probe(Path(shared[f"PROBE_DIR_{name}"]) / "net-ui-result.json")
-        if gate.get("log"):
-            return log_line_seen(root / name / "stdout.log", gate["log"])
-        video = Path(shared[f"VIDEO_{name}"])
-        if "sim_tick" in gate:
-            return any(row.get("screen") == "game" and row.get("sim_tick", 0) >= gate["sim_tick"] for row in read_index(video))
-        path = video / "events.jsonl"
-        return path.is_file() and gate["event"] in path.read_text(encoding="utf-8", errors="replace")
+        return peer_gate_met(gate, root)
 
     def kill_at_tick(name, tick):
         video = Path(shared[f"VIDEO_{name}"])
@@ -2342,7 +2567,7 @@ def _run_one(options, scenario, run, run_index, out, case_root=None):
                 probe = next((part for part in gate_parts(gate) if part.get("probe_complete")), None)
                 # A peer dropped because a probe finished ends a scenario, not a fault: its recorder writes the
                 # frames it already took first, so the probe's last marked window keeps its video.
-                flushed = await_recorder(shared[f"VIDEO_{probe['peer']}"], stop_watchers) if probe else None
+                flushed = await_recorder(shared[f"VIDEO_{probe['peer']}"], stop_watchers) if probe and probe["peer"] in runs else None
                 rows = read_index(shared[f"VIDEO_{name}"])
                 receipt = {"requested_event": gate, "last_recorded_frame": rows[-1] if rows else None, "recorder_flush": flushed}
                 # A gate on the peer's own tick is a drop after that recorded tick, as kill_at_tick receipts it.
@@ -2357,6 +2582,20 @@ def _run_one(options, scenario, run, run_index, out, case_root=None):
                 if probe:
                     await_watch_flush(root / name / "stdout.log", stop_watchers)
                 drop_peer(runs[name], "scenario drop after " + description)
+                return
+
+    def suspend_when(name, gates, seconds):
+        gates = gates if isinstance(gates, list) else [gates]
+        while not stop_watchers.wait(.05):
+            if name in records:
+                return
+            gate = next((candidate for candidate in gates if gate_met(candidate)), None)
+            if gate:
+                rows = read_index(shared[f"VIDEO_{name}"])
+                receipt = {"requested_event": gate, "last_recorded_frame": rows[-1] if rows else None}
+                receipt.update(hang_peer(runs[name], seconds, stop_watchers))
+                # The receipt lands where the peer's signals live, so another player's script can wait for the peer's return.
+                write_json(Path(shared[f"PROBE_DIR_{name}"]) / SUSPEND_RECEIPT, receipt)
                 return
 
     def kill_after_seconds(name, seconds):
@@ -2378,7 +2617,8 @@ def _run_one(options, scenario, run, run_index, out, case_root=None):
                     break
             gate = peer.get("start_when")
             if gate:
-                native_launch = launched[gate["peer"]] if getattr(options, "remote_capture", None) and not gate.get("run") else None
+                # A peer another box plays has started before this one is launched.
+                native_launch = launched.get(gate["peer"]) if getattr(options, "remote_capture", None) and not gate.get("run") else None
                 if not await_start_gate(gate, gate_met, failed, native_launch):
                     records[name] = {"error": f"start gate not reached: {gate}"}
                     failed.set()
@@ -2405,6 +2645,10 @@ def _run_one(options, scenario, run, run_index, out, case_root=None):
                 killers.append(watcher)
             if peer.get("kill_when"):
                 watcher = threading.Thread(target=kill_when, args=(name, peer["kill_when"]), daemon=True)
+                watcher.start()
+                killers.append(watcher)
+            if peer.get("suspend_when"):
+                watcher = threading.Thread(target=suspend_when, args=(name, peer["suspend_when"], float(peer["suspend_s"])), daemon=True)
                 watcher.start()
                 killers.append(watcher)
         def measure_footprint():
@@ -2441,6 +2685,8 @@ def _run_one(options, scenario, run, run_index, out, case_root=None):
                 epochs = next(peer.get("gameplay_epochs", 1) for peer in peers if peer["name"] == name)
                 if not signal.exists() or epochs > 1:
                     gameplay_signals(shared[f"VIDEO_{name}"], staged[name]["stage"], epochs)
+                if staged[name].get("lobby_file"):
+                    write_listed_lobby(root / name / "stdout.log", Path(staged[name]["lobby_file"]))
             if failed.is_set():
                 for handle in runs.values():
                     drop_peer(handle, "another scenario peer failed")

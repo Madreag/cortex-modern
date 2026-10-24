@@ -7871,9 +7871,11 @@ namespace RTE {
 			if (!authority || timing.peerId > 4 || timing.applyFrame < m_Stats.nextFrame) return;
 			const auto prior = m_ReclaimTransactions.find(timing.peerId);
 			if (prior != m_ReclaimTransactions.end() && prior->second.eventSequence >= timing.revision) return;
-			// A returning player comes back as a new incarnation; the host's own seat comes back on the connection it never left.
+			// A returning player comes back as a new incarnation; the host's own seat comes back on the connection it never left, and a
+			// seat back in place already starts at the incarnation its own return names.
 			const uint32_t known = m_Config.peerIncarnations[timing.peerId];
-			if (timing.peerId == GetHostPeerId() ? timing.seatIncarnations[timing.peerId - 1] < known : timing.seatIncarnations[timing.peerId - 1] <= known) return;
+			const bool sameIncarnationReturns = timing.peerId == GetHostPeerId() || (timing.peerId == m_Config.localPeerId && m_Config.joinsRunningRound);
+			if (sameIncarnationReturns ? timing.seatIncarnations[timing.peerId - 1] < known : timing.seatIncarnations[timing.peerId - 1] <= known) return;
 			const auto pending = m_TimingDecisions.find(timing.revision);
 			NetLockstepTiming proposed = timing; proposed.phase = NetTimingPhase::Propose;
 			if (pending != m_TimingDecisions.end() && pending->second.proposal != proposed) {

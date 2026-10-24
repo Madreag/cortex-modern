@@ -9583,6 +9583,53 @@ namespace RTE {
 			return true;
 		}
 
+		// A world seat that catches up in place starts its round already at the incarnation its return names. The host announces the
+		// return and orders it at once; both reach the seat before its first frame. The order was dropped as an old incarnation's, so
+		// the announcement stayed open, the seat never played its first frame, and the host held it again.
+		bool TestAReturnerTakesItsOwnAnnouncedReturn(std::string* error) {
+			LoopbackTransport hostWire, clientWire;
+			if (!hostWire.StartHost(49553, error) || !clientWire.Connect("loopback", 49553, error)) return false;
+			NetLockstepConfig config;
+			config.sessionId = 0x9A57; config.roundId = 57; config.localPeerId = 2; config.peerCount = 2; config.authorityPeerId = 1;
+			config.startFrame = 898; config.joinsRunningRound = true; config.inputDelayFrames = 4;
+			config.timeoutMs = 60000; config.simTickMs = c_DefaultDeltaTimeS * 1000.0;
+			config.remoteTransportPeerIds = {{1, 1}};
+			config.scenario = "LockstepSelfTest"; config.ownershipPolicy = "unique-id-split";
+			config.matchConfig = NetMatchConfigUtil::MakeDefault(config.sessionId);
+			config.matchConfig.peerCount = 2;
+			config.activePeerIds = {1, 2};
+			config.peerIncarnations = {{1, 1}, {2, 2}};
+			NetLockstepCoordinator client;
+			if (!client.Start(clientWire, config, error)) return false;
+			NetLockstepTiming announced;
+			announced.senderPeerId = 1; announced.peerId = 2; announced.action = NetTimingAction::Reclaim; announced.phase = NetTimingPhase::Propose;
+			announced.sessionId = config.sessionId; announced.roundId = 57; announced.revision = 7; announced.applyFrame = 898; announced.cutoffFrame = 898;
+			announced.delayFrames = 4; announced.neutralThroughFrame = 926; announced.heldPeers = 2; announced.requiredPeers = 1; announced.seatIncarnations[1] = 2;
+			NetLockstepTiming ordered = announced;
+			ordered.phase = NetTimingPhase::ReclaimAtFrame;
+			NetLockstepStart start;
+			start.sessionId = config.sessionId; start.roundId = 57; start.localPeerId = 1; start.peerCount = 2; start.startFrame = 898; start.inputDelayFrames = 4;
+			start.controllerFrameVersion = ControllerFrame::c_Version;
+			start.controllerFrameEncodedSize = static_cast<uint16_t>(ControllerFrame::c_EncodedSize);
+			start.scenario = "LockstepSelfTest"; start.ownershipPolicy = "unique-id-split";
+			uint64_t now = 0;
+			for (const NetLockstepPacket& packet: {NetLockstepPacket{announced}, NetLockstepPacket{ordered}, NetLockstepPacket{start}}) {
+				NetTransportEvent event;
+				event.type = NetTransportEventType::PacketReceived; event.peerId = 1; event.lane = NetTransportLane::ControlReliable;
+				if (!NetLockstepCodec::Encode(packet, event.bytes)) { *error = "a packet of the return would not encode"; return false; }
+				client.InjectEvent(event, now);
+				for (const uint64_t until = now + 20; now < until; ++now) { hostWire.AdvanceTimeMs(1); clientWire.AdvanceTimeMs(1); client.Tick(now); }
+			}
+			if (!client.IsRunning() || client.TimingDecisionPendingAt(898) || !client.ReclaimTransactions().contains(2)) {
+				*error = "a seat back in place left its own announced return open: state=" + std::string(NetLockstepCoordinator::StateName(client.GetState())) +
+				         " pending_at_first_frame=" + std::to_string(client.TimingDecisionPendingAt(898)) + " return_taken=" + std::to_string(client.ReclaimTransactions().contains(2)) +
+				         " " + client.DescribePendingTimingDecisions(898);
+				return false;
+			}
+			std::cout << "[net-lockstep-selftest] PASS a_returner_takes_its_own_announced_return" << std::endl;
+			return true;
+		}
+
 		// A seat back from its second hold sets its round up from the tail it replayed, which stopped before the round re-sized another
 		// member's delay; the member start the host hands it is the first word of that change and must not end its round.
 		bool TestAReturnerTakesAMemberDelayResizedAfterItsTail(std::string* error) {
@@ -34295,6 +34342,7 @@ namespace {
 		row([](std::string* rowError) { return TestAJoinerTakesADelayDecidedForItsTail(rowError); }, "TestAJoinerTakesADelayDecidedForItsTail");
 		row([](std::string* rowError) { return TestAJoinerTakesASeatReturnedBeforeIt(rowError); }, "TestAJoinerTakesASeatReturnedBeforeIt");
 		row([](std::string* rowError) { return TestAReturnerStartsAtItsReturnsDelay(rowError); }, "TestAReturnerStartsAtItsReturnsDelay");
+		row([](std::string* rowError) { return TestAReturnerTakesItsOwnAnnouncedReturn(rowError); }, "TestAReturnerTakesItsOwnAnnouncedReturn");
 		row([](std::string* rowError) { return TestAReturnerTakesAMemberDelayResizedAfterItsTail(rowError); }, "TestAReturnerTakesAMemberDelayResizedAfterItsTail");
 		row([](std::string* rowError) { return TestAHandoverEndpointCarriesItsIceRoute(rowError); }, "TestAHandoverEndpointCarriesItsIceRoute");
 		row([](std::string* rowError) { return TestAJoinerTakesAReturnDecidedAfterItsStart(rowError); }, "TestAJoinerTakesAReturnDecidedAfterItsStart");

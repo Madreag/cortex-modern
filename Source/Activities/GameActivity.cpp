@@ -4531,6 +4531,11 @@ bool GameActivity::RestoreNetLocalPlayerState(const NetLocalPlayerState& state) 
 
 bool GameActivity::CreateNetLocalUI() {
 	if (m_SharedPlayerSeats) RefreshLockstepLocalPlayers();
+	std::string seats = std::to_string(g_WindowMan.GetResX()) + "x" + std::to_string(g_WindowMan.GetResY());
+	for (int player = 0; player < Players::MaxPlayerCount; ++player) {
+		seats += IsSeatActive(player) && IsLocalHumanSeat(player) ? " " + std::to_string(m_PlayerScreen[player]) + ":" + std::to_string(m_Team[player]) : std::string(" -");
+	}
+	if (m_KeepNetLocalUI && seats == m_NetLocalUISeats) return true;
 	GUICheckpoint::NetLocalRestoreScope localUI;
 	const uint8_t humanCount = GetLocalHumanCount();
 	const bool wide = static_cast<float>(g_WindowMan.GetResX()) / g_WindowMan.GetResY() >= 1.6F;
@@ -4564,6 +4569,7 @@ bool GameActivity::CreateNetLocalUI() {
 			!RestoreNetLocalBanner(m_pBannerRed[player], red.SaveCheckpoint(), "Base.rte/GUIs/Fonts/BannerFontRedReg.png", "Base.rte/GUIs/Fonts/BannerFontRedBlur.png") ||
 			!RestoreNetLocalBanner(m_pBannerYellow[player], yellow.SaveCheckpoint(), "Base.rte/GUIs/Fonts/BannerFontYellowReg.png", "Base.rte/GUIs/Fonts/BannerFontYellowBlur.png")) return false;
 	}
+	m_NetLocalUISeats = seats;
 	return true;
 }
 
