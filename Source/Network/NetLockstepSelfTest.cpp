@@ -191,6 +191,69 @@ namespace RTE {
 			return true;
 		}
 
+		// The fast machine of a scene ran behind its pace on the slow host and drew one frame 84 ms after the last: it waited 28, 16 and
+		// 30 ms on that host for three ticks of the same frame, each inside the bound measured from the tick before it. The waits a drawn
+		// frame shows past their ticks' slots share one bound; a machine drawing several ticks a frame at its pace shows none of them.
+		static bool ADrawnFrameShowsOneBoundOfLateWaits(std::string* error) {
+			enum class Arm { Behind, AtPace, DrawnBetween };
+			for (const Arm arm: {Arm::Behind, Arm::AtPace, Arm::DrawnBetween}) {
+				Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
+				peer.m_Config.localPeerId = 1;
+				peer.m_Config.peerCount = peer.m_Config.matchConfig.peerCount = 2;
+				peer.m_Config.matchConfig.players.resize(2);
+				peer.m_Config.matchConfig.successorOrder = {2};
+				peer.m_Config.peerFrameGroups = peer.m_Config.substituteSlowPeers = true;
+				peer.m_Config.slowPlayerBoundTicks = 3;
+				peer.m_Config.inputDelayFrames = 4;
+				peer.m_Config.frameTieReferee = [](const NetFrameTieRequest&) { NetFrameTieReply reply; reply.state = NetFrameTieReply::State::Waiting; return reply; };
+				peer.m_RoundConfigHash = NetMatchConfigUtil::HashConfig(peer.m_Config.matchConfig);
+				peer.m_MigrationPhase = NetHostMigrationPhase::None;
+				peer.m_FrameGroupMembers = 3; peer.m_FrameGroupChanges = {{1, 3}};
+				peer.m_RemotePeerIds = {2}; peer.m_RemoteTransports = {{2, 42}};
+				for (uint64_t frame = 348; frame <= 350; ++frame) peer.m_MigrationHistory[frame] = {1, 2};
+				peer.m_PeerPaceStartFrame = 348; peer.m_PeerPaceStartMs = 1000;
+				// Behind: the frame drawn at 1100 runs ticks 349 and 350, long past their slots at 1017 and 1033, waiting 28 and 16 ms.
+				// At its pace: the frame drawn at 1000 reaches each tick before its slot and waits for it. Drawn between: the same as behind
+				// with a frame drawn after tick 349.
+				const uint64_t drawn = arm == Arm::AtPace ? 1000 : 1100;
+				peer.NotePresented(drawn);
+				uint64_t now = drawn;
+				for (const uint64_t frame: {349ULL, 350ULL}) {
+					const uint64_t waited = arm == Arm::AtPace ? static_cast<uint64_t>(std::floor(*peer.PeerPaceSlotMs(frame))) - now : frame == 349 ? 28 : 16;
+					peer.m_Stats.nextFrame = frame;
+					peer.m_ConsumerWaitingFrame = frame; peer.m_ConsumerWaitStartMs = now;
+					now += waited;
+					peer.FinishFrameWait(now);
+					peer.m_LastCompletedSimulationTick = frame; peer.m_PeerConsumerAtMs = ++now;
+					if (arm == Arm::DrawnBetween && frame == 349) peer.NotePresented(now);
+				}
+				peer.m_Stats.nextFrame = 351;
+				peer.m_FirstMissingFrame = 351; peer.m_FirstMissingMs = now;
+				peer.m_ConsumerWaitingFrame = 351; peer.m_ConsumerWaitStartMs = now;
+				ControllerFrame controls; controls.actorUniqueID = 1001;
+				NetLockstepFrame input; input.senderPeerId = 1; input.roundId = 77; input.targetFrame = 351; input.frames = {controls};
+				peer.m_PeerSourceInputs[351][1] = input;
+				peer.m_LocalFrames[351] = input.frames;
+				peer.m_PeerInputSentAtMs[351] = 1000;
+				peer.m_PeerInputReceipts[1][2] = 352;
+				// The rest of the bound after the late waits this frame showed: 50 - 44 behind, 50 - 16 with a frame drawn between, 50 at pace.
+				const uint64_t heldAt = now + (arm == Arm::Behind ? 6 : arm == Arm::DrawnBetween ? 34 : 50);
+				const char* name = arm == Arm::Behind ? "behind its pace" : arm == Arm::DrawnBetween ? "with a frame drawn between its waits" : "at its pace";
+				peer.m_TimingNowMs = heldAt - 1;
+				if (peer.ProposePeerBridge(351, peer.m_TimingNowMs) || peer.IsSeatUnderAI(2, 351)) {
+					*error = std::string("a survivor ") + name + " held the other seat " + std::to_string(peer.m_TimingNowMs - now) + " ms into its wait, before its drawn frame spent the bound";
+					return false;
+				}
+				peer.m_TimingNowMs = heldAt;
+				if (!peer.ProposePeerBridge(351, peer.m_TimingNowMs) || !peer.IsSeatUnderAI(2, 351)) {
+					*error = std::string("drawn-frame-past-the-bound: a survivor ") + name + " still waited " + std::to_string(heldAt - now) +
+					         " ms into its third wait of one drawn frame, which then shows its late waits past the 50 ms bound";
+					return false;
+				}
+			}
+			return true;
+		}
+
 		// The relay runs held a silent host 50 ms after the survivor's last tick and showed the held tick 50.26 ms after it: the tick's
 		// own work landed past the bound. The hold leaves that work inside the bound; with none measured the input keeps the whole
 		// window, and a machine slower than a quarter tick a tick spends no more of the other seat's window than that.
@@ -33855,6 +33918,12 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS relay_jitter_does_not_make_a_fast_machine_slow\n[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "drawn-frame-late-waits") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::ADrawnFrameShowsOneBoundOfLateWaits(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS a_drawn_frame_shows_one_bound_of_late_waits\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "hold-tick-inside-bound") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::AHoldShowsItsTickInsideTheBound(&error)) return fail(error);
@@ -34365,6 +34434,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::RemoteInputReceiptsFormTheLocalHoldGroup, "remote_input_receipts_form_the_local_hold_group");
 		row(&SessionPlaneRecoveryTest::OwnLateInputsLeaveTheirReceiptTime, "own_late_inputs_leave_their_receipt_time");
 		row(&SessionPlaneRecoveryTest::AHoldShowsItsTickInsideTheBound, "a_hold_shows_its_tick_inside_the_bound");
+		row(&SessionPlaneRecoveryTest::ADrawnFrameShowsOneBoundOfLateWaits, "a_drawn_frame_shows_one_bound_of_late_waits");
 		row(&SessionPlaneRecoveryTest::ASeatEveryOtherHeldYieldsItsPlay, "a_seat_every_other_held_yields_its_play");
 		row(&SessionPlaneRecoveryTest::AReturnHeldAgainBeforeItStartsIsOver, "a_return_held_again_before_it_starts_is_over");
 		row(&SessionPlaneRecoveryTest::AcceptedInputsKeepTheirPlayingReceiptGroup, "accepted_inputs_keep_their_playing_receipt_group");

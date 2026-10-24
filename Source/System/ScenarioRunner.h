@@ -402,6 +402,8 @@ namespace RTE {
 		static std::string GetLockstepMissingPeers();
 		static bool IsLockstepLocalMachineSlow(uint64_t nowMs = UINT64_MAX);
 		static void NoteLockstepLocalTickCost(uint64_t producedFrame, double computeMs);
+		/// This machine drew a frame of the running round.
+		static void NoteLockstepFramePresented();
 		/// Counts resync wait-screen draws for the report (also counted headless).
 		static void NoteResyncOverlayFrame();
 		static uint64_t GetResyncOverlayFrames();

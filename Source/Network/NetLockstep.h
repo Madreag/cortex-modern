@@ -1228,6 +1228,8 @@ namespace RTE {
 		/// Moves every running deadline past a gap in our own ticks, so our park is not charged to a peer.
 		void ShiftDeadlinesPastOurOwnPark(uint64_t nowMs);
 		void FinishFrameWait(uint64_t nowMs);
+		/// The frame this machine just drew: the waits the next one shows start from here.
+		void NotePresented(uint64_t nowMs);
 		void NoteLocalTickCost(uint64_t producedFrame, double computeMs);
 		void NoteLocalInputProduced(uint64_t producedFrame, uint64_t nowUs, uint64_t networkWaitUs);
 		bool UsesBoundedWait() const { NET_PLANE_CHECK(); return m_Config.substituteSlowPeers; }
@@ -1684,6 +1686,9 @@ namespace RTE {
 		bool& PeerPrimaryListener() { return m_Config.peerSessionLinks ? m_Config.peerSessionLinks->primaryListener : m_PeerPrimaryListener; }
 		bool HasPeerFrameRoute(uint8_t peer) const;
 		bool PeerFrameCatchUp(bool requireReceiptRunway, double nextOrdinaryTickInMs = 0) const;
+		std::optional<double> PeerPaceSlotMs(uint64_t frame) const;
+		/// When a frame's inputs are due on this machine's display, before the bound.
+		std::optional<double> PeerInputDueMs(uint64_t frame) const;
 		std::optional<double> PeerInputDeadlineMs(uint64_t frame) const;
 		/// The part of the bound the held tick's own work spends after the hold: this machine's median recent tick, at most a quarter
 		/// tick. A machine whose ticks take longer shows its own work, which no hold of another seat pays for.
@@ -1876,6 +1881,8 @@ namespace RTE {
 		std::optional<uint64_t> m_PeerTailThrough;
 		std::optional<uint64_t> m_PeerPaceStartMs;
 		std::optional<uint64_t> m_PeerConsumerAtMs; //!< Local time of the latest displayed tick, including startup catch-up.
+		std::optional<uint64_t> m_LastPresentMs; //!< Local time this machine last drew a frame; unset where nothing reports one.
+		double m_LateWaitShownMs = 0; //!< Waits past their ticks' slots since that frame, which the next drawn frame shows.
 		uint64_t m_PeerPaceStartFrame = 0;
 		uint8_t m_PeerPaceReference = 0;
 		bool m_PeerHadHitch = false;

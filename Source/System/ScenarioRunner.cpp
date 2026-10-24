@@ -1007,6 +1007,11 @@ namespace RTE {
 		s_LockstepCoordinator->NoteLocalTickCost(producedFrame, computeMs);
 	}
 
+	void ScenarioRunner::NoteLockstepFramePresented() {
+		NetLockstepPlaneGuard plane;
+		if (s_LockstepCoordinator) s_LockstepCoordinator->NotePresented(NetLockstepNowMs());
+	}
+
 	void ScenarioRunner::DrawNetUiToasts(const std::string& screenLine) {
 		const uint64_t nowMs = NetLockstepNowMs();
 		for (auto it = s_NetUiToasts.begin(); it != s_NetUiToasts.end(); ) {

@@ -3801,11 +3801,14 @@ namespace RTE {
 		return dial != probes.end() && dial->second.answered && dial->second.connection != c_InvalidNetPeerId;
 	}
 
-	std::optional<double> NetLockstepCoordinator::PeerInputDeadlineMs(uint64_t frame) const {
+	std::optional<double> NetLockstepCoordinator::PeerPaceSlotMs(uint64_t frame) const {
+		if (!m_PeerPaceStartMs || frame < m_PeerPaceStartFrame || m_Config.simTickMs <= 0) return std::nullopt;
+		return *m_PeerPaceStartMs + (frame - m_PeerPaceStartFrame) * m_Config.simTickMs;
+	}
+
+	std::optional<double> NetLockstepCoordinator::PeerInputDueMs(uint64_t frame) const {
 		if (m_Config.simTickMs <= 0) return std::nullopt;
-		std::optional<double> due;
-		if (m_PeerPaceStartMs && frame >= m_PeerPaceStartFrame)
-			due = *m_PeerPaceStartMs + (frame - m_PeerPaceStartFrame) * m_Config.simTickMs;
+		std::optional<double> due = PeerPaceSlotMs(frame);
 		// The bound limits the displayed gap. The ordinary interval before this missing tick is already part of that gap;
 		// adding it again gives a three-tick bound four ticks. Future buffered frames retain their intervening slots.
 		if (m_PeerConsumerAtMs && m_LastCompletedSimulationTick && frame > *m_LastCompletedSimulationTick)
@@ -3813,9 +3816,27 @@ namespace RTE {
 		// A catching-up consumer can need a frame before its original pacing slot.
 		if (m_ConsumerWaitingFrame == frame)
 			due = due ? std::min(*due, static_cast<double>(m_ConsumerWaitStartMs)) : m_ConsumerWaitStartMs;
-		// The held tick shows inside the bound, its own work included.
-		if (due) *due += std::ceil(m_Config.slowPlayerBoundTicks * m_Config.simTickMs) - PeerHoldWorkMs();
 		return due;
+	}
+
+	std::optional<double> NetLockstepCoordinator::PeerInputDeadlineMs(uint64_t frame) const {
+		const auto due = PeerInputDueMs(frame);
+		if (!due) return due;
+		// The held tick shows inside the bound, its own work included.
+		const double bound = std::ceil(m_Config.slowPlayerBoundTicks * m_Config.simTickMs) - PeerHoldWorkMs();
+		double deadline = *due + bound;
+		// A drawn frame that already showed waits past their own ticks' slots has only the rest of the bound for this one.
+		if (m_LateWaitShownMs > 0 && m_ConsumerWaitingFrame == frame && m_LastPresentMs && m_ConsumerWaitStartMs >= *m_LastPresentMs) {
+			const double from = std::max<double>(static_cast<double>(m_ConsumerWaitStartMs), PeerPaceSlotMs(frame).value_or(0));
+			deadline = std::min(deadline, from + bound - m_LateWaitShownMs);
+		}
+		return deadline;
+	}
+
+	void NetLockstepCoordinator::NotePresented(uint64_t nowMs) {
+		NET_PLANE_CHECK();
+		m_LastPresentMs = nowMs;
+		m_LateWaitShownMs = 0;
 	}
 
 	double NetLockstepCoordinator::PeerHoldWorkMs() const {
@@ -3841,10 +3862,10 @@ namespace RTE {
 		// machine's account: a peer that receipted every input before it is owed a receipt trip and the bound from when it left.
 		const auto ownInputReceiptDue = [&] {
 			const auto sent = m_PeerInputSentAtMs.find(frame);
-			const auto deadline = PeerInputDeadlineMs(frame);
-			if (sent == m_PeerInputSentAtMs.end() || !deadline || m_Config.simTickMs <= 0) return true;
+			const auto slot = PeerInputDueMs(frame);
+			if (sent == m_PeerInputSentAtMs.end() || !slot || m_Config.simTickMs <= 0) return true;
 			const double boundMs = std::ceil(m_Config.slowPlayerBoundTicks * m_Config.simTickMs);
-			const double lead = *deadline + PeerHoldWorkMs() - boundMs - static_cast<double>(sent->second);
+			const double lead = *slot - static_cast<double>(sent->second);
 			const auto own = m_PeerInputReceipts.find(m_Config.localPeerId);
 			const auto trip = m_PeerReceiptDelaySamples.find(peer);
 			// The delay this input went out on: a change since then does not make it late.
@@ -3858,7 +3879,7 @@ namespace RTE {
 				static std::map<std::pair<const void*, uint8_t>, uint64_t> named;
 				if (auto& last = named[{this, peer}]; frame != last && (last = frame))
 					DiagnosticLine() << "[net-peer-own-receipt] local=" << static_cast<int>(m_Config.localPeerId) << " peer=" << static_cast<int>(peer) << " frame=" << frame
-					    << " sent_ms=" << sent->second << " slot_ms=" << *deadline - boundMs << " lead_ms=" << lead << " late=" << late << " current=" << current
+					    << " sent_ms=" << sent->second << " slot_ms=" << *slot << " lead_ms=" << lead << " late=" << late << " current=" << current
 					    << " due=" << due << " trip_ms=" << (trip == m_PeerReceiptDelaySamples.end() ? 0 : trip->second.P95Ms()) << " now_ms=" << m_TimingNowMs << std::endl;
 			}
 			return due;
@@ -5561,6 +5582,7 @@ namespace RTE {
 		m_PeerRemovalNotices.clear();
 		m_PeerTailPrefixes.clear(); m_PeerTailVotes.clear(); m_PeerTailDecisions.clear(); m_PeerTailUnconfirmed = {}; m_PeerTailForeignFrame = 0;
 		m_PeerPaceStartMs.reset(); m_PeerConsumerAtMs.reset(); m_PeerPaceStartFrame = 0; m_PeerPaceReference = GetHostPeerId(); m_PeerHadHitch = false;
+		m_LateWaitShownMs = 0;
 		if (!m_Config.peerSessionLinks) { PeerListenerBindings().clear(); PeerPrimaryBindings().clear(); }
 		m_FrameGroupChanges.clear(); m_PeerFrameHolds.clear(); m_PeerOwnershipChanges.clear(); m_PeerSplitRenewals.clear(); m_PeerDelayBelowSinceMs.clear();
 		m_PeerFrameTie.reset(); m_PeerFrameTieWinners.clear(); m_PeerFrameTieSinceMs = 0;
@@ -7521,6 +7543,11 @@ namespace RTE {
 	void NetLockstepCoordinator::FinishFrameWait(uint64_t nowMs) {
 		NET_PLANE_CHECK();
 		AccrueConsumerWaitCost(nowMs);
+		// The part of a wait past its tick's slot is lateness the frame being drawn shows; one waited early is that frame's own pace.
+		if (m_ConsumerWaitingFrame && m_LastPresentMs && m_ConsumerWaitStartMs >= *m_LastPresentMs) {
+			const double from = std::max<double>(static_cast<double>(m_ConsumerWaitStartMs), PeerPaceSlotMs(*m_ConsumerWaitingFrame).value_or(0));
+			if (static_cast<double>(nowMs) > from) m_LateWaitShownMs += static_cast<double>(nowMs) - from;
+		}
 		if (m_ConsumerWaitingFrame && nowMs >= m_ConsumerWaitStartMs) {
 			m_Stats.longestStallMs = std::max(m_Stats.longestStallMs, nowMs - m_ConsumerWaitStartMs);
 			if (nowMs > m_ConsumerWaitStartMs) {

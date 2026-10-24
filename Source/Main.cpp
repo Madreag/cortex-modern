@@ -1596,6 +1596,7 @@ static bool s_paceWindowLeftActivity = false; //!< The menus ran since the last 
 // CC_TEST_FRAME_PACE=1, which a run sets to compare the two.
 static void NoteFramePresented() {
 	static const bool s_singleToo = std::getenv("CC_TEST_FRAME_PACE") != nullptr;
+	if (ScenarioRunner::IsLockstepControllerSyncActive()) ScenarioRunner::NoteLockstepFramePresented();
 	if (!s_singleToo && !ScenarioRunner::IsLockstepControllerSyncActive()) return;
 	struct Pace {
 		uint64_t iterations = 0, ticks = 0, shed = 0, shedding = 0, previews = 0;
