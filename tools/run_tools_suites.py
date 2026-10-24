@@ -51,6 +51,7 @@ SUITES = (
     ("feel-engine-placement", ["test_feel_placement.py"]),
     ("feel-recorder-on-off-scope", ["test_feel_on_off_proof.py"]),
     ("soak-judgement", ["test_soak_two_peer.py"]),
+    ("split-loser-judgement", ["test_split_loser_host.py", "--self-test"]),
     ("inventory-run-split", [str(INVENTORY / "run_split.py"), "--self-test"]),
     ("inventory-run-stream", [str(INVENTORY / "run_stream.py"), "--self-test"]),
     ("inventory-extract-defects", [str(INVENTORY / "extract_defects.py"), "--self-test"]),
