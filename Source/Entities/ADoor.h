@@ -235,7 +235,7 @@ namespace RTE {
 		/// @return Whether the fill erasure was successful (if the same material as the door was found and erased).
 		bool EraseDoorMaterial(bool updateMaterialArea = true);
 
-		/// Flood-fills the door's material like EraseDoorMaterial, kept within the door's own footprint, and remembers every pixel it changed.
+		/// Flood-fills the door's material like EraseDoorMaterial, kept within the door's own shape, and remembers every pixel it changed.
 		void TempEraseDoorMaterialRestorably();
 
 		/// Puts back exactly the pixels TempEraseDoorMaterialRestorably changed.

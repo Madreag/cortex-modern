@@ -366,6 +366,9 @@ namespace RTE {
 		/// per-frame draws would feed it frame-timed positions.
 		void SetRenderDrawContext(bool render) { m_RenderDrawContext = render; }
 
+		/// Whether MOID-grid registration is suspended for render-frame draws.
+		bool IsRenderDrawContext() const { return m_RenderDrawContext; }
+
 		/// Clears all registered drawn areas of the MOID layer to the g_NoMOID color and clears the registrations too. Should be done each sim update.
 		void ClearAllMOIDDrawings();
 

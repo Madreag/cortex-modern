@@ -3157,11 +3157,14 @@ int PathFinder::RunHorizonGridSelfTest() {
 	}
 
 	// door-override-terrain: path updates land on each machine's own ticks, so inside a match a door's override must leave every
-	// terrain pixel as it found it - fill laid over the door, a dug door pixel and the seed's material running past the door included.
+	// terrain pixel as it found it - fill laid over the door, a dug door pixel and the seed's material running past the door included -
+	// and open nothing outside the door's own shape.
 	{
 		struct PaintedDoorPiece : TestDoorPiece {
-			void Draw(BITMAP* target, const Vector& = Vector(), DrawMode mode = g_DrawColor, bool = false) const override {
-				if (mode == g_DrawDoor) rectfill(target, 55, 25, 64, 54, MaterialColorKeys::g_MaterialDoor);
+			void Draw(BITMAP* target, const Vector& targetPos = Vector(), DrawMode mode = g_DrawColor, bool = false) const override {
+				const int x = targetPos.GetFloorIntX();
+				const int y = targetPos.GetFloorIntY();
+				if (mode == g_DrawDoor) rectfill(target, 55 - x, 25 - y, 64 - x, 54 - y, MaterialColorKeys::g_MaterialDoor);
 			}
 		};
 		struct DrawnDoor : TestDoor {
@@ -3230,17 +3233,28 @@ int PathFinder::RunHorizonGridSelfTest() {
 				const bool doorOpened = bandOverSeed ? at(opened, 60, 40) == MaterialColorKeys::g_MaterialAir : at(opened, 60, 30) == MaterialColorKeys::g_MaterialAir;
 				size_t changed = 0;
 				size_t first = 0;
+				size_t openedOutside = 0;
+				size_t firstOutside = 0;
 				for (size_t index = before.size(); index-- > 0;) {
 					if (before[index] != after[index]) {
 						++changed;
 						first = index;
 					}
+					const int x = static_cast<int>(index % 160);
+					const int y = static_cast<int>(index / 160);
+					if (before[index] != opened[index] && (x < 55 || x > 64 || y < 25 || y > 54)) {
+						++openedOutside;
+						firstOutside = index;
+					}
 				}
-				if (!doorOpened || changed != 0) {
+				if (!doorOpened || changed != 0 || openedOutside != 0) {
 					std::cout << Tag << " FAIL door override in a match " << (bandOverSeed ? "with terrain over its seed" : "under fill") << " opened=" << doorOpened
-					          << " changed_pixels=" << changed;
+					          << " changed_pixels=" << changed << " opened_outside_shape=" << openedOutside;
 					if (changed != 0) {
 						std::cout << " first=" << first % 160 << "," << first / 160 << " " << static_cast<int>(before[first]) << "->" << static_cast<int>(after[first]);
+					}
+					if (openedOutside != 0) {
+						std::cout << " first_outside=" << firstOutside % 160 << "," << firstOutside / 160;
 					}
 					std::cout << std::endl;
 					return 1;

@@ -19,7 +19,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstring>
 #include <vector>
 
 using namespace RTE;
@@ -473,26 +472,40 @@ void ADoor::TempEraseDoorMaterialRestorably() {
 	const int width = right - left;
 	const int height = bottom - top;
 
-	std::vector<unsigned char> before(static_cast<size_t>(width) * height);
-	for (int y = 0; y < height; ++y) {
-		std::memcpy(&before[static_cast<size_t>(y) * width], materialBitmap->line[top + y] + left, width);
-	}
-	BITMAP* footprint = create_sub_bitmap(materialBitmap, left, top, width, height);
+	BITMAP* footprint = create_bitmap_ex(8, width, height);
 	if (!footprint) {
 		return;
 	}
+	clear_to_color(footprint, g_MaterialAir);
+	// Drawn on each machine's own ticks, so the silhouette must stay out of the MOID grid.
+	const bool renderDraw = g_SceneMan.IsRenderDrawContext();
+	g_SceneMan.SetRenderDrawContext(true);
+	m_Door->Draw(footprint, Vector(static_cast<float>(left), static_cast<float>(top)) + m_Door->GetPos() - m_LastDoorMaterialPos, g_DrawDoor, true);
+	g_SceneMan.SetRenderDrawContext(renderDraw);
+
+	// Only the door's own shape opens: the terrain is copied inside it and walled off with air outside it.
+	std::vector<bool> inside(static_cast<size_t>(width) * height);
+	for (int y = 0; y < height; ++y) {
+		unsigned char* row = footprint->line[y];
+		const unsigned char* terrain = materialBitmap->line[top + y] + left;
+		for (int x = 0; x < width; ++x) {
+			inside[static_cast<size_t>(y) * width + x] = row[x] != g_MaterialAir;
+			row[x] = row[x] != g_MaterialAir ? terrain[x] : g_MaterialAir;
+		}
+	}
 	floodfill(footprint, fillX - left, fillY - top, g_MaterialAir);
-	destroy_bitmap(footprint);
 
 	m_TempErasedDoorMaterial->material = material;
 	for (int y = 0; y < height; ++y) {
-		const unsigned char* row = materialBitmap->line[top + y] + left;
+		const unsigned char* row = footprint->line[y];
 		for (int x = 0; x < width; ++x) {
-			if (row[x] != before[static_cast<size_t>(y) * width + x]) {
+			if (inside[static_cast<size_t>(y) * width + x] && row[x] != _getpixel(materialBitmap, left + x, top + y)) {
+				_putpixel(materialBitmap, left + x, top + y, g_MaterialAir);
 				m_TempErasedDoorMaterial->pixels.emplace_back(left + x, top + y);
 			}
 		}
 	}
+	destroy_bitmap(footprint);
 }
 
 void ADoor::RestoreTempErasedDoorMaterial() {
