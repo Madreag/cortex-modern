@@ -31918,12 +31918,12 @@ namespace {
 				input.finished = {3601};
 				(void)step(4170, heldAtNaming ? std::set<uint8_t>{1} : std::set<uint8_t>{1, 2});
 				(void)step(4200, {1, 2});
-				if (step(7199, {1, 2})) { *error = "the host named its next save while a writer back from a hold in place still wrote the last one"; return false; }
+				if (step(7230, {1, 2})) { *error = "the host named its next save while a writer back from a hold in place still wrote the last one"; return false; }
 				uint64_t settled = 7240;
 				if (end == End::Reports || end == End::HeldAtNaming) input.applied = {{2, NetGameCheckpoint::Written, 3601}};
 				if (end == End::ImageReturn) input.incarnations[2] = 2;
 				if (end == End::NeverReports) {
-					settled = 3790 + static_cast<uint64_t>(2 * interval / tickLength);
+					settled = 3790 + static_cast<uint64_t>((2 * interval + tickLength - 1) / tickLength);
 					if (step(settled - 1, {1, 2})) { *error = "the host named past an unreported save before two intervals of its writer's play"; return false; }
 				}
 				if (!step(settled, {1, 2})) {
