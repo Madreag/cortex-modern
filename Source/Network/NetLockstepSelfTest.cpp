@@ -31888,6 +31888,49 @@ namespace {
 			if (!named) { *error = "the host named no periodic save while the capture a departed writer never reported stayed open"; return false; }
 			return true;
 		}
+		static bool WriterBackInPlaceReportsBeforeTheNextSave(std::string* error) {
+			enum class End { Reports, ImageReturn, NeverReports };
+			const auto run = [](End end, std::string* error) {
+				NetMatchService service;
+				service.m_IsHost = true;
+				service.m_LocalPeerId = 1;
+				service.m_MatchAutosaveSeconds = 60;
+				const int64_t tickLength = g_TimerMan.GetDeltaTimeTicks();
+				const int64_t interval = 60 * g_TimerMan.GetTicksPerSecond();
+				const int64_t start = 1000000;
+				// Both seats took the capture at 3601; the joiner's seat is then held in place for a few ticks while its writer still works on it.
+				service.m_OpenCaptureTick = 3601; service.m_OpenCaptureApplied = true; service.m_CaptureWriters = {1, 2};
+				service.m_NextAutosaveSimTime = start + interval; service.m_LastAutosaveSimTime = start;
+				NetMatchService::AutosaveTickInput input;
+				input.localPeer = 1; input.lead = 2; input.writerReady = true; input.incarnations = {{1, 1}, {2, 1}};
+				const auto step = [&](uint64_t tick, std::set<uint8_t> writers) {
+					input.tick = tick; input.now = start + static_cast<int64_t>(tick - 3601) * tickLength; input.writers = std::move(writers);
+					const auto output = service.StepAutosaveSchedule(input);
+					input.applied.clear(); input.finished.clear();
+					return std::any_of(output.send.begin(), output.send.end(), [](const auto& note) { return note.kind == NetGameCheckpoint::Capture; });
+				};
+				(void)step(3780, {1});
+				(void)step(3790, {1, 2});
+				input.finished = {3601};
+				(void)step(4170, {1, 2});
+				if (step(7199, {1, 2})) { *error = "the host named its next save while a writer back from a hold in place still wrote the last one"; return false; }
+				uint64_t settled = 7240;
+				if (end == End::Reports) input.applied = {{2, NetGameCheckpoint::Written, 3601}};
+				if (end == End::ImageReturn) input.incarnations[2] = 2;
+				if (end == End::NeverReports) {
+					settled = 3790 + static_cast<uint64_t>(2 * interval / tickLength);
+					if (step(settled - 1, {1, 2})) { *error = "the host named past an unreported save before two intervals of its writer's play"; return false; }
+				}
+				if (!step(settled, {1, 2})) {
+					*error = end == End::Reports ? "the host named no save after the writer back in place reported the last one"
+					       : end == End::ImageReturn ? "the host still waited for the save of a writer that came back through an image"
+					                                 : "the host waited for an unreported save past two intervals";
+					return false;
+				}
+				return true;
+			};
+			return run(End::Reports, error) && run(End::ImageReturn, error) && run(End::NeverReports, error);
+		}
 		static void Reset() {
 			auto& service = g_NetMatchService;
 			service.m_Coordinator.release();
@@ -34075,6 +34118,7 @@ namespace {
 		row([](std::string* why) { return TestOwnerSilenceThreshold(0, why); }, "client_2s_bridge_survivor_tick_bound_automatic_return");
 		row(&SeatAdmissionServiceTest::HeldHostAdoptsBaseCapture, "held_host_adopts_the_agreed_base_capture");
 		row(&SeatAdmissionServiceTest::LoneHostNamesPastAFrameGroupHold, "a_lone_host_names_saves_past_a_frame_group_hold");
+		row(&SeatAdmissionServiceTest::WriterBackInPlaceReportsBeforeTheNextSave, "a_writer_back_in_place_reports_before_the_next_save");
 		row(&NetSessionPlaneSelfTest::CheckHeldHostControllers, "a_held_host_preserves_controller_disable_before_its_return_arrives");
 		row(&SessionPlaneRecoveryTest::LinkDelay, "input_delay_follows_the_measured_link");
 		row(&SessionPlaneRecoveryTest::ConsumerHoldDeadlineIncludesTheDisplayedSlot, "consumer_hold_deadline_includes_the_displayed_slot");

@@ -445,6 +445,7 @@ namespace RTE {
 			std::vector<uint64_t> refused; //!< Of those, the captures whose archive the writer refused.
 			uint8_t localPeer = 0; //!< This peer's id, a holder of every capture its writer archived.
 			std::set<uint8_t> writers; //!< Host: every peer that captures on the schedule.
+			std::map<uint8_t, uint32_t> incarnations; //!< Host: each seat's incarnation in the round; one that grew came back through an image.
 			uint16_t lead = 0; //!< Host: ticks between naming a capture and taking it.
 			bool activationPending = false; //!< Host: a seat's agreed activation is still ahead.
 			bool startupPending = false; //!< Host: the round's agreed first frame is still ahead.
@@ -1967,6 +1968,10 @@ namespace RTE {
 		std::atomic<uint64_t> m_AnnouncedActivationTick = 0; //!< Host: the earliest activation told to a returner and not yet scheduled; 0 when none.
 		bool m_OpenCaptureApplied = false; //!< Host: the capture it named reached the committed stream.
 		std::set<uint8_t> m_CaptureWriters; //!< Host: the peers still writing the open capture.
+		/// Host: a capture a writer was dropped from while its seat was held, the incarnation the seat had then, and the sim time it
+		/// first played again still owing the report; -1 until then.
+		struct OwedCaptureReport { uint64_t tick = 0; uint32_t incarnation = 0; int64_t playingSince = -1; };
+		std::map<uint8_t, OwedCaptureReport> m_OwedCaptureReports;
 		std::map<uint64_t, std::set<uint8_t>> m_CheckpointHolders; //!< The peers that reported an archive of each of this round's captures.
 		bool m_OpenCaptureForJoin = false;
 		std::set<uint64_t> m_ManualCaptures; //!< The named ticks the host asked for by hand.

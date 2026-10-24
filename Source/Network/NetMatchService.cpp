@@ -4022,6 +4022,7 @@ static std::string ResyncSaveName() {
 		m_WriterOnJoinCapture = false;
 		m_OpenCaptureTick = 0;
 		m_CaptureWriters.clear();
+		m_OwedCaptureReports.clear();
 		m_CheckpointHolders.clear();
 		m_OpenCaptureForJoin = false;
 		m_ManualCaptures.clear();
@@ -4040,6 +4041,7 @@ static std::string ResyncSaveName() {
 		// A heal restarts the stream the writers' reports rode, so the host names afresh instead of waiting on reports it dropped.
 		m_OpenCaptureTick = 0;
 		m_CaptureWriters.clear();
+		m_OwedCaptureReports.clear();
 		m_OpenCaptureForJoin = false;
 		// The host's ask the heal cut short is taken again after it.
 		if (m_OpenCaptureManual) m_ManualSaveAsked = true;
@@ -4111,9 +4113,13 @@ static std::string ResyncSaveName() {
 					m_OpenCaptureTick = takenAt;
 					m_OpenCaptureApplied = true;
 				}
-			} else if ((note.kind == NetGameCheckpoint::Written || note.kind == NetGameCheckpoint::Missed) && m_IsHost && note.tick == m_OpenCaptureTick) {
-				m_CaptureWriters.erase(note.sender);
-				if (m_OpenCaptureManual && note.kind == NetGameCheckpoint::Written) m_ManualSaveReported.insert(note.sender);
+			} else if ((note.kind == NetGameCheckpoint::Written || note.kind == NetGameCheckpoint::Missed) && m_IsHost) {
+				// A writer reports its captures in order, so a report of the one it owed or a later one settles it.
+				if (const auto owed = m_OwedCaptureReports.find(note.sender); owed != m_OwedCaptureReports.end() && note.tick >= owed->second.tick) m_OwedCaptureReports.erase(owed);
+				if (note.tick == m_OpenCaptureTick) {
+					m_CaptureWriters.erase(note.sender);
+					if (m_OpenCaptureManual && note.kind == NetGameCheckpoint::Written) m_ManualSaveReported.insert(note.sender);
+				}
 			}
 			// Every peer keeps who holds what, so a host that takes the round over names the same rewind points.
 			if (note.kind == NetGameCheckpoint::Written) NoteCheckpointHolder(note.tick, note.sender);
@@ -4173,7 +4179,39 @@ static std::string ResyncSaveName() {
 			m_OpenCaptureManual = false;
 		}
 		for (auto writer = m_CaptureWriters.begin(); writer != m_CaptureWriters.end();) {
-			writer = input.writers.contains(*writer) ? std::next(writer) : m_CaptureWriters.erase(writer);
+			if (input.writers.contains(*writer)) { ++writer; continue; }
+			// A seat held while it writes the capture is not waited on, but it still owes it: its connection carries the report once it plays.
+			if (*writer != input.localPeer) {
+				const auto incarnation = input.incarnations.find(*writer);
+				m_OwedCaptureReports[*writer] = {m_OpenCaptureTick, incarnation != input.incarnations.end() ? incarnation->second : 0, -1};
+			}
+			writer = m_CaptureWriters.erase(writer);
+		}
+		// A writer back in place still writes that capture, so the next waits for its report; one whose seat came back through an image
+		// has a world of its own past it. No report is waited for longer than two intervals of its seat's play.
+		bool owedReport = false;
+		const int64_t owedBound = 2 * (interval > 0 ? interval : static_cast<int64_t>(60) * g_TimerMan.GetTicksPerSecond());
+		for (auto owed = m_OwedCaptureReports.begin(); owed != m_OwedCaptureReports.end();) {
+			const auto incarnation = input.incarnations.find(owed->first);
+			if (incarnation != input.incarnations.end() && incarnation->second > owed->second.incarnation) {
+				owed = m_OwedCaptureReports.erase(owed);
+				continue;
+			}
+			if (!input.writers.contains(owed->first)) {
+				++owed;
+				continue;
+			}
+			if (owed->second.playingSince < 0) {
+				owed->second.playingSince = input.now;
+				System::PrintDiagnosticLine(std::format("[autosave] peer={} plays again still writing its save of tick={}", owed->first, owed->second.tick));
+			}
+			if (input.now - owed->second.playingSince >= owedBound) {
+				System::PrintDiagnosticLine(std::format("[autosave] peer={} never reported its save of tick={}; naming past it", owed->first, owed->second.tick));
+				owed = m_OwedCaptureReports.erase(owed);
+				continue;
+			}
+			owedReport = true;
+			++owed;
 		}
 		// A second ask before the capture it would name is taken is that same capture.
 		if (ask && m_OpenCaptureManual && m_OpenCaptureTick != 0 && input.tick <= m_OpenCaptureTick) ask = false;
@@ -4187,7 +4225,7 @@ static std::string ResyncSaveName() {
 		// Publication can reach the network pump before the writer has finished releasing its capture, and its future is ready
 		// before the writer has prepared the next plan: wait for both before naming another command, including a requested
 		// fresher base. The ask and the deadline stay pending, and the command is named at the first tick the writer is ready.
-		const bool writersBusy = input.unwritten != 0 || !input.writerReady || (m_OpenCaptureTick != 0 && (input.tick <= m_OpenCaptureTick || !m_CaptureWriters.empty()));
+		const bool writersBusy = owedReport || input.unwritten != 0 || !input.writerReady || (m_OpenCaptureTick != 0 && (input.tick <= m_OpenCaptureTick || !m_CaptureWriters.empty()));
 		if (writersBusy) {
 			if (!input.paused && interval > 0 && m_NextAutosaveSimTime >= 0 && input.now + static_cast<int64_t>(input.lead) * tickLength >= m_NextAutosaveSimTime) {
 				if (m_PeriodicWaitSince == 0) m_PeriodicWaitSince = input.tick;
@@ -4488,6 +4526,7 @@ static std::string ResyncSaveName() {
 		input.writerJoinWork = WriterHoldsOnlyJoinCaptures();
 		if (m_IsHost) {
 			input.writers = CheckpointWriters(tick);
+			input.incarnations = m_Coordinator->GetConfig().peerIncarnations;
 			input.lead = static_cast<uint16_t>(m_Coordinator->InputDelayAt(GetLocalPeerId(), tick) + 2);
 			// An activation told to a returner but not yet scheduled is decided in its last frames: a capture named at or before it
 			// would hold those frames open and push the activation a lead later, onto the same phase of the next capture.
