@@ -4,6 +4,7 @@
 #include "NativeCheckpoint.h"
 
 #include "Atom.h"
+#include "ParticleFrame.h"
 #include "PostProcessMan.h"
 #include "Draw.h"
 #include "FrameMan.h"
@@ -205,17 +206,8 @@ void MOSParticle::Travel() {
 		}
 
 		// TODO: Rework this so it's less incomprehensible black magic math and not driven by AngularVel.
-		double newFrame = m_Rotation.GetRadAngle();
-
-		newFrame -= std::floor(m_Rotation.GetRadAngle() / (2.0F * c_PI)) * (2.0F * c_PI);
-		newFrame /= (2.0F * c_PI);
-		newFrame *= m_FrameCount;
-		m_Frame = std::floor(newFrame);
+		m_Frame = ParticleTurnFrame(m_Rotation.GetRadAngle(), m_FrameCount);
 		m_Rotation += m_AngularVel * deltaTime;
-
-		if (m_Frame >= m_FrameCount) {
-			m_Frame = m_FrameCount - 1;
-		}
 	}
 }
 

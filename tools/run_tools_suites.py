@@ -35,6 +35,7 @@ SUITES = (
     ("snapshot-runtime", ["snapshot_runtime.py", "--self-test"]),
     ("print-discipline", ["test_print_discipline.py"]),
     ("one-steady-clock", ["test_one_steady_clock.py"]),
+    ("particle-determinism", ["-m", "unittest", "test_particle_lifetime", "test_particle_frame"]),
     ("drawn-frames-rule", ["test_frame_pace.py"]),
     ("menu-readback-platform", ["test_menu_readback.py", "--self-test"]),
     ("in-match-ux", ["test_in_match_ux.py", "--self-test"]),

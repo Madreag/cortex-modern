@@ -25,6 +25,13 @@ namespace RTE {
 		return static_cast<int32_t>(value);
 	}
 
+	// Truncate toward zero through a 64-bit integer and keep its low 32 bits, as Windows and x86 GCC convert a double to
+	// unsigned; arm64 saturates instead, so a negative or out-of-range value would pick another number there.
+	inline uint32_t DeterministicDoubleToUInt32(double value) {
+		if (!(value >= -9223372036854775808.0 && value < 9223372036854775808.0)) { return 0; }
+		return static_cast<uint32_t>(static_cast<int64_t>(value));
+	}
+
 	inline double DeterministicSqrt(double value) {
 		if (value < 0.0 || std::isnan(value)) { return std::numeric_limits<double>::quiet_NaN(); }
 #if defined(__aarch64__)
