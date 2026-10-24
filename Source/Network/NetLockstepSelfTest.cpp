@@ -31853,6 +31853,34 @@ namespace {
 			if (service.m_CaptureWriters.contains(1)) { *error = "the held host waited for its own unwritable report"; return false; }
 			return true;
 		}
+		static bool LoneHostNamesPastAFrameGroupHold(std::string* error) {
+			NetMatchService service;
+			service.m_IsHost = true;
+			service.m_MatchAutosaveSeconds = 60;
+			auto coordinator = std::make_unique<NetLockstepCoordinator>();
+			coordinator->m_Config.matchConfig = NetMatchConfigUtil::MakeDefault(0x60584424);
+			coordinator->m_Config.localPeerId = 1;
+			coordinator->m_Config.peerCount = 2;
+			coordinator->m_Config.peerFrameGroups = true;
+			coordinator->m_State = NetLockstepState::Running;
+			coordinator->m_RemotePeerIds = {2};
+			coordinator->m_RemoteTransports = {{2, 42}};
+			// The joiner that died during the save: its frame group holds its seat, with no hold of the AI's own and no leave.
+			coordinator->m_PeerBridges[2] = {18255, 18255, true, std::nullopt, {}, 1};
+			service.m_Coordinator = std::move(coordinator);
+			if (service.CheckpointWriters(18300) != std::set<uint8_t>{1}) { *error = "a seat its frame group holds still writes the host's captures"; return false; }
+			// The capture that joiner never reported; the next periodic save is due.
+			service.m_OpenCaptureTick = 17526; service.m_OpenCaptureApplied = true; service.m_CaptureWriters = {2};
+			NetMatchService::AutosaveTickInput input;
+			input.tick = 21200; input.localPeer = 1; input.lead = 2; input.writerReady = true;
+			input.now = 1000000;
+			service.m_NextAutosaveSimTime = input.now - 1; service.m_LastAutosaveSimTime = input.now - 1;
+			input.writers = service.CheckpointWriters(input.tick);
+			const auto output = service.StepAutosaveSchedule(input);
+			const bool named = std::any_of(output.send.begin(), output.send.end(), [](const auto& note) { return note.kind == NetGameCheckpoint::Capture; });
+			if (!named) { *error = "the host named no periodic save while the capture a departed writer never reported stayed open"; return false; }
+			return true;
+		}
 		static void Reset() {
 			auto& service = g_NetMatchService;
 			service.m_Coordinator.release();
@@ -34039,6 +34067,7 @@ namespace {
 		};
 		row([](std::string* why) { return TestOwnerSilenceThreshold(0, why); }, "client_2s_bridge_survivor_tick_bound_automatic_return");
 		row(&SeatAdmissionServiceTest::HeldHostAdoptsBaseCapture, "held_host_adopts_the_agreed_base_capture");
+		row(&SeatAdmissionServiceTest::LoneHostNamesPastAFrameGroupHold, "a_lone_host_names_saves_past_a_frame_group_hold");
 		row(&NetSessionPlaneSelfTest::CheckHeldHostControllers, "a_held_host_preserves_controller_disable_before_its_return_arrives");
 		row(&SessionPlaneRecoveryTest::LinkDelay, "input_delay_follows_the_measured_link");
 		row(&SessionPlaneRecoveryTest::ConsumerHoldDeadlineIncludesTheDisplayedSlot, "consumer_hold_deadline_includes_the_displayed_slot");

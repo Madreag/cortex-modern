@@ -4067,9 +4067,10 @@ static std::string ResyncSaveName() {
 		std::set<uint8_t> writers;
 		if (!m_Coordinator) return writers;
 		writers.insert(GetLocalPeerId());
-		// A held or departed seat is not simulating the tick live, so it neither captures nor reports.
+		// A held or departed seat is not simulating the tick live, so it neither captures nor reports: a seat its frame group holds
+		// is as held as one the AI holds.
 		for (const auto& [peer, transport]: m_Coordinator->RemoteTransports()) {
-			if (!m_Coordinator->HasHeldAISeat(peer) && !m_Coordinator->IsPeerGoneAtFrame(peer, tick)) writers.insert(peer);
+			if (!m_Coordinator->HasHeldAISeat(peer) && !m_Coordinator->IsSeatUnderAI(peer, tick) && !m_Coordinator->IsPeerGoneAtFrame(peer, tick)) writers.insert(peer);
 		}
 		return writers;
 	}
