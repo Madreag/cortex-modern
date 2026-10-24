@@ -142,6 +142,70 @@ using namespace RTE;
 #define HACK_MZ_COMPRESS_METHOD_DEFLATE 8
 
 namespace {
+	/// Test lever CC_TEST_CAPTURE_TERRAIN: the terrain's material and colour rows as a capture's tick left them, held to what the
+	/// live terrain and the image's layers show afterwards.
+	struct TerrainRows {
+		std::array<std::string, 2> bytes;
+		std::array<size_t, 2> rowBytes{};
+	};
+
+	bool CaptureTerrainCheck() {
+		static const bool check = std::getenv("CC_TEST_CAPTURE_TERRAIN") != nullptr;
+		return check;
+	}
+
+	std::array<const BITMAP*, 2> LiveTerrainBitmaps() {
+		SLTerrain* terrain = g_SceneMan.GetScene() ? g_SceneMan.GetScene()->GetTerrain() : nullptr;
+		if (!terrain) return {};
+		return {terrain->GetMaterialBitmap(), terrain->GetFGColorBitmap()};
+	}
+
+	std::string BitmapRows(const BITMAP* bitmap, size_t& rowBytes) {
+		std::string bytes;
+		if (!bitmap) return bytes;
+		rowBytes = static_cast<size_t>(bitmap->w) * static_cast<size_t>((bitmap_color_depth(const_cast<BITMAP*>(bitmap)) + 7) / 8);
+		bytes.reserve(rowBytes * static_cast<size_t>(bitmap->h));
+		for (int y = 0; y < bitmap->h; ++y) bytes.append(reinterpret_cast<const char*>(bitmap->line[y]), rowBytes);
+		return bytes;
+	}
+
+	std::shared_ptr<const TerrainRows> CopyLiveTerrain() {
+		auto rows = std::make_shared<TerrainRows>();
+		const auto bitmaps = LiveTerrainBitmaps();
+		for (size_t layer = 0; layer < bitmaps.size(); ++layer) rows->bytes[layer] = BitmapRows(bitmaps[layer], rows->rowBytes[layer]);
+		return rows;
+	}
+
+	// Names the rows that differ from the tick's own, or "equal".
+	std::string DescribeTerrainRows(const std::string& expected, const std::string& actual, size_t rowBytes) {
+		if (expected.size() != actual.size() || rowBytes == 0) return std::format("size={}/{}", actual.size(), expected.size());
+		size_t rows = 0, firstRow = 0, firstColumn = 0, bytes = 0;
+		for (size_t offset = 0; offset < expected.size(); offset += rowBytes) {
+			if (std::memcmp(expected.data() + offset, actual.data() + offset, rowBytes) == 0) continue;
+			size_t column = 0;
+			while (expected[offset + column] == actual[offset + column]) ++column;
+			if (!rows++) { firstRow = offset / rowBytes; firstColumn = column; }
+			for (size_t at = 0; at < rowBytes; ++at) bytes += expected[offset + at] != actual[offset + at];
+		}
+		return rows ? std::format("rows={} bytes={} first_row={} first_column={}", rows, bytes, firstRow, firstColumn) : "equal";
+	}
+
+	// One line a peer can hold against another's: the capture's tick on one, the restore of that capture on the other.
+	void ReportTerrainHashes(uint64_t tick, const char* where, const TerrainRows& rows) {
+		const auto fnv = [](const std::string& bytes) {
+			uint64_t hash = 1469598103934665603ULL;
+			for (const char byte: bytes) hash = (hash ^ static_cast<uint8_t>(byte)) * 1099511628211ULL;
+			return hash;
+		};
+		System::PrintDiagnosticLine(std::format("[capture-terrain] tick={} where={} mat={:016x} fg={:016x}", tick, where, fnv(rows.bytes[0]), fnv(rows.bytes[1])));
+	}
+
+	void ReportTerrainRows(uint64_t tick, const char* where, const TerrainRows& expected, const std::array<std::string, 2>& actual) {
+		constexpr std::array<const char*, 2> names{"Mat", "FG"};
+		for (size_t layer = 0; layer < names.size(); ++layer)
+			System::PrintDiagnosticLine(std::format("[capture-terrain] tick={} where={} layer={} {}", tick, where, names[layer], DescribeTerrainRows(expected.bytes[layer], actual[layer], expected.rowBytes[layer])));
+	}
+
 	/// Freezes the world's top-level objects side by side, each with everything it owns, beside the other boundary parts
 	/// that only read; the scene that names the objects afterwards finds every one frozen. An armed injected failure
 	/// runs everything on this thread, where it counts.
@@ -699,6 +763,7 @@ struct ActivityMan::PreparedAutosave {
 		std::shared_ptr<CheckpointCaptureClock> clock = std::make_shared<CheckpointCaptureClock>();
 		std::shared_ptr<Written> written = std::make_shared<Written>();
 		std::shared_ptr<void> ranges;
+		std::shared_ptr<const TerrainRows> terrain; //!< CC_TEST_CAPTURE_TERRAIN only.
 		Header() { clock->call = std::make_shared<CheckpointCaptureClock::Call>(); }
 		std::array<int64_t, 7>* BoundaryParts() noexcept { return &clock->call->parts; }
 	};
@@ -796,8 +861,10 @@ struct ActivityMan::PreparedAutosave {
 		const uint64_t simDraws = g_SimRNG.GetDrawCount(), renderDraws = g_RenderRNG.GetDrawCount(), soundCursor = g_AudioMan.GetCheckpointSoundContainerCursor();
 		// The plan keeps the hold until it is replaced, so no frozen iterator outlives the container it describes.
 		auto ranges = HoldOwnedLuaRanges();
+		const std::shared_ptr<const TerrainRows> terrain = CaptureTerrainCheck() ? CopyLiveTerrain() : nullptr;
 		const auto fill = [&](Header& header) noexcept {
 			header.ranges = ranges;
+			header.terrain = terrain;
 			clock = header.clock; header.clock->started = began;
 			clock->call->simulation = std::this_thread::get_id();
 #ifdef _WIN32
@@ -837,6 +904,11 @@ struct ActivityMan::PreparedAutosave {
 			const auto [nowNotReady, failed] = queue.NotReadyState();
 			if (refusal) owner.NoteAutosaveRefusal(true, "the capture's pages could not be armed: ", refusal);
 			else owner.NoteAutosaveRefusal(nowNotReady.empty() || failed, !nowNotReady.empty() ? std::string_view(nowNotReady) : std::string_view("the capture's pages could not be armed"));
+		}
+		if (accepted && terrain) {
+			ReportTerrainHashes(tick, "freeze", *terrain);
+			const TerrainRows live = *CopyLiveTerrain();
+			ReportTerrainRows(tick, "live", *terrain, live.bytes);
 		}
 		if (accepted) {
 			owner.NoteAutosaveRefusal(false, {});
@@ -1041,6 +1113,7 @@ struct ActivityMan::PreparedAutosave {
 		image->imageBytes = image->activity.OwnedBytes() + image->scene.OwnedBytes() + image->structure.OwnedBytes() + image->sceneRuntime.OwnedBytes() + image->globals.OwnedBytes();
 		for (const auto& graph: image->graphs) image->imageBytes += graph.OwnedBytes();
 		for (const auto& [name, layer]: image->layers) { layer->Finalize(); image->imageBytes += layer->LogicalBytes(); image->dirtyBytes += layer->dirtyBytes; }
+		if (header.terrain && image->layers.size() >= 2) ReportTerrainRows(header.tick, "image", *header.terrain, {image->layers[0].second->PixelBytes(), image->layers[1].second->PixelBytes()});
 		image->dirtyRatio = image->imageBytes ? static_cast<double>(image->dirtyBytes) / image->imageBytes : 0;
 		image->freezeUs = header.clock->SimulationUs(); image->nativeBoundaryUs = header.clock->call->parts[1];
 		image->boundaryThread = std::hash<std::thread::id>{}(header.clock->call->simulation);
@@ -1360,6 +1433,7 @@ bool ActivityMan::QueueFrozenAutosave(const std::string& fileName, const std::st
 	const auto* sourceActivity = dynamic_cast<const GAScripted*>(GetActivity());
 	if (!sourceScene || !sourceScene->GetTerrain() || !sourceActivity || sourceActivity->GetActivityState() == Activity::Over) return false;
 	const HarnessCost::SimulationSpan freezeSpan;
+	const std::shared_ptr<const TerrainRows> terrain = CaptureTerrainCheck() ? CopyLiveTerrain() : nullptr;
 	const auto began = captureClock ? captureClock->started : RTE::SteadyClock::now();
 	auto image = std::make_shared<CheckpointImage>();
 	image->tick = tick; image->captureClock = std::move(captureClock);
@@ -1502,7 +1576,7 @@ bool ActivityMan::QueueFrozenAutosave(const std::string& fileName, const std::st
 	for (const auto& [name, layer]: image->layers) image->imageBytes += layer->LogicalBytes();
 	bytes = image->imageBytes;
 	phase("sim_handoff");
-	const auto complete = [image, snapshot, scene, activity, hasStart, startActivity, sceneName, carried] {
+	const auto complete = [image, snapshot, scene, activity, hasStart, startActivity, sceneName, carried, terrain] {
 		CheckpointNativeSnapshot::ReadScope read(snapshot.get());
 		CheckpointWriter::BatchOverride batch(true);
 		CheckpointWriter::CacheScope cache(nullptr);
@@ -1524,12 +1598,17 @@ bool ActivityMan::QueueFrozenAutosave(const std::string& fileName, const std::st
 		image->imageBytes = image->activity.OwnedBytes() + image->scene.OwnedBytes() + image->sceneRuntime.OwnedBytes() + image->structure.OwnedBytes() + image->globals.OwnedBytes();
 		for (const auto& graph: image->graphs) image->imageBytes += graph.OwnedBytes();
 		for (const auto& [name, layer]: image->layers) { layer->Finalize(); image->imageBytes += layer->LogicalBytes(); image->dirtyBytes += layer->dirtyBytes; }
+		if (terrain && image->layers.size() >= 2) ReportTerrainRows(image->tick, "image", *terrain, {image->layers[0].second->PixelBytes(), image->layers[1].second->PixelBytes()});
 		image->dirtyRatio = image->imageBytes ? static_cast<double>(image->dirtyBytes) / image->imageBytes : 0;
 	};
 	image->freezeUs = freezeSpan.Stop() / 1000;
 	phase(nullptr);
 	image->boundaryThread = std::hash<std::thread::id>{}(std::this_thread::get_id());
 	image->cloneCosts = CheckpointCloneCost::Take(&image->cloneThreadCosts);
+	if (terrain) {
+		ReportTerrainHashes(tick, "freeze", *terrain);
+		ReportTerrainRows(tick, "live", *terrain, CopyLiveTerrain()->bytes);
+	}
 	return SubmitCheckpointArchiveImage(fileName, path, matchId, tick, task, compression, identity, std::move(image), complete, {}, {}, {}, {}, pixels.TakeStorage());
 }
 
@@ -3894,6 +3973,7 @@ bool ActivityMan::RestartActivityWorld() {
 		}
 		// Under the full-state oracle the restored world logs its state before it runs a tick, against the save it came from.
 		mode.Commit();
+		if (CaptureTerrainCheck()) ReportTerrainHashes(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), "restored", *CopyLiveTerrain());
 		if (m_FullStateLever) CaptureFullStateHash(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), m_FullStateRound, {}, "restored");
 		return true;
 	}
