@@ -21910,6 +21910,60 @@ bool TestBufferedReturnIsNotAnAnswer(std::string* error) {
 			return finish(nullptr);
 		}
 
+		// A hold takes the returning machine's player off its actor; its return hands that actor back, or the player is left
+		// watching and falls back to its brain ('Lost control of remote body!').
+		bool TestAReturnedSeatGetsItsActorBack(std::string* error) {
+			const char* name = "a_returned_seat_gets_its_actor_back";
+			EnsureSwitchTestManagers();
+			const uint16_t port = 48473;
+			LoopbackTransport hostTransport;
+			LoopbackTransport clientTransport;
+			NetLockstepCoordinator host;
+			NetLockstepCoordinator client;
+			NetMatchConfig matchConfig = NetMatchConfigUtil::MakeDefault(0x5245544F524E4544ULL);
+			NetLockstepConfig hostConfig = MakeCoordinatorConfig(1, 2, port, 2, NetTransportLane::ControlReliable);
+			NetLockstepConfig clientConfig = MakeCoordinatorConfig(2, 1, port, 2, NetTransportLane::ControlReliable);
+			hostConfig.matchConfig = matchConfig;
+			clientConfig.matchConfig = matchConfig;
+			hostConfig.timeoutMs = 4000;
+			clientConfig.timeoutMs = 4000;
+			const auto finish = [&](const char* message) {
+				ScenarioRunner::SetLockstepCoordinator(nullptr);
+				std::unique_ptr<Activity> empty;
+				g_ActivityMan.SwapCheckpointActivity(empty);
+				if (message) {
+					std::cout << "[net-lockstep-selftest] FAIL " << name << ": " << message << std::endl;
+					if (error) *error = message;
+				} else {
+					std::cout << "[net-lockstep-selftest] PASS " << name << std::endl;
+				}
+				return message == nullptr;
+			};
+			if (!StartCoordinatorPair(port, hostTransport, clientTransport, host, client, hostConfig, clientConfig, error)) return finish("coordinator pair failed");
+			if (!DriveCoordinators(hostTransport, clientTransport, host, client, [&] { return host.IsRunning() && client.IsRunning(); }, error, 4000))
+				return finish("pair did not reach Running");
+			// This machine is peer 2, the roster's seat 1.
+			ScenarioRunner::SetLockstepCoordinator(&client);
+			std::unique_ptr<Activity> activity = std::make_unique<GameActivity>();
+			g_ActivityMan.SwapCheckpointActivity(activity);
+			auto* match = dynamic_cast<GameActivity*>(g_ActivityMan.GetActivity());
+			if (!match || !match->ConfigureLockstepPlayers()) return finish("the match roster did not reach the activity");
+			const int team = match->GetTeamOfPlayer(Players::PlayerTwo);
+			Actor* soldier = MakeSwitchTestActor(team);
+			if (!soldier) return finish("the selftest actor could not be created");
+			AddSwitchTestActor(soldier);
+			if (!match->SwitchToActor(soldier, Players::PlayerTwo, team) || match->GetLocallyControlledActor(Players::PlayerTwo) != soldier)
+				return finish("the player could not take its actor before the hold");
+			ScenarioRunner::DrainLocalGameCommands();
+			match->ApplyNetworkSeatAI(2, true, 40);
+			if (match->GetLocallyControlledActor(Players::PlayerTwo)) return finish("the hold left the player on its actor");
+			match->ApplyNetworkSeatAI(2, false, 41);
+			ScenarioRunner::DrainLocalGameCommands();
+			if (match->GetLocallyControlledActor(Players::PlayerTwo) != soldier)
+				return finish("returned-seat-left-watching: the player's seat came back and its actor, alive on its team, was not handed back");
+			return finish(nullptr);
+		}
+
 		// A clean match end drops the coordinator while the activity keeps updating. The roster's seat map has to
 		// outlive it, or every seat reads as this machine's own and GameActivity::Update's per-seat loop runs for a
 		// seat whose menus were never built. A restore under a live match must not remap an activity that takes its
@@ -34527,6 +34581,7 @@ namespace {
 		row([](std::string* rowError) { return TestCommittedCatchUpKeepsSharedState(rowError); }, "TestCommittedCatchUpKeepsSharedState");
 		row([](std::string* rowError) { return TestAWorldTailHandsAHeldSeatToTheAI(rowError); }, "TestAWorldTailHandsAHeldSeatToTheAI");
 		row([](std::string* rowError) { return TestCatchUpFencesTheReclaimGap(rowError); }, "TestCatchUpFencesTheReclaimGap");
+		row([](std::string* rowError) { return TestAReturnedSeatGetsItsActorBack(rowError); }, "TestAReturnedSeatGetsItsActorBack");
 		row([](std::string* rowError) { return TestCatchUpFencesTheHoldGap(rowError); }, "TestCatchUpFencesTheHoldGap");
 		row([](std::string* rowError) { return TestWorldTailKeepsItsLiveCoordinatorSeparate(rowError); }, "TestWorldTailKeepsItsLiveCoordinatorSeparate");
 		row([](std::string* rowError) { return TestLateStartPreservesHoldBoundary(rowError); }, "TestLateStartPreservesHoldBoundary");

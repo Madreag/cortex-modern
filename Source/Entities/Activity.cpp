@@ -186,6 +186,7 @@ void Activity::Clear() {
 		m_BrainEvacuated[player] = false;
 		m_ControlledActor[player] = 0;
 		m_RenderSubstituteActor[player] = nullptr;
+		m_LockstepReleasedActor[player] = 0;
 		m_PresentationView[player] = PresentationView{};
 		m_PlayerController[player].SetCheckpointOwner(this);
 		m_PlayerController[player].Reset();
@@ -250,6 +251,7 @@ int Activity::Create(const Activity& reference) {
 		m_ViewState[player] = reference.m_ViewState[player];
 		m_ControlledActor[player] = reference.m_ControlledActor[player];
 		m_RenderSubstituteActor[player] = nullptr;
+		m_LockstepReleasedActor[player] = reference.m_LockstepReleasedActor[player];
 		m_PlayerController[player] = reference.m_PlayerController[player];
 	}
 
@@ -1529,6 +1531,7 @@ void Activity::ReleaseLockstepControlOfActor(int player) {
 		return;
 	}
 	if (Actor* actor = m_ControlledActor[player]; actor && g_MovableMan.IsActor(actor)) {
+		m_LockstepReleasedActor[player] = actor->GetUniqueID();
 		actor->SetControllerMode(Controller::CIM_AI);
 	}
 	m_ControlledActor[player] = nullptr;

@@ -848,6 +848,7 @@ namespace RTE {
 
 		Actor* m_ControlledActor[Players::MaxPlayerCount]; //!< Currently controlled actor, not owned.
 		Actor* m_RenderSubstituteActor[Players::MaxPlayerCount]{}; //!< Preview clone answered by GetControlledActor during a render window only; not owned.
+		long int m_LockstepReleasedActor[Players::MaxPlayerCount]{}; //!< The actor a lockstep hold took from each player, handed back when the seat returns.
 		/// Local-seat presentation of activity UI the preview fills and the commit clears. Never checkpointed.
 		struct PresentationOrder {
 			float cost = 0;

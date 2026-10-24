@@ -100,6 +100,7 @@
 #include <mutex>
 #include <sstream>
 #include <thread>
+#include <utility>
 
 #define BRAINLZWIDTHDEFAULT 640
 
@@ -584,6 +585,16 @@ void GameActivity::ApplyNetworkSeatAI(uint8_t peerId, bool held, uint64_t frame)
 	}
 	TouchCheckpoint();
 	ConfigureLockstepCPUTeams(cpuTeams);
+	// A hold took this machine's player off its actor and left it watching: its return hands that actor back, as the player's own
+	// switch would, unless the actor is gone or another player has it.
+	if (!held && peerId == ScenarioRunner::GetLockstepLocalPeerId())
+		for (int player = Players::PlayerOne; player < Players::MaxPlayerCount; ++player) {
+			if (LockstepSeatPeerId(player) != peerId || !IsLocalHumanSeat(player)) continue;
+			const long int released = std::exchange(m_LockstepReleasedActor[player], 0);
+			Actor* actor = released ? dynamic_cast<Actor*>(g_MovableMan.FindObjectByUniqueID(released)) : nullptr;
+			if (actor && g_MovableMan.IsActor(actor) && actor != m_Brain[player] && actor->GetTeam() == GetTeamOfPlayer(player) &&
+			    (!m_ControlledActor[player] || m_ControlledActor[player] == m_Brain[player])) SwitchToActor(actor, player, actor->GetTeam());
+		}
 	if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) {
 		int mask = 0;
 		for (int team = Teams::TeamOne; team < Teams::MaxTeamCount; ++team) mask |= cpuTeams[team] ? 1 << team : 0;
@@ -725,7 +736,8 @@ bool GameActivity::SwitchToActor(Actor* pActor, int player, int team) {
 	if (!IsLocalHumanSeat(player))
 		return Activity::SwitchToActor(pActor, player, team);
 
-	m_InventoryMenuGUI[player]->SetEnabled(false);
+	// A seat's return can hand its actor back before this activity has built its menus.
+	if (m_InventoryMenuGUI[player]) m_InventoryMenuGUI[player]->SetEnabled(false);
 
 	// Disable the AI command mode since it's connected to the current actor
 	if (m_ViewState[player] == ViewState::AISentryPoint || m_ViewState[player] == ViewState::AIPatrolPoints || m_ViewState[player] == ViewState::AIGoldDigPoint || m_ViewState[player] == ViewState::AIGoToPoint || m_ViewState[player] == ViewState::UnitSelectCircle)
