@@ -38,9 +38,8 @@ namespace RTE {
 			std::map<uint8_t, Gap> gaps; //!< Per owner: the first input missing while a later one is in.
 		};
 		InputWireStats* InputWire() {
-			static const bool on = std::getenv("CC_TEST_PEER_INPUT_WIRE") != nullptr;
 			static InputWireStats stats;
-			return on ? &stats : nullptr;
+			return PeerInputWireDetails() ? &stats : nullptr;
 		}
 		void FlushInputWire(InputWireStats& stats, uint8_t local, uint64_t frame, uint64_t nowMs) {
 			if (stats.sinceMs == 0) stats.sinceMs = nowMs;

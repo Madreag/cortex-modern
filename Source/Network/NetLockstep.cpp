@@ -3827,9 +3827,35 @@ namespace RTE {
 		// Every required sender needs acceptance within this continuation. Complete receipts for just our own input cannot
 		// make another sender's missing quorum wait for the directory. This uses input evidence, never a transport classifier.
 		const auto sources = m_PeerSourceInputs.find(frame);
+		// A receipt answers our own input. One this machine produced more than the bound behind its own consumer is late on this
+		// machine's account: a peer that receipted every input before it is owed a receipt trip and the bound from when it left.
+		const auto ownInputReceiptDue = [&] {
+			const auto sent = m_PeerInputSentAtMs.find(frame);
+			const auto deadline = PeerInputDeadlineMs(frame);
+			if (sent == m_PeerInputSentAtMs.end() || !deadline || m_Config.simTickMs <= 0) return true;
+			const double boundMs = std::ceil(m_Config.slowPlayerBoundTicks * m_Config.simTickMs);
+			const double lead = *deadline - boundMs - static_cast<double>(sent->second);
+			const auto own = m_PeerInputReceipts.find(m_Config.localPeerId);
+			const auto trip = m_PeerReceiptDelaySamples.find(peer);
+			// The delay this input went out on: a change since then does not make it late.
+			uint64_t delay = 0;
+			while (delay <= NetLockstepCodec::c_MaxInputDelayFrames && delay < frame && InputDelayAt(m_Config.localPeerId, frame - delay) != delay) ++delay;
+			const bool late = delay <= NetLockstepCodec::c_MaxInputDelayFrames && delay < frame && lead < static_cast<double>(delay) * m_Config.simTickMs - boundMs;
+			const bool current = own != m_PeerInputReceipts.end() && own->second.contains(peer) && own->second.at(peer) >= frame;
+			const bool due = !late || !current ||
+			    m_TimingNowMs >= sent->second + (trip == m_PeerReceiptDelaySamples.end() ? 0 : trip->second.P95Ms()) + static_cast<uint64_t>(boundMs);
+			if (NetPeerFrameDetail::PeerInputWireDetails()) {
+				static std::map<std::pair<const void*, uint8_t>, uint64_t> named;
+				if (auto& last = named[{this, peer}]; frame != last && (last = frame))
+					DiagnosticLine() << "[net-peer-own-receipt] local=" << static_cast<int>(m_Config.localPeerId) << " peer=" << static_cast<int>(peer) << " frame=" << frame
+					    << " sent_ms=" << sent->second << " slot_ms=" << *deadline - boundMs << " lead_ms=" << lead << " late=" << late << " current=" << current
+					    << " due=" << due << " trip_ms=" << (trip == m_PeerReceiptDelaySamples.end() ? 0 : trip->second.P95Ms()) << " now_ms=" << m_TimingNowMs << std::endl;
+			}
+			return due;
+		};
 		return peer != m_Config.localPeerId && sources != m_PeerSourceInputs.end() && sources->second.contains(peer) &&
 		    frame >= EffectiveStartOf(peer) && !IsSeatReclaimGap(peer, frame) &&
-		    ((PeerConsumerHoldDue(frame, m_TimingNowMs) && (PeerInputReceiptGroup(frame) & (1U << (peer - 1))) == 0) ||
+		    ((PeerConsumerHoldDue(frame, m_TimingNowMs) && ownInputReceiptDue() && (PeerInputReceiptGroup(frame) & (1U << (peer - 1))) == 0) ||
 		     (!HasPeerFrameRoute(peer) && (PeerInputVoters(frame, m_Config.localPeerId) & (1U << (peer - 1))) == 0));
 	}
 

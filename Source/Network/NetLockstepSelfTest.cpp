@@ -191,6 +191,73 @@ namespace RTE {
 			return true;
 		}
 
+		// A machine running behind its own pace sends an input only a moment before it plays it: the peer's receipt of that input
+		// cannot come back by the bound, and the peer, which keeps up, is not the one to hold for it.
+		static bool OwnLateInputsLeaveTheirReceiptTime(std::string* error) {
+			enum class Arm { Late, Paced, Burst, LateToABehindPeer };
+			for (const Arm arm: {Arm::Late, Arm::Paced, Arm::Burst, Arm::LateToABehindPeer}) {
+				Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
+				peer.m_Config.localPeerId = 1;
+				peer.m_Config.peerCount = peer.m_Config.matchConfig.peerCount = 2;
+				peer.m_Config.matchConfig.players.resize(2);
+				peer.m_Config.matchConfig.successorOrder = {2};
+				peer.m_Config.peerFrameGroups = peer.m_Config.substituteSlowPeers = true;
+				peer.m_Config.slowPlayerBoundTicks = 3;
+				peer.m_Config.inputDelayFrames = 4;
+				peer.m_Config.frameTieReferee = [](const NetFrameTieRequest&) { NetFrameTieReply reply; reply.state = NetFrameTieReply::State::Waiting; return reply; };
+				peer.m_RoundConfigHash = NetMatchConfigUtil::HashConfig(peer.m_Config.matchConfig);
+				peer.m_MigrationPhase = NetHostMigrationPhase::None;
+				peer.m_FrameGroupMembers = 3; peer.m_FrameGroupChanges = {{1, 3}};
+				peer.m_RemotePeerIds = {2}; peer.m_RemoteTransports = {{2, 42}};
+				peer.m_Stats.nextFrame = 349; peer.m_LastCompletedSimulationTick = 348;
+				peer.m_MigrationHistory[348] = {1, 2};
+				peer.m_PeerPaceStartFrame = 348; peer.m_PeerPaceStartMs = peer.m_PeerConsumerAtMs = 1000;
+				peer.m_FirstMissingFrame = 349; peer.m_FirstMissingMs = 1000;
+				peer.m_ConsumerWaitingFrame = 349; peer.m_ConsumerWaitStartMs = 1000;
+				for (uint8_t owner = 1; owner <= 2; ++owner) {
+					ControllerFrame controls; controls.actorUniqueID = 1000 + owner;
+					NetLockstepFrame input; input.senderPeerId = owner; input.roundId = 77; input.targetFrame = 349; input.frames = {controls};
+					peer.m_PeerSourceInputs[349][owner] = input;
+					if (owner == 1) peer.m_LocalFrames[349] = input.frames; else peer.m_RemoteFrames[349][owner] = input.frames;
+				}
+				// The peer's input is ours to receipt. Its receipts of ours have taken 45 ms and reached the frame before, or one short of it.
+				peer.m_PeerInputReceipts[2][1] = 350;
+				peer.m_PeerInputReceipts[1][2] = arm == Arm::LateToABehindPeer ? 348 : 349;
+				for (uint64_t at = 500; at < 1000; at += 100) peer.m_PeerReceiptDelaySamples[2].Observe(at, 45);
+				const double tickMs = peer.m_Config.simTickMs, leadMs = peer.InputDelayAt(1, 349) * tickMs;
+				const uint64_t bound = static_cast<uint64_t>(std::ceil(3 * tickMs));
+				// Late: this machine sent its input two milliseconds before it reached the frame. Paced: a millisecond after the tick that
+				// produced it. Burst: a machine that plays three ticks a frame sent it the bound short of a whole input delay, still on time.
+				const uint64_t sentAt = arm == Arm::Paced ? static_cast<uint64_t>(std::ceil(1000 - leadMs)) + 1 :
+				    arm == Arm::Burst ? 1000 - static_cast<uint64_t>(std::floor(leadMs)) + bound - 1 : 998;
+				peer.m_PeerInputSentAtMs[349] = sentAt;
+				peer.m_TimingNowMs = 1000 + bound + 1;
+				const bool heldAtBound = peer.ProposePeerBridge(349, peer.m_TimingNowMs);
+				if (arm == Arm::Late && heldAtBound) {
+					*error = "own-late-input-held-peer: our input of frame 349 left 2 ms before we played it and the peer that receipts it was held " +
+					         std::to_string(bound + 1) + " ms later, before its receipt could come back";
+					return false;
+				}
+				if ((arm == Arm::Paced || arm == Arm::Burst) && !heldAtBound) {
+					*error = std::string("a receipt missing at the bound after our ") + (arm == Arm::Paced ? "paced" : "three-tick burst's") +
+					         " input held nobody: the survivor waited past " + std::to_string(bound) + " ms";
+					return false;
+				}
+				if (arm == Arm::LateToABehindPeer && !heldAtBound) {
+					*error = "a peer behind on the receipts before our late input held nobody at the bound: the survivor waited past " + std::to_string(bound) + " ms";
+					return false;
+				}
+				if (arm == Arm::Late) {
+					// Its receipt is owed one receipt trip and the bound after the late input left; past that the peer is held as ever.
+					peer.m_TimingNowMs = sentAt + 45 + bound + 1;
+					if (!peer.ProposePeerBridge(349, peer.m_TimingNowMs) || !peer.IsSeatUnderAI(2, 349)) {
+						*error = "a receipt still missing a receipt trip and the bound after our late input held nobody"; return false;
+					}
+				}
+			}
+			return true;
+		}
+
 		static bool AcceptedInputsKeepTheirPlayingReceiptGroup(std::string* error) {
 			for (bool directory: {false, true}) for (uint8_t local: {1, 3, 4}) {
 				Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
@@ -33551,6 +33618,12 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS tail_hold_signers_are_not_another_playing_half\n[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "own-late-input-receipt") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::OwnLateInputsLeaveTheirReceiptTime(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS own_late_inputs_leave_their_receipt_time\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "remote-input-receipt-group") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::RemoteInputReceiptsFormTheLocalHoldGroup(&error)) return fail(error);
@@ -34047,6 +34120,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::HeldPeerFrameSeatsOweNoInput, "held_peer_frame_seats_owe_no_input");
 		row(&SessionPlaneRecoveryTest::LegacyCombatHoldUsesItsInputDeadline, "legacy_combat_hold_uses_its_input_deadline");
 		row(&SessionPlaneRecoveryTest::RemoteInputReceiptsFormTheLocalHoldGroup, "remote_input_receipts_form_the_local_hold_group");
+		row(&SessionPlaneRecoveryTest::OwnLateInputsLeaveTheirReceiptTime, "own_late_inputs_leave_their_receipt_time");
 		row(&SessionPlaneRecoveryTest::AcceptedInputsKeepTheirPlayingReceiptGroup, "accepted_inputs_keep_their_playing_receipt_group");
 		row(&SessionPlaneRecoveryTest::MissingInputsExcludeIncompatibleWitnesses, "missing_inputs_exclude_incompatible_witnesses");
 		row(&SessionPlaneRecoveryTest::MissingOrZeroLinkNeverUsesReceipts, "missing_or_zero_rtt_never_uses_machine_receipts");
