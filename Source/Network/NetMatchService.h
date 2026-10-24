@@ -724,6 +724,8 @@ namespace RTE {
 		bool ReadPrivateBaseLocked(uint64_t tick, NetWorldCheckpointImage& image, std::string* error);
 		/// Host: a returning seat is waiting and the private base it would load is missing, abandoned or older than one capture interval.
 		bool PrivateBaseWantedLocked(uint64_t nowMs) const;
+		/// Host: why a waiting returner's image does not leave yet, or empty when the published base is the one it takes.
+		std::string PrivateTransferWaitLocked(uint64_t nowMs) const;
 		/// Whether a private base taken earlier is due again, for a seat held now or one returned after the base was taken.
 		/// steadyCaptureMs is the median of the last captures past the round's first, or negative before there is one.
 		static bool PrivateBaseRefreshDue(bool seatHeld, uint64_t staleFrom, uint64_t baseTick, double steadyCaptureMs);
@@ -1430,6 +1432,7 @@ namespace RTE {
 		friend bool TestSignalPumpInitialCredential(std::string* error);
 		friend bool TestDirectoryCapacityFallback(std::string* error);
 		friend bool TestStaleWorldImageRecaptures(std::string* error);
+		friend bool TestAReturnerTakesTheBaseAskedForIt(std::string* error);
 		friend bool TestWorldCatchUpRefusal(std::string* error);
 		friend bool TestWorldDisconnectReason(bool watcher, std::string* error);
 		void InstallIcePump(NetMuxTransport& mux, bool host, std::shared_ptr<GnsDirectorySignalDispatcher> ownedDispatcher = {});
