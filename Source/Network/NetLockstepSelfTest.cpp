@@ -191,6 +191,55 @@ namespace RTE {
 			return true;
 		}
 
+		// The relay runs held a silent host 50 ms after the survivor's last tick and showed the held tick 50.26 ms after it: the tick's
+		// own work landed past the bound. The hold leaves that work inside the bound; with none measured the input keeps the whole
+		// window, and a machine slower than a quarter tick a tick spends no more of the other seat's window than that.
+		static bool AHoldShowsItsTickInsideTheBound(std::string* error) {
+			struct Arm { const char* name; double tickCostMs; uint64_t lastOpenMs; };
+			const Arm arms[] = {{"a 2.4 ms tick", 2.4, 1046}, {"no measured tick", -1, 1049}, {"a 40 ms tick", 40, 1045}};
+			for (const Arm& arm: arms) {
+				Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
+				peer.m_Config.localPeerId = 1;
+				peer.m_Config.peerCount = peer.m_Config.matchConfig.peerCount = 2;
+				peer.m_Config.matchConfig.players.resize(2);
+				peer.m_Config.matchConfig.successorOrder = {2};
+				peer.m_Config.peerFrameGroups = peer.m_Config.substituteSlowPeers = true;
+				peer.m_Config.slowPlayerBoundTicks = 3;
+				peer.m_Config.inputDelayFrames = 4;
+				peer.m_Config.frameTieReferee = [](const NetFrameTieRequest&) { NetFrameTieReply reply; reply.state = NetFrameTieReply::State::Waiting; return reply; };
+				peer.m_RoundConfigHash = NetMatchConfigUtil::HashConfig(peer.m_Config.matchConfig);
+				peer.m_MigrationPhase = NetHostMigrationPhase::None;
+				peer.m_FrameGroupMembers = 3; peer.m_FrameGroupChanges = {{1, 3}};
+				peer.m_RemotePeerIds = {2}; peer.m_RemoteTransports = {{2, 42}};
+				peer.m_Stats.nextFrame = 349; peer.m_LastCompletedSimulationTick = 348;
+				peer.m_MigrationHistory[348] = {1, 2};
+				peer.m_PeerPaceStartFrame = 348; peer.m_PeerPaceStartMs = peer.m_PeerConsumerAtMs = 1000;
+				peer.m_FirstMissingFrame = 349; peer.m_FirstMissingMs = 1017;
+				peer.m_ConsumerWaitingFrame = 349; peer.m_ConsumerWaitStartMs = 1017;
+				// Our own input is in and receipted; the other seat's has not come.
+				ControllerFrame controls; controls.actorUniqueID = 1001;
+				NetLockstepFrame input; input.senderPeerId = 1; input.roundId = 77; input.targetFrame = 349; input.frames = {controls};
+				peer.m_PeerSourceInputs[349][1] = input;
+				peer.m_LocalFrames[349] = input.frames;
+				peer.m_PeerInputSentAtMs[349] = 950;
+				peer.m_PeerInputReceipts[1][2] = 350;
+				if (arm.tickCostMs >= 0) for (uint64_t tick = 333; tick <= 348; ++tick) peer.NoteLocalTickCost(tick, arm.tickCostMs);
+				peer.m_TimingNowMs = arm.lastOpenMs;
+				if (peer.ProposePeerBridge(349, arm.lastOpenMs) || peer.IsSeatUnderAI(2, 349)) {
+					*error = std::string("with ") + arm.name + " the missing seat was held " + std::to_string(arm.lastOpenMs - 1000) +
+					         " ms after the last tick, while its input could still show inside the bound";
+					return false;
+				}
+				peer.m_TimingNowMs = arm.lastOpenMs + 1;
+				if (!peer.ProposePeerBridge(349, peer.m_TimingNowMs) || !peer.IsSeatUnderAI(2, 349)) {
+					*error = std::string("hold-tick-past-the-bound: with ") + arm.name + " the missing seat was not held " +
+					         std::to_string(peer.m_TimingNowMs - 1000) + " ms after the last tick, so the held tick shows past the 50 ms bound";
+					return false;
+				}
+			}
+			return true;
+		}
+
 		// A machine running behind its own pace sends an input only a moment before it plays it: the peer's receipt of that input
 		// cannot come back by the bound, and the peer, which keeps up, is not the one to hold for it.
 		static bool OwnLateInputsLeaveTheirReceiptTime(std::string* error) {
@@ -33806,6 +33855,12 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS relay_jitter_does_not_make_a_fast_machine_slow\n[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "hold-tick-inside-bound") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::AHoldShowsItsTickInsideTheBound(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS a_hold_shows_its_tick_inside_the_bound\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "own-late-input-receipt") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::OwnLateInputsLeaveTheirReceiptTime(&error)) return fail(error);
@@ -34309,6 +34364,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::LegacyCombatHoldUsesItsInputDeadline, "legacy_combat_hold_uses_its_input_deadline");
 		row(&SessionPlaneRecoveryTest::RemoteInputReceiptsFormTheLocalHoldGroup, "remote_input_receipts_form_the_local_hold_group");
 		row(&SessionPlaneRecoveryTest::OwnLateInputsLeaveTheirReceiptTime, "own_late_inputs_leave_their_receipt_time");
+		row(&SessionPlaneRecoveryTest::AHoldShowsItsTickInsideTheBound, "a_hold_shows_its_tick_inside_the_bound");
 		row(&SessionPlaneRecoveryTest::ASeatEveryOtherHeldYieldsItsPlay, "a_seat_every_other_held_yields_its_play");
 		row(&SessionPlaneRecoveryTest::AReturnHeldAgainBeforeItStartsIsOver, "a_return_held_again_before_it_starts_is_over");
 		row(&SessionPlaneRecoveryTest::AcceptedInputsKeepTheirPlayingReceiptGroup, "accepted_inputs_keep_their_playing_receipt_group");

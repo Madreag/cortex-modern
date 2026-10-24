@@ -1685,6 +1685,9 @@ namespace RTE {
 		bool HasPeerFrameRoute(uint8_t peer) const;
 		bool PeerFrameCatchUp(bool requireReceiptRunway, double nextOrdinaryTickInMs = 0) const;
 		std::optional<double> PeerInputDeadlineMs(uint64_t frame) const;
+		/// The part of the bound the held tick's own work spends after the hold: this machine's median recent tick, at most a quarter
+		/// tick. A machine whose ticks take longer shows its own work, which no hold of another seat pays for.
+		double PeerHoldWorkMs() const;
 		bool PeerConsumerHoldDue(uint64_t frame, uint64_t nowMs) const;
 		bool PeerMissingInputReceipt(uint8_t peer, uint64_t frame) const;
 		std::pair<INetTransport*, NetPeerId> PeerFrameRoute(uint8_t peer) const;

@@ -3813,8 +3813,18 @@ namespace RTE {
 		// A catching-up consumer can need a frame before its original pacing slot.
 		if (m_ConsumerWaitingFrame == frame)
 			due = due ? std::min(*due, static_cast<double>(m_ConsumerWaitStartMs)) : m_ConsumerWaitStartMs;
-		if (due) *due += std::ceil(m_Config.slowPlayerBoundTicks * m_Config.simTickMs);
+		// The held tick shows inside the bound, its own work included.
+		if (due) *due += std::ceil(m_Config.slowPlayerBoundTicks * m_Config.simTickMs) - PeerHoldWorkMs();
 		return due;
+	}
+
+	double NetLockstepCoordinator::PeerHoldWorkMs() const {
+		const size_t ticks = std::min(m_TickCosts.size(), c_OwnPaceTicks);
+		if (ticks == 0 || m_Config.simTickMs <= 0) return 0;
+		std::array<double, c_OwnPaceTicks> costs;
+		std::copy(m_TickCosts.end() - ticks, m_TickCosts.end(), costs.begin());
+		std::nth_element(costs.begin(), costs.begin() + ticks / 2, costs.begin() + ticks);
+		return std::min(std::floor(m_Config.simTickMs / 4), std::ceil(costs[ticks / 2]));
 	}
 
 	bool NetLockstepCoordinator::PeerConsumerHoldDue(uint64_t frame, uint64_t nowMs) const {
@@ -3834,7 +3844,7 @@ namespace RTE {
 			const auto deadline = PeerInputDeadlineMs(frame);
 			if (sent == m_PeerInputSentAtMs.end() || !deadline || m_Config.simTickMs <= 0) return true;
 			const double boundMs = std::ceil(m_Config.slowPlayerBoundTicks * m_Config.simTickMs);
-			const double lead = *deadline - boundMs - static_cast<double>(sent->second);
+			const double lead = *deadline + PeerHoldWorkMs() - boundMs - static_cast<double>(sent->second);
 			const auto own = m_PeerInputReceipts.find(m_Config.localPeerId);
 			const auto trip = m_PeerReceiptDelaySamples.find(peer);
 			// The delay this input went out on: a change since then does not make it late.
