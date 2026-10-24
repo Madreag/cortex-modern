@@ -7048,7 +7048,7 @@ namespace RTE {
 		{
 			// Every seat this return reaches, so a seat that plays on without it says whether it was sent.
 			std::ostringstream line;
-			line << "[net-lockstep] return of peer " << static_cast<int>(peerId) << " at " << timing.applyFrame << " goes to";
+			line << "[net-lockstep] return of peer " << static_cast<int>(peerId) << " at " << timing.applyFrame << " trail=" << trailFrames << " goes to";
 			for (const auto& [seat, connection]: m_RemoteTransports) line << ' ' << static_cast<int>(seat);
 			DiagnosticLine() << line.str() << std::endl;
 		}

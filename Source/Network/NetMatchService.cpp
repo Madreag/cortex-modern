@@ -6049,9 +6049,10 @@ static std::string ResyncSaveName() {
 				const uint64_t simulated = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount());
 				if ((m_OpenCaptureTick != 0 && m_OpenCaptureTick >= simulated) || m_Coordinator->CaptureParkMayReach(session.activationTick)) continue;
 				std::string error;
-				// A seat the AI holds is still this member's: it comes back by reclaiming the seat, never as a new member.
+				// A seat the AI holds is still this member's: it comes back by reclaiming the seat, never as a new member, and its return
+				// leaves it the trail its replay showed, as a private return's does, so its first input is one it can send in time.
 				if (m_Coordinator->HasHeldAISeat(session.assignedPeerId)) {
-					if (m_Coordinator->SchedulePeerReclaim(session.assignedPeerId, session.connection, incarnation, session.activationTick, &error)) {
+					if (m_Coordinator->SchedulePeerReclaim(session.assignedPeerId, session.connection, incarnation, session.activationTick, &error, session.activationTrailFrames)) {
 						m_WorldJoin.MarkActivationProposed(session.connection);
 						m_HeldWorldReclaims.insert(session.connection);
 					} else {
