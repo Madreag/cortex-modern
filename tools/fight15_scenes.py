@@ -371,15 +371,20 @@ def say(text):
                           wait(chat_text_once=text)]
 
 
-def complete_live_scene(peer, number):
+# A returned seat's saving is judged on the first save named after its return and 600 ticks past it; at the save proof's
+# ten-second interval that is up to two intervals of play after the return.
+RETURN_PLAY_ON_TICKS = 1200
+
+
+def complete_live_scene(peer, number, play_on=0):
     # The menu script resumes only after the activity returns to the lobby.
-    # The joiner acknowledges its captured result before the host ends the match.
+    # The joiner acknowledges its captured result before the host ends the match, after play_on more ticks of play.
     joined = f"joiner answers scene {number}"
     hosted = f"host answers scene {number}"
     captured = f"joiner captured scene {number}"
     steps = say(joined) + [wait(chat_text_once=hosted)] if peer == "joiner" else [wait(chat_text_once=joined)] + say(hosted)
     steps += capture(f"answered-{peer}") + [dict(op="assert_scene", input_player=0, equals=dict(alive=True)), dict(op="assert_relay")]
-    steps += say(captured) if peer == "joiner" else [wait(chat_text_once=captured)] + pause_end()
+    steps += say(captured) if peer == "joiner" else [wait(chat_text_once=captured)] + ([wait(sim_advanced=play_on)] if play_on else []) + pause_end()
     return steps + [lobby_wait(peer), dict(op="finish")]
 
 
@@ -432,7 +437,7 @@ def game_scenes():
             # The status box tells the host why the seat is held; its numbers stay behind Show network diagnostics.
             dict(op="assert_control", control="LabelNetMatchStatus", text_contains="Joiner: Left", text_lacks=STATUS_NUMBERS, fits=True, inside="BoxNetMatchStatus"),
             dict(op="signal", name="left-read"), wait(returned_peer="Joiner", within_ms=90000)] + key("F6") + [wait(panel_open=False)]
-    host += capture("rejoined-host") + [dict(op="assert_scene", input_player=0, equals=dict(alive=True, brain_count=2)), dict(op="assert_relay")] + complete_live_scene("host", 7)
+    host += capture("rejoined-host") + [dict(op="assert_scene", input_player=0, equals=dict(alive=True, brain_count=2)), dict(op="assert_relay")] + complete_live_scene("host", 7, RETURN_PLAY_ON_TICKS)
     joiner += key("Escape") + [wait(screen="Pause"), menu("activate ButtonLeaveMatch"), wait(screen="PauseLeaveConfirm")]
     joiner += capture("leave-consequence", "PauseLeaveConfirm") + [menu("assert_text_fits ButtonLeaveConfirm"), menu("activate ButtonLeaveConfirm"),
                wait(screen="MultiplayerScreen", scope="menu"), dict(op="signal", name="left", scope="menu"),
