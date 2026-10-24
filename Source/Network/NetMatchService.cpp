@@ -10749,6 +10749,12 @@ static std::string ResyncSaveName() {
 				System::PrintDiagnosticLine("[net-auth] crypto unavailable - reconnect auth disabled");
 			}
 		}
+		// A harness picks the moment a joiner reaches its host: the join waits at its door until this file exists.
+		if (const char* gate = std::getenv("CC_TEST_JOIN_GATE_FILE"); gate && *gate && !request.host) {
+			System::PrintDiagnosticLine(std::string("[net-test] join held until ") + gate + " exists");
+			while (!m_CancelRequested.load() && !std::filesystem::exists(gate)) std::this_thread::sleep_for(std::chrono::milliseconds(5));
+			System::PrintDiagnosticLine("[net-test] join released");
+		}
 		auto transport = std::make_unique<GnsTransport>();
 		auto session = std::make_unique<NetSession>();
 		auto coordinator = std::make_unique<NetLockstepCoordinator>();
