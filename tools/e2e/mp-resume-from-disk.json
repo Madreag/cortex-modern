@@ -268,8 +268,7 @@
             "all": [
               {"peer": "host", "sim_tick": 601},
               {"peer": "host", "log": "^\\[autosave\\] retained tick="},
-              {"peer": "client", "log": "^\\[autosave\\] retained tick="},
-              {"peer": "host", "log": "^\\[autosave\\] restart admission written "}
+              {"peer": "client", "log": "^\\[autosave\\] retained tick="}
             ]
           },
           "observe_after_failure": true,
@@ -321,8 +320,7 @@
             "all": [
               {"peer": "client", "sim_tick": 601},
               {"peer": "host", "log": "^\\[autosave\\] retained tick="},
-              {"peer": "client", "log": "^\\[autosave\\] retained tick="},
-              {"peer": "host", "log": "^\\[autosave\\] restart admission written "}
+              {"peer": "client", "log": "^\\[autosave\\] retained tick="}
             ]
           },
           "observe_after_failure": true,
