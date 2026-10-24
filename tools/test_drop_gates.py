@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from types import SimpleNamespace
@@ -43,6 +44,28 @@ class DropGateTests(unittest.TestCase):
                                 f"{name} drops its {peer['name']} without waiting for both peers' checkpoints on disk")
                 self.assertIsNone(e2e_video.run_preflight({"peers": died["peers"]}, {"name": "died", "peers": [
                     {key: value for key, value in node.items() if key not in ("menu_script", "probe", "input_script")} for node in died["peers"]]}, [], {}))
+
+    def test_no_resume_scene_drops_a_peer_before_every_peer_recorded_the_drop_tick(self):
+        # A peer killed first stops the other short of the tick its own drop waits for, and that drop never comes.
+        for name in ("mp-resume-from-disk.json", "mp-resume-from-disk-autosave.json"):
+            scene = json.loads((SCENES / name).read_text(encoding="utf-8"))
+            for run in (run for run in scene["runs"] if any("kill_when" in peer for peer in run["peers"])):
+                ticks = {(part["peer"], part["sim_tick"]) for peer in run["peers"] for part in e2e_video.gate_parts(peer.get("kill_when") or {}) if "sim_tick" in part}
+                for peer in run["peers"]:
+                    own = {(part["peer"], part["sim_tick"]) for part in e2e_video.gate_parts(peer.get("kill_when") or {}) if "sim_tick" in part}
+                    missing = sorted({(other["name"], tick) for other in run["peers"] for _, tick in ticks} - own)
+                    self.assertEqual(missing, [], f"{name} {run['name']} drops its {peer['name']} before these players recorded these ticks")
+
+    def test_a_tick_gate_counts_only_frames_the_recorder_saved(self):
+        # The drop item reads saved frames only; a gate met by an unsaved frame drops the peer short of its recorded tick.
+        with tempfile.TemporaryDirectory() as folder:
+            video = Path(folder) / "client" / "video"
+            video.mkdir(parents=True)
+            rows = [dict(screen="game", sim_tick=589, saved=True), dict(screen="game", sim_tick=601, saved=False)]
+            (video / "frames.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+            self.assertFalse(e2e_video.peer_gate_met({"peer": "client", "sim_tick": 601}, folder))
+            (video / "frames.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows + [dict(screen="game", sim_tick=603, saved=True)]), encoding="utf-8")
+            self.assertTrue(e2e_video.peer_gate_met({"peer": "client", "sim_tick": 601}, folder))
 
 
 class HangGateTests(unittest.TestCase):

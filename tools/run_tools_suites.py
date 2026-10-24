@@ -53,6 +53,7 @@ SUITES = (
     ("soak-judgement", ["test_soak_two_peer.py"]),
     ("split-loser-judgement", ["test_split_loser_host.py", "--self-test"]),
     ("two-machine-scenes", ["-m", "unittest", "test_e2e_peers.CommittedScenesTest"]),
+    ("drop-gates", ["-m", "unittest", "test_drop_gates"]),
     ("inventory-run-split", [str(INVENTORY / "run_split.py"), "--self-test"]),
     ("inventory-run-stream", [str(INVENTORY / "run_stream.py"), "--self-test"]),
     ("inventory-extract-defects", [str(INVENTORY / "extract_defects.py"), "--self-test"]),
