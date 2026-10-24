@@ -9439,6 +9439,7 @@ void RunGameLoop() {
 				g_MovableMan.FeedTickEndChecksum();
 				g_SceneMan.FeedTerrainToSimChecksum();
 				const auto tickResult = g_SimChecksum.EndTick();
+				ActivityMan::DumpTerrainAtTickEnd(simTick);
 				if (s_checkpointRestoreContinue) System::PrintDiagnosticLine(std::format("[checkpoint-restore-hash] tick={} total={} sim_gated={}",
 				    simTick, SimChecksum::HashHex(tickResult.total), SimChecksum::HashHex(SimChecksum::SimGatedHash(tickResult))));
 				// Test lever CCCP_TEST_HASH_SUBSYSTEMS: a continued restore also names each subsystem's hash, so a divergence names its part.

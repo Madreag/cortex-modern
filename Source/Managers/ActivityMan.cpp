@@ -740,6 +740,55 @@ ActivityMan::PendingCheckpoint::~PendingCheckpoint() = default;
 ActivityMan::PendingCheckpoint::PendingCheckpoint(PendingCheckpoint&&) noexcept = default;
 ActivityMan::PendingCheckpoint& ActivityMan::PendingCheckpoint::operator=(PendingCheckpoint&&) noexcept = default;
 
+namespace {
+	// CC_TEST_TERRAIN_DUMP_TICKS as "<first>[-<last>]", or "capture+<n>": the n ticks after each capture and each restore of one.
+	struct TerrainDumpTicks {
+		uint64_t first = 1, last = 0, afterCapture = 0;
+	};
+
+	TerrainDumpTicks& TerrainDumps() {
+		static TerrainDumpTicks ticks = [] {
+			TerrainDumpTicks parsed;
+			const char* value = std::getenv("CC_TEST_TERRAIN_DUMP_TICKS");
+			if (!value) return parsed;
+			std::string_view text(value);
+			if (text.starts_with("capture+")) {
+				text.remove_prefix(8);
+				std::from_chars(text.data(), text.data() + text.size(), parsed.afterCapture);
+				return parsed;
+			}
+			const size_t dash = text.find('-');
+			std::from_chars(text.data(), text.data() + (dash == std::string_view::npos ? text.size() : dash), parsed.first);
+			parsed.last = parsed.first;
+			if (dash != std::string_view::npos) std::from_chars(text.data() + dash + 1, text.data() + text.size(), parsed.last);
+			return parsed;
+		}();
+		return ticks;
+	}
+
+	void DumpTerrainAfterCapture(uint64_t tick) {
+		if (TerrainDumpTicks& ticks = TerrainDumps(); ticks.afterCapture != 0) {
+			ticks.first = tick + 1;
+			ticks.last = tick + ticks.afterCapture;
+		}
+	}
+}
+
+void ActivityMan::DumpTerrainAtTickEnd(uint64_t tick) {
+	if (const TerrainDumpTicks& ticks = TerrainDumps(); tick < ticks.first || tick > ticks.last) return;
+	const auto bitmaps = LiveTerrainBitmaps();
+	if (!bitmaps[0] || !bitmaps[1]) return;
+	const std::shared_ptr<const TerrainRows> rows = CopyLiveTerrain();
+	ReportTerrainHashes(tick, "tick_end", *rows);
+	// The copy is the tick's; the files are written off the simulation's thread.
+	std::thread([rows, tick, width = bitmaps[0]->w, height = bitmaps[0]->h] {
+		const std::string base = std::format("terrain-tick-{}", tick);
+		std::ofstream(base + ".json") << std::format(R"({{"tick":{},"width":{},"height":{},"mat_row_bytes":{},"fg_row_bytes":{}}})", tick, width, height, rows->rowBytes[0], rows->rowBytes[1]) << "\n";
+		std::ofstream(base + "-mat.bin", std::ios::binary).write(rows->bytes[0].data(), static_cast<std::streamsize>(rows->bytes[0].size()));
+		std::ofstream(base + "-fg.bin", std::ios::binary).write(rows->bytes[1].data(), static_cast<std::streamsize>(rows->bytes[1].size()));
+	}).detach();
+}
+
 ActivityMan::ActivityMan() {
 	Clear();
 }
@@ -907,6 +956,7 @@ struct ActivityMan::PreparedAutosave {
 		}
 		if (accepted && terrain) {
 			ReportTerrainHashes(tick, "freeze", *terrain);
+			DumpTerrainAfterCapture(tick);
 			const TerrainRows live = *CopyLiveTerrain();
 			ReportTerrainRows(tick, "live", *terrain, live.bytes);
 		}
@@ -1607,6 +1657,7 @@ bool ActivityMan::QueueFrozenAutosave(const std::string& fileName, const std::st
 	image->cloneCosts = CheckpointCloneCost::Take(&image->cloneThreadCosts);
 	if (terrain) {
 		ReportTerrainHashes(tick, "freeze", *terrain);
+		DumpTerrainAfterCapture(tick);
 		ReportTerrainRows(tick, "live", *terrain, CopyLiveTerrain()->bytes);
 	}
 	return SubmitCheckpointArchiveImage(fileName, path, matchId, tick, task, compression, identity, std::move(image), complete, {}, {}, {}, {}, pixels.TakeStorage());
@@ -3974,6 +4025,7 @@ bool ActivityMan::RestartActivityWorld() {
 		// Under the full-state oracle the restored world logs its state before it runs a tick, against the save it came from.
 		mode.Commit();
 		if (CaptureTerrainCheck()) ReportTerrainHashes(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), "restored", *CopyLiveTerrain());
+		DumpTerrainAfterCapture(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()));
 		if (m_FullStateLever) CaptureFullStateHash(static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()), m_FullStateRound, {}, "restored");
 		return true;
 	}

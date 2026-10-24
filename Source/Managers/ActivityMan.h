@@ -51,6 +51,9 @@ namespace RTE {
 		void ExpectAutosave(double seconds);
 		/// A capture comes now, with no tick for the saver to warm ahead: warms the prepared capture and waits for it.
 		bool WarmAutosaveNow();
+		/// Test lever CC_TEST_TERRAIN_DUMP_TICKS=<first>[-<last>] or capture+<n> (the n ticks after each restore, and after each capture
+		/// under CC_TEST_CAPTURE_TERRAIN): writes the terrain each such tick ends on beside the run, so two peers' copies name the pixels a terrain difference is made of.
+		static void DumpTerrainAtTickEnd(uint64_t tick);
 #pragma region Creation
 		/// Constructor method used to instantiate an ActivityMan object in system memory. Create() should be called before using the object.
 		ActivityMan();
