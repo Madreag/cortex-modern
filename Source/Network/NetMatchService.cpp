@@ -3325,7 +3325,7 @@ static std::string ResyncSaveName() {
 			// Admission refusals are the same final answer on a new join and a saved rejoin.
 			if (state == NetMatchServiceState::Failed && !isHost && m_Session && m_Session->HasReject()) {
 				const auto rejected = m_Session->GetRejectReason();
-				const auto step = NextHeldRejoinStep(0, true, rejected, m_Session->BuildPlayerRefusalText());
+				const auto step = NextHeldRejoinStep(0, true, rejected, m_Session->BuildPlayerRefusalText(), false);
 				if (!step.retry) {
 					if ((rejected == NetRejectReason::SeatReassigned || rejected == NetRejectReason::SeatReleased) && m_TicketStore.HasRecord())
 						(void)m_TicketStore.Clear(nullptr);
@@ -11620,7 +11620,7 @@ static std::string ResyncSaveName() {
 			m_OrdinaryTicketRejoin = m_HeldRejoinDriving = false;
 			m_HeldRejoinRoutes.clear();
 			m_HeldRejoinRetryAtMs = 0;
-			m_HeldRejoinFailedAttempts = 0;
+			m_HeldRejoinFailedAttempts = 0; m_HeldRejoinAwaitsHost = false;
 			if (cancelAttempt) {
 				m_CancelRequested.store(true);
 				m_StartRequested.store(false);
@@ -11763,7 +11763,7 @@ static std::string ResyncSaveName() {
 			std::lock_guard<std::mutex> lock(m_Mutex);
 			m_HeldRejoinDriving = true;
 			m_HeldRejoinStartedMs = SteadyNowMs();
-			m_HeldRejoinFailedAttempts = 0;
+			m_HeldRejoinFailedAttempts = 0; m_HeldRejoinAwaitsHost = false;
 			m_HeldRejoinRetryAtMs = 0;
 			m_RejoinFoundHostRowGone = false;
 		}
@@ -11785,7 +11785,7 @@ static std::string ResyncSaveName() {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		m_HeldRejoinDriving = false;
 		m_HeldRejoinStartedMs = 0;
-		m_HeldRejoinFailedAttempts = 0;
+		m_HeldRejoinFailedAttempts = 0; m_HeldRejoinAwaitsHost = false;
 		m_HeldRejoinRetryAtMs = 0;
 		m_HeldRejoinRoutes.clear();
 		m_HeldRejoinPriorInput = 0;
@@ -11813,7 +11813,7 @@ static std::string ResyncSaveName() {
 		return !lostDuringSetup && hasReject && reason == NetRejectReason::Timeout && rejectSummary == "client hello timeout";
 	}
 
-	NetMatchService::HeldRejoinStep NetMatchService::NextHeldRejoinStep(uint8_t failedAttempts, bool hasReject, NetRejectReason reason, const std::string& rejectText) {
+	NetMatchService::HeldRejoinStep NetMatchService::NextHeldRejoinStep(uint8_t failedAttempts, bool hasReject, NetRejectReason reason, const std::string& rejectText, bool awaitingHost) {
 		HeldRejoinStep step;
 		// The host's final word on the seat ends the rejoin with that word.
 		const bool final = hasReject && (reason == NetRejectReason::SeatReassigned || reason == NetRejectReason::ParticipantRemoved || reason == NetRejectReason::ParticipantBanned ||
@@ -11824,7 +11824,9 @@ static std::string ResyncSaveName() {
 			return step;
 		}
 		step.retry = true;
-		step.delayMs = static_cast<uint32_t>(std::min<uint64_t>(30000, c_RosterReturnBackoffMs << std::min<unsigned>(failedAttempts > 0 ? failedAttempts - 1 : 0, 4)));
+		// The other players still choosing the next host is a wait as long as their election, not a host to back off from.
+		step.delayMs = awaitingHost ? static_cast<uint32_t>(c_RosterReturnBackoffMs) :
+		    static_cast<uint32_t>(std::min<uint64_t>(30000, c_RosterReturnBackoffMs << std::min<unsigned>(failedAttempts > 0 ? failedAttempts - 1 : 0, 4)));
 		return step;
 	}
 
@@ -11853,8 +11855,9 @@ static std::string ResyncSaveName() {
 			    (m_Session->GetRejectSummary() == "The address belongs to another hosted session." || m_Session->GetRejectSummary() == "reconnect denied")));
 			const bool hostGone = obsoleteRoute || (!helloUnanswered && (lostDuringSetup || (m_Session && ClientSessionLossIsHostDeparture(*m_Session))));
 			if (!hostGone || m_HeldRejoinRoutes.empty()) {
-				if (m_HeldRejoinFailedAttempts < UINT8_MAX) ++m_HeldRejoinFailedAttempts;
-				step = NextHeldRejoinStep(m_HeldRejoinFailedAttempts, hasReject, reason, hasReject ? m_Session->BuildPlayerRefusalText() : std::string());
+				const bool awaitingHost = std::exchange(m_HeldRejoinAwaitsHost, false);
+				if (!awaitingHost && m_HeldRejoinFailedAttempts < UINT8_MAX) ++m_HeldRejoinFailedAttempts;
+				step = NextHeldRejoinStep(m_HeldRejoinFailedAttempts, hasReject, reason, hasReject ? m_Session->BuildPlayerRefusalText() : std::string(), awaitingHost);
 				if (!step.retry) {
 					m_HeldRejoinRetryAtMs = 0;
 					m_StatusText = step.stop;
@@ -11948,7 +11951,7 @@ static std::string ResyncSaveName() {
 				m_HeldRejoinStartedMs = SteadyNowMs();
 				m_ReconnectUx.SetRetainedSeat(!record.seatToken.empty());
 				m_ReconnectUx.SetRetryWindowMs(c_TicketRejoinAttemptBudgetMs * NetReconnectUx::c_MaxAttempts + 300000);
-				m_HeldRejoinFailedAttempts = 0; m_HeldRejoinRetryAtMs = 0;
+				m_HeldRejoinFailedAttempts = 0; m_HeldRejoinAwaitsHost = false; m_HeldRejoinRetryAtMs = 0;
 			}
 		}
 		return BeginTicketRejoinOnRoute(error, nullptr);
@@ -12057,6 +12060,10 @@ static std::string ResyncSaveName() {
 			std::this_thread::sleep_for(std::chrono::milliseconds(20));
 		}
 		if (error) *error = "The other players are choosing who hosts the match now. Rejoining in a moment.";
+		{
+			std::lock_guard<std::mutex> lock(m_Mutex);
+			m_HeldRejoinAwaitsHost = true;
+		}
 		System::PrintDiagnosticLine("[net-match] rejoin waits for another host: the directory still names this seat's own listing " + ownListing);
 		return false;
 	}

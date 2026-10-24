@@ -715,7 +715,7 @@ namespace RTE {
 			uint32_t delayMs = 0;
 			std::string stop;
 		};
-		static HeldRejoinStep NextHeldRejoinStep(uint8_t failedAttempts, bool hasReject, NetRejectReason reason, const std::string& rejectText);
+		static HeldRejoinStep NextHeldRejoinStep(uint8_t failedAttempts, bool hasReject, NetRejectReason reason, const std::string& rejectText, bool awaitingHost);
 		static bool RematchLossReturnsThroughRejoin(bool isHost, bool hostEndedMatch, bool rosterRefused, bool sessionReady, bool hasReject, NetRejectReason reason, bool linkLost,
 		                                            bool startNeverCame, bool heldAtStart);
 		/// Client: the last rematch setup lost its link to the host and the seat is owed its return to the round the host plays.
@@ -1999,6 +1999,7 @@ namespace RTE {
 		/// Held client: the hosts its rejoin may still find when its own is gone, in the match's published successor order.
 		std::deque<NetMatchServiceRequest> m_HeldRejoinRoutes;
 		uint8_t m_HeldRejoinFailedAttempts = 0; //!< The attempts of this held rejoin that failed with its host still there.
+		bool m_HeldRejoinAwaitsHost = false; //!< The last attempt found the directory still naming this seat's own listing.
 		bool m_RejoinFoundHostRowGone = false; //!< The directory confirms that this session ended by its host.
 		uint64_t m_HeldRejoinStartedMs = 0;
 		uint64_t m_TicketRejoinAttemptStartedMs = 0;

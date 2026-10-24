@@ -9037,6 +9037,7 @@ namespace RTE {
 			NetRejectReason reason;
 			bool retry;
 			uint32_t delayMs;
+			bool awaitingHost = false;
 		};
 		const Case cases[] = {
 		    {"a first failure the host gave no reason for", 1, false, NetRejectReason::InternalError, true, 2000},
@@ -9044,11 +9045,13 @@ namespace RTE {
 		    {"the roster's backoff refusal", 2, true, NetRejectReason::HostNotAccepting, true, 4000},
 		    {"a third failure", 3, true, NetRejectReason::Timeout, true, 8000},
 		    {"a sustained outage", 255, false, NetRejectReason::InternalError, true, 30000},
+		    {"four failures while the others still choose the next host", 4, false, NetRejectReason::InternalError, true, 2000, true},
 		    {"the seat given away", 1, true, NetRejectReason::SeatReassigned, false, 0},
 		    {"a ban", 1, true, NetRejectReason::ParticipantBanned, false, 0},
+		    {"a ban while the others still choose the next host", 4, true, NetRejectReason::ParticipantBanned, false, 0, true},
 		};
 		for (const Case& c: cases) {
-			const NetMatchService::HeldRejoinStep step = NetMatchService::NextHeldRejoinStep(c.failed, c.hasReject, c.reason, "the host's words");
+			const NetMatchService::HeldRejoinStep step = NetMatchService::NextHeldRejoinStep(c.failed, c.hasReject, c.reason, "the host's words", c.awaitingHost);
 			if (step.retry != c.retry || step.delayMs != c.delayMs || (!step.retry && step.stop.empty())) {
 				*error = std::string("a held rejoin after ") + c.name + (step.retry ? " asks again in " + std::to_string(step.delayMs) + " ms" : " stops: '" + step.stop + "'");
 				return false;
