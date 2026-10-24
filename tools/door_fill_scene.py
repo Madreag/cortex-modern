@@ -3,7 +3,9 @@ reinforced fill buried around its brain chamber and then laid over the chamber's
 
 While a team's paths update, the game opens that team's doors in the terrain and closes them again, on each machine's own
 ticks. Fill over a door is the terrain that override meets, so the scene checks every running tick's shared hashes,
-terrain included, on both players while the AI re-routes around the filled doors.
+terrain included, on both players while the AI re-routes around the filled doors. Twenty seconds into each door's life
+a slit is dug through it (the CC_TEST_DOOR_DIG_AGE_MS lever), and both players must see the door whole again within
+100 sim ms, the cadence of single player's path update.
 """
 import json
 
@@ -16,6 +18,11 @@ FILL = "Reinforced Concrete Fill"
 # door's block goes in last, as the players turn to their brains.
 LAYOUT = ((-144, -144), (-48, -144), (48, -144), (144, -144), (-144, -48), (-144, 48), (144, -48), (144, 48), (48, 48))
 FILL_LINE = r"\[net-match\] editor purchase applied: seat={seat} preset=Base.rte/" + FILL + " funds="
+DIG_AGE_MS = 20000
+DUG_LINE = r"\[door-reseal\] door=\d+ team=\d+ dug=[1-9]\d* at_ms=\d+"
+RESEALED_LINE = r"\[door-reseal\] door=\d+ team=\d+ resealed_after_ms=(\d|[1-9]\d|100)\b"
+LATE_LINES = [r"\[door-reseal\] door=\d+ team=\d+ resealed_after_ms=(10[1-9]|1[1-9]\d|[2-9]\d\d|\d{4,})\b",
+              r"\[door-reseal\] door=\d+ team=\d+ not resealed "]
 
 
 def fill(player):
@@ -72,8 +79,13 @@ def main():
             item.update(what="Both bunkers, their ring of fill and the fill over each closed door reached the shared scene before the brains started playing.",
                         log_regex=lines + [FILL_LINE.format(seat=seat) for seat in (0, 1)])
         checklist.append(item)
+    for peer in ("host", "joiner"):
+        checklist.append(dict(id=f"door-resealed-{peer}", peer=peer, mark=f"fight-ended-{peer}", screen="game", log_regex=[DUG_LINE, RESEALED_LINE],
+                              forbidden_log_regex=LATE_LINES,
+                              what="A slit dug through a closed door is whole again within 100 sim ms on this player, as single player's path update leaves it."))
     for peer in scene["peers"]:
         peer["settings"] = dict(peer["settings"], NetworkConnectionMode="Automatic")
+        peer["env"] = dict(peer.get("env", {}), CC_TEST_DOOR_DIG_AGE_MS=str(DIG_AGE_MS))
     scene.update(name="door-fill", port_base=49474, timeout_s=900, checklist=checklist,
                  title="Reinforced fill over each brain chamber's closed door: every running tick's terrain alike on both players while the AI re-routes",
                  fight_hash_gate=dict(scene["fight_hash_gate"], running_ticks=TICKS))

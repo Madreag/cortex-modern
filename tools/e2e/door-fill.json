@@ -12,7 +12,8 @@
       "menu_script": "host.menu",
       "probe": "host.probe",
       "env": {
-        "CCCP_TEST_READBACK_TIMING": "1"
+        "CCCP_TEST_READBACK_TIMING": "1",
+        "CC_TEST_DOOR_DIG_AGE_MS": "20000"
       },
       "settings": {
         "SessionDirectoryUrl": "directory.broserver.com",
@@ -35,7 +36,8 @@
       "menu_script": "joiner.menu",
       "probe": "joiner.probe",
       "env": {
-        "CCCP_TEST_READBACK_TIMING": "1"
+        "CCCP_TEST_READBACK_TIMING": "1",
+        "CC_TEST_DOOR_DIG_AGE_MS": "20000"
       },
       "settings": {
         "SessionDirectoryUrl": "directory.broserver.com",
@@ -282,6 +284,36 @@
         134,
         135
       ]
+    },
+    {
+      "id": "door-resealed-host",
+      "peer": "host",
+      "mark": "fight-ended-host",
+      "screen": "game",
+      "log_regex": [
+        "\\[door-reseal\\] door=\\d+ team=\\d+ dug=[1-9]\\d* at_ms=\\d+",
+        "\\[door-reseal\\] door=\\d+ team=\\d+ resealed_after_ms=(\\d|[1-9]\\d|100)\\b"
+      ],
+      "forbidden_log_regex": [
+        "\\[door-reseal\\] door=\\d+ team=\\d+ resealed_after_ms=(10[1-9]|1[1-9]\\d|[2-9]\\d\\d|\\d{4,})\\b",
+        "\\[door-reseal\\] door=\\d+ team=\\d+ not resealed "
+      ],
+      "what": "A slit dug through a closed door is whole again within 100 sim ms on this player, as single player's path update leaves it."
+    },
+    {
+      "id": "door-resealed-joiner",
+      "peer": "joiner",
+      "mark": "fight-ended-joiner",
+      "screen": "game",
+      "log_regex": [
+        "\\[door-reseal\\] door=\\d+ team=\\d+ dug=[1-9]\\d* at_ms=\\d+",
+        "\\[door-reseal\\] door=\\d+ team=\\d+ resealed_after_ms=(\\d|[1-9]\\d|100)\\b"
+      ],
+      "forbidden_log_regex": [
+        "\\[door-reseal\\] door=\\d+ team=\\d+ resealed_after_ms=(10[1-9]|1[1-9]\\d|[2-9]\\d\\d|\\d{4,})\\b",
+        "\\[door-reseal\\] door=\\d+ team=\\d+ not resealed "
+      ],
+      "what": "A slit dug through a closed door is whole again within 100 sim ms on this player, as single player's path update leaves it."
     }
   ],
   "fight_hash_gate": {
