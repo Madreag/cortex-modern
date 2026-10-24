@@ -208,6 +208,8 @@ if get_option('tracy_enable')
   if not get_option('debug')
     # A Final build never starts the kernel trace: as root or under a permissive perf_event_paranoid it samples every CPU and records every context switch.
     add_global_arguments('-DTRACY_NO_SYSTEM_TRACING', language:'cpp')
+    # Only a profiler on the player's own machine may connect, and the game never announces itself on the LAN.
+    add_global_arguments(['-DTRACY_ONLY_LOCALHOST', '-DTRACY_NO_BROADCAST'], language:'cpp')
   endif
 endif
 if get_option('tracy_callstack') > 0
