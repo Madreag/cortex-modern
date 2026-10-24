@@ -1,5 +1,6 @@
 #include "SimChecksum.h"
 
+#include "SteadyClock.h"
 #include "ThreadMan.h"
 
 #include "tracy/Tracy.hpp"
@@ -258,7 +259,7 @@ namespace RTE {
 
 		// Test lever CC_TEST_SIM_CHECKSUM_ROWS: each call names what its compare and its fold cost and what the fold read.
 		static const bool s_Details = std::getenv("CC_TEST_SIM_CHECKSUM_ROWS") != nullptr;
-		const auto startedAt = s_Details ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+		const auto startedAt = s_Details ? SteadyClock::now() : SteadyClock::time_point{};
 		size_t changedBlocks = 0, byteFolds = 0;
 		const uint64_t tableFoldsBefore = cache.tableFolds;
 
@@ -307,7 +308,7 @@ namespace RTE {
 			}
 		}
 
-		const auto comparedAt = s_Details ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+		const auto comparedAt = s_Details ? SteadyClock::now() : SteadyClock::time_point{};
 		uint64_t state = hasher->second.state;
 		std::vector<size_t> worthATable;
 		for (int y = 0; y < height; ++y) {
@@ -347,7 +348,7 @@ namespace RTE {
 		hasher->second.state = state;
 		cache.byteFolds += byteFolds;
 		if (s_Details) {
-			const auto foldedAt = std::chrono::steady_clock::now();
+			const auto foldedAt = SteadyClock::now();
 			const auto us = [](auto span) { return static_cast<long long>(std::chrono::duration_cast<std::chrono::microseconds>(span).count()); };
 			std::cout << "[sim-checksum-rows] tick=" << m_Impl->tick << " subsystem=" << name << " size=" << width << "x" << height << " blocks=" << cache.version.size()
 			          << " changed=" << changedBlocks << " byte_folds=" << byteFolds << " table_folds=" << (cache.tableFolds - tableFoldsBefore)

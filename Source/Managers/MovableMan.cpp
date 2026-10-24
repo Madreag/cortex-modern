@@ -8294,10 +8294,10 @@ bool MovableMan::RunPoolUpdateSelfTest() {
 	std::atomic<size_t> arrived{0};
 	std::vector<std::future<bool>> contexts;
 	contexts.reserve(workers);
-	const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+	const auto deadline = RTE::SteadyClock::now() + std::chrono::seconds(3);
 	for (size_t index = 0; index < workers; ++index) contexts.push_back(pool.submit([&] {
 		arrived.fetch_add(1, std::memory_order_acq_rel);
-		while (arrived.load(std::memory_order_acquire) < workers && std::chrono::steady_clock::now() < deadline) std::this_thread::yield();
+		while (arrived.load(std::memory_order_acquire) < workers && RTE::SteadyClock::now() < deadline) std::this_thread::yield();
 		return arrived.load(std::memory_order_acquire) == workers &&
 		       g_LuaMan.GetThreadLuaStateOverride() == nullptr && g_CurrentAIActor == nullptr;
 	}));

@@ -4266,12 +4266,12 @@ namespace RTE {
 		}
 		// Shrinks a failing schedule while it still fails the same way: the shrinks are tried in order, a worker's worth at once, and the
 		// first in order that still fails is kept and shrunk again, until none does or the run budget is spent.
-		Schedule Minimize(Schedule schedule, const Finding& finding, unsigned threads, size_t budget, size_t& runs, Finding& last, std::chrono::steady_clock::time_point deadline) {
+		Schedule Minimize(Schedule schedule, const Finding& finding, unsigned threads, size_t budget, size_t& runs, Finding& last, SteadyClock::time_point deadline) {
 			last = finding;
-			for (bool shrunk = true; shrunk && runs < budget && std::chrono::steady_clock::now() < deadline;) {
+			for (bool shrunk = true; shrunk && runs < budget && SteadyClock::now() < deadline;) {
 				shrunk = false;
 				const auto candidates = Shrinks(schedule);
-				for (size_t first = 0; first < candidates.size() && !shrunk && runs < budget && std::chrono::steady_clock::now() < deadline; first += threads) {
+				for (size_t first = 0; first < candidates.size() && !shrunk && runs < budget && SteadyClock::now() < deadline; first += threads) {
 					const size_t count = std::min({static_cast<size_t>(threads), candidates.size() - first, budget - runs});
 					std::vector<std::optional<Finding>> results(count);
 					RunParallel(count, threads, [&](size_t index) { results[index] = RunScheduleQuietly(candidates[first + index]); });
@@ -4451,7 +4451,7 @@ namespace RTE {
 			uint64_t firstSeed = 0, elapsedMs = 0, budgetMs = 0;
 			bool runRandom = true, reusedFixedCatalogue = false;
 			std::map<std::string, std::string> priorFailures;
-			std::chrono::steady_clock::time_point began;
+			SteadyClock::time_point began;
 			std::vector<Schedule> schedules;
 			std::vector<std::string> names, lines;
 			std::vector<std::optional<Finding>> results;
@@ -4484,7 +4484,7 @@ namespace RTE {
 				return true;
 			}
 			void Prepare(const char* selected) {
-				began = std::chrono::steady_clock::now();
+				began = SteadyClock::now();
 				count = EnvironmentNumber("CC_TEST_HOLD_SCHEDULES", 200);
 				firstSeed = EnvironmentNumber("CC_TEST_HOLD_SCHEDULE_SEED", 1);
 				const unsigned hardware = std::max(2U, std::thread::hardware_concurrency());
@@ -4584,8 +4584,8 @@ namespace RTE {
 				}
 				elapsedMs = Elapsed(began);
 			}
-			static uint64_t Elapsed(std::chrono::steady_clock::time_point since) {
-				return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - since).count());
+			static uint64_t Elapsed(SteadyClock::time_point since) {
+				return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(SteadyClock::now() - since).count());
 			}
 		};
 		bool CheckPrivateReturnShape(std::string_view shape, uint32_t rttMs, std::string& error) {
