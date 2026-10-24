@@ -39,8 +39,16 @@ def _one(text, path, start, body, pattern, what):
 
 
 def _constant(text, path, start, body, owner, name):
-    pattern = rf"(?m)^[ \t]*static\s+constexpr\s+\w+\s+{name}\s*=\s*{LITERAL}\s*;"
-    return _one(text, path, start, body, pattern, f"{owner}::{name}")
+    head = rf"(?m)^[ \t]*static\s+constexpr\s+\w+\s+{name}\s*=\s*"
+    literals = list(re.finditer(rf"{head}{LITERAL}\s*;", body))
+    aliases = list(re.finditer(rf"{head}([A-Za-z_]\w*)\s*;", body))
+    if len(literals) + len(aliases) != 1:
+        raise RuntimeError(f"{path}: expected exactly one integer definition of {owner}::{name}, found {len(literals) + len(aliases)}")
+    if literals:
+        return _one(text, path, start, body, rf"{head}{LITERAL}\s*;", f"{owner}::{name}")
+    # A class constant that names the header's own namespace constant carries that constant's literal.
+    target = aliases[0].group(1)
+    return _one(text, path, 0, text, rf"(?m)^[ \t]*inline\s+constexpr\s+\w+\s+{target}\s*=\s*{LITERAL}\s*;", f"{owner}::{name} = {target}")
 
 
 def _enumerator(text, path, start, body, owner, name):

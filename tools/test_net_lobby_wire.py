@@ -23,6 +23,31 @@ class LaunchRelayLayoutTests(unittest.TestCase):
         self.assertEqual(struct.unpack_from("<I", current, 12)[0], len(current) - header)
         self.assertEqual(struct.unpack_from("<H", current, header)[0], 8)
 
+    def test_a_named_default_is_read_through_the_header_constant_it_names(self):
+        repo = Path(__file__).resolve().parents[1]
+        bound = read(repo).default_slow_bound
+        header = (repo / "Source/Network/NetMatchConfig.h").read_text(encoding="utf-8").splitlines()
+        line = header[int(bound.site.rsplit(":", 1)[1]) - 1]
+        self.assertIn("c_NetSlowPlayerBoundTicks", line)
+        self.assertIn(f"= {bound.value};", line)
+
+    def test_a_constant_named_twice_or_through_an_unknown_name_is_refused(self):
+        import tempfile
+        from net_lobby_wire import CONFIG_HEADER, LOBBY_HEADER
+        repo = Path(__file__).resolve().parents[1]
+        config = (repo / CONFIG_HEADER).read_text(encoding="utf-8")
+        line = "static constexpr uint16_t c_DefaultSlowPlayerBoundTicks = c_NetSlowPlayerBoundTicks;"
+        broken = {"twice": config.replace(line, line + "\n\t\tstatic constexpr uint16_t c_DefaultSlowPlayerBoundTicks = 3;"),
+                  "unknown": config.replace(line, line.replace("c_NetSlowPlayerBoundTicks", "c_NetNoSuchTicks"))}
+        for name, text in broken.items():
+            with self.subTest(name), tempfile.TemporaryDirectory() as directory:
+                tree = Path(directory)
+                for relative, content in ((CONFIG_HEADER, text), (LOBBY_HEADER, (repo / LOBBY_HEADER).read_text(encoding="utf-8"))):
+                    (tree / relative).parent.mkdir(parents=True, exist_ok=True)
+                    (tree / relative).write_text(content, encoding="utf-8")
+                with self.assertRaises(RuntimeError):
+                    read(tree)
+
     def test_the_session_protocol_is_read_from_the_tree(self):
         repo = Path(__file__).resolve().parents[1]
         protocol = session_protocol(repo)
