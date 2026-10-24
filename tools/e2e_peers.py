@@ -343,11 +343,16 @@ def play(request_path):
                               resume_tokens=request.get("resume_tokens", {}), service_tokens={},
                               completed_runs=completed_runs(request, scene_out, role),
                               scratch_root=Path(request["box"]["scratch"]), scratch_limit_bytes=video.SCRATCH_LIMIT,
-                              remote_capture=PlayerRun(request, out / (role + "-started.json")))
+                              remote_capture=PlayerRun(request, out / (role + "-started.json")), shared_run_root=True)
     missing = video.requirement_findings(options.repo, document)
     if missing:
         raise ValueError("scene requirements failed: " + json.dumps(missing))
     video.check_scratch_budget(options.scratch_root, options.scratch_limit_bytes)
+    for peer in run["peers"]:
+        reference = peer.get("retain_runtime_from") or {}
+        if reference.get("run") == name:
+            # Its engine is staged on the earlier player's runtime, which that player's run fills only by playing.
+            await_earlier_player(options.remote_capture, peer["start_when"], float(document.get("timeout_s", 480)))
     captured = video._run_one(options, local_scene, run, index, scene_out)
     captured.update(repo=str(options.repo), topology="spread", proof=False, peer_boxes={role: request["box"]["name"]})
     for peer in captured["peers"]:
@@ -368,6 +373,15 @@ def play(request_path):
     passed = all(video.peer_completed(peer) for peer in captured["peers"])
     print(f"{role}: {'GREEN' if passed else 'RED'} {captured['root']}", flush=True)
     return 0 if passed else 1
+
+
+def await_earlier_player(remote, gate, timeout_s, poll_s=0.5):
+    """A player restarted in its run starts only once the player it restarts from has ended on this box."""
+    deadline = time.monotonic() + timeout_s
+    while not remote.peer_fact(gate):
+        if time.monotonic() >= deadline:
+            raise ValueError(f"the player this one restarts from never ended: {gate}")
+        time.sleep(poll_s)
 
 
 def completed_runs(request, scene_out, role):

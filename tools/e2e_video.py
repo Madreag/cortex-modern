@@ -2337,7 +2337,8 @@ def _run_one(options, scenario, run, run_index, out, case_root=None):
         if Path(case_root).resolve() != root.resolve() or not root.is_dir():
             raise ValueError("named case does not own this scenario run root")
     elif not dry:
-        root.mkdir(parents=True, exist_ok=False)
+        # Two players of one seat, each in its own player run, share the run's folder on their box.
+        root.mkdir(parents=True, exist_ok=getattr(options, "shared_run_root", False))
     size = options.size or run.get("size") or scenario.get("size") or DEFAULT_SIZE
     width, height = (int(part) for part in size.split("x"))
     port = port_for(run_index, options.port)

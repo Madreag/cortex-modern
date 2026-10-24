@@ -841,6 +841,15 @@ class KillAndRestartTest(unittest.TestCase):
         alone.pop("scenario_definition")
         self.assertIn("reconnect: peers ran on one named box", peers.spread_check(alone)["reasons"])
 
+    def test_a_player_restarted_in_its_run_waits_for_the_end_its_box_reports(self):
+        request = self.request("rejoined", run="reconnect")
+        remote = peers.PlayerRun(json.loads(request.read_text()), self.root / "rejoined-started.json")
+        gate = {"peer": "dropped", "ended": True}
+        with self.assertRaisesRegex(ValueError, "never ended"):
+            peers.await_earlier_player(remote, gate, 0.2, poll_s=0.05)
+        peers.write_player_files(request, {"files": {}, "facts": {"dropped": [peers.fact_key(gate)]}})
+        peers.await_earlier_player(remote, gate, 0.2, poll_s=0.05)
+
     def test_a_player_restarted_in_its_run_starts_from_the_runtime_its_box_kept(self):
         root = self.root / "dropped" / "reconnect"
         runtime = peers.video.retained_runtime({"run": "reconnect", "peer": "dropped"}, root, {}, [])
