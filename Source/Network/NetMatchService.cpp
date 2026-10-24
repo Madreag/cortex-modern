@@ -4555,18 +4555,15 @@ static std::string ResyncSaveName() {
 			const bool replaying = ScenarioRunner::WorldCatchUpActive() || privateReader;
 			const bool attempted = g_ActivityMan.ActivityRunning();
 			if (attempted && replaying) {
-				// It still writes the save, later than the live peers: its replay passes the named ticks closer together than the round
-				// did, so it waits here for the save its writer still holds.
-				const auto waitBegan = RTE::SteadyClock::now();
-				const bool writerBusy = !g_ActivityMan.AutosaveWriterReady();
-				if (writerBusy) (void)g_ActivityMan.AwaitAutosaveWriter();
-				const auto waitedMs = writerBusy ? std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - waitBegan).count() : 0;
+				// It still writes the save, later than the live peers. Its replay passes the named ticks closer together than the round
+				// did, so a writer still on the save before refuses this one: waiting for it would hold the return back, for good at an
+				// interval shorter than this machine's save.
 				m_AutosaveIdentity.savedByHost = output.manual;
 				taken = SaveStampedAutosave(tick, !joinCapture);
 				m_CaptureAnchorSimTime = input.now;
 				m_AutosaveIdentity.savedByHost = false;
-				System::PrintDiagnosticLine(std::format("[autosave] named tick={} {} while replaying the round: catch_up={} private_reader={} writer_waited_ms={}", tick, taken ? "taken" : "not taken",
-				    ScenarioRunner::WorldCatchUpActive(), privateReader, waitedMs));
+				System::PrintDiagnosticLine(std::format("[autosave] named tick={} {} while replaying the round: catch_up={} private_reader={}", tick, taken ? "taken" : "not taken",
+				    ScenarioRunner::WorldCatchUpActive(), privateReader));
 			} else if (attempted) {
 				if (m_Coordinator) m_Coordinator->BeginSynchronizedCapture(tick);
 				const auto captureBegan = RTE::SteadyClock::now();
