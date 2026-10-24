@@ -65,19 +65,43 @@ namespace {
 		if (right - left < 4 || bottom - top < 4) {
 			return;
 		}
-		// Three pixels wide across the door's short side, a quarter of the way along it, so the slit parts the door the way a dig does.
-		const bool tall = bottom - top >= right - left;
-		const int along = tall ? top + (bottom - top) * 3 / 4 : left + (right - left) * 3 / 4;
-		DoorDig& dig = DoorDigs()[door.GetUniqueID()];
-		dig.dugAtMs = g_TimerMan.GetSimTimeMS();
-		for (int y = tall ? along : top; y < (tall ? along + 3 : bottom); ++y) {
-			for (int x = tall ? left : along; x < (tall ? right : along + 3); ++x) {
-				if (_getpixel(material, x, y) == g_MaterialDoor) {
-					_putpixel(material, x, y, g_MaterialAir);
-					dig.pixels.emplace_back(x, y);
+		// Only this door's own silhouette is cut: a neighbouring door's material inside the box comes back with that door, not this one.
+		BITMAP* silhouette = create_bitmap_ex(8, right - left, bottom - top);
+		clear_to_color(silhouette, g_MaterialAir);
+		const bool renderDraw = g_SceneMan.IsRenderDrawContext();
+		g_SceneMan.SetRenderDrawContext(true);
+		door.GetDoor()->Draw(silhouette, Vector(static_cast<float>(left), static_cast<float>(top)), g_DrawDoor, true);
+		g_SceneMan.SetRenderDrawContext(renderDraw);
+		int minX = silhouette->w;
+		int minY = silhouette->h;
+		int maxX = -1;
+		int maxY = -1;
+		for (int y = 0; y < silhouette->h; ++y) {
+			for (int x = 0; x < silhouette->w; ++x) {
+				if (silhouette->line[y][x] != g_MaterialAir) {
+					minX = std::min(minX, x);
+					maxX = std::max(maxX, x);
+					minY = std::min(minY, y);
+					maxY = std::max(maxY, y);
 				}
 			}
 		}
+		DoorDig& dig = DoorDigs()[door.GetUniqueID()];
+		dig.dugAtMs = g_TimerMan.GetSimTimeMS();
+		if (maxX >= 0) {
+			// Three pixels wide across the silhouette's short side, a quarter of the way from its end, so the slit parts the door the way a dig does.
+			const bool tall = maxY - minY >= maxX - minX;
+			const int along = tall ? minY + (maxY - minY) * 3 / 4 : minX + (maxX - minX) * 3 / 4;
+			for (int y = tall ? along : minY; y <= (tall ? std::min(along + 2, maxY) : maxY); ++y) {
+				for (int x = tall ? minX : along; x <= (tall ? maxX : std::min(along + 2, maxX)); ++x) {
+					if (silhouette->line[y][x] != g_MaterialAir && _getpixel(material, left + x, top + y) == g_MaterialDoor) {
+						_putpixel(material, left + x, top + y, g_MaterialAir);
+						dig.pixels.emplace_back(left + x, top + y);
+					}
+				}
+			}
+		}
+		destroy_bitmap(silhouette);
 		g_SceneMan.GetTerrain()->AddUpdatedMaterialArea(Box(Vector(static_cast<float>(left), static_cast<float>(top)), Vector(static_cast<float>(right), static_cast<float>(bottom))));
 		std::cout << "[door-reseal] door=" << door.GetUniqueID() << " team=" << door.GetTeam() << " dug=" << dig.pixels.size() << " at_ms=" << dig.dugAtMs << std::endl;
 	}
@@ -90,12 +114,13 @@ namespace {
 		DoorDig& dig = found->second;
 		BITMAP* material = g_SceneMan.GetTerrain()->GetMaterialBitmap();
 		const long long afterMs = g_TimerMan.GetSimTimeMS() - dig.dugAtMs;
-		const bool whole = std::all_of(dig.pixels.begin(), dig.pixels.end(), [material](const std::pair<int, int>& pixel) { return _getpixel(material, pixel.first, pixel.second) == g_MaterialDoor; });
-		if (whole) {
+		const auto whole = std::count_if(dig.pixels.begin(), dig.pixels.end(), [material](const std::pair<int, int>& pixel) { return _getpixel(material, pixel.first, pixel.second) == g_MaterialDoor; });
+		if (!dig.pixels.empty() && static_cast<size_t>(whole) == dig.pixels.size()) {
 			std::cout << "[door-reseal] door=" << door.GetUniqueID() << " team=" << door.GetTeam() << " resealed_after_ms=" << afterMs << std::endl;
 			dig.reported = true;
 		} else if (afterMs > 12000) {
-			std::cout << "[door-reseal] door=" << door.GetUniqueID() << " team=" << door.GetTeam() << " not resealed after_ms=" << afterMs << std::endl;
+			std::cout << "[door-reseal] door=" << door.GetUniqueID() << " team=" << door.GetTeam() << " not resealed after_ms=" << afterMs << " whole=" << whole << "/" << dig.pixels.size()
+			          << " state=" << door.GetDoorState() << " drawn=" << door.GetDoorMaterialDrawn() << std::endl;
 			dig.reported = true;
 		}
 	}
