@@ -12553,6 +12553,11 @@ namespace RTE {
 		    m_RoundId != 0 && start.roundId == m_RoundId &&
 		    !(m_Config.peerFrameGroups && m_Config.initialPeerStartTerms.contains(start.localPeerId) && StartMatchesConfig(start))) {
 			++m_Stats.staleRoundPackets;
+			if (m_Config.peerFrameGroups) {
+				const auto kept = m_Config.initialPeerStartTerms.find(start.localPeerId);
+				NameStaleStart(start, "the host's start before this seat's own at " + std::to_string(m_Config.startFrame) + " delay=" + std::to_string(start.inputDelayFrames) +
+				    " kept=" + (kept == m_Config.initialPeerStartTerms.end() ? std::string("none") : std::to_string(kept->second.first) + "/" + std::to_string(kept->second.second)));
+			}
 			return;
 		}
 		if (const auto admission = m_PeerAdmissions.find(start.localPeerId); admission != m_PeerAdmissions.end() && start.startFrame < admission->second.frame) {
