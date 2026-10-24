@@ -40,9 +40,9 @@ def main():
     record = dict(upstream=revision, patch_sha256=hashlib.sha256(patch.read_bytes()).hexdigest(),
                   transport_diagnostics_patch_sha256=hashlib.sha256(diagnostics.read_bytes()).hexdigest(),
                   library=str(library.resolve()), library_sha256=hashlib.sha256(library.read_bytes()).hexdigest(),
-                  lifetime_version=5, transport_diagnostics_version=1)
+                  lifetime_version=6, transport_diagnostics_version=1)
     (args.out / 'gns-build.json').write_text(json.dumps(record, indent=2) + '\n', encoding='utf-8')
-    print('[gns-build] complete lifetime_version=5 transport_diagnostics_version=1', flush=True)
+    print('[gns-build] complete lifetime_version=6 transport_diagnostics_version=1', flush=True)
     return 0
 
 
