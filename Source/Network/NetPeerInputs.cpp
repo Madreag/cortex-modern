@@ -135,7 +135,7 @@ namespace RTE {
 			if (!received && !IsSeatReclaimGap(frame.senderPeerId, accepted->second)) break;
 			++accepted->second;
 		}
-		if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) if (const auto own = m_ReclaimTransactions.find(m_Config.localPeerId);
+		if (ReturnInputDetails()) if (const auto own = m_ReclaimTransactions.find(m_Config.localPeerId);
 		    ObservedReceiptFrame(frame.targetFrame) || (own != m_ReclaimTransactions.end() && frame.targetFrame >= own->second.activationFrame &&
 		    frame.targetFrame > own->second.neutralThroughFrame && frame.targetFrame - own->second.neutralThroughFrame <= 8))
 			DiagnosticLine() << "[net-return-input-receipt] local=" << unsigned(m_Config.localPeerId) << " owner=" << unsigned(frame.senderPeerId)
@@ -319,14 +319,14 @@ namespace RTE {
 		    (message.type > NetHostMigrationMessageType::PeerControl && message.type != NetHostMigrationMessageType::PeerForwardInput && message.type != NetHostMigrationMessageType::PeerCaptureRequest)) return false;
 		const uint8_t detailOwner = message.type == NetHostMigrationMessageType::PeerForwardInput ? message.successorPeerId : message.senderPeerId;
 		const auto detailBack = m_ReclaimTransactions.find(detailOwner);
-		if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS") && (message.type == NetHostMigrationMessageType::PeerInput || message.type == NetHostMigrationMessageType::PeerForwardInput) &&
+		if (ReturnInputDetails() && (message.type == NetHostMigrationMessageType::PeerInput || message.type == NetHostMigrationMessageType::PeerForwardInput) &&
 		    detailBack != m_ReclaimTransactions.end() && message.frame > detailBack->second.neutralThroughFrame && message.frame <= detailBack->second.neutralThroughFrame + 3) {
 			DiagnosticLine() << "[net-return-input-read] local=" << static_cast<int>(m_Config.localPeerId) << " owner=" << static_cast<int>(detailOwner)
 			    << " frame=" << message.frame << " prepared=" << m_Stats.nextFrame << " session_matches=" << (message.sessionId == m_Config.sessionId)
 			    << " round_matches=" << (message.roundId == m_Config.matchConfig.roundId) << " setup_matches=" << (message.configHash == m_RoundConfigHash)
 			    << " removed=" << m_RemovedPeers.contains(message.senderPeerId) << " now_ms=" << nowMs << std::endl;
 		}
-		if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS") && message.type == NetHostMigrationMessageType::PeerTail && message.frame == m_Stats.nextFrame &&
+		if (ReturnInputDetails() && message.type == NetHostMigrationMessageType::PeerTail && message.frame == m_Stats.nextFrame &&
 		    (m_FrameGroupMembers & SeatBit(m_Config.localPeerId)) == 0 && m_TailArrivalNamed != message.frame) {
 			m_TailArrivalNamed = message.frame;
 			DiagnosticLine() << "[net-peer-tail-arrival] local=" << static_cast<int>(m_Config.localPeerId) << " donor=" << static_cast<int>(message.senderPeerId)
@@ -437,7 +437,7 @@ namespace RTE {
 					}
 				}
 				receipt = std::max(receipt, message.frame);
-				if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS") && ObservedReceiptFrame(message.frame))
+				if (ReturnInputDetails() && ObservedReceiptFrame(message.frame))
 					DiagnosticLine() << "[net-input-receipt-read] local=" << unsigned(m_Config.localPeerId) << " owner=" << unsigned(message.successorPeerId)
 					    << " receiver=" << unsigned(message.senderPeerId) << " through=" << message.frame << " retained=" << receipt
 					    << " next=" << m_Stats.nextFrame << " now_ms=" << nowMs << std::endl;
@@ -467,7 +467,7 @@ namespace RTE {
 				return true;
 			}
 			if (!ValidatePeerBridge(message) && !CoSignsOwnHold(message)) {
-				if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) DiagnosticLine() << "[net-peer-vote-refused] local=" << static_cast<int>(m_Config.localPeerId)
+				if (ReturnInputDetails()) DiagnosticLine() << "[net-peer-vote-refused] local=" << static_cast<int>(m_Config.localPeerId)
 				    << " sender=" << static_cast<int>(message.senderPeerId) << " frame=" << message.frame << " boundary=" << message.boundary
 				    << " kind=" << static_cast<int>(DecisionKind(message)) << " next=" << m_Stats.nextFrame << " start=" << m_Config.startFrame
 				    << " applied_boundary=" << m_MigrationHistory.contains(message.boundary) << " replay_boundary=" << m_PeerReplayAppliedPrefixes.contains(message.boundary)
@@ -530,7 +530,7 @@ namespace RTE {
 					range->second.second = std::max(range->second.second, message.completeFrom);
 				}
 				SendPeerCommittedTail(message.senderPeerId, message.frame);
-				if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) {
+				if (ReturnInputDetails()) {
 					const auto queued = m_PeerTailOutgoing.find(message.senderPeerId);
 					DiagnosticLine() << "[net-peer-tail-serve] donor=" << static_cast<int>(m_Config.localPeerId) << " reader=" << static_cast<int>(message.senderPeerId)
 					    << " from=" << message.frame << " until=" << message.completeFrom << " displayed=" << m_LastCompletedSimulationTick.value_or(0)
@@ -617,7 +617,7 @@ namespace RTE {
 		    (message.frame < m_Stats.nextFrame && m_Stats.nextFrame - message.frame > NetHostMigrationCodec::c_PeerHistoryFrames) ||
 		    (message.type == NetHostMigrationMessageType::PeerInput && message.totalBytes > NetLockstepCodec::c_InputWindowByteCap)) return true;
 		if (!m_PeerFrameIncoming.contains(key) && m_PeerFrameIncoming.size() >= 2 * m_Config.peerCount) {
-			if (inputMessage || std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) DiagnosticLine() << "[net-peer-input-room] local=" << static_cast<int>(m_Config.localPeerId)
+			if (inputMessage || ReturnInputDetails()) DiagnosticLine() << "[net-peer-input-room] local=" << static_cast<int>(m_Config.localPeerId)
 			    << " sender=" << static_cast<int>(message.senderPeerId) << " owner=" << static_cast<int>(message.successorPeerId) << " type=" << static_cast<int>(message.type)
 			    << " through=" << message.frame << " partial=" << m_PeerFrameIncoming.size() << std::endl;
 			return true;
@@ -631,7 +631,7 @@ namespace RTE {
 		std::vector<uint8_t> body = std::move(incoming.bytes); m_PeerFrameIncoming.erase(key);
 		if (message.type == NetHostMigrationMessageType::PeerTail) {
 			const auto readFailed = [&](const char* reason) {
-				if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) DiagnosticLine() << "[net-peer-tail-read] local=" << static_cast<int>(m_Config.localPeerId)
+				if (ReturnInputDetails()) DiagnosticLine() << "[net-peer-tail-read] local=" << static_cast<int>(m_Config.localPeerId)
 				    << " donor=" << static_cast<int>(message.senderPeerId) << " frame=" << message.frame << " prepared=" << m_Stats.nextFrame
 				    << " reason=" << reason << " now_ms=" << nowMs << std::endl;
 				return true;
@@ -820,7 +820,7 @@ namespace RTE {
 			if ((m_PeerRejectedInputs[input.targetFrame] & SeatBit(input.senderPeerId)) != 0) {
 				if (!HasHoldDecision(m_PeerBridgeCertificates, input.targetFrame, input.senderPeerId)) {
 					const auto pending = m_PeerPendingBridgeInputs[input.targetFrame].try_emplace(input.senderPeerId, input);
-					if (pending.second && std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) DiagnosticLine() << "[net-peer-input-at-vote] local=" << static_cast<int>(m_Config.localPeerId)
+					if (pending.second && ReturnInputDetails()) DiagnosticLine() << "[net-peer-input-at-vote] local=" << static_cast<int>(m_Config.localPeerId)
 					    << " owner=" << static_cast<int>(input.senderPeerId) << " frame=" << input.targetFrame << " prepared=" << m_Stats.nextFrame
 					    << " displayed=" << m_LastCompletedSimulationTick.value_or(0) << " now_ms=" << nowMs << std::endl;
 				}

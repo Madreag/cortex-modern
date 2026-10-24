@@ -39,12 +39,17 @@ namespace RTE {
 
 	namespace {
 		uint16_t PeerLinkFixturePort() {
+			// The port is read once: this runs every tick, and every getenv takes the C runtime's environment lock.
+			static const uint16_t fixturePort = [] {
+				const char* text = std::getenv("CC_TEST_PEER_LINK_PORT");
+				if (!text) return uint16_t{0};
+				unsigned int port = 0;
+				const auto [end, error] = std::from_chars(text, text + std::strlen(text), port);
+				return error == std::errc{} && *end == '\0' && port >= 1024 && port <= 65530 ? static_cast<uint16_t>(port) : uint16_t{0};
+			}();
+			if (fixturePort == 0) return 0;
 			const char* headless = std::getenv("CCCP_HEADLESS");
-			const char* text = std::getenv("CC_TEST_PEER_LINK_PORT");
-			if (!headless || std::string_view(headless) != "1" || !text) return 0;
-			unsigned int port = 0;
-			const auto [end, error] = std::from_chars(text, text + std::strlen(text), port);
-			return error == std::errc{} && *end == '\0' && port >= 1024 && port <= 65530 ? static_cast<uint16_t>(port) : 0;
+			return headless && std::string_view(headless) == "1" ? fixturePort : 0;
 		}
 	}
 
@@ -6255,7 +6260,7 @@ namespace RTE {
 		if (!UsesPeerFrameGroups() || !m_Config.joinsRunningRound || m_Playback || !replay.m_Playback ||
 		    m_Config.sessionId != replay.m_Config.sessionId || m_RoundId != replay.m_RoundId || m_RoundConfigHash != replay.m_RoundConfigHash ||
 		    m_Config.localPeerId != replay.m_Config.localPeerId || !replay.m_LastCompletedSimulationTick || m_Config.startFrame == 0) {
-			if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) DiagnosticLine() << "[net-replay-adoption] local=" << static_cast<int>(m_Config.localPeerId)
+			if (NetPeerFrameDetail::ReturnInputDetails()) DiagnosticLine() << "[net-replay-adoption] local=" << static_cast<int>(m_Config.localPeerId)
 			    << " refused: groups=" << UsesPeerFrameGroups() << " joins=" << m_Config.joinsRunningRound << " playback=" << m_Playback << "/" << replay.m_Playback
 			    << " round=" << (m_RoundId == replay.m_RoundId) << " config=" << (m_RoundConfigHash == replay.m_RoundConfigHash)
 			    << " replayed=" << replay.m_LastCompletedSimulationTick.value_or(0) << " start=" << m_Config.startFrame << std::endl;
@@ -10735,7 +10740,8 @@ namespace RTE {
 					if (at != changes->second.begin()) delay = std::prev(at)->second;
 				}
 				m_Config.matchConfig.peerInputDelayFrames[peer - 1] = delay;
-				if (std::getenv("CC_TEST_DELAY_APPLY_DETAILS")) if (const auto changes = m_DelayChanges.find(peer);
+				static const bool s_DelayApplyDetails = std::getenv("CC_TEST_DELAY_APPLY_DETAILS") != nullptr;
+				if (s_DelayApplyDetails) if (const auto changes = m_DelayChanges.find(peer);
 				    changes != m_DelayChanges.end() && changes->second.contains(outFrame.frame)) {
 					DiagnosticLine() << "[net-input-delay-applied] local=" << static_cast<int>(m_Config.localPeerId)
 					                 << " peer=" << static_cast<int>(peer) << " frame=" << outFrame.frame << " ticks=" << delay << std::endl;

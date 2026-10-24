@@ -2,7 +2,14 @@
 
 #include "NetLockstep.h"
 
+#include <cstdlib>
+
 namespace RTE::NetPeerFrameDetail {
+		// Read once: every getenv takes the C runtime's environment lock and scans the whole environment, and this is asked per message.
+		inline bool ReturnInputDetails() {
+			static const bool details = std::getenv("CC_TEST_RETURN_INPUT_DETAILS") != nullptr;
+			return details;
+		}
 		inline uint32_t SeatBit(uint8_t peer) { return peer > 0 && peer <= 32 ? 1U << (peer - 1) : 0; }
 		inline bool IsHoldDecision(uint8_t kind) { return (kind & 0xF0) == 0x10; }
 		inline uint8_t DecisionKind(const NetHostMigrationMessage& message) {

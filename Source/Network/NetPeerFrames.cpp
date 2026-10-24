@@ -67,7 +67,7 @@ namespace RTE {
 		    SendPeerFrameMessage(message, NetTransportLane::InputUnreliable, onlyPeer);
 		const bool liveInput = message.type == NetHostMigrationMessageType::PeerInput || message.type == NetHostMigrationMessageType::PeerForwardInput;
 		const auto back = m_ReclaimTransactions.find(m_Config.localPeerId);
-		const bool details = std::getenv("CC_TEST_RETURN_INPUT_DETAILS") && message.type == NetHostMigrationMessageType::PeerInput &&
+		const bool details = ReturnInputDetails() && message.type == NetHostMigrationMessageType::PeerInput &&
 		    back != m_ReclaimTransactions.end() && message.frame > back->second.neutralThroughFrame && message.frame <= back->second.neutralThroughFrame + 3;
 		const auto wantsInput = [&](uint8_t peer) { return !liveInput || PeerWantsLiveInput(peer); };
 		if (m_Config.peerSessionLinks) {
@@ -351,7 +351,7 @@ namespace RTE {
 	void NetLockstepCoordinator::AskPeerFrameTie(uint64_t split, uint64_t frame, uint32_t members, uint64_t nowMs) {
 		// Under the details lever, a split this seat does not ask about says why, once per split.
 		const auto unasked = [&](const char* why) {
-			if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS") && m_TieUnaskedNamed != split) {
+			if (ReturnInputDetails() && m_TieUnaskedNamed != split) {
 				m_TieUnaskedNamed = split;
 				DiagnosticLine() << "[net-peer-tie-unasked] local=" << unsigned(m_Config.localPeerId) << " frame=" << frame << " split=" << split << " members=" << members
 				    << " why=" << why << " retained=" << PeerRetainedSeatsAt(frame) << " held=" << PeerHeldSeatsAt(frame) << " group=" << PeerFrameMembersAt(frame)
@@ -416,7 +416,7 @@ namespace RTE {
 			if (asked == request) request = *m_PeerFrameTie;
 		}
 		if (!m_PeerFrameTie || *m_PeerFrameTie != request) {
-			if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) DiagnosticLine() << "[net-peer-tie-question] local=" << unsigned(m_Config.localPeerId)
+			if (ReturnInputDetails()) DiagnosticLine() << "[net-peer-tie-question] local=" << unsigned(m_Config.localPeerId)
 			    << " frame=" << frame << " split=" << split << " members=" << voting << " owners=" << owners << " query_only=" << request.queryOnly
 			    << " generation=" << request.generation << " host=" << request.host << " superseding=" << m_CertifiedSupersedingGeneration
 			    << " next=" << m_Stats.nextFrame << " displayed=" << m_LastCompletedSimulationTick.value_or(0) << " whole=" << (PeerRetainedSeatsAt(frame) & ~PeerHeldSeatsAt(frame))
@@ -454,7 +454,7 @@ namespace RTE {
 			if (nowMs >= ask->second.first && arbitration->second.request.queryOnly) {
 				arbitration->second.request.queryOnly = false;
 				if (arbitration->second.asked == 0) arbitration->second.asked = ask->second.second;
-				if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) DiagnosticLine() << "[net-peer-tie-question] local=" << unsigned(m_Config.localPeerId)
+				if (ReturnInputDetails()) DiagnosticLine() << "[net-peer-tie-question] local=" << unsigned(m_Config.localPeerId)
 				    << " split=" << ask->first << " minority_asks=1 members=" << ask->second.second << " now_ms=" << nowMs << std::endl;
 			}
 			++ask;

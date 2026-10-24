@@ -1,4 +1,5 @@
 #include "NetLockstep.h"
+#include "NetPeerFrameHelpers.h"
 
 #include "DiagnosticLine.h"
 
@@ -74,7 +75,7 @@ namespace RTE {
 			m_PeerAdminRequest->configHash = m_RoundConfigHash; m_PeerAdminRequest->appliedFrame = *m_LastCompletedSimulationTick;
 			m_PeerAdminRequest->preparedFrame = m_Stats.nextFrame - 1;
 			m_MigrationPhase = NetHostMigrationPhase::Contacting; m_MigrationSinceMs = nowMs;
-			if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) DiagnosticLine() << "[net-admin] request local=" << static_cast<int>(m_Config.localPeerId)
+			if (NetPeerFrameDetail::ReturnInputDetails()) DiagnosticLine() << "[net-admin] request local=" << static_cast<int>(m_Config.localPeerId)
 			    << " authority_heard_ms=" << m_AuthorityLastHeardMs << " superseded=" << superseded << " own_vote=" << m_PeerAdminOwnVote.has_value()
 			    << " directory=" << MigrationUsesDirectory() << " now_ms=" << nowMs << std::endl;
 		}
