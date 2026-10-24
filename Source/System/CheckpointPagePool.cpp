@@ -234,9 +234,6 @@ struct CheckpointPagePool::Copy {
 
 namespace {
 	std::atomic<uint64_t> s_TallyFaults{0}, s_TallyFaultNs{0}, s_TallySettled{0}, s_TallyCooled{0};
-	// What one cooling pass spent fencing pages again, on the settling thread.
-	struct CoolCosts { int64_t protects = 0, protectUs = 0, protectMaxUs = 0, lockMaxUs = 0; };
-	thread_local CoolCosts t_CoolCosts;
 }
 
 bool CheckpointPagePool::TallyingFaults() {
@@ -463,18 +460,13 @@ struct CheckpointPagePool::Block {
 				digests[first + index] = digest;
 				any |= still[index] != 0;
 			}
-			const auto held = RTE::SteadyClock::now();
 			Locked guard(lock);
 			for (size_t index = 0; any && index < count;) {
 				const auto unchanged = [&](size_t at) { return still[at] && states[first + at] == PageState::Hot; };
 				if (!unchanged(index)) { ++index; continue; }
 				size_t end = index + 1;
 				while (end < count && unchanged(end)) ++end;
-				const auto protecting = RTE::SteadyClock::now();
-				const bool fenced = PageWriteFence::ProtectCopyPages(reinterpret_cast<uintptr_t>(live.data + (first + index) * pageBytes), (end - index) * pageBytes);
-				const int64_t protectUs = std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - protecting).count();
-				t_CoolCosts.protects += 1; t_CoolCosts.protectUs += protectUs; t_CoolCosts.protectMaxUs = std::max(t_CoolCosts.protectMaxUs, protectUs);
-				if (fenced) {
+				if (PageWriteFence::ProtectCopyPages(reinterpret_cast<uintptr_t>(live.data + (first + index) * pageBytes), (end - index) * pageBytes)) {
 					std::fill(states.begin() + first + index, states.begin() + first + end, PageState::Fenced);
 					cooled += end - index;
 				}
@@ -488,7 +480,6 @@ struct CheckpointPagePool::Block {
 				hotCopyRuns[run] = std::find(states.begin() + begin, states.begin() + end, PageState::Hot) != states.begin() + end;
 			}
 			for (const auto& copy: copies) RetainColdCopy(*copy, firstRun, endRun);
-			t_CoolCosts.lockMaxUs = std::max<int64_t>(t_CoolCosts.lockMaxUs, std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - held).count());
 		}
 		return cooled;
 	}
@@ -585,19 +576,11 @@ size_t CheckpointPagePool::CoolInventory() {
 	static std::mutex passes;
 	std::lock_guard pass(passes);
 	size_t cooled = 0;
-	t_CoolCosts = {};
-	const auto started = RTE::SteadyClock::now();
-	const auto blocks = LiveBlocks();
-	for (const auto& block: blocks) {
+	for (const auto& block: LiveBlocks()) {
 		SaverThreads::YieldToGame();
 		if (block->Watch()) cooled += block->Cool();
 	}
 	if (TallyingFaults()) s_TallyCooled.fetch_add(cooled, std::memory_order_relaxed);
-	// A pass that fenced pages for long names what it spent: every fence holds the block's writers.
-	if (t_CoolCosts.protectMaxUs >= 20000 || t_CoolCosts.lockMaxUs >= 20000)
-		System::PrintDiagnosticLine(std::format("[checkpoint-cool] pass_ms={} blocks={} cooled_pages={} protects={} protect_ms={} protect_max_ms={} lock_max_ms={}",
-		    std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - started).count(), blocks.size(), cooled, t_CoolCosts.protects,
-		    t_CoolCosts.protectUs / 1000, t_CoolCosts.protectMaxUs / 1000, t_CoolCosts.lockMaxUs / 1000));
 	return cooled;
 }
 
