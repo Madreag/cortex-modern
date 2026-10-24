@@ -302,6 +302,10 @@
               {
                 "peer": "client",
                 "log": "^\\[autosave\\] retained tick="
+              },
+              {
+                "peer": "host",
+                "log": "^\\[autosave\\] restart admission written "
               }
             ]
           },
@@ -367,6 +371,10 @@
               {
                 "peer": "client",
                 "log": "^\\[autosave\\] retained tick="
+              },
+              {
+                "peer": "host",
+                "log": "^\\[autosave\\] restart admission written "
               }
             ]
           },

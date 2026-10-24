@@ -7731,6 +7731,7 @@ static std::string ResyncSaveName() {
 			}
 			return;
 		}
+		System::PrintDiagnosticLine("[autosave] restart admission written match=" + matchId + " generation=" + std::to_string(generation));
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		m_LastRestartAdmissionState = std::move(state);
 		m_PublishedDirectorySession = directorySession;
