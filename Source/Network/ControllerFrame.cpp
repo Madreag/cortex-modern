@@ -16,6 +16,7 @@
 #include "SettingsMan.h"
 #include "TimerMan.h"
 #include "UInputMan.h"
+#include "WindowMan.h"
 
 #include <algorithm>
 #include <bit>
@@ -1117,6 +1118,8 @@ namespace RTE {
 		if (!UInputMan::IsConstructed()) { UInputMan::Construct(); }
 		if (!ActivityMan::IsConstructed()) { ActivityMan::Construct(); }
 		if (!MetricsCollector::IsConstructed()) { MetricsCollector::Construct(); }
+		// Mouse motion reads the window layout.
+		if (!WindowMan::IsConstructed()) { WindowMan::Construct(); }
 		if (!g_UInputMan.RunScriptedInputEdgeSelfTest()) {
 			return fail("a scripted input element did not edge once per press");
 		}
