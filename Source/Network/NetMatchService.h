@@ -1009,7 +1009,8 @@ namespace RTE {
 		std::optional<uint32_t> GetMatchPingMs() const;
 		/// Whether the current match is being restored from the host snapshot.
 		bool IsMatchResyncing() const;
-		/// Whether this held seat's rejoin is under way, from its first attempt until the round it rejoins launches or it gives up.
+		/// Whether this seat's rejoin from a hold in the match is under way, from its first attempt until the round it rejoins launches or
+		/// it gives up; a rejoin the player starts from the menus is not one.
 		bool IsHeldRejoinDriving() const;
 		/// The current seat holder's display name for presentation events.
 		std::string GetPeerDisplayName(uint8_t peerId) const;

@@ -9327,7 +9327,7 @@ static std::string ResyncSaveName() {
 
 	bool NetMatchService::IsHeldRejoinDriving() const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
-		return m_HeldRejoinDriving;
+		return m_HeldRejoinDriving && !m_OrdinaryTicketRejoin;
 	}
 
 	bool NetMatchService::IsMatchResyncing() const {
