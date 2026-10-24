@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <deque>
 #include <limits>
+#include <map>
 #include <optional>
 #include <utility>
 
@@ -26,6 +27,33 @@ namespace RTE {
 			static const uint64_t observed = value ? std::strtoull(value, nullptr, 10) : UINT64_MAX;
 			return value && frame >= observed && frame - observed <= 1;
 		}
+
+		// Test lever CC_TEST_PEER_INPUT_WIRE: once a second, what the peer input path put on each lane and how its receipts came back.
+		struct InputWireStats {
+			struct Lane { uint64_t sends = 0, bytes = 0, maxBytes = 0, maxTicks = 0; };
+			struct Peer { Lane unreliable, reliable; uint64_t repairs = 0, repairBytes = 0, receiptsSent = 0, receiptsRead = 0, maxReceiptMs = 0; };
+			struct Gap { uint64_t frame = 0, openedMs = 0, aheadFrame = 0; };
+			uint64_t sinceMs = 0;
+			std::map<uint8_t, Peer> peers;
+			std::map<uint8_t, Gap> gaps; //!< Per owner: the first input missing while a later one is in.
+		};
+		InputWireStats* InputWire() {
+			static const bool on = std::getenv("CC_TEST_PEER_INPUT_WIRE") != nullptr;
+			static InputWireStats stats;
+			return on ? &stats : nullptr;
+		}
+		void FlushInputWire(InputWireStats& stats, uint8_t local, uint64_t frame, uint64_t nowMs) {
+			if (stats.sinceMs == 0) stats.sinceMs = nowMs;
+			if (nowMs < stats.sinceMs + 1000) return;
+			for (const auto& [peer, wire]: stats.peers)
+				DiagnosticLine() << "[net-peer-input-wire] local=" << unsigned(local) << " peer=" << unsigned(peer) << " frame=" << frame << " ms=" << nowMs - stats.sinceMs
+				    << " unreliable=" << wire.unreliable.sends << "/" << wire.unreliable.bytes << "/" << wire.unreliable.maxBytes << "/" << wire.unreliable.maxTicks
+				    << " reliable=" << wire.reliable.sends << "/" << wire.reliable.bytes << "/" << wire.reliable.maxBytes << "/" << wire.reliable.maxTicks
+				    << " repairs=" << wire.repairs << "/" << wire.repairBytes << " receipts_sent=" << wire.receiptsSent << " receipts_read=" << wire.receiptsRead
+				    << " max_receipt_ms=" << wire.maxReceiptMs << " now_ms=" << nowMs << std::endl;
+			stats.peers.clear();
+			stats.sinceMs = nowMs;
+		}
 	}
 
 	void NetLockstepCoordinator::SendForwardedPeerInput(const NetLockstepFrame& input, uint8_t onlyPeer) {
@@ -36,6 +64,11 @@ namespace RTE {
 		std::vector<uint8_t> body{1};
 		PutSize(body, static_cast<uint32_t>(encoded.size()));
 		body.insert(body.end(), encoded.begin(), encoded.end());
+		if (InputWireStats* wire = InputWire(); wire && onlyPeer != 0) {
+			auto& peer = wire->peers[onlyPeer];
+			++peer.repairs;
+			peer.repairBytes += body.size() * (body.size() <= 4096 ? 2 : 1);
+		}
 		for (size_t offset = 0; offset < body.size(); offset += NetHostMigrationCodec::c_ChunkBytes) {
 			auto message = PeerFrameMessage(NetHostMigrationMessageType::PeerForwardInput);
 			message.successorPeerId = frame.senderPeerId; message.frame = frame.targetFrame;
@@ -106,6 +139,11 @@ namespace RTE {
 			}
 			// Repeated input windows repair missing small messages without delaying later inputs.
 			const NetTransportLane lane = body.size() <= 4096 ? NetTransportLane::InputUnreliable : NetTransportLane::ControlReliable;
+			if (InputWireStats* wire = InputWire()) for (uint8_t peer: peers) {
+				auto& sent = lane == NetTransportLane::ControlReliable ? wire->peers[peer].reliable : wire->peers[peer].unreliable;
+				++sent.sends; sent.bytes += body.size();
+				sent.maxBytes = std::max<uint64_t>(sent.maxBytes, body.size()); sent.maxTicks = std::max<uint64_t>(sent.maxTicks, inputs.size());
+			}
 			for (uint8_t peer: peers) {
 				bool delivered = true;
 				for (size_t offset = 0; offset < body.size(); offset += NetHostMigrationCodec::c_ChunkBytes) {
@@ -122,6 +160,7 @@ namespace RTE {
 		}
 		m_PeerSourceInputs[frame.targetFrame][m_Config.localPeerId] = std::move(current);
 		m_PeerInputSentAtMs.try_emplace(frame.targetFrame, m_TimingNowMs);
+		if (InputWireStats* wire = InputWire()) FlushInputWire(*wire, m_Config.localPeerId, frame.targetFrame, m_TimingNowMs);
 	}
 
 	void NetLockstepCoordinator::NotePeerInputAccepted(const NetLockstepFrame& frame) {
@@ -135,6 +174,17 @@ namespace RTE {
 			if (!received && !IsSeatReclaimGap(frame.senderPeerId, accepted->second)) break;
 			++accepted->second;
 		}
+		if (InputWireStats* wire = InputWire()) {
+			const auto open = wire->gaps.find(frame.senderPeerId);
+			if (open != wire->gaps.end() && accepted->second > open->second.frame) {
+				if (m_TimingNowMs >= open->second.openedMs + 20)
+					DiagnosticLine() << "[net-peer-input-gap] local=" << unsigned(m_Config.localPeerId) << " owner=" << unsigned(frame.senderPeerId) << " missing=" << open->second.frame
+					    << " ahead=" << open->second.aheadFrame << " open_ms=" << m_TimingNowMs - open->second.openedMs << " filled_by=" << frame.targetFrame
+					    << " through=" << accepted->second << " next=" << m_Stats.nextFrame << " now_ms=" << m_TimingNowMs << std::endl;
+				wire->gaps.erase(open);
+			}
+			if (!ahead.empty() && !wire->gaps.contains(frame.senderPeerId)) wire->gaps[frame.senderPeerId] = {accepted->second, m_TimingNowMs, *ahead.begin()};
+		}
 		if (ReturnInputDetails()) if (const auto own = m_ReclaimTransactions.find(m_Config.localPeerId);
 		    ObservedReceiptFrame(frame.targetFrame) || (own != m_ReclaimTransactions.end() && frame.targetFrame >= own->second.activationFrame &&
 		    frame.targetFrame > own->second.neutralThroughFrame && frame.targetFrame - own->second.neutralThroughFrame <= 8))
@@ -145,6 +195,7 @@ namespace RTE {
 		receipt.successorPeerId = frame.senderPeerId;
 		receipt.frame = accepted->second;
 		m_PeerInputReceipts[frame.senderPeerId][m_Config.localPeerId] = accepted->second;
+		if (InputWireStats* wire = InputWire()) ++wire->peers[frame.senderPeerId].receiptsSent;
 		// Each cumulative receipt replaces a missing one without waiting on the ordered stream.
 		SendPeerFrameMessage(std::move(receipt), NetTransportLane::InputUnreliable);
 	}
@@ -423,6 +474,11 @@ namespace RTE {
 					const bool live = bridge == m_PeerBridges.end() || (bridge->second.returnFrame && message.appliedFrame >= *bridge->second.returnFrame);
 					// A private tail reader's delayed receipt measures its catch-up,
 					// not the live sender's transport round trip.
+					if (InputWireStats* wire = InputWire()) {
+						auto& peer = wire->peers[message.senderPeerId];
+						++peer.receiptsRead;
+						peer.maxReceiptMs = std::max<uint64_t>(peer.maxReceiptMs, nowMs - sent->second);
+					}
 					if (live && sent->second >= m_PeerReceiptSampleFloorMs[message.senderPeerId] && (members & m_FrameGroupMembers & SeatBit(message.senderPeerId)) != 0) {
 						const auto delay = static_cast<uint32_t>(std::min<uint64_t>(nowMs - sent->second, UINT32_MAX));
 						const auto [wire, route] = PeerFrameRoute(message.senderPeerId);
