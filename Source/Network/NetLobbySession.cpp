@@ -1258,9 +1258,7 @@ namespace RTE {
 			const NetReconnectHost* plane = m_Config.session ? m_Config.session->GetReconnectHost() : nullptr;
 			if (plane && plane->GetRoster().stage == NetRosterStage::Starting) {
 				// Every human owner in the new round must be present. A lobby drop is not a combat hold.
-				for (const uint8_t member: plane->StartMembers())
-					if (member != m_Config.matchConfig.hostPeerId && !IsKnownRemote(member)) return false;
-				return true;
+				return AwaitedStartMembers().empty();
 			}
 			const std::vector<uint8_t>& members = m_Config.matchConfig.activePeerIds;
 			// The first lobby fills every seat; with no round forming the agreed config names the members.
@@ -1269,6 +1267,15 @@ namespace RTE {
 			if (plane && plane->GetRoster().stage != NetRosterStage::Lobby && !members.empty()) return true;
 		}
 		return !m_RemotePeerIds.empty() || !SeatsRemoteHuman();
+	}
+
+	std::vector<uint8_t> NetLobbySession::AwaitedStartMembers() const {
+		std::vector<uint8_t> awaited;
+		const NetReconnectHost* plane = m_Config.host && m_Config.session ? m_Config.session->GetReconnectHost() : nullptr;
+		if (m_Config.matchConfig.persistentWorld || !plane || plane->GetRoster().stage != NetRosterStage::Starting) return awaited;
+		for (const uint8_t member: plane->StartMembers())
+			if (member != m_Config.matchConfig.hostPeerId && !IsKnownRemote(member)) awaited.push_back(member);
+		return awaited;
 	}
 
 	bool NetLobbySession::AllConfigAcked() const {

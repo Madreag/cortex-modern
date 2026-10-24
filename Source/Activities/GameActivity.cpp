@@ -5021,6 +5021,15 @@ bool GameActivity::RunFight15SelfTest(const std::string& row) {
 		snapshot.startCountdownMs = 27000; draw(); check("countdown_counts_down", menu.m_MultiplayerStatusLabel->GetText().starts_with("Starting in 27 s"));
 		check("host_can_press_cancel", menu.m_SubMenuScreenGUIControlManager->GetControl("ButtonMultiplayerStart") && click());
 		snapshot.startCountdownRunning = false; draw(); check("canceled_countdown_returns_to_waiting", menu.m_MultiplayerStatusLabel->GetText() == "Waiting for Guest to press Ready");
+		// Three players: the countdown names who has not pressed Ready, and a start that waits for its own members names them.
+		NetLobbyMember joiner = player, joiner2 = player; joiner.displayName = "Joiner"; joiner.ready = true; joiner2.peerId = 3; joiner2.displayName = "Joiner2";
+		snapshot.members = {host, joiner, joiner2}; snapshot.startCountdownRunning = true; snapshot.startCountdownMs = 28000; draw();
+		check("countdown_names_the_unready_player", menu.m_MultiplayerStatusLabel->GetText().find("waiting for Joiner2 to press Ready") != std::string::npos);
+		for (NetLobbyMember& member: snapshot.members) if (!member.isLocal) { member.connected = false; member.dropped = true; }
+		snapshot.startCountdownRunning = snapshot.occupancyComplete = false; snapshot.awaitedPeers = {2, 3}; draw();
+		System::PrintDiagnosticLine("[fight15-selftest] R5 observed awaited start: " + menu.m_MultiplayerStatusLabel->GetText());
+		check("start_names_the_members_it_waits_for", menu.m_MultiplayerStatusLabel->GetText() == "Waiting for Joiner and Joiner2 to reconnect");
+		snapshot.members = {host, player}; snapshot.occupancyComplete = true; snapshot.awaitedPeers.clear();
 		snapshot.isHost = false; snapshot.localPeerId = 2; snapshot.members[0].isLocal = false; snapshot.members[1].isLocal = true;
 		snapshot.joiningWorld = snapshot.startCountdownRunning = true; snapshot.startCountdownMs = 30000;
 		snapshot.transferLine = "Receiving the world: 0.0 of 1.7 MB"; draw();

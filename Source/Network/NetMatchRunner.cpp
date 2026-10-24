@@ -1081,6 +1081,7 @@ namespace RTE {
 		snapshot.modeLabel = NetMatchConfigUtil::ModeLabel(rosterConfig.mode);
 		snapshot.localReady = m_Lobby.IsLocalReady();
 		snapshot.occupancyComplete = m_Lobby.IsOccupancyComplete();
+		snapshot.awaitedPeers = m_Lobby.AwaitedStartMembers();
 		snapshot.startCountdownRunning = m_Lobby.IsStartCountdownRunning();
 		snapshot.startCountdownMs = m_Lobby.StartCountdownRemainingMs();
 		snapshot.startCommitted = m_Lobby.IsStartCommitted();

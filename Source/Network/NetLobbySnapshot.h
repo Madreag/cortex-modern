@@ -137,6 +137,7 @@ namespace RTE {
 		bool localReady = false;
 		bool remoteReady = false;
 		bool occupancyComplete = false;     //!< Every player the round waits for is in the lobby, so the host's Start can begin.
+		std::vector<uint8_t> awaitedPeers;  //!< Host: the forming round's members whose link the start still waits for.
 		bool startCountdownRunning = false; //!< The host's start countdown runs.
 		bool startCommitted = false;        //!< Host: the round's Start has reached a peer; it starts for everyone.
 		bool hostSetupOpen = false;         //!< The host has the setup open; no count runs until it closes it.

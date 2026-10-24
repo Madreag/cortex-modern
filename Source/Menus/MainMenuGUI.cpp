@@ -4661,7 +4661,7 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	};
 	const std::string localName = m_MultiplayerNameTextBox && !m_MultiplayerNameTextBox->GetText().empty() ? m_MultiplayerNameTextBox->GetText() : SavedMultiplayerName();
 	std::vector<std::string> rowName, rowTail, rowTailCompact;
-	std::vector<std::string> notReady;
+	std::vector<std::string> notReady, awaited;
 	std::string hostName;
 	size_t seatsToFill = 0;
 	for (const NetLobbyMember& member : snapshot.members) {
@@ -4689,6 +4689,7 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 			state = member.ready ? "Ready" : "Not ready";
 		}
 		if (!open && !member.cpu && !host && !member.isLocal && !member.ready && member.connected && !member.dropped && !member.joining) notReady.push_back(name);
+		if (std::find(snapshot.awaitedPeers.begin(), snapshot.awaitedPeers.end(), member.peerId) != snapshot.awaitedPeers.end()) awaited.push_back(name);
 		const std::string you = member.isLocal ? " (you)" : "";
 		rowName.push_back(name + you);
 		rowTail.push_back(" - Team " + std::to_string(member.team + 1) + (state.empty() ? std::string() : " - " + state));
@@ -4742,8 +4743,10 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 			sentence = PlayerFacingStatus(snapshot.statusText);
 		} else if (snapshot.isHost) {
 			if (seatsToFill > 0 || !snapshot.occupancyComplete) {
-				const size_t missing = std::max<size_t>(seatsToFill, 1);
-				sentence = "Waiting for " + std::to_string(missing) + (missing == 1 ? " more player to join" : " more players to join");
+				// The start waits for the round's own members by name and for its open seats by count.
+				const size_t missing = awaited.empty() ? std::max<size_t>(seatsToFill, 1) : seatsToFill;
+				const std::string seats = std::to_string(missing) + (missing == 1 ? " more player to join" : " more players to join");
+				sentence = awaited.empty() ? "Waiting for " + seats : "Waiting for " + names(awaited) + " to reconnect" + (missing == 0 ? std::string() : " and " + seats);
 			} else if (snapshot.startCommitted) {
 				sentence = "Starting the match...";
 			} else if (snapshot.startCountdownRunning) {

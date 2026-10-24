@@ -154,6 +154,8 @@ namespace RTE {
 		static uint32_t SetupTag(const NetHash32& configHash);
 		/// Whether the round has every player it waits for, so the host's Start can begin.
 		bool IsOccupancyComplete() const { return m_State != NetLobbyState::Idle && HasRequiredOccupancy(); }
+		/// Host: the members of a forming round whose link the start still waits for; empty when it waits for none by name.
+		std::vector<uint8_t> AwaitedStartMembers() const;
 		/// Client: whether the host's new setup took back this player's Ready since the last call.
 		bool TakeReadyClearedBySetup() { return std::exchange(m_ReadyClearedBySetup, false); }
 		// The coordinator owns the queue after Start; repeat the agreed start until its peers answer.
