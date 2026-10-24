@@ -5639,7 +5639,13 @@ static std::string ResyncSaveName() {
 	}
 
 	void NetMatchService::FeedRosterReturnsLocked() {
-		for (const auto& [peer, returnerFailed]: m_WorldJoin.TakeCancelledJoinCauses()) m_ReconnectHost.NoteReturnAborted(peer, returnerFailed);
+		for (const auto& [peer, returnerFailed]: m_WorldJoin.TakeCancelledJoinCauses()) {
+			// A returner the round holds again keeps its link: it catches up in place, held for the round's own cause.
+			const NetSeatHoldCause inPlace = !m_Coordinator || !m_Coordinator->HasHeldAISeat(peer) ? NetSeatHoldCause::None :
+			    peer == m_Coordinator->GetHostPeerId() ? NetSeatHoldCause::OwnSeat : m_Coordinator->IsHeldAsSlowMachine(peer) ? NetSeatHoldCause::Capacity :
+			    m_Coordinator->HasDeclaredLeave(peer) ? NetSeatHoldCause::Leave : NetSeatHoldCause::LateStream;
+			m_ReconnectHost.NoteReturnAborted(peer, returnerFailed, inPlace);
+		}
 		for (const NetWorldJoinSession& session: m_WorldJoin.Sessions())
 			if (session.phase == NetWorldJoinPhase::CatchingUp || session.phase == NetWorldJoinPhase::Active) m_ReconnectHost.NoteReturnWorldReady(session.assignedPeerId);
 		if (!m_Coordinator || !m_Coordinator->IsRunning()) return;

@@ -510,7 +510,8 @@ namespace RTE {
 		std::vector<uint8_t> HeldInPlacePeers() const;
 		/// A returning seat's transfer was abandoned: the AI keeps the seat and the return is offered again after the roster's backoff.
 		/// A return ended before its seat played; only one the returner's own failure ended counts toward its attempts.
-		void NoteReturnAborted(uint8_t lockstepPeerId, bool returnerFailed = true);
+		/// @param inPlace The round's cause when it holds the returner again with its link up, so the seat comes back by playing; None otherwise.
+		void NoteReturnAborted(uint8_t lockstepPeerId, bool returnerFailed = true, NetSeatHoldCause inPlace = NetSeatHoldCause::None);
 		/// The lockstep peers whose seats are on their way back, through the image or the catch-up.
 		std::vector<uint8_t> ReturningPeers() const;
 		/// A seat whose return failed while its player stayed connected: true when the return is offered again now (its backoff over,

@@ -807,6 +807,13 @@ namespace RTE {
 		return own;
 	}
 
+	namespace {
+		bool IsInPlaceCause(NetSeatHoldCause cause) {
+			return cause == NetSeatHoldCause::Capacity || cause == NetSeatHoldCause::LateStream || cause == NetSeatHoldCause::Quiet || cause == NetSeatHoldCause::TimingAck || cause == NetSeatHoldCause::OwnSeat ||
+			       cause == NetSeatHoldCause::Leave;
+		}
+	}
+
 	void NetReconnectHost::NoteReturnWorldReady(uint8_t lockstepPeerId) {
 		const SeatState* seat = SeatOfPeer(lockstepPeerId);
 		if (const NetRosterSeat* held = seat ? RosterSeatOf(*seat) : nullptr; held && held->phase == NetSeatPhase::RejoinImage) ApplySeatEvent(*seat, NetRosterEventKind::ImageLoaded);
@@ -821,23 +828,16 @@ namespace RTE {
 		ApplySeatEvent(*seat, NetRosterEventKind::CaughtUp);
 	}
 
-	void NetReconnectHost::NoteReturnAborted(uint8_t lockstepPeerId, bool returnerFailed) {
+	void NetReconnectHost::NoteReturnAborted(uint8_t lockstepPeerId, bool returnerFailed, NetSeatHoldCause inPlace) {
 		const SeatState* seat = SeatOfPeer(lockstepPeerId);
 		const NetRosterSeat* held = seat ? RosterSeatOf(*seat) : nullptr;
 		if (held && (held->phase == NetSeatPhase::RejoinImage || held->phase == NetSeatPhase::RejoinCatchUp))
-			ApplySeatEvent(*seat, NetRosterEventKind::TransferAborted, false, false, NetSeatHoldCause::None, !returnerFailed);
+			ApplySeatEvent(*seat, NetRosterEventKind::TransferAborted, false, false, IsInPlaceCause(inPlace) ? inPlace : NetSeatHoldCause::None, !returnerFailed);
 	}
 
 	bool NetReconnectHost::RosterHoldsSeat(const SeatState& seat) const {
 		const NetRosterSeat* held = RosterSeatOf(seat);
 		return held && held->owner != 0 && (held->phase == NetSeatPhase::Held || held->phase == NetSeatPhase::RoundEnd || held->phase == NetSeatPhase::Relaunching);
-	}
-
-	namespace {
-		bool IsInPlaceCause(NetSeatHoldCause cause) {
-			return cause == NetSeatHoldCause::Capacity || cause == NetSeatHoldCause::LateStream || cause == NetSeatHoldCause::Quiet || cause == NetSeatHoldCause::TimingAck || cause == NetSeatHoldCause::OwnSeat ||
-			       cause == NetSeatHoldCause::Leave;
-		}
 	}
 
 	void NetReconnectHost::NoteSeatHeldInPlace(uint8_t lockstepPeerId, NetSeatHoldCause cause) {
