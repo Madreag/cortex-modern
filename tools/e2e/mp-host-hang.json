@@ -71,6 +71,10 @@
           },
           "env": {
             "CCCP_TEST_READBACK_TIMING": "1"
+          },
+          "kill_when": {
+            "peer": "joiner",
+            "probe_complete": true
           }
         }
       ]
@@ -140,6 +144,10 @@
           },
           "env": {
             "CCCP_TEST_READBACK_TIMING": "1"
+          },
+          "kill_when": {
+            "peer": "joiner",
+            "probe_complete": true
           }
         }
       ]
@@ -174,7 +182,8 @@
       "id": "world-relay",
       "run": "world",
       "peer": "joiner",
-      "screen": "any",
+      "mark": "world-playing",
+      "screen": "game",
       "what": "Every connection the player makes to its host, the return included, goes through the relay.",
       "log_regex": [
         "^\\[net-ice\\] connected connection=\\d+ after_ms=\\d+ route=relay$"
@@ -232,7 +241,8 @@
       "id": "dedicated-relay",
       "run": "dedicated",
       "peer": "joiner",
-      "screen": "any",
+      "mark": "dedicated-playing",
+      "screen": "game",
       "what": "Every connection the player makes to its host, the return included, goes through the relay.",
       "log_regex": [
         "^\\[net-ice\\] connected connection=\\d+ after_ms=\\d+ route=relay$"
