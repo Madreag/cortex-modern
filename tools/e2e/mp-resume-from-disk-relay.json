@@ -3,8 +3,8 @@
   "name": "mp-resume-from-disk-relay",
   "port_base": 49402,
   "size": "960x540",
-  "timeout_s": 240,
-  "title": "Autosave on, both players' processes killed on their own machines, the match resumed from disk there and played on over the relay",
+  "timeout_s": 720,
+  "title": "Autosave on, both players' processes killed on their own machines, the match resumed from disk there and played on over the relay; the frame rate judged at a real autosave interval",
   "runs": [
     {
       "name": "died",
@@ -26,7 +26,7 @@
             "-max-ticks",
             "1200"
           ],
-          "menu_script": "died.host.menu",
+          "menu_script": "stress.host.menu",
           "input_script": "mp-resume-from-disk.input.txt",
           "probe": "mp-resume-from-disk.before.probe.json",
           "kill_when": {
@@ -56,7 +56,23 @@
             "NetworkConnectionMode": "RelayOnly",
             "NetworkIceEnable": 1,
             "NetworkPortMapEnable": 0
-          }
+          },
+          "runtime_files": [
+            {
+              "copy": "tools/feel/FeelBaseline.lua",
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua",
+              "replace": [
+                [
+                  "^local WINDOW_TICKS = \\d+;$",
+                  "local WINDOW_TICKS = 9000;"
+                ]
+              ]
+            },
+            {
+              "to": "Userdata/UserScenes.rte/Index.ini",
+              "write": "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n\tAddActivity = GAScripted\n\t\tCopyOf = P4 Alpha Duel\n\t\tPresetName = Determinism FeelBaseline\n\t\tScriptPath = UserScenes.rte/FeelBaseline.lua\n\t\tLuaClassName = FeelBaseline\n\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n"
+            }
+          ]
         },
         {
           "name": "client",
@@ -110,9 +126,29 @@
             "peer": "host",
             "event": "video_mark resume-host-listening",
             "timeout_s": 90
-          }
+          },
+          "runtime_files": [
+            {
+              "copy": "tools/feel/FeelBaseline.lua",
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua",
+              "replace": [
+                [
+                  "^local WINDOW_TICKS = \\d+;$",
+                  "local WINDOW_TICKS = 9000;"
+                ]
+              ]
+            },
+            {
+              "to": "Userdata/UserScenes.rte/Index.ini",
+              "write": "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n\tAddActivity = GAScripted\n\t\tCopyOf = P4 Alpha Duel\n\t\tPresetName = Determinism FeelBaseline\n\t\tScriptPath = UserScenes.rte/FeelBaseline.lua\n\t\tLuaClassName = FeelBaseline\n\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n"
+            }
+          ]
         }
-      ]
+      ],
+      "pacing_judged_in": {
+        "run": "died-paced",
+        "reason": "The round's saves every second are the harness's stress lever for correctness; its frame rate is judged at a real interval in died-paced."
+      }
     },
     {
       "name": "resumed",
@@ -223,6 +259,270 @@
       ],
       "resume_from": {
         "run": "died",
+        "peer": "host"
+      },
+      "pacing_judged_in": {
+        "run": "resumed-paced",
+        "reason": "The round's saves every second are the harness's stress lever for correctness; its frame rate is judged at a real interval in resumed-paced."
+      }
+    },
+    {
+      "name": "died-paced",
+      "peers": [
+        {
+          "name": "host",
+          "args": [
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-reconnect-ticket",
+            "{OUT}/host.ticket",
+            "-tick-hashes",
+            "-out",
+            "{OUT}/host_trace.json",
+            "-net-match-report",
+            "{OUT}/host-match.json",
+            "-net-autosave-seconds",
+            "60",
+            "-max-ticks",
+            "7200"
+          ],
+          "menu_script": "paced.host.menu",
+          "input_script": "paced.input",
+          "probe": "paced.before.probe",
+          "kill_when": {
+            "all": [
+              {
+                "peer": "host",
+                "sim_tick": 601
+              },
+              {
+                "peer": "host",
+                "log": "^\\[autosave\\] retained tick="
+              },
+              {
+                "peer": "client",
+                "log": "^\\[autosave\\] retained tick="
+              }
+            ]
+          },
+          "observe_after_failure": true,
+          "settings": {
+            "NetworkDisplayName": "Host",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always",
+            "NetworkAutosavesKept": "2",
+            "SessionDirectoryUrl": "directory.broserver.com",
+            "NetworkHostRelayMode": "Directory",
+            "NetworkConnectionMode": "RelayOnly",
+            "NetworkIceEnable": 1,
+            "NetworkPortMapEnable": 0
+          },
+          "runtime_files": [
+            {
+              "copy": "tools/feel/FeelBaseline.lua",
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua",
+              "replace": [
+                [
+                  "^local WINDOW_TICKS = \\d+;$",
+                  "local WINDOW_TICKS = 9000;"
+                ]
+              ]
+            },
+            {
+              "to": "Userdata/UserScenes.rte/Index.ini",
+              "write": "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n\tAddActivity = GAScripted\n\t\tCopyOf = P4 Alpha Duel\n\t\tPresetName = Determinism FeelBaseline\n\t\tScriptPath = UserScenes.rte/FeelBaseline.lua\n\t\tLuaClassName = FeelBaseline\n\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n"
+            }
+          ]
+        },
+        {
+          "name": "client",
+          "args": [
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-reconnect-ticket",
+            "{OUT}/client.ticket",
+            "-tick-hashes",
+            "-out",
+            "{OUT}/client_trace.json",
+            "-net-match-report",
+            "{OUT}/client-match.json",
+            "-net-autosave-seconds",
+            "60",
+            "-max-ticks",
+            "7200"
+          ],
+          "menu_script": "died.client.menu",
+          "input_script": "paced.input",
+          "probe": "paced.before.probe",
+          "kill_when": {
+            "all": [
+              {
+                "peer": "client",
+                "sim_tick": 601
+              },
+              {
+                "peer": "host",
+                "log": "^\\[autosave\\] retained tick="
+              },
+              {
+                "peer": "client",
+                "log": "^\\[autosave\\] retained tick="
+              }
+            ]
+          },
+          "observe_after_failure": true,
+          "settings": {
+            "NetworkDisplayName": "Joiner",
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always",
+            "NetworkAutosavesKept": "2",
+            "SessionDirectoryUrl": "directory.broserver.com",
+            "NetworkHostRelayMode": "Directory",
+            "NetworkConnectionMode": "RelayOnly",
+            "NetworkIceEnable": 1,
+            "NetworkPortMapEnable": 0
+          },
+          "start_when": {
+            "peer": "host",
+            "event": "video_mark resume-host-listening",
+            "timeout_s": 90
+          },
+          "runtime_files": [
+            {
+              "copy": "tools/feel/FeelBaseline.lua",
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua",
+              "replace": [
+                [
+                  "^local WINDOW_TICKS = \\d+;$",
+                  "local WINDOW_TICKS = 9000;"
+                ]
+              ]
+            },
+            {
+              "to": "Userdata/UserScenes.rte/Index.ini",
+              "write": "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n\tAddActivity = GAScripted\n\t\tCopyOf = P4 Alpha Duel\n\t\tPresetName = Determinism FeelBaseline\n\t\tScriptPath = UserScenes.rte/FeelBaseline.lua\n\t\tLuaClassName = FeelBaseline\n\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n"
+            }
+          ]
+        }
+      ],
+      "start_when": {
+        "run": "resumed",
+        "peers": [
+          "host",
+          "client"
+        ],
+        "ended": true
+      }
+    },
+    {
+      "name": "resumed-paced",
+      "start_when": {
+        "run": "died-paced",
+        "peers": [
+          "host",
+          "client"
+        ],
+        "ended": true
+      },
+      "peers": [
+        {
+          "name": "host",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "2",
+            "-net-match-ticks",
+            "7800",
+            "-net-match-input-delay",
+            "3",
+            "-net-autosave-seconds",
+            "60",
+            "-net-match-e2e-resync",
+            "-tick-hashes",
+            "-out",
+            "{OUT}/host_trace.json",
+            "-net-reconnect-ticket",
+            "{OUT}/../died-paced/host.ticket",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/host-match.json",
+            "-net-host",
+            "-net-resume-match",
+            "{RESUME_MATCH}",
+            "-net-resume-tick",
+            "{RESUME_TICK}"
+          ],
+          "start_when": {
+            "run": "died-paced",
+            "peer": "host",
+            "ended": true
+          },
+          "input_script": "paced.input",
+          "probe": "paced.after.probe",
+          "observe_after_failure": true,
+          "settings": {
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always",
+            "NetworkAutosavesKept": "2",
+            "SessionDirectoryUrl": "directory.broserver.com",
+            "NetworkHostRelayMode": "Directory",
+            "NetworkConnectionMode": "RelayOnly",
+            "NetworkIceEnable": 1,
+            "NetworkPortMapEnable": 0
+          },
+          "retain_runtime_from": {
+            "run": "died-paced",
+            "peer": "host"
+          }
+        },
+        {
+          "name": "client",
+          "args": [
+            "-net-autosave-seconds",
+            "60",
+            "-tick-hashes",
+            "-out",
+            "{OUT}/client_trace.json",
+            "-net-reconnect-ticket",
+            "{OUT}/../died-paced/client.ticket",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-match-report",
+            "{OUT}/client-match.json",
+            "-max-ticks",
+            "7800"
+          ],
+          "start_when": {
+            "run": "died-paced",
+            "peer": "client",
+            "ended": true
+          },
+          "input_script": "paced.input",
+          "probe": "paced.after.probe",
+          "observe_after_failure": true,
+          "settings": {
+            "NetworkShowDiagnostics": "1",
+            "NetworkMatchStatusMode": "Always",
+            "NetworkAutosavesKept": "2",
+            "SessionDirectoryUrl": "directory.broserver.com",
+            "NetworkHostRelayMode": "Directory",
+            "NetworkConnectionMode": "RelayOnly",
+            "NetworkIceEnable": 1,
+            "NetworkPortMapEnable": 0
+          },
+          "retain_runtime_from": {
+            "run": "died-paced",
+            "peer": "client"
+          },
+          "start_delay_s": 2,
+          "menu_script": "resumed.client.menu"
+        }
+      ],
+      "resume_from": {
+        "run": "died-paced",
         "peer": "host"
       }
     }
@@ -351,12 +651,58 @@
         "\\[autosave\\] tick=\\d+ capture_ms="
       ],
       "assert": "the resumed round's committed frames across the marked window, which closes on the round's own frame 850 (and no sooner than 5 s), so a loaded box stretches the window instead of thinning it"
+    },
+    {
+      "id": "resume-paced-save-host",
+      "run": "died-paced",
+      "peer": "host",
+      "screen": "game",
+      "what": "At the real one-minute interval the original match saves once before its players are killed; its frame rate is judged across that save.",
+      "log_regex": [
+        "^\\[autosave\\] tick=\\d+ capture_ms=",
+        "^\\[autosave\\] retained tick=\\d+ keep=\\d+ "
+      ]
+    },
+    {
+      "id": "resume-paced-resumed-save-host",
+      "run": "resumed-paced",
+      "peer": "host",
+      "screen": "game",
+      "what": "The match resumed from the real-interval save plays on past its own next save at the same interval; its frame rate is judged across it.",
+      "log_regex": [
+        "^\\[autosave\\] tick=\\d+ capture_ms="
+      ]
+    },
+    {
+      "id": "resume-paced-save-client",
+      "run": "died-paced",
+      "peer": "client",
+      "screen": "game",
+      "what": "At the real one-minute interval the original match saves once before its players are killed; its frame rate is judged across that save.",
+      "log_regex": [
+        "^\\[autosave\\] tick=\\d+ capture_ms=",
+        "^\\[autosave\\] retained tick=\\d+ keep=\\d+ "
+      ]
+    },
+    {
+      "id": "resume-paced-resumed-save-client",
+      "run": "resumed-paced",
+      "peer": "client",
+      "screen": "game",
+      "what": "The match resumed from the real-interval save plays on past its own next save at the same interval; its frame rate is judged across it.",
+      "log_regex": [
+        "^\\[autosave\\] tick=\\d+ capture_ms="
+      ]
     }
   ],
-  "public_directory": true,
   "scripts": {
-    "died.host.menu": "wait_ms 1800\nactivate ButtonMainToMultiplayer\nwait_ms 600\nsettext TextMultiplayerName Host\nactivate ButtonMultiplayerHostGame\nwait_ms 600\ncombo_select ComboHostActivity P4 Alpha Duel\nsetup_host_port {PORT}\ncombo_select ComboHostPlayers 2\nactivate ButtonHostOptions\nwait_ms 600\nactivate TabHostPageRecovery\nvideo_mark resume-autosave-options\nwait_ms 900\nassert_visible CollectionBoxHostPageRecovery 1\nsetcheck CheckHostRecAutosave 1\nwait_ms 600\nobserve assert_checked CheckHostRecAutosave 1\nobserve assert_enabled ComboHostRecAutosaveInterval 1\nwait_ms 600\nobserve assert_label ComboHostRecAutosaveInterval 1 second\nobserve assert_enabled ButtonHostOptApply 0\nwait_ms 900\nactivate TabHostPageConnection\ncombo_select ComboHostNetVisibility Public (default)\ncombo_select ComboHostNetRelay Game service (default)\nassert_label ComboHostNetVisibility Public (default)\nassert_label ComboHostNetRelay Game service (default)\ndump_host_options\nactivate ButtonHostOptBack\nwait_ms 600\nactivate ButtonMultiplayerCreate\nwait_substate Lobby 90\nwrite_lobby {PROBE_DIR}/lobby.json 90\nassert_substate Lobby\nvideo_mark resume-host-listening\nwait_connected 2 90\nwait_remote_ready 90\nvideo_mark resume-ready-start\ndump_lobby\nassert_enabled ButtonMultiplayerStart 1\nactivate ButtonMultiplayerStart\nwait_file {PROBE_DIR}/ready-to-drop.json 120\nwait_ms 120000\n",
-    "died.client.menu": "wait_ms 1800\nactivate ButtonMainToMultiplayer\nwait_ms 600\nsettext TextMultiplayerName Joiner\nactivate ButtonMultiplayerJoinGame\nwait_ms 600\nassert_substate JoinSetup\nwait_file {PROBE_DIR_host}/lobby.json 120\nwait_row PublicGameRowLobby:{PROBE_DIR_host}/lobby.json 120\nclick_row PublicGameRowLobby:{PROBE_DIR_host}/lobby.json\nassert_label LabelJoinSelected internet\nassert_enabled ButtonMultiplayerConnect 1\nactivate ButtonMultiplayerConnect\nwait_connected 2 120\nwait_substate Lobby 60\nwait_ms 900\nassert_substate Lobby\nvideo_mark resume-client-lobby\ndump_lobby\nactivate ButtonMultiplayerReady\nwait_file {PROBE_DIR}/ready-to-drop.json 120\nwait_ms 120000\n",
+    "paced.input": "# Movement and aim without fire for the two seated humans: both brains live, so the round the peers resume from disk\n# is still running when its autosaves come due. Format: [player=N] <from> <to> ACTION...  (InputScript::Load)\n\nplayer=0 1 8100 AIM=0.8,0.6\n\nplayer=1 1 8100 AIM=-0.8,0.6\n\nplayer=0 30 90 L_RIGHT\nplayer=0 70 85 JUMP\nplayer=0 110 140 AIM_UP\nplayer=0 170 230 L_LEFT\nplayer=0 200 215 CROUCH\nplayer=0 240 270 AIM_DOWN\nplayer=0 295 305 WEAPON_CHANGE_NEXT\nplayer=0 330 390 L_RIGHT\nplayer=0 370 385 JUMP\nplayer=0 410 440 AIM_UP\nplayer=0 470 530 L_LEFT\nplayer=0 500 515 CROUCH\nplayer=0 540 570 AIM_DOWN\nplayer=0 595 605 WEAPON_CHANGE_NEXT\nplayer=0 630 690 L_RIGHT\nplayer=0 670 685 JUMP\nplayer=0 710 740 AIM_UP\nplayer=0 770 830 L_LEFT\nplayer=0 800 815 CROUCH\nplayer=0 840 870 AIM_DOWN\nplayer=0 895 905 WEAPON_CHANGE_NEXT\nplayer=0 930 990 L_RIGHT\nplayer=0 970 985 JUMP\nplayer=0 1010 1040 AIM_UP\nplayer=0 1070 1130 L_LEFT\nplayer=0 1100 1115 CROUCH\nplayer=0 1140 1170 AIM_DOWN\nplayer=0 1195 1205 WEAPON_CHANGE_NEXT\nplayer=0 1230 1290 L_RIGHT\nplayer=0 1270 1285 JUMP\nplayer=0 1310 1340 AIM_UP\nplayer=0 1370 1430 L_LEFT\nplayer=0 1400 1415 CROUCH\nplayer=0 1440 1470 AIM_DOWN\nplayer=0 1495 1505 WEAPON_CHANGE_NEXT\nplayer=0 1530 1590 L_RIGHT\nplayer=0 1570 1585 JUMP\nplayer=0 1610 1640 AIM_UP\nplayer=0 1670 1730 L_LEFT\nplayer=0 1700 1715 CROUCH\nplayer=0 1740 1770 AIM_DOWN\nplayer=0 1795 1805 WEAPON_CHANGE_NEXT\nplayer=0 1830 1890 L_RIGHT\nplayer=0 1870 1885 JUMP\nplayer=0 1910 1940 AIM_UP\nplayer=0 1970 2030 L_LEFT\nplayer=0 2000 2015 CROUCH\nplayer=0 2040 2070 AIM_DOWN\nplayer=0 2095 2105 WEAPON_CHANGE_NEXT\nplayer=0 2130 2190 L_RIGHT\nplayer=0 2170 2185 JUMP\nplayer=0 2210 2240 AIM_UP\nplayer=0 2270 2330 L_LEFT\nplayer=0 2300 2315 CROUCH\nplayer=0 2340 2370 AIM_DOWN\nplayer=0 2395 2405 WEAPON_CHANGE_NEXT\nplayer=1 50 110 L_LEFT\nplayer=1 90 105 JUMP\nplayer=1 130 160 AIM_UP\nplayer=1 190 250 L_RIGHT\nplayer=1 220 235 CROUCH\nplayer=1 260 290 AIM_DOWN\nplayer=1 315 325 WEAPON_CHANGE_NEXT\nplayer=1 350 410 L_LEFT\nplayer=1 390 405 JUMP\nplayer=1 430 460 AIM_UP\nplayer=1 490 550 L_RIGHT\nplayer=1 520 535 CROUCH\nplayer=1 560 590 AIM_DOWN\nplayer=1 615 625 WEAPON_CHANGE_NEXT\nplayer=1 650 710 L_LEFT\nplayer=1 690 705 JUMP\nplayer=1 730 760 AIM_UP\nplayer=1 790 850 L_RIGHT\nplayer=1 820 835 CROUCH\nplayer=1 860 890 AIM_DOWN\nplayer=1 915 925 WEAPON_CHANGE_NEXT\nplayer=1 950 1010 L_LEFT\nplayer=1 990 1005 JUMP\nplayer=1 1030 1060 AIM_UP\nplayer=1 1090 1150 L_RIGHT\nplayer=1 1120 1135 CROUCH\nplayer=1 1160 1190 AIM_DOWN\nplayer=1 1215 1225 WEAPON_CHANGE_NEXT\nplayer=1 1250 1310 L_LEFT\nplayer=1 1290 1305 JUMP\nplayer=1 1330 1360 AIM_UP\nplayer=1 1390 1450 L_RIGHT\nplayer=1 1420 1435 CROUCH\nplayer=1 1460 1490 AIM_DOWN\nplayer=1 1515 1525 WEAPON_CHANGE_NEXT\nplayer=1 1550 1610 L_LEFT\nplayer=1 1590 1605 JUMP\nplayer=1 1630 1660 AIM_UP\nplayer=1 1690 1750 L_RIGHT\nplayer=1 1720 1735 CROUCH\nplayer=1 1760 1790 AIM_DOWN\nplayer=1 1815 1825 WEAPON_CHANGE_NEXT\nplayer=1 1850 1910 L_LEFT\nplayer=1 1890 1905 JUMP\nplayer=1 1930 1960 AIM_UP\nplayer=1 1990 2050 L_RIGHT\nplayer=1 2020 2035 CROUCH\nplayer=1 2060 2090 AIM_DOWN\nplayer=1 2115 2125 WEAPON_CHANGE_NEXT\nplayer=1 2150 2210 L_LEFT\nplayer=1 2190 2205 JUMP\nplayer=1 2230 2260 AIM_UP\nplayer=1 2290 2350 L_RIGHT\nplayer=1 2320 2335 CROUCH\nplayer=1 2360 2390 AIM_DOWN\nplayer=1 2415 2425 WEAPON_CHANGE_NEXT\nplayer=0 2730 2790 L_RIGHT\nplayer=0 2770 2785 JUMP\nplayer=0 2810 2840 AIM_UP\nplayer=0 2870 2930 L_LEFT\nplayer=0 2900 2915 CROUCH\nplayer=0 2940 2970 AIM_DOWN\nplayer=0 2995 3005 WEAPON_CHANGE_NEXT\nplayer=0 3030 3090 L_RIGHT\nplayer=0 3070 3085 JUMP\nplayer=0 3110 3140 AIM_UP\nplayer=0 3170 3230 L_LEFT\nplayer=0 3200 3215 CROUCH\nplayer=0 3240 3270 AIM_DOWN\nplayer=0 3295 3305 WEAPON_CHANGE_NEXT\nplayer=0 3330 3390 L_RIGHT\nplayer=0 3370 3385 JUMP\nplayer=0 3410 3440 AIM_UP\nplayer=0 3470 3530 L_LEFT\nplayer=0 3500 3515 CROUCH\nplayer=0 3540 3570 AIM_DOWN\nplayer=0 3595 3605 WEAPON_CHANGE_NEXT\nplayer=0 3630 3690 L_RIGHT\nplayer=0 3670 3685 JUMP\nplayer=0 3710 3740 AIM_UP\nplayer=0 3770 3830 L_LEFT\nplayer=0 3800 3815 CROUCH\nplayer=0 3840 3870 AIM_DOWN\nplayer=0 3895 3905 WEAPON_CHANGE_NEXT\nplayer=0 3930 3990 L_RIGHT\nplayer=0 3970 3985 JUMP\nplayer=0 4010 4040 AIM_UP\nplayer=0 4070 4130 L_LEFT\nplayer=0 4100 4115 CROUCH\nplayer=0 4140 4170 AIM_DOWN\nplayer=0 4195 4205 WEAPON_CHANGE_NEXT\nplayer=0 4230 4290 L_RIGHT\nplayer=0 4270 4285 JUMP\nplayer=0 4310 4340 AIM_UP\nplayer=0 4370 4430 L_LEFT\nplayer=0 4400 4415 CROUCH\nplayer=0 4440 4470 AIM_DOWN\nplayer=0 4495 4505 WEAPON_CHANGE_NEXT\nplayer=0 4530 4590 L_RIGHT\nplayer=0 4570 4585 JUMP\nplayer=0 4610 4640 AIM_UP\nplayer=0 4670 4730 L_LEFT\nplayer=0 4700 4715 CROUCH\nplayer=0 4740 4770 AIM_DOWN\nplayer=0 4795 4805 WEAPON_CHANGE_NEXT\nplayer=0 4830 4890 L_RIGHT\nplayer=0 4870 4885 JUMP\nplayer=0 4910 4940 AIM_UP\nplayer=0 4970 5030 L_LEFT\nplayer=0 5000 5015 CROUCH\nplayer=0 5040 5070 AIM_DOWN\nplayer=0 5095 5105 WEAPON_CHANGE_NEXT\nplayer=1 2750 2810 L_LEFT\nplayer=1 2790 2805 JUMP\nplayer=1 2830 2860 AIM_UP\nplayer=1 2890 2950 L_RIGHT\nplayer=1 2920 2935 CROUCH\nplayer=1 2960 2990 AIM_DOWN\nplayer=1 3015 3025 WEAPON_CHANGE_NEXT\nplayer=1 3050 3110 L_LEFT\nplayer=1 3090 3105 JUMP\nplayer=1 3130 3160 AIM_UP\nplayer=1 3190 3250 L_RIGHT\nplayer=1 3220 3235 CROUCH\nplayer=1 3260 3290 AIM_DOWN\nplayer=1 3315 3325 WEAPON_CHANGE_NEXT\nplayer=1 3350 3410 L_LEFT\nplayer=1 3390 3405 JUMP\nplayer=1 3430 3460 AIM_UP\nplayer=1 3490 3550 L_RIGHT\nplayer=1 3520 3535 CROUCH\nplayer=1 3560 3590 AIM_DOWN\nplayer=1 3615 3625 WEAPON_CHANGE_NEXT\nplayer=1 3650 3710 L_LEFT\nplayer=1 3690 3705 JUMP\nplayer=1 3730 3760 AIM_UP\nplayer=1 3790 3850 L_RIGHT\nplayer=1 3820 3835 CROUCH\nplayer=1 3860 3890 AIM_DOWN\nplayer=1 3915 3925 WEAPON_CHANGE_NEXT\nplayer=1 3950 4010 L_LEFT\nplayer=1 3990 4005 JUMP\nplayer=1 4030 4060 AIM_UP\nplayer=1 4090 4150 L_RIGHT\nplayer=1 4120 4135 CROUCH\nplayer=1 4160 4190 AIM_DOWN\nplayer=1 4215 4225 WEAPON_CHANGE_NEXT\nplayer=1 4250 4310 L_LEFT\nplayer=1 4290 4305 JUMP\nplayer=1 4330 4360 AIM_UP\nplayer=1 4390 4450 L_RIGHT\nplayer=1 4420 4435 CROUCH\nplayer=1 4460 4490 AIM_DOWN\nplayer=1 4515 4525 WEAPON_CHANGE_NEXT\nplayer=1 4550 4610 L_LEFT\nplayer=1 4590 4605 JUMP\nplayer=1 4630 4660 AIM_UP\nplayer=1 4690 4750 L_RIGHT\nplayer=1 4720 4735 CROUCH\nplayer=1 4760 4790 AIM_DOWN\nplayer=1 4815 4825 WEAPON_CHANGE_NEXT\nplayer=1 4850 4910 L_LEFT\nplayer=1 4890 4905 JUMP\nplayer=1 4930 4960 AIM_UP\nplayer=1 4990 5050 L_RIGHT\nplayer=1 5020 5035 CROUCH\nplayer=1 5060 5090 AIM_DOWN\nplayer=1 5115 5125 WEAPON_CHANGE_NEXT\nplayer=0 5430 5490 L_RIGHT\nplayer=0 5470 5485 JUMP\nplayer=0 5510 5540 AIM_UP\nplayer=0 5570 5630 L_LEFT\nplayer=0 5600 5615 CROUCH\nplayer=0 5640 5670 AIM_DOWN\nplayer=0 5695 5705 WEAPON_CHANGE_NEXT\nplayer=0 5730 5790 L_RIGHT\nplayer=0 5770 5785 JUMP\nplayer=0 5810 5840 AIM_UP\nplayer=0 5870 5930 L_LEFT\nplayer=0 5900 5915 CROUCH\nplayer=0 5940 5970 AIM_DOWN\nplayer=0 5995 6005 WEAPON_CHANGE_NEXT\nplayer=0 6030 6090 L_RIGHT\nplayer=0 6070 6085 JUMP\nplayer=0 6110 6140 AIM_UP\nplayer=0 6170 6230 L_LEFT\nplayer=0 6200 6215 CROUCH\nplayer=0 6240 6270 AIM_DOWN\nplayer=0 6295 6305 WEAPON_CHANGE_NEXT\nplayer=0 6330 6390 L_RIGHT\nplayer=0 6370 6385 JUMP\nplayer=0 6410 6440 AIM_UP\nplayer=0 6470 6530 L_LEFT\nplayer=0 6500 6515 CROUCH\nplayer=0 6540 6570 AIM_DOWN\nplayer=0 6595 6605 WEAPON_CHANGE_NEXT\nplayer=0 6630 6690 L_RIGHT\nplayer=0 6670 6685 JUMP\nplayer=0 6710 6740 AIM_UP\nplayer=0 6770 6830 L_LEFT\nplayer=0 6800 6815 CROUCH\nplayer=0 6840 6870 AIM_DOWN\nplayer=0 6895 6905 WEAPON_CHANGE_NEXT\nplayer=0 6930 6990 L_RIGHT\nplayer=0 6970 6985 JUMP\nplayer=0 7010 7040 AIM_UP\nplayer=0 7070 7130 L_LEFT\nplayer=0 7100 7115 CROUCH\nplayer=0 7140 7170 AIM_DOWN\nplayer=0 7195 7205 WEAPON_CHANGE_NEXT\nplayer=0 7230 7290 L_RIGHT\nplayer=0 7270 7285 JUMP\nplayer=0 7310 7340 AIM_UP\nplayer=0 7370 7430 L_LEFT\nplayer=0 7400 7415 CROUCH\nplayer=0 7440 7470 AIM_DOWN\nplayer=0 7495 7505 WEAPON_CHANGE_NEXT\nplayer=0 7530 7590 L_RIGHT\nplayer=0 7570 7585 JUMP\nplayer=0 7610 7640 AIM_UP\nplayer=0 7670 7730 L_LEFT\nplayer=0 7700 7715 CROUCH\nplayer=0 7740 7770 AIM_DOWN\nplayer=0 7795 7805 WEAPON_CHANGE_NEXT\nplayer=1 5450 5510 L_LEFT\nplayer=1 5490 5505 JUMP\nplayer=1 5530 5560 AIM_UP\nplayer=1 5590 5650 L_RIGHT\nplayer=1 5620 5635 CROUCH\nplayer=1 5660 5690 AIM_DOWN\nplayer=1 5715 5725 WEAPON_CHANGE_NEXT\nplayer=1 5750 5810 L_LEFT\nplayer=1 5790 5805 JUMP\nplayer=1 5830 5860 AIM_UP\nplayer=1 5890 5950 L_RIGHT\nplayer=1 5920 5935 CROUCH\nplayer=1 5960 5990 AIM_DOWN\nplayer=1 6015 6025 WEAPON_CHANGE_NEXT\nplayer=1 6050 6110 L_LEFT\nplayer=1 6090 6105 JUMP\nplayer=1 6130 6160 AIM_UP\nplayer=1 6190 6250 L_RIGHT\nplayer=1 6220 6235 CROUCH\nplayer=1 6260 6290 AIM_DOWN\nplayer=1 6315 6325 WEAPON_CHANGE_NEXT\nplayer=1 6350 6410 L_LEFT\nplayer=1 6390 6405 JUMP\nplayer=1 6430 6460 AIM_UP\nplayer=1 6490 6550 L_RIGHT\nplayer=1 6520 6535 CROUCH\nplayer=1 6560 6590 AIM_DOWN\nplayer=1 6615 6625 WEAPON_CHANGE_NEXT\nplayer=1 6650 6710 L_LEFT\nplayer=1 6690 6705 JUMP\nplayer=1 6730 6760 AIM_UP\nplayer=1 6790 6850 L_RIGHT\nplayer=1 6820 6835 CROUCH\nplayer=1 6860 6890 AIM_DOWN\nplayer=1 6915 6925 WEAPON_CHANGE_NEXT\nplayer=1 6950 7010 L_LEFT\nplayer=1 6990 7005 JUMP\nplayer=1 7030 7060 AIM_UP\nplayer=1 7090 7150 L_RIGHT\nplayer=1 7120 7135 CROUCH\nplayer=1 7160 7190 AIM_DOWN\nplayer=1 7215 7225 WEAPON_CHANGE_NEXT\nplayer=1 7250 7310 L_LEFT\nplayer=1 7290 7305 JUMP\nplayer=1 7330 7360 AIM_UP\nplayer=1 7390 7450 L_RIGHT\nplayer=1 7420 7435 CROUCH\nplayer=1 7460 7490 AIM_DOWN\nplayer=1 7515 7525 WEAPON_CHANGE_NEXT\nplayer=1 7550 7610 L_LEFT\nplayer=1 7590 7605 JUMP\nplayer=1 7630 7660 AIM_UP\nplayer=1 7690 7750 L_RIGHT\nplayer=1 7720 7735 CROUCH\nplayer=1 7760 7790 AIM_DOWN\nplayer=1 7815 7825 WEAPON_CHANGE_NEXT\n",
+    "paced.before.probe": "{\n  \"schema\": 1,\n  \"timeout_ms\": 240000,\n  \"steps\": [\n    {\n      \"op\": \"wait_file\",\n      \"path\": \"{STAGE}/gameplay-started.json\"\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark resume-play-before-drop\"\n    },\n    {\n      \"op\": \"wait\",\n      \"service\": \"Running\",\n      \"sim_at_least\": 3300\n    },\n    {\n      \"op\": \"assert\",\n      \"equals\": {\n        \"service\": \"Running\"\n      },\n      \"sim_at_least\": 3300\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark resume-two-checkpoints\"\n    },\n    {\n      \"op\": \"wait\",\n      \"service\": \"Running\",\n      \"sim_at_least\": 3450\n    },\n    {\n      \"op\": \"screenshot\",\n      \"name\": \"before-drop\"\n    },\n    {\n      \"op\": \"signal\",\n      \"name\": \"ready-to-drop\"\n    },\n    {\n      \"op\": \"finish\"\n    }\n  ]\n}\n",
+    "paced.after.probe": "{\n  \"schema\": 1,\n  \"timeout_ms\": 240000,\n  \"steps\": [\n    {\n      \"op\": \"wait_file\",\n      \"path\": \"{STAGE}/gameplay-started.json\"\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark resume-reloaded\"\n    },\n    {\n      \"op\": \"wait\",\n      \"service\": \"Running\"\n    },\n    {\n      \"op\": \"assert\",\n      \"equals\": {\n        \"service\": \"Running\"\n      }\n    },\n    {\n      \"op\": \"screenshot\",\n      \"name\": \"reloaded\"\n    },\n    {\n      \"op\": \"wait\",\n      \"service\": \"Running\",\n      \"elapsed_ms\": 1500\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark resume-play-continued\"\n    },\n    {\n      \"op\": \"wait\",\n      \"service\": \"Running\",\n      \"elapsed_ms\": 5000,\n      \"lockstep_frame_at_least\": 7400\n    },\n    {\n      \"op\": \"assert\",\n      \"equals\": {\n        \"service\": \"Running\"\n      }\n    },\n    {\n      \"op\": \"screenshot\",\n      \"name\": \"continued\"\n    },\n    {\n      \"op\": \"finish\"\n    }\n  ]\n}\n",
+    "stress.host.menu": "wait_ms 1800\nactivate ButtonMainToMultiplayer\nwait_ms 600\nsettext TextMultiplayerName Host\nactivate ButtonMultiplayerHostGame\nwait_ms 600\ncombo_select ComboHostActivity Determinism FeelBaseline\nsetup_host_port {PORT}\ncombo_select ComboHostPlayers 2\nactivate ButtonHostOptions\nwait_ms 600\nactivate TabHostPageRecovery\nvideo_mark resume-autosave-options\nwait_ms 900\nassert_visible CollectionBoxHostPageRecovery 1\nsetcheck CheckHostRecAutosave 1\nwait_ms 600\nobserve assert_checked CheckHostRecAutosave 1\nobserve assert_enabled ComboHostRecAutosaveInterval 1\nwait_ms 600\nobserve assert_label ComboHostRecAutosaveInterval 1 second\nobserve assert_enabled ButtonHostOptApply 0\nwait_ms 900\nactivate TabHostPageConnection\ncombo_select ComboHostNetVisibility Public (default)\ncombo_select ComboHostNetRelay Game service (default)\nassert_label ComboHostNetVisibility Public (default)\nassert_label ComboHostNetRelay Game service (default)\ndump_host_options\nactivate ButtonHostOptBack\nwait_ms 600\nactivate ButtonMultiplayerCreate\nwait_substate Lobby 90\nwrite_lobby {PROBE_DIR}/lobby.json 90\nassert_substate Lobby\nvideo_mark resume-host-listening\nwait_connected 2 90\nwait_remote_ready 90\nvideo_mark resume-ready-start\ndump_lobby\nassert_enabled ButtonMultiplayerStart 1\nactivate ButtonMultiplayerStart\nwait_file {PROBE_DIR}/ready-to-drop.json 120\nwait_ms 120000\n",
+    "paced.host.menu": "wait_ms 1800\nactivate ButtonMainToMultiplayer\nwait_ms 600\nsettext TextMultiplayerName Host\nactivate ButtonMultiplayerHostGame\nwait_ms 600\ncombo_select ComboHostActivity Determinism FeelBaseline\nsetup_host_port {PORT}\ncombo_select ComboHostPlayers 2\nactivate ButtonHostOptions\nwait_ms 600\nactivate TabHostPageRecovery\nvideo_mark resume-autosave-options\nwait_ms 900\nassert_visible CollectionBoxHostPageRecovery 1\nsetcheck CheckHostRecAutosave 1\nwait_ms 600\nobserve assert_checked CheckHostRecAutosave 1\nobserve assert_enabled ComboHostRecAutosaveInterval 1\nwait_ms 600\nobserve assert_label ComboHostRecAutosaveInterval 1 minute\nobserve assert_enabled ButtonHostOptApply 0\nwait_ms 900\nactivate TabHostPageConnection\ncombo_select ComboHostNetVisibility Public (default)\ncombo_select ComboHostNetRelay Game service (default)\nassert_label ComboHostNetVisibility Public (default)\nassert_label ComboHostNetRelay Game service (default)\ndump_host_options\nactivate ButtonHostOptBack\nwait_ms 600\nactivate ButtonMultiplayerCreate\nwait_substate Lobby 90\nwrite_lobby {PROBE_DIR}/lobby.json 90\nassert_substate Lobby\nvideo_mark resume-host-listening\nwait_connected 2 90\nwait_remote_ready 90\nvideo_mark resume-ready-start\ndump_lobby\nassert_enabled ButtonMultiplayerStart 1\nactivate ButtonMultiplayerStart\nwait_file {PROBE_DIR}/ready-to-drop.json 120\nwait_ms 120000\n",
+    "died.client.menu": "wait_ms 1800\nactivate ButtonMainToMultiplayer\nwait_ms 600\nsettext TextMultiplayerName Joiner\nactivate ButtonMultiplayerJoinGame\nwait_ms 600\nassert_substate JoinSetup\nwait_file {PROBE_DIR_host}/lobby.json 120\nwait_row PublicGameRowLobby:{PROBE_DIR_host}/lobby.json 120\nclick_row PublicGameRowLobby:{PROBE_DIR_host}/lobby.json\nassert_label LabelJoinSelected internet\nassert_enabled ButtonMultiplayerConnect 1\nactivate ButtonMultiplayerConnect\nwait_connected 2 120\nwait_substate Lobby 60\nwait_ms 900\nassert_substate Lobby\nvideo_mark resume-client-lobby\ndump_lobby\nactivate ButtonMultiplayerReady\nwait_file {PROBE_DIR}/ready-to-drop.json 120\nwait_ms 240000\n",
     "resumed.client.menu": "wait_ms 1800\nassert_substate Landing\nassert_label ButtonMultiplayerReconnect Rejoin Match\nactivate ButtonMultiplayerReconnect\nwait_connected 2 120\nwait_substate Lobby 60\nwait_ms 900\nactivate ButtonMultiplayerReady\nwait_round_end 300\nwait_ms 1500\nexit\n"
-  }
+  },
+  "public_directory": true
 }

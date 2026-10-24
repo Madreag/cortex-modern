@@ -1012,6 +1012,9 @@ namespace RTE {
 		std::optional<uint32_t> GetMatchPingMs() const;
 		/// Whether the current match is being restored from the host snapshot.
 		bool IsMatchResyncing() const;
+		/// Whether this seat's rejoin from a hold in the match is under way, from its first attempt until the round it rejoins launches or
+		/// it gives up; a rejoin the player starts from the menus is not one.
+		bool IsHeldRejoinDriving() const;
 		/// The current seat holder's display name for presentation events.
 		std::string GetPeerDisplayName(uint8_t peerId) const;
 		std::string GetStatusText() const;
@@ -1165,6 +1168,8 @@ namespace RTE {
 		/// Publishes the newest archive the autosave writer has FINISHED, when it is newer than the
 		/// image a bootstrap is already being served. Nothing here reads a file.
 		void PublishFinishedWorldJoinImage();
+		/// Host: publishes a private match's written base to the returners waiting on it.
+		void PublishPrivateBaseLocked(const NetWorldCheckpointImage& image);
 		/// Writes a newly issued directory row token into the world identity record, so a reboot
 		/// resumes the same row instead of leaving a stale one to expire.
 		void PersistWorldDirectoryToken();
@@ -1347,6 +1352,9 @@ namespace RTE {
 		/// Opens the directory's host end on this successor's handover listener, so the survivors' ICE dials reach it.
 		void HostMigrationIce(INetTransport& listener);
 		static constexpr uint64_t c_IceResolveBudgetMs = 30000;
+		/// A rejoin of the seat that last hosted this match reads the directory, without checking in, until it names another host.
+		/// @return Whether the directory names another host; false says why in error.
+		bool AwaitAnotherHostListing(const std::string& sessionId, const std::string& ownListing, std::string* error);
 		static constexpr uint32_t c_IceConnectBudgetMs = 15000;
 		static constexpr uint32_t c_IceHandshakeMarginMs = 5000; //!< The session's hello after the transport connects, on top of its connect limit.
 		void JoinWorkerIfDone();
@@ -1428,6 +1436,8 @@ namespace RTE {
 		friend bool TestDirectoryCapacityFallback(std::string* error);
 		friend bool TestStaleWorldImageRecaptures(std::string* error);
 		friend bool TestAReturnerTakesTheBaseAskedForIt(std::string* error);
+		friend bool TestALateBaseVerdictKeepsTheNextAsk(std::string* error);
+		friend bool TestASlowWrittenBaseServesItsReturner(std::string* error);
 		friend bool TestWorldCatchUpRefusal(std::string* error);
 		friend bool TestWorldDisconnectReason(bool watcher, std::string* error);
 		void InstallIcePump(NetMuxTransport& mux, bool host, std::shared_ptr<GnsDirectorySignalDispatcher> ownedDispatcher = {});
@@ -1801,6 +1811,8 @@ namespace RTE {
 		std::string m_IceBoundSessionId;    //!< The session id the process's GNS identity is pinned to.
 		bool m_DirectoryJoinIsWorld = false;
 		std::string m_IceIdentity;
+		std::string m_LastHostedIceIdentity; //!< The identity this process last listened under as a host: a rejoin never dials it.
+		std::string m_LastHostedSessionId; //!< The directory session this process last hosted.
 		std::string m_IceJoinSessionId;     //!< Client: the session id -net-join-session named.
 		std::string m_IceReport;            //!< The dispatcher's last report, taken when a worker or teardown takes the dispatcher.
 		std::string m_IceRoute;             //!< The leg the join actually took: "ice" | "ip" | "".
@@ -2031,7 +2043,7 @@ namespace RTE {
 		std::optional<NetWorldCheckpointImage> m_PrivateBasePending; //!< Host: the base read at its tick, waiting for its archive's writer.
 		uint64_t m_PrivateImageRound = 0;
 		uint64_t m_PrivateImageStaleFrom = 0; //!< Host: the frame a rejoin finished on; the base is older than play from here.
-		uint64_t m_PrivateImageTakenMs = 0; //!< Host: when the base was last captured; the cadence is measured from it.
+		uint64_t m_PrivateImageTakenMs = 0; //!< Host: when the base was last asked for, then when it was published; the cadence is measured from it.
 		double m_PrivateImageLastCaptureMs = 0.0; //!< Host: the last capture's measured cost.
 		std::deque<double> m_PrivateCaptureCosts; //!< Host: the last three capture costs past the round's first, which the refresh rule reads.
 		bool m_PrivateCaptureCold = false; //!< Host: the capture in flight is the round's first, whose one-time warm-up is not the steady cost.

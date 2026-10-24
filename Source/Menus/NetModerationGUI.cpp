@@ -1767,7 +1767,7 @@ void NetModerationGUI::DrawMatchStatus(const NetLobbySnapshot& snapshot) {
 	const bool ownRejoin = !menuLobby && !hostLost && (resyncing || ScenarioRunner::WorldCatchUpActive()) &&
 	                       (OwnRosterSeatHeld() || ScenarioRunner::IsLockstepOwnSeatHeld());
 	// A seat on its way back reads held through its catch-up and the lobby its return passes, as the screen watch judges it.
-	const bool ownHeld = !hostLost && NetPlayerPresentation::OwnSeatAway(snapshot);
+	const bool ownHeld = !hostLost && m_DrawnOwnSeatAway;
 	std::string ownHeldCause;
 	if (ownHeld) {
 		if (const auto view = g_NetMatchService.GetSeatView(snapshot.localPeerId)) {
@@ -2781,6 +2781,8 @@ void NetModerationGUI::Draw() {
 	++m_DrawSerial;
 	const NetLobbySnapshot& snapshot = *m_FrameSnapshot;
 	NetPlayerPresentation::Remember(snapshot, g_SettingsMan.GetNetworkDisplayName());
+	// One reading of the own seat per frame: the status line and its watch judge the same one, and the wait screen is held by its nature.
+	m_DrawnOwnSeatAway = m_HeldWaitScreen || NetPlayerPresentation::OwnSeatAway(snapshot);
 	s_OverlayPhases.Lap(0);
 	m_StatusRect = {};
 	m_ChatRect = {};
@@ -2788,7 +2790,8 @@ void NetModerationGUI::Draw() {
 	m_RosterWrap = {};
 	m_StatusWrap = {};
 	const auto state = g_NetMatchService.GetState();
-	if (state == NetMatchServiceState::Failed || state == NetMatchServiceState::Idle) {
+	// A held seat's rejoin wait keeps its line between attempts, a failed attempt included.
+	if ((state == NetMatchServiceState::Failed || state == NetMatchServiceState::Idle) && !m_HeldWaitScreen) {
 		if (m_ConnectionControls) ClearConnectionControls();
 		return;
 	}
@@ -2810,7 +2813,7 @@ void NetModerationGUI::Draw() {
 	const bool matchEnded = snapshot.serviceState == "Completed" && ActivityInMatch();
 	const bool menuLobby = PostMatchLobbySurfaces();
 	if (snapshot.serviceState != "Running" && snapshot.serviceState != "Starting" && snapshot.serviceState != "ReadyToLaunch" &&
-	    !matchEnded && !snapshot.hostLost && !snapshot.migrating && !m_Open && !menuLobby) return;
+	    !matchEnded && !snapshot.hostLost && !snapshot.migrating && !m_Open && !menuLobby && !m_HeldWaitScreen) return;
 	RandomGenerator* previousRNG = t_simRNGOverride;
 	t_simRNGOverride = &g_RenderRNG;
 	const bool inMatch = MatchSurfacesDrawn(ScenarioRunner::IsLockstepControllerSyncActive(), g_NetMatchService.IsMatchResyncing(),
@@ -2820,7 +2823,7 @@ void NetModerationGUI::Draw() {
 	    (ScenarioRunner::HasLockstepCoordinator() || g_NetMatchService.IsMatchResyncing() || snapshot.hostLost);
 	if (m_ConnectionInMatch) CreateConnectionControls();
 	else if (m_ConnectionControls) ClearConnectionControls();
-	if (inMatch) {
+	if (inMatch || m_HeldWaitScreen) {
 		CreateOverlay();
 	} else {
 		DrawRoster(snapshot);
@@ -2828,7 +2831,8 @@ void NetModerationGUI::Draw() {
 	// The lobby arm sits inside inMatch: the rematch lobby keeps the seats reading beside its own box.
 	if (menuLobby) DrawRoster(snapshot);
 	s_OverlayPhases.Lap(1);
-	if (inMatch && (menuLobby || MatchStatusWanted())) {
+	// A held seat waiting for its rejoin reads the same status line as in the match, whatever the round's own state.
+	if (m_HeldWaitScreen || (inMatch && (menuLobby || MatchStatusWanted()))) {
 		DrawMatchStatus(snapshot);
 		m_NetStatus->SetVisible(true);
 	}

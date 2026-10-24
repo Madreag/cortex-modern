@@ -3004,6 +3004,28 @@ def scenario_manifest(capture, out, elapsed):
     return manifest
 
 
+def judge_pacing_where_named(definition, items):
+    """A run whose saves are the harness's stress lever names the run at a real interval where its players' frame rate is judged:
+    its drawn-frames rows keep their own measurement and take that run's verdict for the same player, or fail without one."""
+    runs = {run.get("name"): run for run in definition.get("runs") or []}
+    for item in items:
+        paced = (runs.get(item.get("run")) or {}).get("pacing_judged_in")
+        if not paced or not str(item.get("id", "")).startswith("drawn-frames-"):
+            continue
+        judged = next((row for row in items if row.get("id") == item["id"] and row.get("run") == paced["run"]), None)
+        item["at_stress"] = {"probe": item.get("probe"), "drawn_frames": item.pop("drawn_frames", None), "finding": item.pop("finding", None)}
+        item["judged_in"] = {"run": paced["run"], "reason": paced["reason"]}
+        if judged is None or judged.get("probe") in (None, "not-run"):
+            item["probe"] = "fail"
+            item["finding"] = {"class": "harness", "reason": f"the run {paced['run']} that judges this player's frame rate drew no judged frames", "launch": None, "errors": []}
+            continue
+        item["probe"] = judged["probe"]
+        item["drawn_frames"] = judged.get("drawn_frames")
+        if judged.get("finding"):
+            item["finding"] = {**judged["finding"], "reason": f"{paced['run']}: {judged['finding'].get('reason', '')}"}
+    return items
+
+
 def aggregate_review(capture, out):
     documents = [json.loads((Path(run["root"]) / "review.json").read_text(encoding="utf-8")) for run in capture["runs"]]
     items = [item for review_doc in documents for item in review_doc["checklist"]]
@@ -3020,6 +3042,7 @@ def aggregate_review(capture, out):
             for peer in ([item["peer"]] if item.get("peer") else [peer["name"] for peer in run.get("peers", definition.get("peers", []))]):
                 items.append({**item, "run": name, "peer": peer, "frames": None, "probe": "not-run", "state": "not started",
                               "finding": {"class": "harness", "reason": capture.get("interrupted") or "Capture ended before this run"}})
+    judge_pacing_where_named(definition, items)
     document = {"schema": 1, "scenario": capture["scenario"], "title": capture["scenario_definition"].get("title"),
                 "source": capture["source"], "manifest": str(Path(out) / "manifest.json"),
                 "peer_selection": capture["scenario_definition"].get("peer_selection"),

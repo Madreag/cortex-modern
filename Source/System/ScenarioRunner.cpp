@@ -106,6 +106,7 @@ namespace RTE {
 		uint64_t s_WorldCatchUpWindowHead = 0; //!< The newest frame the tail held when it began.
 		bool s_WorldCatchUpWindowPaced = false; //!< Whether every frame of it stopped on its time or its ceiling, with the tail still ahead.
 		bool s_WorldCatchUpFramePaced = false; //!< Whether this frame stopped on its time or its ceiling.
+		bool s_WorldCatchUpFrameCollected = false; //!< Whether this frame ran a tick that collects every Lua state.
 		int s_OwnSeatCatchUpBudget = 0;
 		int s_OwnSeatCatchUpGranted = 0; //!< The ticks this frame's own-seat catch-up granted past the round's pace.
 		RTE::SteadyClock::time_point s_OwnSeatCatchUpLastGrant;
@@ -1551,6 +1552,7 @@ namespace RTE {
 
 	void ScenarioRunner::BeginWorldCatchUpFrame(double drawMs, double untilDrawMs, RTE::SteadyClock::time_point now) {
 		s_WorldCatchUpBudget = s_WorldCatchUpActive ? c_WorldCatchUpTicksPerRealFrame : 0;
+		s_WorldCatchUpFrameCollected = false;
 		// A replay that does not close on the round never comes back, and a frame's time after its draw reads the display's wait as
 		// draw, so that time alone can settle at the round's pace. A second whose frames all stopped on their time or their ceiling
 		// with the tail ahead of them, applying less than the frames the round committed to the tail and a tenth, raises the ticks
@@ -1618,9 +1620,10 @@ namespace RTE {
 		return IsLockstepControllerSyncActive() ? "[net-tick-cost]" : s_WorldCatchUpActive ? "[catchup-tick-cost]" : "[sp-tick-cost]";
 	}
 
-	bool ScenarioRunner::TakeOwnSeatCatchUpGrant(uint64_t nextSimTick, RTE::SteadyClock::time_point now) {
+	bool ScenarioRunner::TakeOwnSeatCatchUpGrant(uint64_t nextSimTick, bool collectsEveryState, RTE::SteadyClock::time_point now) {
 		NetLockstepPlaneGuard plane;
-		if (s_OwnSeatCatchUpBudget <= 0 || !s_LockstepCoordinator || !s_LockstepCoordinator->HasReadyFrame(nextSimTick)) return false;
+		// A tick that collects every Lua state costs several ticks: it runs at the round's pace, first in a frame, never as an extra one.
+		if (collectsEveryState || s_OwnSeatCatchUpBudget <= 0 || !s_LockstepCoordinator || !s_LockstepCoordinator->HasReadyFrame(nextSimTick)) return false;
 		const double ordinaryWaitMs = std::max(0.0, static_cast<double>(g_TimerMan.GetDeltaTimeTicks() - g_TimerMan.GetSimAccumulator()) *
 		    1000.0 / g_TimerMan.GetTicksPerSecond());
 		const bool catchingUp = s_LockstepCoordinator->PeerFrameCatchUpActive(ordinaryWaitMs);
@@ -1644,7 +1647,7 @@ namespace RTE {
 		return true;
 	}
 
-	bool ScenarioRunner::TakeWorldCatchUpGrant(uint64_t nextSimTick, RTE::SteadyClock::time_point now) {
+	bool ScenarioRunner::TakeWorldCatchUpGrant(uint64_t nextSimTick, bool collectsEveryState, RTE::SteadyClock::time_point now) {
 		NetLockstepPlaneGuard plane;
 		// Test lever CC_TEST_CATCHUP_GRANT_DETAILS: the catch-up names what keeps the next tick back, every two seconds at most.
 		static const bool grantDetails = std::getenv("CC_TEST_CATCHUP_GRANT_DETAILS") != nullptr;
@@ -1674,7 +1677,13 @@ namespace RTE {
 		const int granted = c_WorldCatchUpTicksPerRealFrame - s_WorldCatchUpBudget;
 		if (granted > 0) {
 			const auto tick = std::chrono::duration_cast<std::chrono::microseconds>(now - s_WorldCatchUpLastGrant);
-			s_WorldCatchUpTickTime = s_WorldCatchUpTickTime.count() == 0 ? tick : (s_WorldCatchUpTickTime * 3 + tick) / 4;
+			// A tick that collected every state is no measure of the next ones.
+			if (!s_WorldCatchUpFrameCollected) s_WorldCatchUpTickTime = s_WorldCatchUpTickTime.count() == 0 ? tick : (s_WorldCatchUpTickTime * 3 + tick) / 4;
+		}
+		// A tick that collects every Lua state costs several ticks: it runs alone in its frame, which the floor does not fill.
+		if (s_WorldCatchUpFrameCollected || (collectsEveryState && granted > 0)) {
+			s_WorldCatchUpFramePaced = true;
+			return false;
 		}
 		if (granted >= s_WorldCatchUpFloor && now - s_WorldCatchUpFrameBegan + (s_WorldCatchUpUntilDraw ? std::chrono::microseconds{0} : s_WorldCatchUpTickTime) > s_WorldCatchUpFrameTime) {
 			if (grantDetails && granted == 0) {
@@ -1702,6 +1711,7 @@ namespace RTE {
 			if (!s_LockstepCoordinator->PrepareReplayFrame(nextSimTick, &error)) { SetControllerReplayError(error); return false; }
 		}
 		--s_WorldCatchUpBudget;
+		s_WorldCatchUpFrameCollected = collectsEveryState;
 		return true;
 	}
 

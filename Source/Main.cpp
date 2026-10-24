@@ -5985,19 +5985,25 @@ static bool UpdateResyncUI(uint32_t elapsedSeconds, bool heldRejoin = false, con
 	const std::string resyncTitle = heldRejoin ? (heldLine.empty() ? std::string("Rejoining the match...") : heldLine) : std::string("Restoring the shared match state...");
 	g_FrameMan.GetLargeFont(true)->DrawAligned(&bitmap, centerX, centerY - 12, resyncTitle, GUIFont::Centre);
 	MenuAutomation::NoteDrawnText(heldRejoin ? "RejoinOverlay" : "ResyncOverlay", resyncTitle);
-	// A held player's units are the AI's until the player is back; a repair pauses every player at once.
-	const std::string resyncLine = heldRejoin ? (ScenarioRunner::IsLockstepHoldNoticeVisible() ? NetReconnectUx::HeldSeatReturnNotice() : std::string())
-	                                          : "Every player waits while the match is reloaded  /  " + std::to_string(elapsedSeconds) + " s  /  F6: Players";
-	g_FrameMan.GetSmallFont(true)->DrawAligned(&bitmap, centerX, centerY + 8, resyncLine, GUIFont::Centre);
-	MenuAutomation::NoteDrawnText(heldRejoin ? "RejoinOverlay" : "ResyncOverlay", resyncLine);
+	// A held player's own line is the status line drawn below, as on every surface that shows its held seat; a repair pauses every player at once.
+	const std::string resyncLine = heldRejoin ? std::string() : "Every player waits while the match is reloaded  /  " + std::to_string(elapsedSeconds) + " s  /  F6: Players";
+	if (!resyncLine.empty()) {
+		g_FrameMan.GetSmallFont(true)->DrawAligned(&bitmap, centerX, centerY + 8, resyncLine, GUIFont::Centre);
+		MenuAutomation::NoteDrawnText("ResyncOverlay", resyncLine);
+	}
 	if (heldRejoin) {
 		const std::string controls = std::to_string(elapsedSeconds) + " s  /  F6: Players  /  Esc: pause menu";
 		g_FrameMan.GetSmallFont(true)->DrawAligned(&bitmap, centerX, centerY + 10 + g_FrameMan.GetSmallFont(true)->GetFontHeight(), controls, GUIFont::Centre);
 		MenuAutomation::NoteDrawnText("RejoinOverlay", controls);
 	}
+	auto* networkPanel = g_MenuMan.GetNetworkPanel();
+	if (networkPanel) networkPanel->SetHeldWaitScreen(heldRejoin);
 	g_MenuMan.DrawNetworkUI();
+	if (networkPanel) networkPanel->SetHeldWaitScreen(false);
 	ScenarioRunner::DrawNetUiToasts(resyncTitle);
 	ScenarioRunner::NoteResyncOverlayFrame();
+	// The wait is not a frame of the running round: the pace window starts afresh once the round draws again.
+	s_paceWindowLeftActivity = true;
 	g_MenuMan.DrawLocalPauseMenu();
 	g_WindowMan.UploadFrame();
 	if (FrameRecorder::Instance().Enabled()) {
@@ -8622,8 +8628,9 @@ void RunGameLoop() {
 				break;
 			}
 			const uint64_t nextSimTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) + 1;
+			const bool collectsEveryState = g_NetMatchService.IsNamedCaptureTick(nextSimTick);
 			if (ScenarioRunner::WorldCatchUpActive()) {
-				if (!ScenarioRunner::TakeWorldCatchUpGrant(nextSimTick)) {
+				if (!ScenarioRunner::TakeWorldCatchUpGrant(nextSimTick, collectsEveryState)) {
 					// A joiner that cannot advance still has to receive: the tail's next frame and the
 					// lockstep start both arrive on this pump, which otherwise runs per sim tick only.
 					g_NetMatchService.PumpSessionEvents();
@@ -8634,7 +8641,7 @@ void RunGameLoop() {
 					g_TimerMan.GrantSimUpdates(1);
 				}
 			} else if (!g_TimerMan.TimeForSimUpdate()) {
-				if (!ScenarioRunner::TakeOwnSeatCatchUpGrant(nextSimTick)) break;
+				if (!ScenarioRunner::TakeOwnSeatCatchUpGrant(nextSimTick, collectsEveryState)) break;
 				g_TimerMan.GrantSimUpdates(1);
 			}
 			if (!ScenarioRunner::WorldCatchUpActive() && !ScenarioRunner::PollLockstepSimulationTick(nextSimTick)) {

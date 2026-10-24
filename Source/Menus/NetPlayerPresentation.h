@@ -153,6 +153,8 @@ namespace RTE::NetPlayerPresentation {
 	inline bool OwnSeatAway(const NetLobbySnapshot& snapshot) {
 		const auto view = g_NetMatchService.GetSeatView(snapshot.localPeerId);
 		if (OwnSeatHeld(snapshot, view, !view && ScenarioRunner::IsLockstepSeatReleased(snapshot.localPeerId)) || ScenarioRunner::IsLockstepOwnSeatHeld()) return true;
+		// A held seat's rejoin runs only for a seat its host holds: from its first dial to the launch of the round it returns to.
+		if (!snapshot.isHost && g_NetMatchService.IsHeldRejoinDriving()) return true;
 		// A catch-up alone is no hold: a host serves one and a late joiner runs one with nobody's seat held. This peer's own return is
 		// the catch-up or repair that follows the hold its host told it of.
 		if (!snapshot.isHost && (ScenarioRunner::WorldCatchUpActive() || g_NetMatchService.IsMatchResyncing())) {

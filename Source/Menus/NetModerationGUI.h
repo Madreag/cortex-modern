@@ -32,6 +32,11 @@ namespace RTE {
 		~NetModerationGUI();
 		void Update();
 		void Draw();
+		/// Marks the frames a held seat spends on its rejoin's wait screen: the status line shows there as on every held surface.
+		void SetHeldWaitScreen(bool shown) { m_HeldWaitScreen = shown; }
+		/// The frames this panel drew, and whether the last of them read this machine's own seat as away.
+		uint64_t DrawSerial() const { return m_DrawSerial; }
+		bool DrawnOwnSeatAway() const { return m_DrawnOwnSeatAway; }
 		/// Draws the bounded toast rows after the rest of the network UI.
 		/// @param screenLine The line the screen beneath already shows; the rows never repeat it.
 		void DrawMatchToasts(const std::string& screenLine = {});
@@ -363,6 +368,8 @@ namespace RTE {
 		bool m_ChatInMatch = false; //!< Whether the chat showed at the last drawn frame.
 		int m_LastMouseX = -1, m_LastMouseY = -1;
 		bool m_Open = false;
+		bool m_HeldWaitScreen = false; //!< This frame is a held seat's rejoin wait screen, drawn outside the match.
+		bool m_DrawnOwnSeatAway = false; //!< The reading of this machine's own seat the last drawn frame laid its status out from.
 		int m_RefreshCount = 0;
 		int m_RefreshChangeCount = 0;
 		uint64_t m_LastRefreshHash = 0;
