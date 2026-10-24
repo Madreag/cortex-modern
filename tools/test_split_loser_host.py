@@ -162,14 +162,14 @@ def self_test():
     end_of_stay = '[net-peer-hold-installed] local=2 peer=1 frame=9183 ai_frame=9183 voters=1 now_ms=190000 cause=declared_leave\n'
     rows = lambda last: [{'tick': tick} for tick in (4541, last)]
     cases = (
-        ('re-held and aborted (the recorded Linux run)', {1: ruling + reclaim + host_rehold, 2: guest_hold + reclaim}, {1: rows(5526), 2: rows(5525)},
+        ('re-held and aborted after its return', {1: ruling + reclaim + host_rehold, 2: guest_hold + reclaim}, {1: rows(5526), 2: rows(5525)},
          {1: -6, 2: 0}, {1: abort, 2: ''}, ('returned host saw its seat held at frame 4620', 'exited with code -6', 'abort')),
         ('re-held only', {1: ruling + reclaim + host_rehold, 2: guest_hold + reclaim}, {1: rows(5526), 2: rows(5525)}, {1: 0, 2: 0}, {}, ('returned host saw its seat held',)),
         ('held by the guest while still playing', {1: ruling + reclaim, 2: guest_hold + reclaim + end_of_stay.replace('9183', '5000')},
          {1: rows(9181), 2: rows(9302)}, {1: 0, 2: 0}, {}, ('guest held the returned host at frame 5000',)),
         ('exit code only', {1: ruling + reclaim, 2: guest_hold + reclaim}, {1: rows(9181), 2: rows(9302)}, {1: 0, 2: 3}, {}, ('exited with code 3',)),
         ('abort with exit 0', {1: ruling + reclaim, 2: guest_hold + reclaim}, {1: rows(9181), 2: rows(9302)}, {1: 0, 2: 0}, {1: abort}, ('abort',)),
-        ('clean return, held only at its end of stay (the recorded Mac run)', {1: ruling + reclaim, 2: guest_hold + reclaim + end_of_stay},
+        ('clean return, held only at its end of stay', {1: ruling + reclaim, 2: guest_hold + reclaim + end_of_stay},
          {1: rows(9181), 2: rows(9302)}, {1: 0, 2: 0}, {1: '', 2: ''}, ()),
     )
     failures = []
