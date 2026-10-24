@@ -1103,6 +1103,10 @@ def emit_players(number, title, roles, checklist, timeout=420):
         return
     peers, scripts = [], {}
     for role, display, menu_lines, probe_text in roles:
+        # Every relay check of the scene counts its own players; the probe's default is a two-player match.
+        counts = {step.get("players", 2) for step in json.loads(probe_text)["steps"] if step.get("op") == "assert_relay"}
+        if counts - {len(roles)}:
+            raise ValueError(f"{name} {role}: a relay check counts {sorted(counts)} players in a {len(roles)}-player scene")
         scripts[f"{role}.menu"] = "\n".join(menu_lines) + "\n"
         scripts[f"{role}.probe"] = probe_text
         peers.append(dict(name=role, menu_script=f"{role}.menu", probe=f"{role}.probe", env=dict(CCCP_TEST_READBACK_TIMING="1"),
@@ -1129,7 +1133,7 @@ def three_player_countdown_scene():
     joiner2 = join_setup(connected=3, name="Joiner2") + ["wait_label LabelMultiplayerStatus The host is starting the match in",
                "video_mark countdown-joiner2", "assert_label ButtonMultiplayerReady Ready"] + lobby_exit()
     def started(peer, ends):
-        steps = [wait(editing=True, within_ms=90000), dict(op="assert", equals=dict(service="Running")), dict(op="assert_relay")]
+        steps = [wait(editing=True, within_ms=90000), dict(op="assert", equals=dict(service="Running")), dict(op="assert_relay", players=3)]
         steps += capture(f"started-{peer}") + (pause_end() if ends else []) + [wait(scope="menu", screen="MultiplayerScreen", within_ms=120000), dict(op="finish")]
         return steps
     sides = {"host": started("host", True), "joiner": started("joiner", False), "joiner2": started("joiner2", False)}
