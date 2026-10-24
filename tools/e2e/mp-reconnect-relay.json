@@ -1,0 +1,289 @@
+{
+  "schema": 1,
+  "name": "mp-reconnect-relay",
+  "port_base": 49475,
+  "size": "960x540",
+  "timeout_s": 480,
+  "title": "A dropped player's game is stopped on its own machine and started again there; it rejoins the running match over the relay",
+  "public_directory": true,
+  "scripts": {
+    "dropped.menu": "wait_ms 1800\nactivate ButtonMainToMultiplayer\nwait_ms 600\nassert_substate Landing\nsettext TextMultiplayerName Joiner\nactivate ButtonMultiplayerJoinGame\nwait_ms 600\nassert_substate JoinSetup\nwait_file {PROBE_DIR_host}/lobby.json 120\nwait_row PublicGameRowLobby:{PROBE_DIR_host}/lobby.json 120\nclick_row PublicGameRowLobby:{PROBE_DIR_host}/lobby.json\nassert_label LabelJoinSelected internet\nassert_enabled ButtonMultiplayerConnect 1\nactivate ButtonMultiplayerConnect\nwait_connected 2 120\nwait_substate Lobby 120\nwait_ms 1200\nactivate ButtonMultiplayerReady\nwait_round_end 600\nexit\n",
+    "rejoined.menu": "wait_ms 1800\nassert_substate Landing\nassert_label ButtonMultiplayerReconnect Rejoin Match\nactivate ButtonMultiplayerReconnect\nwait_round_end 600\nexit\n",
+    "rejoined.probe": "{\n  \"schema\": 1,\n  \"timeout_ms\": 240000,\n  \"steps\": [\n    {\n      \"op\": \"wait\",\n      \"service\": \"Running\",\n      \"within_ms\": 180000\n    },\n    {\n      \"op\": \"wait\",\n      \"service\": \"Running\",\n      \"elapsed_ms\": 3000,\n      \"ai_held_peer_ids\": [],\n      \"within_ms\": 120000\n    },\n    {\n      \"op\": \"menu\",\n      \"command\": \"video_mark rejoined-playing\",\n      \"capture_screen\": \"game\"\n    },\n    {\n      \"op\": \"wait\",\n      \"elapsed_ms\": 6000,\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"screenshot_pair\",\n      \"name\": \"rejoined-playing\",\n      \"scope\": \"menu\"\n    },\n    {\n      \"op\": \"assert\",\n      \"equals\": {\n        \"service\": \"Running\"\n      }\n    },\n    {\n      \"op\": \"finish\"\n    }\n  ]\n}\n"
+  },
+  "runs": [
+    {
+      "name": "reconnect",
+      "peers": [
+        {
+          "name": "host",
+          "args": [
+            "-net-match-service-e2e",
+            "-net-port",
+            "{PORT}",
+            "-net-match-peers",
+            "2",
+            "-net-match-ticks",
+            "9000",
+            "-net-match-auto-delay",
+            "-net-autosave-seconds",
+            "0",
+            "-net-match-report",
+            "{OUT}/host-match.json",
+            "-net-reconnect-ticket",
+            "{OUT}/host.ticket",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-net-host",
+            "-net-match-service-preset",
+            "Determinism FeelBaseline",
+            "-net-match-service-module",
+            "UserScenes.rte"
+          ],
+          "input_script": "play-input.txt",
+          "lobby_file": "{PROBE_DIR}/lobby.json",
+          "settings": {
+            "NetworkDisplayName": "Host",
+            "NetworkAutoReconnect": "1",
+            "SessionDirectoryUrl": "directory.broserver.com",
+            "NetworkHostRelayMode": "Directory",
+            "NetworkConnectionMode": "RelayOnly",
+            "NetworkIceEnable": 1,
+            "NetworkPortMapEnable": 0,
+            "NetworkMatchStatusMode": "Always"
+          },
+          "env": {
+            "CC_TEST_NET_MATCH_E2E_WAIT_PEERS": "1"
+          },
+          "runtime_files": [
+            {
+              "copy": "tools/feel/FeelBaseline.lua",
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua",
+              "replace": [
+                [
+                  "^local WINDOW_TICKS = \\d+;$",
+                  "local WINDOW_TICKS = 9000;"
+                ]
+              ]
+            },
+            {
+              "to": "Userdata/UserScenes.rte/Index.ini",
+              "write": "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n\tAddActivity = GAScripted\n\t\tCopyOf = P4 Alpha Duel\n\t\tPresetName = Determinism FeelBaseline\n\t\tScriptPath = UserScenes.rte/FeelBaseline.lua\n\t\tLuaClassName = FeelBaseline\n\t\tIsTestActivity = 1\n\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n"
+            }
+          ],
+          "kill_when": {
+            "peer": "rejoined",
+            "probe_complete": true
+          }
+        },
+        {
+          "name": "dropped",
+          "args": [
+            "-net-match-report",
+            "{OUT}/dropped-match.json",
+            "-net-reconnect-ticket",
+            "{OUT}/dropped.ticket",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-max-ticks",
+            "9000"
+          ],
+          "input_script": "play-input.txt",
+          "menu_script": "dropped.menu",
+          "settings": {
+            "NetworkDisplayName": "Joiner",
+            "NetworkAutoReconnect": "1",
+            "NetworkOfferStoredRejoin": "1",
+            "SessionDirectoryUrl": "directory.broserver.com",
+            "NetworkHostRelayMode": "Directory",
+            "NetworkConnectionMode": "RelayOnly",
+            "NetworkIceEnable": 1,
+            "NetworkPortMapEnable": 0,
+            "NetworkMatchStatusMode": "Always"
+          },
+          "kill_at_tick": 900,
+          "runtime_files": [
+            {
+              "copy": "tools/feel/FeelBaseline.lua",
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua",
+              "replace": [
+                [
+                  "^local WINDOW_TICKS = \\d+;$",
+                  "local WINDOW_TICKS = 9000;"
+                ]
+              ]
+            },
+            {
+              "to": "Userdata/UserScenes.rte/Index.ini",
+              "write": "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n\tAddActivity = GAScripted\n\t\tCopyOf = P4 Alpha Duel\n\t\tPresetName = Determinism FeelBaseline\n\t\tScriptPath = UserScenes.rte/FeelBaseline.lua\n\t\tLuaClassName = FeelBaseline\n\t\tIsTestActivity = 1\n\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n"
+            }
+          ]
+        },
+        {
+          "name": "rejoined",
+          "args": [
+            "-net-match-report",
+            "{OUT}/rejoined-match.json",
+            "-net-reconnect-ticket",
+            "{OUT}/dropped.ticket",
+            "-input-script",
+            "{INPUT_SCRIPT}",
+            "-max-ticks",
+            "9000"
+          ],
+          "input_script": "play-input.txt",
+          "menu_script": "rejoined.menu",
+          "probe": "rejoined.probe",
+          "settings": {
+            "NetworkDisplayName": "Joiner",
+            "NetworkAutoReconnect": "1",
+            "NetworkOfferStoredRejoin": "1",
+            "SessionDirectoryUrl": "directory.broserver.com",
+            "NetworkHostRelayMode": "Directory",
+            "NetworkConnectionMode": "RelayOnly",
+            "NetworkIceEnable": 1,
+            "NetworkPortMapEnable": 0,
+            "NetworkMatchStatusMode": "Always"
+          },
+          "start_when": {
+            "peer": "dropped",
+            "ended": true
+          },
+          "after_gate_delay_s": 2,
+          "retain_runtime_from": {
+            "run": "reconnect",
+            "peer": "dropped"
+          },
+          "runtime_files": [
+            {
+              "copy": "tools/feel/FeelBaseline.lua",
+              "to": "Userdata/UserScenes.rte/FeelBaseline.lua",
+              "replace": [
+                [
+                  "^local WINDOW_TICKS = \\d+;$",
+                  "local WINDOW_TICKS = 9000;"
+                ]
+              ]
+            },
+            {
+              "to": "Userdata/UserScenes.rte/Index.ini",
+              "write": "DataModule\n\tModuleName = User Scenes\n\tScanFolderContents = 1\n\tIgnoreMissingItems = 1\n\tAddActivity = GAScripted\n\t\tCopyOf = P4 Alpha Duel\n\t\tPresetName = Determinism FeelBaseline\n\t\tScriptPath = UserScenes.rte/FeelBaseline.lua\n\t\tLuaClassName = FeelBaseline\n\t\tIsTestActivity = 1\n\t\tTeamOfPlayer1 = 0\n\t\tPlayer1IsHuman = 1\n\t\tTeamOfPlayer2 = 1\n\t\tPlayer2IsHuman = 1\n"
+            }
+          ],
+          "kill_when": {
+            "peer": "rejoined",
+            "probe_complete": true
+          }
+        }
+      ]
+    }
+  ],
+  "checklist": [
+    {
+      "id": "rc-play-before-drop",
+      "run": "reconnect",
+      "peer": "host",
+      "screen": "game",
+      "sim_ticks": [
+        30,
+        900
+      ],
+      "what": "Host and player play the round over the relay before the player's game stops.",
+      "assert": "runner record and the host's match report"
+    },
+    {
+      "id": "rc-drop-seen",
+      "run": "reconnect",
+      "peer": "host",
+      "peer_drop": {
+        "peer": "dropped",
+        "tick": 900
+      },
+      "screen": "game",
+      "sim_ticks": [
+        900,
+        1600
+      ],
+      "what": "The host plays on while the player's game is stopped on its box.",
+      "assert": "the dropped player's runner record carries injected_termination"
+    },
+    {
+      "id": "rc-dropped-index-kept",
+      "run": "reconnect",
+      "peer": "dropped",
+      "drop_tick": 900,
+      "what": "The stopped game's recording is collected up to its stop.",
+      "assert": "frames.jsonl is flushed per frame; the manifest is absent on a killed peer, which is expected"
+    },
+    {
+      "id": "rc-rejoin",
+      "run": "reconnect",
+      "peer": "rejoined",
+      "mark": "rejoined-playing",
+      "screen": "game",
+      "service_state": "Running",
+      "ownership_reclaim": {
+        "native": true
+      },
+      "sim_progress": 120,
+      "probe_steps": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "what": "Started again on its own box from the stopped game's files, the player presses Rejoin Match and plays its own seat again."
+    },
+    {
+      "id": "rc-relay-host",
+      "run": "reconnect",
+      "peer": "host",
+      "screen": "game",
+      "sim_ticks": [
+        30,
+        900
+      ],
+      "what": "Every connection this player makes goes through the relay.",
+      "log_regex": [
+        "^\\[net-ice\\] connected connection=\\d+ after_ms=\\d+ route=relay$"
+      ],
+      "forbidden_log_regex": [
+        "^\\[net-ice\\] connected connection=\\d+ after_ms=\\d+ route=(?!relay$)"
+      ]
+    },
+    {
+      "id": "rc-relay-dropped",
+      "run": "reconnect",
+      "peer": "dropped",
+      "screen": "game",
+      "sim_ticks": [
+        30,
+        900
+      ],
+      "what": "Every connection this player makes goes through the relay.",
+      "log_regex": [
+        "^\\[net-ice\\] connected connection=\\d+ after_ms=\\d+ route=relay$"
+      ],
+      "forbidden_log_regex": [
+        "^\\[net-ice\\] connected connection=\\d+ after_ms=\\d+ route=(?!relay$)"
+      ]
+    },
+    {
+      "id": "rc-relay-rejoined",
+      "run": "reconnect",
+      "peer": "rejoined",
+      "screen": "game",
+      "sim_ticks": [
+        1200,
+        9000
+      ],
+      "what": "Every connection this player makes goes through the relay.",
+      "log_regex": [
+        "^\\[net-ice\\] connected connection=\\d+ after_ms=\\d+ route=relay$"
+      ],
+      "forbidden_log_regex": [
+        "^\\[net-ice\\] connected connection=\\d+ after_ms=\\d+ route=(?!relay$)"
+      ]
+    }
+  ]
+}
