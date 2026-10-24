@@ -8457,6 +8457,8 @@ static std::string ResyncSaveName() {
 			// without this the plane's clock stops and a delayed refusal, an offer retransmit or a
 			// dropped seat's reclaim window would wait for the match to end.
 			m_Session->TickAdmissionPlane(nowMs);
+			// Nor would a returner the host keeps waiting for its base hear the host, and its session would end the wait as a lost host.
+			if (m_Coordinator) m_Session->KeepUncarriedPeersAlive(nowMs, [this](NetPeerId peer) { return m_Coordinator->UsesTransportPeer(peer); });
 		}
 		if (holdPause && m_Session) {
 			m_Session->TickKeepalive(nowMs);

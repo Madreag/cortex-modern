@@ -185,6 +185,9 @@ namespace RTE {
 		/// Sends session heartbeats without polling the transport or checking timeouts, so another
 		/// phase (the lobby) can own the shared event queue while peers still see us alive.
 		void TickKeepalive(uint64_t nowMs);
+		/// Heartbeats the host's ready peers a running round does not carry, as `carried` says: the round's frames are its own
+		/// peers' liveness, and a link it does not carry, such as a returner kept waiting for its base, hears only this.
+		void KeepUncarriedPeersAlive(uint64_t nowMs, const std::function<bool(NetPeerId)>& carried);
 		/// Records valid traffic from another phase on a Ready peer's wire.
 		void NotePeerTraffic(NetPeerId peerId, uint64_t nowMs);
 		/// Refuses one Ready client without ending the host's session.
