@@ -51,7 +51,9 @@ def shorten(steps, player):
     kept = [index for index in list(range(minutes[0])) + list(range(end, len(steps))) if index not in dropped]
     moved = {old: new + (len(layout) if old >= bunker else 0) for new, old in enumerate(kept)}
     out = [dict(steps[old]) for old in kept if old < bunker] + layout + [dict(steps[old]) for old in kept if old >= bunker]
-    out[moved[end]].update(lockstep_frame_at_least=TICKS + 1000, within_ms=(MINUTES + 2) * 60000)
+    # The editor leaves the fight on whichever frame its waits end, so the end counts the fight's own ticks from there.
+    del out[moved[end]]["lockstep_frame_at_least"]
+    out[moved[end]].update(sim_advanced=TICKS, within_ms=(MINUTES + 2) * 60000)
     return out, moved
 
 
