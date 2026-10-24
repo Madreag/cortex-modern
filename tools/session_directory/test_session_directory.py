@@ -785,7 +785,8 @@ class DirectoryTests(unittest.TestCase):
             gate.wait()
             while not stop.is_set():
                 try:
-                    status, body, retry = request(index, "GET", f"/v1/sessions/{rows[index]['session_id']}/signals?peer=client:{index:016x}&wait=25")
+                    # A one-second wait keeps these callers re-polling through the heartbeat waves; R2 holds the pool full.
+                    status, body, retry = request(index, "GET", f"/v1/sessions/{rows[index]['session_id']}/signals?peer=client:{index:016x}&wait=1")
                     with result_lock: polls.append((index, status, body.get("error"), retry))
                     pause = int(retry or body.get("retry_after_s", 0))
                     if pause: stop.wait(pause)
@@ -993,6 +994,30 @@ class DirectoryTests(unittest.TestCase):
             self.assertEqual(row["observed_ip"], address, "R1: valid forwarded address was not the pending registration source")
         self.assertEqual({row.observed_ip for row in self.server.store._sessions.values()}, {"192.0.2.1", "192.0.2.2"})
 
+    def test_an_idle_inbox_poll_is_held_for_the_wait_it_asks(self) -> None:
+        """An empty poll is held as long as it asks, so an idle inbox costs one request per hold, not one per second."""
+        self.start(port=0)
+        status, row = self.call("POST", "/v1/sessions", sample_register())
+        self.assertEqual(status, 200)
+        asked, inbox = 3, "ab" * 8
+        started = time.monotonic()
+        status, answer = self.call("GET", f"/v1/sessions/{row['session_id']}/signals?peer=client:{inbox}&wait={asked}", install_key=inbox)
+        held = time.monotonic() - started
+        self.assertEqual((status, answer["signals"]), (200, []))
+        self.assertGreaterEqual(held, asked - 0.25, f"an idle poll asking {asked} s was answered after {held:.2f} s")
+
+    def test_a_service_started_with_few_descriptors_raises_them_for_its_pools(self) -> None:
+        """A launchd job starts with 256 descriptors; the directory raises its own limit to hold every pool's connections."""
+        if os.name == "nt":
+            self.skipTest("Windows has no descriptor limit")
+        import resource
+        needed = session_directory.MAX_HEADER_HANDLERS + session_directory.MAX_ACTIVE_HANDLERS + session_directory.MAX_SIGNAL_WAITERS
+        with mock.patch.object(resource, "getrlimit", return_value=(256, resource.RLIM_INFINITY)), \
+                mock.patch.object(resource, "setrlimit") as raised:
+            session_directory.raise_descriptor_limit()
+        self.assertTrue(raised.called and raised.call_args.args[1][0] > needed and raised.call_args.args[1][1] == resource.RLIM_INFINITY,
+                        f"a 256-descriptor start was left at {raised.call_args}")
+
     def test_R2_waiters_leave_heartbeats_capacity(self) -> None:
         self.start(port=0)
         self.server.store.caller_mode = "tunnel"
@@ -1026,7 +1051,7 @@ class DirectoryTests(unittest.TestCase):
         held.enter_context(mock.patch.object(session_directory, "SIGNAL_POLL_WINDOW_S", session_directory.MAX_SIGNAL_WAIT_S))
         held.enter_context(mock.patch.object(httpd, "begin_signal_wait", counted))
         try:
-            for count, shared, waiting in ((64, True, session_directory.MAX_SIGNAL_WAITERS_PER_SOURCE), (200, False, session_directory.MAX_SIGNAL_WAITERS)):
+            for count, shared, waiting in ((64, True, session_directory.MAX_SIGNAL_WAITERS_PER_SOURCE), (session_directory.MAX_SIGNAL_WAITERS, False, session_directory.MAX_SIGNAL_WAITERS)):
                 for index in range(count):
                     source = "192.0.2.1" if shared else f"198.51.{index // 250}.{index % 250 + 1}"
                     worker = threading.Thread(target=poll, args=(len(threads) + 1000, source))
@@ -3210,17 +3235,17 @@ class DirectoryTests(unittest.TestCase):
         request = sample_register(persistent_world=True, world_id=world, world_boot=1)
         first = store.register(request, "192.0.2.1", now, INSTALL_KEY)
         waiting = threading.Event()
-        original_wait = store._signals_changed.wait
-        def observed_wait(timeout=None):
+        original_wait = store._await_signals
+        def observed_wait(session_id, timeout):
             waiting.set()
-            return original_wait(timeout)
+            return original_wait(session_id, timeout)
         answer = []
         def poll():
             try:
                 answer.append(store.get_signals(world, "host", 10000, first["token"], time.monotonic(), 0.25))
             except Exception as error:
                 answer.append(error)
-        with mock.patch.object(store._signals_changed, "wait", side_effect=observed_wait):
+        with mock.patch.object(store, "_await_signals", side_effect=observed_wait):
             thread = threading.Thread(target=poll)
             thread.start()
             self.assertTrue(waiting.wait(2), "S3: authenticated long poll never reached its wait")

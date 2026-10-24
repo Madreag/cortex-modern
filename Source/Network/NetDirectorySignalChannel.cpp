@@ -412,8 +412,8 @@ namespace RTE {
 			return;
 		}
 		m_BackoffMs = 0; m_PollRetry.Succeeded();
-		// An empty answer is an idle wait only as long as the service held the poll: the directory holds a long poll for less than
-		// asked and names its retry.
+		// An empty answer is an idle wait only as long as the service held the poll: a directory with no free waiter answers at once
+		// and names its retry.
 		if (m_PollWaitS == 0) {
 			m_NextPollMs = nowMs + c_PollIntervalMs;
 		} else if (!inbound.empty()) {

@@ -179,9 +179,9 @@ namespace RTE {
 		m_PollArmed = false;
 		m_PollWindows.clear();
 		m_Channel.SetSink([this](const NetDirectorySignalChannel::Signal& signal) { return Deliver(signal); });
-		// Every mesh peer owns a rendezvous inbox, including a standby host
-		// inbox. Empty two-second polls multiply the directory's request
-		// rate during play. A long poll still wakes as soon as a signal arrives.
+		// Every mesh peer keeps a rendezvous inbox polled through play, a standby
+		// host's included: the directory holds each poll this long and answers it
+		// the moment a signal arrives, so an idle inbox costs one request per hold.
 		m_Channel.SetPollWait(12);
 		if (m_Role == Role::Host) {
 			m_Channel.ConfigureHost(config.baseUrl, config.installKey, config.certPinSha256, config.sessionId, config.sessionToken, config.signalPeer);

@@ -99,13 +99,16 @@ MAX_SHORT_CONNECTIONS_PER_SOURCE = 4
 MAX_ACTIVE_HANDLERS = 256
 # Two simultaneous requests from 200 callers fit before parsed overload gets a retry answer.
 MAX_HEADER_HANDLERS = 512
-SIGNAL_POLL_WINDOW_S = 1.0
+# A poll is held as long as the engine asks (it waits 12 s inside a 15 s request) and wakes the moment a signal comes, so
+# an idle inbox costs one request per hold and a new signal none of its wait.
+SIGNAL_POLL_WINDOW_S = 12.0
 MAX_UNFINISHED_HEADERS_PER_ADDRESS = 2
 SATURATION_LOG_INTERVAL_S = 60.0
 MAX_SATURATION_LOG_SOURCES = MAX_ROWS
-# Waiters have their own capacity, leaving all short handlers available.
-MAX_SIGNAL_WAITERS = 64
-MAX_SIGNAL_WAITERS_PER_SOURCE = 4
+# Waiters have their own capacity, leaving all short handlers available. Every peer of a running match keeps an inbox
+# polled, so the pool holds that many matches' inboxes; one caller address, a household behind one router included, holds 16.
+MAX_SIGNAL_WAITERS = 512
+MAX_SIGNAL_WAITERS_PER_SOURCE = 16
 SIGNAL_WAIT_RETRY_S = 1
 HANDSHAKE_TIMEOUT_S = 5
 MAX_SIGNAL_WAIT_S = 25.0
@@ -268,6 +271,16 @@ class TurnCredentialProvider:
         else:
             raise TurnError(503, "relay_not_configured")
         return {"match_id": match_id, "expires_at": now + ttl, "iceServers": servers}
+
+
+def socket_readable(sock: socket.socket, timeout_s: float) -> bool:
+    """POSIX select() refuses a descriptor past 1023, which a full waiter pool reaches; poll() has no such ceiling."""
+    if hasattr(select, "poll"):
+        poller = select.poll()
+        poller.register(sock, select.POLLIN)
+        return bool(poller.poll(int(timeout_s * 1000)))
+    readable, _, _ = select.select([sock], [], [], timeout_s)
+    return bool(readable)
 
 
 def tokens_equal(left: str, right: str) -> bool:
@@ -596,7 +609,9 @@ class SessionDirectory:
         self.heartbeat_s = heartbeat_s
         self.queue_idle_s = queue_idle_s
         self._lock = threading.RLock()
-        self._signals_changed = threading.Condition(self._lock)
+        # One condition per session with a held poll: a change wakes only that match's polls.
+        self._signal_waits: dict[str, threading.Condition] = {}
+        self._signal_waiting: Counter = Counter()
         self._sessions: dict[str, Session] = {}
         self._resume_tokens: dict[str, tuple[str, float, int]] = {}
         self._host_ends: dict[str, float] = {}
@@ -1163,7 +1178,8 @@ class SessionDirectory:
         self._stop.set()
         with self._owner_changed:
             self._owner_changed.notify_all()
-            self._signals_changed.notify_all()
+            for waits in self._signal_waits.values():
+                waits.notify_all()
         if self._owner_writer.is_alive():
             self._owner_writer.join(OWNER_WRITE_WAIT_S)
         if self._pruner.is_alive():
@@ -1474,7 +1490,7 @@ class SessionDirectory:
                 self._register_replays[session_id] = sess
             if resume is not None:
                 self._resume_tokens.pop(session_id, None)
-            self._signals_changed.notify_all()
+            self._wake_signals(session_id)
             self._host_ends.pop(session_id, None)
         return self._register_reply(sess)
 
@@ -1691,7 +1707,7 @@ class SessionDirectory:
         if carried is not None:
             self._clear_signals(carried[0])
         self._record_host_end(session_id, now)
-        self._signals_changed.notify_all()
+        self._wake_signals(session_id)
         return True
 
     def delete(self, session_id: str, data: dict[str, Any], now: float) -> dict[str, Any]:
@@ -1718,7 +1734,7 @@ class SessionDirectory:
             if self._pending_worlds.pop(session_id, None) is not None:
                 self._owner_revision += 1
                 self._owner_changed.notify_all()
-            self._signals_changed.notify_all()
+            self._wake_signals(session_id)
             revision = self._owner_revision
         self._wait_owner_write(revision)
         return {"ok": True}
@@ -1842,9 +1858,19 @@ class SessionDirectory:
             queue.append(Signal(seq, from_peer, to_peer, payload_b64, len(raw), source_ip))
             sess.undrained_bytes += len(raw)
             self._stored_signal_bytes += charge
-            self._signals_changed.notify_all()
+            self._wake_signals(session_id)
             self._persist_session(sess, now)
         return {"ok": True, "seq": seq}
+
+    def _wake_signals(self, session_id: str) -> None:
+        if waits := self._signal_waits.get(session_id):
+            waits.notify_all()
+
+    def _await_signals(self, session_id: str, timeout: float) -> None:
+        """Holds a long poll until its own session changes or the timeout; a post to another match never wakes it."""
+        if session_id not in self._signal_waits:
+            self._signal_waits[session_id] = threading.Condition(self._lock)
+        self._signal_waits[session_id].wait(timeout)
 
     def get_signals(
         self,
@@ -1868,21 +1894,28 @@ class SessionDirectory:
             deadline = now + wait_s
             # Long-poll: hold the request until this peer's queue gains a signal past
             # `after`, the session goes away, or the wait elapses.
-            while wait_s > 0:
-                if self._stop.is_set():
-                    raise KeyError("not_found")
-                queue = sess.queues.get(peer)
-                if queue is not None and any(item.seq > after for item in queue):
-                    break
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    break
-                self._signals_changed.wait(remaining)
-                sess = self._signalling(session_id, time.monotonic(), pruned=True)
-                if sess is None:
-                    raise KeyError("not_found")
-                if host_signal_peer(peer) and (sess is not authenticated_lease or not tokens_equal(host_token or "", sess.token)):
-                    raise PermissionError("forbidden")
+            self._signal_waiting[session_id] += 1
+            try:
+                while wait_s > 0:
+                    if self._stop.is_set():
+                        raise KeyError("not_found")
+                    queue = sess.queues.get(peer)
+                    if queue is not None and any(item.seq > after for item in queue):
+                        break
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    self._await_signals(session_id, remaining)
+                    sess = self._signalling(session_id, time.monotonic(), pruned=True)
+                    if sess is None:
+                        raise KeyError("not_found")
+                    if host_signal_peer(peer) and (sess is not authenticated_lease or not tokens_equal(host_token or "", sess.token)):
+                        raise PermissionError("forbidden")
+            finally:
+                self._signal_waiting[session_id] -= 1
+                if not self._signal_waiting[session_id]:
+                    del self._signal_waiting[session_id]
+                    self._signal_waits.pop(session_id, None)
             now = time.monotonic()
             queue = sess.queues.get(peer)
             if queue is None:
@@ -2482,8 +2515,7 @@ class SessionHTTPServer(ThreadingHTTPServer):
                                      if now - last < SATURATION_LOG_INTERVAL_S}
 
     def _headers_ready(self, request: socket.socket) -> bool:
-        readable, _, _ = select.select([request], [], [], 0.02)
-        if not readable:
+        if not socket_readable(request, 0.02):
             return False
         # TCP accepts can precede a client's first TLS bytes.
         if self.tls_context is not None:
@@ -2529,8 +2561,7 @@ class SessionHTTPServer(ThreadingHTTPServer):
             source = client_address[0]
             with self._connection_lock:
                 if self._unfinished_sources[source] >= MAX_UNFINISHED_HEADERS_PER_ADDRESS:
-                    readable, _, _ = select.select([request], [], [], 0)
-                    if not readable:
+                    if not socket_readable(request, 0):
                         self.shutdown_request(request)
                         return
                     # A ready request displaces an idle header from the same address.
@@ -2636,10 +2667,28 @@ def spawn_server(
     return RunningServer(httpd, store, thread, use_tls=cert is not None)
 
 
+def raise_descriptor_limit() -> None:
+    """A launchd job starts with 256 descriptors; every pool's connections at once, plus files and margin, need more."""
+    try:
+        import resource
+    except ImportError:
+        return
+    needed = MAX_HEADER_HANDLERS + MAX_ACTIVE_HANDLERS + MAX_SIGNAL_WAITERS + 256
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    if soft == resource.RLIM_INFINITY or soft >= needed:
+        return
+    target = needed if hard == resource.RLIM_INFINITY else min(needed, hard)
+    try:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (target, hard))
+    except (ValueError, OSError):
+        LOGGER.warning("descriptor limit stays at %s of the %s the connection pools need", soft, needed)
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     args = parse_args(argv)
     check_tls_args(args)
     configure_logging(args.log_file)
+    raise_descriptor_limit()
     use_tls = args.cert is not None and args.key is not None
     try:
         turn_config = json.loads(args.turn_config.read_text(encoding="utf-8")) if args.turn_config else None
