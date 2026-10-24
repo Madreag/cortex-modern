@@ -31856,6 +31856,7 @@ namespace {
 		static bool LoneHostNamesPastAFrameGroupHold(std::string* error) {
 			NetMatchService service;
 			service.m_IsHost = true;
+			service.m_LocalPeerId = 1;
 			service.m_MatchAutosaveSeconds = 60;
 			auto coordinator = std::make_unique<NetLockstepCoordinator>();
 			coordinator->m_Config.matchConfig = NetMatchConfigUtil::MakeDefault(0x60584424);
@@ -31868,7 +31869,13 @@ namespace {
 			// The joiner that died during the save: its frame group holds its seat, with no hold of the AI's own and no leave.
 			coordinator->m_PeerBridges[2] = {18255, 18255, true, std::nullopt, {}, 1};
 			service.m_Coordinator = std::move(coordinator);
-			if (service.CheckpointWriters(18300) != std::set<uint8_t>{1}) { *error = "a seat its frame group holds still writes the host's captures"; return false; }
+			const NetLockstepCoordinator& held = *service.m_Coordinator;
+			if (held.HasHeldAISeat(2) || held.IsPeerGoneAtFrame(2, 18300) || !held.IsSeatUnderAI(2, 18300)) { *error = "the joiner's seat was not held by its frame group alone"; return false; }
+			if (const auto writers = service.CheckpointWriters(18300); writers != std::set<uint8_t>{1}) {
+				*error = "a seat its frame group holds still writes the host's captures: writers";
+				for (const uint8_t writer: writers) *error += " " + std::to_string(writer);
+				return false;
+			}
 			// The capture that joiner never reported; the next periodic save is due.
 			service.m_OpenCaptureTick = 17526; service.m_OpenCaptureApplied = true; service.m_CaptureWriters = {2};
 			NetMatchService::AutosaveTickInput input;
