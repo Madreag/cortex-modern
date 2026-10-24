@@ -1643,14 +1643,15 @@ bool NetModerationGUI::AutomationWrapLines(const std::string& text, std::string&
 }
 
 bool NetModerationGUI::MatchStatusWanted() const {
-	if (g_SettingsMan.GetNetworkShowDiagnostics() || ScenarioRunner::IsLockstepLocalMachineSlow() || OwnRosterSeatHeld() || ScenarioRunner::IsLockstepOwnSeatHeld()) return true;
+	const auto snapshot = g_NetMatchService.GetLobbySnapshot();
+	// The seat on its way back shows its line from the hold on, before its catch-up replays a frame that reads the seat held.
+	if (g_SettingsMan.GetNetworkShowDiagnostics() || ScenarioRunner::IsLockstepLocalMachineSlow() || NetPlayerPresentation::OwnSeatAway(snapshot)) return true;
 	switch (g_SettingsMan.GetNetworkMatchStatusMode()) {
 		case SettingsMan::NetworkMatchStatusMode::Off: return false;
 		case SettingsMan::NetworkMatchStatusMode::Always: return true;
 		default: break;
 	}
 	// The countdown is still a pause state, so it must not blink the widget off.
-	const auto snapshot = g_NetMatchService.GetLobbySnapshot();
 	bool active = m_Open || snapshot.statusText.starts_with("Host lost") || g_NetMatchService.IsMatchResyncing() || ScenarioRunner::IsLockstepPaused() || ScenarioRunner::GetLockstepResumeCountdown() > 0;
 	if (!active) {
 		// The seats placing their brains hold the world too, and the player is waiting on exactly that.

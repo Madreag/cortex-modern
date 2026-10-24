@@ -4822,7 +4822,10 @@ void RunMenuLoop() {
 		g_WindowMan.GetScreenBuffer()->Begin();
 		g_MenuMan.Draw();
 		// A held seat loading its way back reads its own line over the menus as well, from its hold to its return.
-		if (ScenarioRunner::WorldCatchUpActive()) ScenarioRunner::DrawNetUiToasts();
+		if (ScenarioRunner::WorldCatchUpActive()) {
+			if (!NetModerationGUI::PostMatchLobbySurfaces()) g_MenuMan.DrawNetworkUI();
+			ScenarioRunner::DrawNetUiToasts();
+		}
 		g_ConsoleMan.Draw(g_FrameMan.GetBackBuffer32());
 		g_WindowMan.GetScreenBuffer()->End();
 		g_WindowMan.UploadFrame();
