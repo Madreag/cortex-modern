@@ -3398,6 +3398,51 @@ namespace RTE {
 				return true;
 			}
 
+			// The directory holds a long poll for a second, not the twelve asked, and names the retry with its empty answer. A dial's
+			// answer that lands after an empty poll must be read inside that retry: a dialer that slept the whole asked wait missed
+			// its peer's answer past the connect timeout, and a four-player round never started.
+			bool TestSignalEmptyPollFollowsTheService(std::string* error) {
+				ScriptedChannel held(false);
+				const std::string me = held.channel.GetLocalPeer();
+				held.channel.SetPollWait(12);
+				held.replies->push_back({200, R"({"signals":[],"retry_after_s":1})", ""});
+				held.replies->push_back({200, SignalListBody({{1, "host", me, B64("answer")}}), ""});
+				held.channel.SetPolling(true);
+				held.channel.Update(0);
+				held.channel.Update(1000);
+				held.channel.Update(1999);
+				if (held.sent->size() != 1) { *error = "a poll left before the service's retry: " + std::to_string(held.sent->size()) + " requests by 1999 ms"; return false; }
+				held.channel.Update(2000);
+				if (held.sent->size() != 2) {
+					*error = "an empty held poll waited past the service's one-second retry: " + std::to_string(held.sent->size()) + " polls at 2000 ms";
+					return false;
+				}
+				held.channel.Update(2000);
+				if (Taken(held) != "1:answer") { *error = "the poll after the retry took '" + Taken(held) + "'"; return false; }
+				// A dial posts more than one burst, so a poll goes out between its posts; that poll is not held, and its empty answer
+				// is no idle wait either.
+				ScriptedChannel dial(false);
+				const std::string dialer = dial.channel.GetLocalPeer();
+				dial.channel.SetPollWait(12);
+				for (const char* reply: {R"({"ok":true,"seq":1})", R"({"ok":true,"seq":2})"}) dial.replies->push_back({200, reply, ""});
+				dial.replies->push_back({200, SignalListBody({}), ""});
+				dial.replies->push_back({200, R"({"ok":true,"seq":3})", ""});
+				dial.replies->push_back({200, SignalListBody({{1, "host", dialer, B64("accept")}}), ""});
+				for (const char* bytes: {"connect", "candidate-a", "candidate-b"}) {
+					if (!dial.channel.Post("host", bytes)) { *error = std::string("the dial's ") + bytes + " was not queued"; return false; }
+				}
+				dial.channel.SetPolling(true);
+				for (uint64_t now = 0; now <= 1020; now += 10) dial.channel.Update(now);
+				if (dial.sent->size() != 5 || dial.sent->at(2).method != "GET" || dial.sent->at(3).method != "POST" || dial.sent->at(4).method != "GET") {
+					*error = "the poll between a dial's posts held the next poll for the whole asked wait: " + std::to_string(dial.sent->size()) + " requests at 1020 ms";
+					return false;
+				}
+				dial.channel.Update(1030);
+				if (Taken(dial) != "1:accept") { *error = "the dial's poll after its posts took '" + Taken(dial) + "'"; return false; }
+				std::cout << "[net-directory-selftest] PASS signal_empty_poll_follows_the_service held_next_ms=2000 dial_next_poll_ms=1020" << std::endl;
+				return true;
+			}
+
 			bool TestSignalLongPoll(std::string* error) {
 				ScriptedChannel s(false);
 				const std::string me = s.channel.GetLocalPeer();
@@ -4079,6 +4124,7 @@ namespace RTE {
 			if (!TestSignalCursorWaitsForSink(&error)) return fail(error);
 			if (!TestSignalLongPoll(&error)) return fail(error);
 			if (!TestSignalPostInterruptsAnIdlePoll(&error)) return fail(error);
+			if (!TestSignalEmptyPollFollowsTheService(&error)) return fail(error);
 			if (!TestDirectoryCapacityWords(&error)) return fail(error);
 			if (!TestConnectionProtocolRefusal(&error)) return fail(error);
 			if (!TestSignal404WaitsForAuthority(&error)) return fail(error);

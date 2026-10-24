@@ -409,8 +409,20 @@ namespace RTE {
 			return;
 		}
 		m_BackoffMs = 0; m_PollRetry.Succeeded();
-		// A server that answers an empty long poll immediately must still respect the idle cadence.
-		m_NextPollMs = m_PollWaitS > 0 ? (inbound.empty() ? std::max(nowMs, m_PollStartedMs + std::max<uint64_t>(c_PollIntervalMs, m_PollWaitS * 1000ULL)) : nowMs) : nowMs + c_PollIntervalMs;
+		// An empty answer is an idle wait only as long as the service held the poll: the directory holds a long poll for less than
+		// asked and names its retry, and a poll sent ahead of queued posts was not held at all.
+		if (m_PollWaitS == 0) {
+			m_NextPollMs = nowMs + c_PollIntervalMs;
+		} else if (!inbound.empty()) {
+			m_NextPollMs = nowMs;
+		} else if (m_ActivePollWaitS == 0) {
+			m_NextPollMs = std::max(nowMs, m_PollStartedMs + c_PollIntervalMs);
+		} else if (const uint64_t retryMs = NetDirectoryRetry::RetryAfterMs(reply.body, reply.retryAfter); retryMs > 0) {
+			m_NextPollMs = std::max(nowMs + retryMs, m_PollStartedMs + c_PollIntervalMs);
+		} else {
+			// A server that answers an empty long poll early without naming a retry still gets the idle cadence.
+			m_NextPollMs = std::max(nowMs, m_PollStartedMs + std::max<uint64_t>(c_PollIntervalMs, m_PollWaitS * 1000ULL));
+		}
 		for (const Signal& signal : inbound) {
 			if (signal.seq <= m_Cursor) {
 				continue; // re-delivered: the sink already took it
