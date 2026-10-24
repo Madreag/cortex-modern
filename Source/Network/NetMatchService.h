@@ -1167,6 +1167,8 @@ namespace RTE {
 		/// Publishes the newest archive the autosave writer has FINISHED, when it is newer than the
 		/// image a bootstrap is already being served. Nothing here reads a file.
 		void PublishFinishedWorldJoinImage();
+		/// Host: publishes a private match's written base to the returners waiting on it.
+		void PublishPrivateBaseLocked(const NetWorldCheckpointImage& image);
 		/// Writes a newly issued directory row token into the world identity record, so a reboot
 		/// resumes the same row instead of leaving a stale one to expire.
 		void PersistWorldDirectoryToken();
@@ -1434,6 +1436,7 @@ namespace RTE {
 		friend bool TestStaleWorldImageRecaptures(std::string* error);
 		friend bool TestAReturnerTakesTheBaseAskedForIt(std::string* error);
 		friend bool TestALateBaseVerdictKeepsTheNextAsk(std::string* error);
+		friend bool TestASlowWrittenBaseServesItsReturner(std::string* error);
 		friend bool TestWorldCatchUpRefusal(std::string* error);
 		friend bool TestWorldDisconnectReason(bool watcher, std::string* error);
 		void InstallIcePump(NetMuxTransport& mux, bool host, std::shared_ptr<GnsDirectorySignalDispatcher> ownedDispatcher = {});
@@ -2039,7 +2042,7 @@ namespace RTE {
 		std::optional<NetWorldCheckpointImage> m_PrivateBasePending; //!< Host: the base read at its tick, waiting for its archive's writer.
 		uint64_t m_PrivateImageRound = 0;
 		uint64_t m_PrivateImageStaleFrom = 0; //!< Host: the frame a rejoin finished on; the base is older than play from here.
-		uint64_t m_PrivateImageTakenMs = 0; //!< Host: when the base was last captured; the cadence is measured from it.
+		uint64_t m_PrivateImageTakenMs = 0; //!< Host: when the base was last asked for, then when it was published; the cadence is measured from it.
 		double m_PrivateImageLastCaptureMs = 0.0; //!< Host: the last capture's measured cost.
 		std::deque<double> m_PrivateCaptureCosts; //!< Host: the last three capture costs past the round's first, which the refresh rule reads.
 		bool m_PrivateCaptureCold = false; //!< Host: the capture in flight is the round's first, whose one-time warm-up is not the steady cost.

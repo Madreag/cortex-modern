@@ -7839,6 +7839,36 @@ namespace RTE {
 		return true;
 	}
 
+	// A base asked for a waiting returner serves it when its writer lands, however long the writer took past the shared window.
+	bool TestASlowWrittenBaseServesItsReturner(std::string* error) {
+		NetMatchService service;
+		service.m_IsHost = true;
+		const auto config = NetMatchConfigUtil::MakeDefault(0x9A36);
+		if (!service.m_WorldJoin.ConfigureMatchRejoins(config, 1, 1000.0 / 60.0, error) || !service.m_WorldJoin.BeginRejoin(44, 2, 2, 3, "returning", 1000, error)) return false;
+		const auto nowMs = [] { return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now().time_since_epoch()).count()); };
+		// The base was asked 13.5 s ago, as long as a loaded host's writer took to walk its graph.
+		const uint64_t writerMs = NetMatchService::c_PrivateImageMinIntervalMs + 3500;
+		service.m_PrivateImageTakenMs = nowMs() - writerMs;
+		NetMatchService::PrivateJoinImage written;
+		written.image.privateSessionId = config.sessionId; written.image.round = 1; written.image.tick = 3369; written.image.bytes = 8;
+		written.image.checkpointConfig = "config"; written.image.sideState = "state"; written.image.authorityPeerId = 1;
+		written.archive = std::make_shared<std::vector<uint8_t>>(8, uint8_t{1});
+		std::promise<NetMatchService::PrivateJoinImage> writer;
+		service.m_PrivateImageTask = writer.get_future();
+		writer.set_value(std::move(written));
+		service.PublishFinishedWorldJoinImage();
+		if (service.m_WorldJoin.Image().tick != 3369) {
+			*error = "the written base was not published: image tick " + std::to_string(service.m_WorldJoin.Image().tick);
+			return false;
+		}
+		if (const std::string why = service.PrivateTransferWaitLocked(nowMs()); !why.empty()) {
+			*error = "base-never-fresh: the base of tick 3369 asked for the waiting returner was held back when its writer landed " + std::to_string(writerMs) + " ms later: " + why;
+			return false;
+		}
+		std::cout << "[net-world-join-selftest] PASS a_slow_written_base_serves_its_returner writer_ms=" << writerMs << std::endl;
+		return true;
+	}
+
 	bool TestWorldCatchUpRefusal(std::string* error) {
 		if (!MetricsCollector::IsConstructed()) MetricsCollector::Construct();
 		NetMatchService service;
@@ -10585,6 +10615,7 @@ namespace RTE {
 		if (!selected || std::string(selected) == "returner-base") {
 			if (!TestAReturnerTakesTheBaseAskedForIt(&findingError)) return Fail(findingError);
 			if (!TestALateBaseVerdictKeepsTheNextAsk(&findingError)) return Fail(findingError);
+			if (!TestASlowWrittenBaseServesItsReturner(&findingError)) return Fail(findingError);
 			if (selected) return Pass();
 		}
 		// The Lua states a row brings up close with the suite, not at the process exit.

@@ -4875,6 +4875,17 @@ static std::string ResyncSaveName() {
 		if (activationTick != 0) live.AdoptReplayedSeatTransitions(replay, activationTick - 1);
 	}
 
+	void NetMatchService::PublishPrivateBaseLocked(const NetWorldCheckpointImage& image) {
+		m_PrivateImageLastCaptureMs = image.captureMs;
+		if (!m_PrivateCaptureCold) {
+			m_PrivateCaptureCosts.push_back(image.captureMs);
+			if (m_PrivateCaptureCosts.size() > 3) m_PrivateCaptureCosts.pop_front();
+		}
+		// The returners waiting on this base take it however long its writer took; the window they share opens now.
+		m_PrivateImageTakenMs = SteadyNowMs();
+		m_WorldJoin.PublishImage(image);
+	}
+
 	void NetMatchService::PublishFinishedWorldJoinImage() {
 		if (m_WorldJoin.IsPrivateMatch() && m_PrivateBasePending) {
 			const std::optional<ActivityMan::CompletedAutosave> entry = g_ActivityMan.LastCompletedAutosave();
@@ -4888,13 +4899,8 @@ static std::string ResyncSaveName() {
 			image.path = entry->path; image.bytes = entry->bytes; image.digest = entry->digest; image.captureMs = g_ActivityMan.LastAutosaveCaptureMs();
 			m_WorldJoinImageArchive = entry->archive;
 			m_WorldJoinImageDigest = image.digest;
-			m_PrivateImageLastCaptureMs = image.captureMs;
-			if (!m_PrivateCaptureCold) {
-				m_PrivateCaptureCosts.push_back(image.captureMs);
-				if (m_PrivateCaptureCosts.size() > 3) m_PrivateCaptureCosts.pop_front();
-			}
 			System::PrintDiagnosticLine("[net-match] private base published from the announced capture at tick " + std::to_string(image.tick) + " bytes=" + std::to_string(image.bytes));
-			m_WorldJoin.PublishImage(image);
+			PublishPrivateBaseLocked(image);
 			return;
 		}
 		if (m_WorldJoin.IsPrivateMatch()) {
@@ -4915,12 +4921,7 @@ static std::string ResyncSaveName() {
 			}
 			m_WorldJoinImageArchive = std::move(ready.archive);
 			m_WorldJoinImageDigest = ready.image.digest;
-			m_PrivateImageLastCaptureMs = ready.image.captureMs;
-			if (!m_PrivateCaptureCold) {
-				m_PrivateCaptureCosts.push_back(ready.image.captureMs);
-				if (m_PrivateCaptureCosts.size() > 3) m_PrivateCaptureCosts.pop_front();
-			}
-			m_WorldJoin.PublishImage(ready.image);
+			PublishPrivateBaseLocked(ready.image);
 			return;
 		}
 		if (!m_WorldJoin.IsConfigured()) {
