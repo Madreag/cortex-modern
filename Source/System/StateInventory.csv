@@ -40,6 +40,7 @@ ACraft,m_Clear,copied,an Exit member; the Exit list is copied whole in ACraft::C
 ACraft,m_pIncomingMO,link,resolved from m_FaithfulIncomingMOUID at link resolution
 ACraft,m_FaithfulIncomingMOUID,copied,the faithful carrier of an exit's incoming object
 ACraft,m_ReadExitIncomingCursor,transient,reader-only cursor reset by Clear and consumed while reading SavedIncomingUID entries
+ADoor,m_TempErasedDoorMaterial,transient,set and emptied inside one door override call on the sim thread; never held across a tick a checkpoint or a clone
 Arm,m_HandSpriteBitmap,render,bitmap fetched from the hand sprite file
 HeldDevice,m_SeenByPlayer,render,per-player unheld-item HUD visibility
 HeldDevice,m_BlinkTimer,render,HUD blink timer reset in Update and read only when drawing
