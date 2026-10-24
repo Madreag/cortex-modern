@@ -4,6 +4,7 @@
 #include "NetMatchService.h"
 #include "ScenarioRunner.h"
 
+#include <algorithm>
 #include <cctype>
 #include <map>
 #include <set>
@@ -145,5 +146,24 @@ namespace RTE::NetPlayerPresentation {
 		// A seat that is gone has no live route to name.
 		if (!member.cpu && !member.connectedRoute.empty() && member.connected && !Departed(member.peerId)) row += " / via " + member.connectedRoute;
 		return row;
+	}
+
+	/// This machine's own seat is the AI's until its player is back: the roster or the round holds it, or this peer is catching up
+	/// or repairing after the hold its host told it of. The status line and the screen watch that judges it read it alike.
+	inline bool OwnSeatAway(const NetLobbySnapshot& snapshot) {
+		const auto view = g_NetMatchService.GetSeatView(snapshot.localPeerId);
+		if (OwnSeatHeld(snapshot, view, !view && ScenarioRunner::IsLockstepSeatReleased(snapshot.localPeerId)) || ScenarioRunner::IsLockstepOwnSeatHeld()) return true;
+		// A catch-up alone is no hold: a host serves one and a late joiner runs one with nobody's seat held. This peer's own return is
+		// the catch-up or repair that follows the hold its host told it of.
+		if (!snapshot.isHost && (ScenarioRunner::WorldCatchUpActive() || g_NetMatchService.IsMatchResyncing())) {
+			const auto& log = ScenarioRunner::GetNetUiToastLog();
+			if (std::any_of(log.begin(), log.end(), [](const auto& toast) { return toast.kind == "seat_held" && toast.senderPeerId == 0; })) return true;
+		}
+		// A seat the host opened is released, as its label reads it, though a peer still catching up replays it held.
+		const uint64_t frame = ScenarioRunner::GetLockstepCompletedFrame();
+		return std::any_of(snapshot.members.begin(), snapshot.members.end(), [&](const NetLobbyMember& member) {
+			return !member.cpu && member.peerId == snapshot.localPeerId && !ScenarioRunner::IsLockstepSeatReleased(member.peerId) && !Opened(member.peerId) &&
+			       (member.aiHeld || member.reclaiming || ScenarioRunner::IsLockstepSeatUnderAI(member.peerId, frame));
+		});
 	}
 }

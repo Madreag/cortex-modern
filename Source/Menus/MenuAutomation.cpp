@@ -1546,25 +1546,12 @@ namespace RTE::MenuAutomation {
 		}
 		const auto snapshot = g_NetMatchService.GetLobbySnapshot();
 		if (state == "running") return snapshot.serviceState == "Running";
-		if (state == "local_held" || state == "remote_held") {
-			const bool local = state == "local_held";
-			// The overlay reads the retained roster during continuity and private catch-up too. These are held frames even
-			// before the AI handoff or when the lobby member cache has already learned a future return.
-			if (local) {
-				const auto view = g_NetMatchService.GetSeatView(snapshot.localPeerId);
-				if (NetPlayerPresentation::OwnSeatHeld(snapshot, view, !view && ScenarioRunner::IsLockstepSeatReleased(snapshot.localPeerId)) ||
-				    ScenarioRunner::IsLockstepOwnSeatHeld()) return true;
-			}
-			// A catch-up alone is no hold: a host serves one and a late joiner runs one with nobody's seat held. This peer's
-			// own return is the catch-up or resync that follows the hold its host told it of.
-			const uint64_t frame = ScenarioRunner::GetLockstepCompletedFrame();
-			if (local && !snapshot.isHost && (ScenarioRunner::WorldCatchUpActive() || g_NetMatchService.IsMatchResyncing())) {
-				const auto& log = ScenarioRunner::GetNetUiToastLog();
-				if (std::any_of(log.begin(), log.end(), [](const auto& toast) { return toast.kind == "seat_held" && toast.senderPeerId == 0; })) return true;
-			}
+		if (state == "local_held") return NetPlayerPresentation::OwnSeatAway(snapshot);
+		if (state == "remote_held") {
 			// A seat the host opened is released, as its label reads it, though a peer still catching up replays it held.
+			const uint64_t frame = ScenarioRunner::GetLockstepCompletedFrame();
 			for (const auto& member: snapshot.members) {
-				if (member.cpu || (member.peerId == snapshot.localPeerId) != local || ScenarioRunner::IsLockstepSeatReleased(member.peerId) || NetPlayerPresentation::Opened(member.peerId)) continue;
+				if (member.cpu || member.peerId == snapshot.localPeerId || ScenarioRunner::IsLockstepSeatReleased(member.peerId) || NetPlayerPresentation::Opened(member.peerId)) continue;
 				if (member.aiHeld || member.reclaiming || ScenarioRunner::IsLockstepSeatUnderAI(member.peerId, frame)) return true;
 			}
 			return false;
