@@ -1347,6 +1347,9 @@ namespace RTE {
 		/// Opens the directory's host end on this successor's handover listener, so the survivors' ICE dials reach it.
 		void HostMigrationIce(INetTransport& listener);
 		static constexpr uint64_t c_IceResolveBudgetMs = 30000;
+		/// A rejoin of the seat that last hosted this match reads the directory, without checking in, until it names another host.
+		/// @return Whether the directory names another host; false says why in error.
+		bool AwaitAnotherHostListing(const std::string& sessionId, const std::string& ownListing, std::string* error);
 		static constexpr uint32_t c_IceConnectBudgetMs = 15000;
 		static constexpr uint32_t c_IceHandshakeMarginMs = 5000; //!< The session's hello after the transport connects, on top of its connect limit.
 		void JoinWorkerIfDone();
@@ -1800,6 +1803,8 @@ namespace RTE {
 		std::string m_IceBoundSessionId;    //!< The session id the process's GNS identity is pinned to.
 		bool m_DirectoryJoinIsWorld = false;
 		std::string m_IceIdentity;
+		std::string m_LastHostedIceIdentity; //!< The identity this process last listened under as a host: a rejoin never dials it.
+		std::string m_LastHostedSessionId; //!< The directory session this process last hosted.
 		std::string m_IceJoinSessionId;     //!< Client: the session id -net-join-session named.
 		std::string m_IceReport;            //!< The dispatcher's last report, taken when a worker or teardown takes the dispatcher.
 		std::string m_IceRoute;             //!< The leg the join actually took: "ice" | "ip" | "".
