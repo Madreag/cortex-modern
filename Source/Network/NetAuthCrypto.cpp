@@ -2,11 +2,13 @@
 
 #include <limits>
 #include <algorithm>
+#include <array>
 #include <cstdlib>
 #include <memory>
 
 #ifdef CCCP_WITH_GNS
 #include <openssl/core_names.h>
+#include <openssl/crypto.h>
 #include <openssl/evp.h>
 #include <openssl/params.h>
 #include <openssl/rand.h>
@@ -31,22 +33,47 @@ namespace RTE {
 				if (key == nullptr || keyCount == 0 || (message == nullptr && messageCount > 0)) {
 					return false;
 				}
-				// Fetching the algorithm by name takes the provider store's lock and a lookup on every message: each thread keeps one
-				// context with its digest set, and every message only gives it its key.
-				thread_local std::unique_ptr<EVP_MAC_CTX, decltype(&EVP_MAC_CTX_free)> context{nullptr, EVP_MAC_CTX_free};
-				if (!context) {
-					static EVP_MAC* const hmac = EVP_MAC_fetch(nullptr, "HMAC", nullptr);
-					if (hmac == nullptr) return false;
-					std::unique_ptr<EVP_MAC_CTX, decltype(&EVP_MAC_CTX_free)> fresh{EVP_MAC_CTX_new(hmac), EVP_MAC_CTX_free};
-					char digest[] = "SHA256";
-					const OSSL_PARAM params[] = {OSSL_PARAM_construct_utf8_string(OSSL_MAC_PARAM_DIGEST, digest, 0), OSSL_PARAM_construct_end()};
-					if (!fresh || EVP_MAC_CTX_set_params(fresh.get(), params) != 1) return false;
-					context = std::move(fresh);
+				// Fetching the algorithm by name takes the provider store's lock and a lookup, and keying hashes two pad blocks: each
+				// thread keeps contexts for the keys it used last, so a message under one of them costs only its own blocks.
+				static EVP_MAC* const hmac = EVP_MAC_fetch(nullptr, "HMAC", nullptr);
+				if (hmac == nullptr) return false;
+				Keyed* slot = nullptr;
+				for (auto& candidate: t_Keyed)
+					if (candidate.context && candidate.keyCount == keyCount && std::equal(key, key + keyCount, candidate.key.begin())) slot = &candidate;
+				const bool reused = slot != nullptr;
+				if (!reused) {
+					slot = &t_Keyed[t_NextKeyed];
+					t_NextKeyed = (t_NextKeyed + 1) % t_Keyed.size();
+					OPENSSL_cleanse(slot->key.data(), slot->key.size());
+					slot->keyCount = 0;
+					if (!slot->context) {
+						std::unique_ptr<EVP_MAC_CTX, decltype(&EVP_MAC_CTX_free)> fresh{EVP_MAC_CTX_new(hmac), EVP_MAC_CTX_free};
+						char digest[] = "SHA256";
+						const OSSL_PARAM params[] = {OSSL_PARAM_construct_utf8_string(OSSL_MAC_PARAM_DIGEST, digest, 0), OSSL_PARAM_construct_end()};
+						if (!fresh || EVP_MAC_CTX_set_params(fresh.get(), params) != 1) return false;
+						slot->context = std::move(fresh);
+					}
 				}
 				size_t macCount = 0;
-				return EVP_MAC_init(context.get(), key, keyCount, nullptr) == 1 && EVP_MAC_update(context.get(), message, messageCount) == 1 &&
-				    EVP_MAC_final(context.get(), mac, &macCount, sizeof(mac)) == 1 && macCount == sizeof(mac);
+				const bool keyed = reused ? EVP_MAC_init(slot->context.get(), nullptr, 0, nullptr) == 1 : EVP_MAC_init(slot->context.get(), key, keyCount, nullptr) == 1;
+				// A key longer than a slot is keyed again for every message.
+				if (keyed && !reused && keyCount <= slot->key.size()) {
+					std::copy_n(key, keyCount, slot->key.begin());
+					slot->keyCount = keyCount;
+				}
+				return keyed && EVP_MAC_update(slot->context.get(), message, messageCount) == 1 && EVP_MAC_final(slot->context.get(), mac, &macCount, sizeof(mac)) == 1 &&
+				    macCount == sizeof(mac);
 			}
+
+		private:
+			struct Keyed {
+				std::array<uint8_t, 64> key{};
+				size_t keyCount = 0;
+				std::unique_ptr<EVP_MAC_CTX, decltype(&EVP_MAC_CTX_free)> context{nullptr, EVP_MAC_CTX_free};
+				~Keyed() { OPENSSL_cleanse(key.data(), key.size()); }
+			};
+			static inline thread_local std::array<Keyed, 8> t_Keyed;
+			static inline thread_local size_t t_NextKeyed = 0;
 		};
 #endif
 		// GNS-less builds carry no crypto library; everything refuses so no auth material can exist.
