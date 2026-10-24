@@ -4566,6 +4566,73 @@ namespace RTE {
 		return 0;
 	}
 
+	/// A returner whose tail is older than the memory ring is sent it from the journal as fast as from the ring: one pump's datagrams
+	/// come from what the journal has read, and the reads an earlier returner left behind never hold a later one below them.
+	int TestAJournalReturnerKeepsTheRingsPace() {
+		ResumeScratchDirectory scratch;
+		NetWorldJoinHost host;
+		auto config = NetMatchConfigUtil::MakeDefault(0x9A24);
+		std::string error;
+		if (!host.ConfigureMatchRejoins(config, 1, 1000.0 / 60.0, &error)) return Fail("journal pace fixture: " + error);
+		NetWorldFrameLog& tail = host.Tail();
+		constexpr uint64_t last = 2400, ring = 400, ringFirst = last - ring + 1;
+		tail.Configure(ring, 1 << 20);
+		for (uint64_t tick = 1; tick <= last; ++tick) {
+			if (!tail.Append(MakeCommittedFrame(tick), &error)) return Fail(error);
+			if (tick == 1) tail.EnableJournal((scratch.path / "match.inputs").string());
+		}
+		(void)SettledJournalStats(tail);
+		if (tail.FirstFrame() != ringFirst) return Fail("journal pace fixture: the memory ring starts at " + std::to_string(tail.FirstFrame()));
+		// One pump: the datagrams a host frame sends one returner, then a moment for the journal's own thread.
+		uint64_t nowMs = 1000;
+		std::set<uint64_t> carried;
+		std::string wrongFrame;
+		const auto pump = [&](NetPeerId connection) {
+			std::vector<uint8_t> packed;
+			for (int datagram = 0; datagram < 32 && host.NextTailDatagram(connection, nowMs, packed); ++datagram) {
+				for (size_t offset = 0; offset + 4 <= packed.size();) {
+					const uint32_t bytes = static_cast<uint32_t>(packed[offset]) | (static_cast<uint32_t>(packed[offset + 1]) << 8) |
+						(static_cast<uint32_t>(packed[offset + 2]) << 16) | (static_cast<uint32_t>(packed[offset + 3]) << 24);
+					offset += 4;
+					NetLockstepFrame frame;
+					if (bytes > packed.size() - offset || !DecodeCommittedJoinFrame(std::vector<uint8_t>(packed.begin() + offset, packed.begin() + offset + bytes), frame, &error) ||
+					    frame != MakeCommittedFrame(frame.targetFrame)) {
+						if (wrongFrame.empty()) wrongFrame = "a datagram carried a frame other than the committed one at " + std::to_string(frame.targetFrame) + ": " + error;
+						break;
+					}
+					if (connection == 42) carried.insert(frame.targetFrame);
+					offset += bytes;
+				}
+			}
+			nowMs += 17;
+			std::this_thread::sleep_for(std::chrono::milliseconds(2));
+		};
+		const auto delivered = [&](NetPeerId connection) {
+			const NetWorldJoinSession* session = host.FindSession(connection);
+			return session ? session->deliveredThrough : 0;
+		};
+		// An earlier returner was sent the journal from frame 1501 up to the ring.
+		if (!host.BeginInPlaceRejoin(41, 2, 2, 3, "earlier", nowMs, 1500, &error)) return Fail("journal pace fixture: " + error);
+		host.NoteRejoinLinkFit(41, true);
+		for (int pumps = 0; pumps < 4000 && delivered(41) < ringFirst; ++pumps) pump(41);
+		if (delivered(41) < ringFirst) return Fail("journal pace fixture: the earlier returner was sent only through frame " + std::to_string(delivered(41)));
+		host.CancelJoin(41, "the earlier returner dropped", false);
+		// The next returner starts below every frame the earlier one was sent.
+		if (!host.BeginInPlaceRejoin(42, 2, 2, 4, "returning", nowMs, 100, &error)) return Fail("journal pace fixture: " + error);
+		host.NoteRejoinLinkFit(42, true);
+		constexpr int c_Pumps = 120;
+		int pumps = 0;
+		for (; pumps < c_Pumps && delivered(42) < ringFirst; ++pumps) pump(42);
+		if (!wrongFrame.empty()) return Fail(wrongFrame);
+		if (delivered(42) < ringFirst)
+			return Fail("journal-returner-starved: a returner from frame 101 was sent through frame " + std::to_string(delivered(42)) + " in " + std::to_string(c_Pumps) +
+			            " pumps of 32 datagrams; the memory ring starts at frame " + std::to_string(ringFirst));
+		for (uint64_t frame = 101; frame < ringFirst; ++frame)
+			if (!carried.contains(frame)) return Fail("journal-returner-gap: frame " + std::to_string(frame) + " never left in a datagram");
+		std::cout << "[net-world-join-selftest] PASS a_journal_returner_keeps_the_rings_pace from=101 ring_first=" << ringFirst << " pumps=" << pumps << std::endl;
+		return 0;
+	}
+
 	/// A returning seat is activated where it will have caught up: at its measured replay rate it closes on the round
 	/// only by the difference of the two rates, and an activation the round reaches first leaves every peer waiting.
 	int TestPrivateActivationWaitsForTheCatchUp() {
@@ -10407,6 +10474,10 @@ namespace RTE {
 		}
 		if (!selected || std::string(selected) == "F8") {
 			if (const int result = TestJournalDeleteIsRetriedAndCounted(); result != 0) return result;
+			if (selected) return Pass();
+		}
+		if (!selected || std::string(selected) == "journal-pace") {
+			if (const int result = TestAJournalReturnerKeepsTheRingsPace(); result != 0) return result;
 			if (selected) return Pass();
 		}
 		// The Lua states a row brings up close with the suite, not at the process exit.

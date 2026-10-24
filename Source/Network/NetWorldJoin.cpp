@@ -14,6 +14,7 @@
 #include <bit>
 #include <cmath>
 #include <condition_variable>
+#include <cstddef>
 #include <cstdlib>
 #include <cstring>
 #include <deque>
@@ -21,6 +22,7 @@
 #include <filesystem>
 #include <fstream>
 #include <future>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <random>
@@ -963,7 +965,13 @@ namespace RTE {
 		std::atomic<uint64_t> indexBytes{0}; //!< The worker's per-frame offsets, as it last left them.
 		std::atomic<uint32_t> pendingDeleteCount{0}, orphanedFileCount{0};
 		std::atomic<uint64_t> deleteAttemptCount{0};
-		std::map<std::tuple<uint64_t, size_t, uint64_t>, std::shared_future<ReadResult>> reads;
+		// The caller thread's reads of the journal, by first frame: a reader moving through the journal takes many datagrams from one.
+		struct Read {
+			std::shared_future<ReadResult> result;
+			uint64_t used = 0; //!< The caller's copy count when it last served, so the least recently used goes first.
+		};
+		std::map<uint64_t, Read> reads;
+		uint64_t copies = 0;
 		const Fault fault;
 		std::thread worker;
 
@@ -1006,28 +1014,62 @@ namespace RTE {
 			changed.notify_one();
 			return true;
 		}
-		size_t Copy(uint64_t from, size_t maxRecords, uint64_t maxBytes, std::vector<std::vector<uint8_t>>& out, uint64_t* last) {
+		static bool Ready(const Read& read) { return read.result.wait_for(std::chrono::seconds(0)) == std::future_status::ready; }
+		// What a finished read holds; nothing when its job never ran.
+		static const std::vector<std::vector<uint8_t>>* Records(const Read& read) {
+			try { return &read.result.get().records; } catch (...) { return nullptr; }
+		}
+		// The read that serves the frame: one that holds it, or one still reading from a frame it may reach.
+		std::map<uint64_t, Read>::iterator Serving(uint64_t frame) {
+			auto at = reads.upper_bound(frame);
+			if (at == reads.begin()) return reads.end();
+			--at;
+			if (!Ready(at->second)) return frame - at->first < c_JournalReadFrames ? at : reads.end();
+			const auto* records = Records(at->second);
+			return frame == at->first || (records && frame - at->first < records->size()) ? at : reads.end();
+		}
+		void Queue(uint64_t frame) {
+			Job job; job.frame = frame; job.maxRecords = c_JournalReadFrames; job.maxBytes = c_JournalReadBytes;
+			job.result = std::make_shared<std::promise<ReadResult>>();
+			reads.insert_or_assign(frame, Read{job.result->get_future().share(), copies});
+			{ std::lock_guard lock(mutex); jobs.push_back(std::move(job)); }
+			changed.notify_one();
+		}
+		// Copies what the memory would from `from` through `through`, the journal's newest frame; 0 until the journal has read it all.
+		size_t Copy(uint64_t from, size_t maxRecords, uint64_t maxBytes, uint64_t through, std::vector<std::vector<uint8_t>>& out, uint64_t* last) {
+			out.clear();
+			if (last) *last = 0;
 			if (failed) return 0;
-			const auto key = std::make_tuple(from, maxRecords, maxBytes);
-			auto found = reads.find(key);
-			if (found == reads.end()) {
-				Job job; job.frame = from; job.maxRecords = maxRecords; job.maxBytes = maxBytes;
-				job.result = std::make_shared<std::promise<ReadResult>>();
-				found = reads.emplace(key, job.result->get_future().share()).first;
-				{ std::lock_guard lock(mutex); jobs.push_back(std::move(job)); }
-				changed.notify_one();
+			const uint64_t copy = ++copies;
+			std::vector<std::vector<uint8_t>> copied;
+			uint64_t bytes = 0, next = from;
+			for (bool full = false; !full && copied.size() < maxRecords && next <= through;) {
+				const auto read = Serving(next);
+				if (read == reads.end()) { Queue(next); return 0; }
+				if (!Ready(read->second)) return 0;
+				read->second.used = copy;
+				const auto* records = Records(read->second);
+				if (!records) { Fail("a read from frame " + std::to_string(read->first) + " failed"); return 0; }
+				// A read that found nothing at its first frame finds nothing there again: the journal no longer holds it.
+				if (next - read->first >= records->size()) return 0;
+				for (auto record = records->begin() + static_cast<std::ptrdiff_t>(next - read->first); record != records->end() && copied.size() < maxRecords; ++record, ++next) {
+					if (bytes != 0 && bytes + record->size() > maxBytes) { full = true; break; }
+					bytes += record->size();
+					copied.push_back(*record);
+				}
+				// The next read is under way while this one serves its second half, so a reader going through the journal never waits on it.
+				const uint64_t after = read->first + records->size();
+				if (after <= through && next - read->first >= records->size() / 2 && Serving(after) == reads.end()) Queue(after);
 			}
-			if (found->second.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return 0;
-			try {
-				const auto& ready = found->second.get();
-				out = ready.records;
-				if (last) *last = ready.last;
-			} catch (...) { Fail("a read from frame " + std::to_string(from) + " failed"); return 0; }
-			while (reads.size() > 32) {
-				auto oldest = reads.begin();
-				if (oldest == found) ++oldest;
+			while (reads.size() > c_JournalReads) {
+				auto oldest = reads.end();
+				for (auto read = reads.begin(); read != reads.end(); ++read)
+					if (read->second.used != copy && Ready(read->second) && (oldest == reads.end() || read->second.used < oldest->second.used)) oldest = read;
+				if (oldest == reads.end()) break;
 				reads.erase(oldest);
 			}
+			out = std::move(copied);
+			if (last && !out.empty()) *last = next - 1;
 			return out.size();
 		}
 		void Run() {
@@ -1319,11 +1361,9 @@ namespace RTE {
 		stats.deleteAttempts = m_Journal->deleteAttemptCount;
 		// The reads are kept by the caller's thread, which this is.
 		stats.cachedReads = static_cast<uint32_t>(m_Journal->reads.size());
-		for (const auto& [key, read]: m_Journal->reads) {
-			if (read.wait_for(std::chrono::seconds(0)) != std::future_status::ready) continue;
-			try {
-				for (const std::vector<uint8_t>& record: read.get().records) stats.cachedReadBytes += record.capacity();
-			} catch (...) {}
+		for (const auto& [first, read]: m_Journal->reads) {
+			if (!Journal::Ready(read)) continue;
+			if (const auto* records = Journal::Records(read)) for (const std::vector<uint8_t>& record: *records) stats.cachedReadBytes += record.capacity();
 		}
 		return stats;
 	}
@@ -1343,7 +1383,7 @@ namespace RTE {
 		if (lastCopied) {
 			*lastCopied = 0;
 		}
-		if (m_Journal && (m_Records.empty() || from < m_Records.front().frame)) return m_Journal->Copy(from, maxRecords, maxBytes, out, lastCopied);
+		if (m_Journal && (m_Records.empty() || from < m_Records.front().frame)) return m_Journal->Copy(from, maxRecords, maxBytes, m_JournalLast, out, lastCopied);
 		uint64_t bytes = 0;
 		for (const Record& record: m_Records) {
 			if (record.frame < from) {
