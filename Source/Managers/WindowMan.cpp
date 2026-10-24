@@ -16,6 +16,7 @@
 #include "GLResourceMan.h"
 #include "System.h"
 #include "ScenarioRunner.h"
+#include "PresentPacer.h"
 #include "SwapWaitGuard.h"
 #include "DisplayRefreshes.h"
 #include "HarnessCost.h"
@@ -50,7 +51,17 @@ namespace {
 		return lifted;
 	}
 
+	// A harness lever: the platform drops the swap interval the window asks for, as some drivers and compositors do.
+	bool SwapIntervalDropped() {
+		static const bool dropped = std::getenv("CC_TEST_SWAP_INTERVAL_DROPPED") != nullptr;
+		return dropped;
+	}
+
+	// Asks the platform to hold each swap until the display shows it, or not to.
+	bool SetSwapWait(bool wait) { return SDL_GL_SetSwapInterval(wait && !SwapIntervalDropped() ? 1 : 0); }
+
 	SwapWaitGuard s_SwapWaitGuard;
+	PresentPacer s_PresentPacer;
 
 	// A match does not let a display that takes no frames hold its loop in the swap; outside a match nothing changes.
 	void JudgeSwapWait(SDL_Window* window, double swapMs, bool vsync, double nowMs) {
@@ -66,22 +77,22 @@ namespace {
 		const int64_t refreshes = primary ? CompositorRefreshCount() : -1;
 		switch (s_SwapWaitGuard.Note(swapMs, refreshHz, nowMs, inMatch, refreshes, display == primary, primaryMode ? primaryMode->refresh_rate : 0.0)) {
 			case SwapWaitGuard::Action::Suspend:
-				SDL_GL_SetSwapInterval(0);
+				SetSwapWait(false);
 				FrameMan::SetUnseenDisplayCap(true);
 				if (!wasSuspended) System::PrintDiagnosticLine(std::format("[render] the display took no frame at its {:.0f} Hz ({} swaps in a row waited, the last {:.1f} ms): the match presents without its wait at 60 Hz",
 				                                        refreshHz, SwapWaitGuard::c_LongSwapsToSuspend, swapMs));
 				break;
 			case SwapWaitGuard::Action::Retry:
-				SDL_GL_SetSwapInterval(1);
+				SetSwapWait(true);
 				break;
 			case SwapWaitGuard::Action::Resume:
-				SDL_GL_SetSwapInterval(vsync && !SwapWaitLifted() ? 1 : 0);
+				SetSwapWait(vsync && !SwapWaitLifted());
 				FrameMan::SetUnseenDisplayCap(false);
 				System::PrintDiagnosticLine(refreshes >= 0 ? std::format("[render] the display takes frames again (the compositor counts {:.0f} refreshes a second): presents wait for it", s_SwapWaitGuard.ShownHz()) :
 				                                             std::format("[render] the display takes frames again (a swap of {:.1f} ms): presents wait for it", swapMs));
 				break;
 			case SwapWaitGuard::Action::Release:
-				SDL_GL_SetSwapInterval(vsync && !SwapWaitLifted() ? 1 : 0);
+				SetSwapWait(vsync && !SwapWaitLifted());
 				FrameMan::SetUnseenDisplayCap(false);
 				System::PrintDiagnosticLine("[render] out of the match: presents wait for the display again");
 				break;
@@ -297,7 +308,13 @@ void WindowMan::InitializeOpenGL() {
 	const auto glText = [](GLenum name) { const auto* text = reinterpret_cast<const char*>(glGetString(name)); return std::string(text ? text : "unknown"); };
 	System::PrintDiagnosticLine("[gpu] renderer=" + glText(GL_RENDERER) + " vendor=" + glText(GL_VENDOR) + " version=" + glText(GL_VERSION));
 
-	SDL_GL_SetSwapInterval(m_EnableVSync && !SwapWaitLifted() ? 1 : 0);
+	const bool vsync = m_EnableVSync && !SwapWaitLifted();
+	const bool swapWaitSet = SetSwapWait(vsync);
+	int swapInterval = -1;
+	SDL_GL_GetSwapInterval(&swapInterval);
+	// What the platform made of the window's VSync; its presents show whether it also holds them.
+	const char* videoDriver = SDL_GetCurrentVideoDriver();
+	System::PrintDiagnosticLine(std::format("[render] video={} vsync={} swap_interval set={} reads={}", videoDriver ? videoDriver : "none", vsync ? "on" : "off", swapWaitSet ? "yes" : "no", swapInterval));
 
 	rlLoadExtensions((void*)SDL_GL_GetProcAddress);
 	rlglInit(m_ResX, m_ResY);
@@ -336,9 +353,9 @@ int WindowMan::GetWindowResY() {
 void WindowMan::SetVSyncEnabled(bool enable) {
 	m_EnableVSync = enable;
 
-	int sdlEnableVSync = m_EnableVSync && !SwapWaitLifted() ? 1 : 0;
-	SDL_GL_SetSwapInterval(sdlEnableVSync);
+	SetSwapWait(m_EnableVSync && !SwapWaitLifted());
 	s_SwapWaitGuard = SwapWaitGuard();
+	s_PresentPacer = PresentPacer();
 	FrameMan::SetUnseenDisplayCap(false);
 }
 
@@ -868,6 +885,9 @@ void WindowMan::UploadFrame() {
 }
 
 void WindowMan::Present() {
+	const auto steadyMs = [](RTE::SteadyClock::time_point when) { return std::chrono::duration<double, std::milli>(when.time_since_epoch()).count(); };
+	// Where the platform drops the swap interval, VSync's wait is the window's own.
+	if (const double waitMs = s_PresentPacer.WaitBeforeSwapMs(steadyMs(RTE::SteadyClock::now())); waitMs > 0) SDL_DelayPrecise(static_cast<Uint64>(waitMs * 1000000.0));
 	const auto swapBegan = RTE::SteadyClock::now();
 	if (m_MultiDisplayWindows.empty()) {
 		SDL_GL_SwapWindow(m_PrimaryWindow.get());
@@ -879,6 +899,13 @@ void WindowMan::Present() {
 	}
 	const auto swapEnded = RTE::SteadyClock::now();
 	m_LastSwapMs = std::chrono::duration<double, std::milli>(swapEnded - swapBegan).count();
-	JudgeSwapWait(m_PrimaryWindow.get(), m_LastSwapMs, m_EnableVSync, std::chrono::duration<double, std::milli>(swapEnded.time_since_epoch()).count());
+	JudgeSwapWait(m_PrimaryWindow.get(), m_LastSwapMs, m_EnableVSync, steadyMs(swapEnded));
+	const bool vsync = m_EnableVSync && !SwapWaitLifted() && !s_SwapWaitGuard.Suspended();
+	const SDL_DisplayMode* mode = vsync ? SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(m_PrimaryWindow.get())) : nullptr;
+	const double refreshHz = mode ? mode->refresh_rate : 0.0;
+	if (s_PresentPacer.Note(vsync, refreshHz, m_LastSwapMs, steadyMs(swapEnded))) {
+		System::PrintDiagnosticLine(s_PresentPacer.Pacing() ? std::format("[render] the swap does not wait for the display under VSync: presents wait for its {:.0f} Hz here", refreshHz)
+		                                                    : std::string("[render] the swap waits for the display again: presents leave the wait to it"));
+	}
 	if (HarnessCost::AnyEnabled()) HarnessCost::NotePresent();
 }

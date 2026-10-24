@@ -93,6 +93,7 @@ extern "C" {
 #include "AudioCheckpoint.h"
 #include "System.h"
 #include "SteadyClock.h"
+#include "PresentPacer.h"
 #include "SwapWaitGuard.h"
 #include "RTEError.h"
 #include "DataModule.h"
@@ -4060,6 +4061,42 @@ static bool RunSwapWaitSelfTest() {
 		check("a window on another display is tried with one waited swap once the desktop composes, and its own refresh decides",
 		      triedAt > suspendedAt && triedAt <= suspendedAt + SwapWaitGuard::c_RetryEveryMs + 50.0 && tried == Action::Resume && !lit.Suspended(),
 		      "tried " + std::to_string(triedAt - suspendedAt) + " ms after the suspend, then action " + std::to_string(static_cast<int>(tried)));
+	}
+	{
+		// VSync on a 60 Hz display whose platform drops the swap interval: a present every 3 ms, each swap back at once.
+		PresentPacer pacer;
+		double now = 0;
+		int pacedAt = -1;
+		for (int present = 1; present <= 40 && pacedAt < 0; ++present) {
+			now += 3.0;
+			if (pacer.Note(true, 60, 0.2, now) && pacer.Pacing()) pacedAt = present;
+		}
+		const double wait = pacer.WaitBeforeSwapMs(now + 1.0);
+		check("presents faster than the display shows them wait out its refresh", pacedAt == PresentPacer::c_PresentsToTurn + 1 && wait > 15.6 && wait < 15.7,
+		      "paced at present " + std::to_string(pacedAt) + ", the next waits " + std::to_string(wait) + " ms");
+		bool released = false;
+		for (int present = 0; present < 300; ++present) released = released || pacer.Note(true, 60, 0.2, now += 1000.0 / 60.0);
+		check("presents held to the refresh stay held", !released && pacer.Pacing(), "the pacing let go while the swap still did not wait");
+		int releasedAt = -1;
+		for (int present = 1; present <= 40 && releasedAt < 0; ++present) {
+			if (pacer.Note(true, 60, 16.0, now += 1000.0 / 60.0) && !pacer.Pacing()) releasedAt = present;
+		}
+		check("swaps that wait on their own again take the wait back", releasedAt == PresentPacer::c_PresentsToTurn && pacer.WaitBeforeSwapMs(now) == 0.0,
+		      "released at present " + std::to_string(releasedAt));
+	}
+	{
+		// No pacing without VSync, without a known refresh, or where the display holds the presents: a 144 Hz panel, a 60 Hz frame
+		// held long by the GPU, and a 60 Hz display whose presents alternate early and late.
+		PresentPacer off, unknown, panel, slow, uneven;
+		bool paced = false;
+		double now = 0;
+		for (int present = 0; present < 2000; ++present) {
+			now += 3.0;
+			paced = paced || off.Note(false, 60, 0.2, now) || unknown.Note(true, 0, 0.2, now);
+			paced = paced || panel.Note(true, 144, 5.0, present * (1000.0 / 144.0)) || slow.Note(true, 60, 2.0, present * 20.0);
+			paced = paced || uneven.Note(true, 60, 4.0, present / 2 * (2000.0 / 60.0) + (present % 2 ? 9.0 : 0.0));
+		}
+		check("a window the display holds, or without VSync, is never paced", !paced, "a present was held by the window");
 	}
 	std::cout << "[swap-wait-selftest] " << (passed ? "PASS" : "FAIL") << std::endl;
 	return passed;

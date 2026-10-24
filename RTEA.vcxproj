@@ -1052,6 +1052,7 @@
     <ClInclude Include="Source\Managers\PresetMan.h" />
     <ClInclude Include="Source\Managers\SceneMan.h" />
     <ClInclude Include="Source\Managers\SettingsMan.h" />
+    <ClInclude Include="Source\Managers\PresentPacer.h" />
     <ClInclude Include="Source\Managers\SwapWaitGuard.h" />
     <ClInclude Include="Source\Managers\TimerMan.h" />
     <ClInclude Include="Source\Managers\UInputMan.h" />

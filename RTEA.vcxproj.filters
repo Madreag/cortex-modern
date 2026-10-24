@@ -178,6 +178,9 @@
     <ClInclude Include="Source\Managers\SettingsMan.h">
       <Filter>Managers</Filter>
     </ClInclude>
+    <ClInclude Include="Source\Managers\PresentPacer.h">
+      <Filter>Managers</Filter>
+    </ClInclude>
     <ClInclude Include="Source\Managers\SwapWaitGuard.h">
       <Filter>Managers</Filter>
     </ClInclude>
