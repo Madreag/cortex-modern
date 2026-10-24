@@ -1433,6 +1433,7 @@ namespace RTE {
 		friend bool TestDirectoryCapacityFallback(std::string* error);
 		friend bool TestStaleWorldImageRecaptures(std::string* error);
 		friend bool TestAReturnerTakesTheBaseAskedForIt(std::string* error);
+		friend bool TestALateBaseVerdictKeepsTheNextAsk(std::string* error);
 		friend bool TestWorldCatchUpRefusal(std::string* error);
 		friend bool TestWorldDisconnectReason(bool watcher, std::string* error);
 		void InstallIcePump(NetMuxTransport& mux, bool host, std::shared_ptr<GnsDirectorySignalDispatcher> ownedDispatcher = {});

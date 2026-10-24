@@ -3969,7 +3969,8 @@ static std::string ResyncSaveName() {
 		}
 		if (joinCapture) {
 			m_WorldCaptureRequestedTick = tick;
-			m_WorldCapturePending = false;
+			// A returner's next base asked since this capture was taken still wants its own capture named.
+			if (!m_PrivateBaseRequested) m_WorldCapturePending = false;
 		}
 		// Every checkpoint wants a current admission file beside it; the pump writes it.
 		m_RestartAdmissionDue.store(true);

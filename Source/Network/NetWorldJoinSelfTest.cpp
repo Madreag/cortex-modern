@@ -7820,6 +7820,25 @@ namespace RTE {
 		return true;
 	}
 
+	bool TestALateBaseVerdictKeepsTheNextAsk(std::string* error) {
+		for (const bool asked: {true, false}) {
+			NetMatchService service;
+			service.m_IsHost = true;
+			// The last base's capture was taken; its writer's verdict lands after the returner's next base was asked, or with none asked.
+			service.m_AwaitedAutosaves.push_back({3083, true, false});
+			service.m_PrivateBaseRequested = asked;
+			service.m_WorldCapturePending = asked;
+			service.ResolveAwaitedAutosave(3083, true);
+			if (service.m_WorldCapturePending != asked) {
+				*error = asked ? "base-ask-lost: the verdict of the base taken at tick 3083 cleared the capture the returner's next base was asked for"
+				               : "a capture stayed pending after its verdict with no base asked";
+				return false;
+			}
+		}
+		std::cout << "[net-world-join-selftest] PASS a_late_base_verdict_keeps_the_next_ask" << std::endl;
+		return true;
+	}
+
 	bool TestWorldCatchUpRefusal(std::string* error) {
 		if (!MetricsCollector::IsConstructed()) MetricsCollector::Construct();
 		NetMatchService service;
@@ -10565,6 +10584,7 @@ namespace RTE {
 		}
 		if (!selected || std::string(selected) == "returner-base") {
 			if (!TestAReturnerTakesTheBaseAskedForIt(&findingError)) return Fail(findingError);
+			if (!TestALateBaseVerdictKeepsTheNextAsk(&findingError)) return Fail(findingError);
 			if (selected) return Pass();
 		}
 		// The Lua states a row brings up close with the suite, not at the process exit.
