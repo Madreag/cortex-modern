@@ -3374,27 +3374,29 @@ namespace RTE {
 				return true;
 			}
 
-			bool TestSignalPostInterruptsAnIdlePoll(std::string* error) {
+			bool TestSignalPostLeavesAnIdlePoll(std::string* error) {
 				struct HeldPoll final : NetDirectoryClient::Transport {
 					std::shared_ptr<std::vector<NetDirectoryClient::Request>> sent;
+					std::shared_ptr<int> cancelled;
 					bool post = false;
-					explicit HeldPoll(std::shared_ptr<std::vector<NetDirectoryClient::Request>> requests) : sent(std::move(requests)) {}
+					HeldPoll(std::shared_ptr<std::vector<NetDirectoryClient::Request>> requests, std::shared_ptr<int> cancels) : sent(std::move(requests)), cancelled(std::move(cancels)) {}
 					void Start(const NetDirectoryClient::Request& request) override { sent->push_back(request); post = request.method == "POST"; }
 					bool Finished() override { return post; }
 					NetDirectoryClient::Reply Take() override { return {200, R"({"ok":true,"seq":1})", ""}; }
-					void Abort() override {}
+					void Abort() override { ++*cancelled; }
 				};
 				auto sent = std::make_shared<std::vector<NetDirectoryClient::Request>>();
+				auto cancelled = std::make_shared<int>(0);
 				NetDirectorySignalChannel channel;
-				channel.SetTransportFactory([sent] { return std::make_unique<HeldPoll>(sent); });
+				channel.SetTransportFactory([sent, cancelled] { return std::make_unique<HeldPoll>(sent, cancelled); });
 				channel.ConfigureClient("https://dir.test", "key0123456789abcd", "", kSignalSession);
 				channel.SetPollWait(2); channel.SetPolling(true); channel.Update(0);
 				if (!channel.Post("host", "rendezvous")) { *error = "the rendezvous was not queued"; return false; }
 				channel.Update(1);
 				if (sent->size() != 2 || sent->back().method != "POST") { *error = "an idle long poll blocked the outgoing rendezvous"; return false; }
 				channel.Update(2);
-				if (sent->size() != 3 || sent->back().method != "GET") { *error = "the signal poll did not resume after the rendezvous"; return false; }
-				std::cout << "[net-directory-selftest] PASS long_poll_preemption post_ms=1 polling_resumed_ms=2" << std::endl;
+				if (sent->size() != 2 || *cancelled != 0) { *error = "the rendezvous cancelled the held poll: " + std::to_string(*cancelled) + " cancelled, " + std::to_string(sent->size()) + " requests"; return false; }
+				std::cout << "[net-directory-selftest] PASS long_poll_beside_a_post post_ms=1 cancelled=0" << std::endl;
 				return true;
 			}
 
@@ -3419,27 +3421,68 @@ namespace RTE {
 				}
 				held.channel.Update(2000);
 				if (Taken(held) != "1:answer") { *error = "the poll after the retry took '" + Taken(held) + "'"; return false; }
-				// A dial posts more than one burst, so a poll goes out between its posts; that poll is not held, and its empty answer
-				// is no idle wait either.
-				ScriptedChannel dial(false);
-				const std::string dialer = dial.channel.GetLocalPeer();
-				dial.channel.SetPollWait(12);
-				for (const char* reply: {R"({"ok":true,"seq":1})", R"({"ok":true,"seq":2})"}) dial.replies->push_back({200, reply, ""});
-				dial.replies->push_back({200, SignalListBody({}), ""});
-				dial.replies->push_back({200, R"({"ok":true,"seq":3})", ""});
-				dial.replies->push_back({200, SignalListBody({{1, "host", dialer, B64("accept")}}), ""});
-				for (const char* bytes: {"connect", "candidate-a", "candidate-b"}) {
-					if (!dial.channel.Post("host", bytes)) { *error = std::string("the dial's ") + bytes + " was not queued"; return false; }
-				}
-				dial.channel.SetPolling(true);
-				for (uint64_t now = 0; now <= 1020; now += 10) dial.channel.Update(now);
-				if (dial.sent->size() != 5 || dial.sent->at(2).method != "GET" || dial.sent->at(3).method != "POST" || dial.sent->at(4).method != "GET") {
-					*error = "the poll between a dial's posts held the next poll for the whole asked wait: " + std::to_string(dial.sent->size()) + " requests at 1020 ms";
+				std::cout << "[net-directory-selftest] PASS signal_empty_poll_follows_the_service held_next_ms=2000" << std::endl;
+				return true;
+			}
+
+			// The host reads its joiners on a poll the directory holds until a signal arrives; the host's own answers go out beside
+			// it. A post that cancelled the held poll re-polled for every signal the host sent, and a four-player start spent the
+			// directory's whole admission budget on the host's polls.
+			bool TestSignalPostsLeaveTheHeldPoll(std::string* error) {
+				struct Directory {
+					uint64_t now = 0;
+					int64_t seq = 0;
+					size_t waiting = 0, polls = 0, posts = 0, aborted = 0;
+				};
+				class Held final : public NetDirectoryClient::Transport {
+				public:
+					explicit Held(Directory& directory) : m_Directory(directory) {}
+					void Start(const NetDirectoryClient::Request& request) override {
+						m_Poll = request.method == "GET";
+						m_StartedMs = m_Directory.now;
+						++(m_Poll ? m_Directory.polls : m_Directory.posts);
+					}
+					bool Finished() override { return !m_Poll || m_Directory.waiting != 0 || m_Directory.now >= m_StartedMs + 1000; }
+					NetDirectoryClient::Reply Take() override {
+						if (!m_Poll) return kPostOk;
+						if (m_Directory.waiting == 0) return {200, R"({"signals":[],"retry_after_s":1})", ""};
+						std::vector<NetDirectorySignal> signals;
+						for (; m_Directory.waiting != 0; --m_Directory.waiting) signals.push_back({++m_Directory.seq, "client:joinNonce1", "host", B64("candidate")});
+						return {200, SignalListBody(signals), ""};
+					}
+					void Abort() override { ++m_Directory.aborted; }
+
+				private:
+					Directory& m_Directory;
+					bool m_Poll = false;
+					uint64_t m_StartedMs = 0;
+				};
+				// A minute of a joiner's signals arriving every second, with the host answering every postEveryMs.
+				const auto minute = [](uint64_t postEveryMs, Directory& directory) {
+					NetDirectorySignalChannel channel;
+					channel.SetTransportFactory([&directory] { return std::make_unique<Held>(directory); });
+					channel.ConfigureHost("https://dir.test", "key0123456789abcd", "", kSignalSession, "hostToken_0123456789");
+					channel.SetSink([](const NetDirectorySignalChannel::Signal&) { return true; });
+					channel.SetPollWait(12);
+					channel.SetPolling(true);
+					for (directory.now = 0; directory.now < 60000; directory.now += 10) {
+						if (directory.now % 1000 == 500) ++directory.waiting;
+						if (postEveryMs != 0 && directory.now % postEveryMs == 0) channel.Post("client:joinNonce1", "answer");
+						channel.Update(directory.now);
+					}
+					// The channel's teardown cancels its last poll; only the minute's cancels count.
+					return std::make_pair(directory.aborted, channel.PendingPosts());
+				};
+				Directory quiet, busy;
+				minute(0, quiet);
+				const auto [cancelled, unsent] = minute(500, busy);
+				if (busy.polls != quiet.polls || cancelled != 0) {
+					*error = "the host's posts drove its polls from " + std::to_string(quiet.polls) + " to " + std::to_string(busy.polls) + " in a minute, " +
+					         std::to_string(cancelled) + " of them cancelled; the directory allows 120";
 					return false;
 				}
-				dial.channel.Update(1030);
-				if (Taken(dial) != "1:accept") { *error = "the dial's poll after its posts took '" + Taken(dial) + "'"; return false; }
-				std::cout << "[net-directory-selftest] PASS signal_empty_poll_follows_the_service held_next_ms=2000 dial_next_poll_ms=1020" << std::endl;
+				if (busy.posts != 120 || unsent != 0) { *error = "the host's answers waited behind its held poll: " + std::to_string(busy.posts) + " of 120 sent in a minute"; return false; }
+				std::cout << "[net-directory-selftest] PASS signal_posts_leave_the_held_poll polls_per_minute=" << busy.polls << " posts=" << busy.posts << " cancelled=" << cancelled << std::endl;
 				return true;
 			}
 
@@ -3569,7 +3612,7 @@ namespace RTE {
 					return false;
 				}
 				s.channel.Update(1000);
-				if (s.sent->size() != 2 || s.sent->back().method != "POST") { *error = "signal 404 did not retry its retained message"; return false; }
+				if (s.sent->size() != 3 || s.sent->at(1).method != "POST" || s.sent->at(2).method != "GET") { *error = "signal 404 did not retry its retained message"; return false; }
 				std::cout << "[net-directory-selftest] PASS missing_signal_row waits_for_authority retry_ms=1000" << std::endl;
 				return true;
 			}
@@ -3586,8 +3629,9 @@ namespace RTE {
 				s.channel.Update(0);
 				s.channel.Update(600000);
 				const json report = json::parse(s.channel.BuildReportJson());
-				if (s.sent->size() != 1 || !RequestIs(s.sent->at(0), "POST", (kSignalBase + "/signal").c_str(), error)) {
-					*error = "signal 403: " + (error->empty() ? std::to_string(s.sent->size()) + " requests, expected the one post" : *error);
+				// The post and the first poll left together at t=0; the 403 sent nothing after them.
+				if (s.sent->size() != 2 || !RequestIs(s.sent->at(0), "POST", (kSignalBase + "/signal").c_str(), error) || s.sent->at(1).method != "GET") {
+					*error = "signal 403: " + (error->empty() ? std::to_string(s.sent->size()) + " requests, expected the post and the first poll" : *error);
 					return false;
 				}
 				if (s.channel.GetState() != NetDirectorySignalChannel::State::Failed || s.channel.GetLastError() != "The directory could not confirm your place in this match. Choose another game." || report["last_error"] != "The directory could not confirm your place in this match. Choose another game." || report["last_status"] != 403) {
@@ -3683,6 +3727,7 @@ namespace RTE {
 			bool TestSignal429RetryAfter(std::string* error) {
 				ScriptedChannel s(false);
 				s.replies->push_back({429, R"({"error":"rate_limited_key","retry_after_s":7})", ""});
+				s.replies->push_back(kNoSignals);
 				s.replies->push_back(kPostOk);
 				s.replies->push_back(kNoSignals);
 				if (!s.channel.Post("host", "offer")) {
@@ -3690,24 +3735,19 @@ namespace RTE {
 					return false;
 				}
 				s.channel.SetPolling(true);
-				s.channel.Update(1000);
-				s.channel.Update(1000); // 429: every request waits for t=8000
+				s.channel.Update(1000); // the post and the poll leave together
+				s.channel.Update(1000); // 429 on the post: every request waits for t=8000
 				s.channel.Update(7999);
-				if (s.sent->size() != 1) {
+				if (s.sent->size() != 2 || s.sent->at(0).method != "POST" || s.sent->at(1).method != "GET") {
 					*error = "signal 429: a request left at t=7999, before retry_after_s=7 from t=1000 elapsed";
 					return false;
 				}
 				s.channel.Update(8000);
-				if (s.sent->size() != 2 || s.sent->at(1).method != "POST" || s.sent->at(1).body != s.sent->at(0).body) {
-					*error = "signal 429: the post was not retried at exactly t=8000";
+				if (s.sent->size() != 4 || s.sent->at(2).method != "POST" || s.sent->at(2).body != s.sent->at(0).body || s.sent->at(3).method != "GET") {
+					*error = "signal 429: the post was not retried at exactly t=8000 beside the poll";
 					return false;
 				}
-				s.channel.Update(8000);
-				if (s.sent->size() != 3 || s.sent->at(2).method != "GET") {
-					*error = "signal 429: the held poll did not follow the retried post";
-					return false;
-				}
-				std::cout << "[net-directory-selftest] signal 429: retry_after_s=7 at t=1000 held every request through t=7999; the post went again at t=8000, then the poll" << std::endl;
+				std::cout << "[net-directory-selftest] signal 429: retry_after_s=7 at t=1000 held every request through t=7999; the post went again at t=8000 beside the poll" << std::endl;
 				return true;
 			}
 
@@ -3868,14 +3908,14 @@ namespace RTE {
 				return true;
 			}
 
-			bool TestSignalPostBeforePoll(std::string* error) {
+			bool TestSignalPostsGoBesideThePoll(std::string* error) {
 				ScriptedChannel s(false);
 				s.replies->push_back(kPostOk);
-				s.replies->push_back(kPostOk);
 				s.replies->push_back(kNoSignals);
+				s.replies->push_back(kPostOk);
 				s.channel.SetPolling(true);
 				if (!s.channel.Post("host", "first") || !s.channel.Post("host", "second")) {
-					*error = "signal priority: Post refused a signal";
+					*error = "signal order: Post refused a signal";
 					return false;
 				}
 				s.channel.Update(0);
@@ -3884,27 +3924,28 @@ namespace RTE {
 				NetDirectorySignalPost first;
 				NetDirectorySignalPost second;
 				std::string reason;
-				if (s.sent->size() != 3 || s.sent->at(0).method != "POST" || s.sent->at(1).method != "POST" || !RequestIs(s.sent->at(2), "GET", s.PollPath(0).c_str(), error) ||
-				    !NetDirectoryCodec::DecodeSignalPost(s.sent->at(0).body, first, reason) || !NetDirectoryCodec::DecodeSignalPost(s.sent->at(1).body, second, reason) ||
+				if (s.sent->size() != 3 || s.sent->at(0).method != "POST" || !RequestIs(s.sent->at(1), "GET", s.PollPath(0).c_str(), error) || s.sent->at(2).method != "POST" ||
+				    !NetDirectoryCodec::DecodeSignalPost(s.sent->at(0).body, first, reason) || !NetDirectoryCodec::DecodeSignalPost(s.sent->at(2).body, second, reason) ||
 				    base64_decode(first.payloadB64) != "first" || base64_decode(second.payloadB64) != "second") {
-					*error = "signal priority: expected POST first, POST second, then the poll that was due all along";
+					*error = "signal order: the poll due at t=0 waited behind the posts, or the posts left out of order";
 					return false;
 				}
-				std::cout << "[net-directory-selftest] signal priority: with the poll due at t=0, POST(first) and POST(second) went before the GET" << std::endl;
+				std::cout << "[net-directory-selftest] signal order: with the poll due at t=0, POST(first) and the GET left together, then POST(second)" << std::endl;
 				for (const int wait : {0, 2}) {
 					ScriptedChannel busy(false);
 					busy.channel.SetPolling(true); busy.channel.SetPollWait(wait);
-					busy.replies->push_back(kPostOk); busy.replies->push_back(kPostOk);
+					busy.replies->push_back(kPostOk);
+					busy.replies->push_back({200, SignalListBody({{1, "host", busy.channel.GetLocalPeer(), B64("answer")}}), ""});
 					for (int offer = 0; offer < 12; ++offer)
 						if (!busy.channel.Post("host", "offer")) { *error = "the busy signal queue refused an offer"; return false; }
-					busy.channel.Update(0); busy.channel.Update(1); busy.channel.Update(2);
-					if (busy.sent->size() != 3 || !RequestIs(busy.sent->back(), "GET", busy.PollPath(0).c_str(), error)) {
+					busy.channel.Update(0);
+					const std::string poll = busy.PollPath(0) + (wait != 0 ? "&wait=" + std::to_string(wait) : std::string());
+					if (busy.sent->size() != 2 || !RequestIs(busy.sent->at(1), "GET", poll.c_str(), error)) {
 						*error = "queued offers starved the peer's answer or blocked outgoing offers on a long poll"; return false;
 					}
-					busy.replies->push_back({200, SignalListBody({{1, "host", busy.channel.GetLocalPeer(), B64("answer")}}), ""});
 					if (!busy.channel.Post("host", "new offer")) { *error = "the active poll refused a new offer"; return false; }
-					busy.channel.Update(3);
-					if (Taken(busy) != "1:answer" || busy.channel.PendingPosts() == 0 || busy.sent->back().method != "POST") {
+					busy.channel.Update(1);
+					if (Taken(busy) != "1:answer" || busy.channel.PendingPosts() != 12 || busy.sent->size() < 3 || busy.sent->at(2).method != "POST") {
 						*error = "a new offer discarded the peer's ready answer or the answer stopped outgoing progress"; return false;
 					}
 				}
@@ -4123,8 +4164,9 @@ namespace RTE {
 			if (!TestSignalOrderingAndCursor(&error)) return fail(error);
 			if (!TestSignalCursorWaitsForSink(&error)) return fail(error);
 			if (!TestSignalLongPoll(&error)) return fail(error);
-			if (!TestSignalPostInterruptsAnIdlePoll(&error)) return fail(error);
+			if (!TestSignalPostLeavesAnIdlePoll(&error)) return fail(error);
 			if (!TestSignalEmptyPollFollowsTheService(&error)) return fail(error);
+			if (!TestSignalPostsLeaveTheHeldPoll(&error)) return fail(error);
 			if (!TestDirectoryCapacityWords(&error)) return fail(error);
 			if (!TestConnectionProtocolRefusal(&error)) return fail(error);
 			if (!TestSignal404WaitsForAuthority(&error)) return fail(error);
@@ -4138,7 +4180,7 @@ namespace RTE {
 #endif
 			if (!TestSignalTransportBackoff(&error)) return fail(error);
 			if (!TestSignalPayloadCap(&error)) return fail(error);
-			if (!TestSignalPostBeforePoll(&error)) return fail(error);
+			if (!TestSignalPostsGoBesideThePoll(&error)) return fail(error);
 			if (!TestSignalNonceAndCredentials(&error)) return fail(error);
 			if (!TestSignalDrain(&error)) return fail(error);
 #if defined(CCCP_WITH_GNS) && (defined(_WIN32) || defined(__APPLE__) || defined(__linux__))

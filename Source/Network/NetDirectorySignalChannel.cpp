@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <initializer_list>
 #include <chrono>
 #include <iostream>
 #include <random>
@@ -150,9 +151,6 @@ namespace RTE {
 		m_Outbox.clear();
 		m_Cursor = 0;
 		m_NextPollMs = 0;
-
-		m_PostBurst = 0;
-		m_ActivePollWaitS = 0;
 		m_DrainPolled = false;
 		m_SignalsPosted = 0;
 		m_SignalsReceived = 0;
@@ -198,10 +196,6 @@ namespace RTE {
 		if (m_State != State::Open || !reachable || bytes.size() > c_MaxSignalBytes || m_Outbox.size() >= c_MaxPendingPosts) {
 			return false;
 		}
-		if (m_RequestKind == RequestKind::Poll && m_ActivePollWaitS > 0 && !m_Request->Finished()) {
-			AbortRequest();
-			m_NextPollMs = 0;
-		}
 		m_Outbox.push_back({to, base64_encode(bytes, false)});
 		return true;
 	}
@@ -213,32 +207,21 @@ namespace RTE {
         if (m_HttpTransport && NetDirectoryBudget::SessionEnded(m_BaseUrl, m_InstallKey, m_SessionPath.substr(13), nowMs)) {
             Fail("This match is no longer in the directory. Choose another game."); return;
         }
-		if (m_Request && m_Request->Finished()) {
-			const RequestKind kind = m_RequestKind;
-			const Reply reply = m_Request->Take();
-			m_Request.reset();
-			m_RequestKind = RequestKind::None;
-			if (reply.statusCode > 0) {
-				m_LastStatus = reply.statusCode;
+		const RequestKind first = m_PostRequest && m_PollRequest && m_PollRequestSeq < m_PostRequestSeq ? RequestKind::Poll : RequestKind::Post;
+		for (const RequestKind kind : {first, first == RequestKind::Post ? RequestKind::Poll : RequestKind::Post}) {
+			TakeReply(kind, nowMs);
+			if (m_State != State::Open && m_State != State::Draining) {
+				return;
 			}
-			// An answer proves the admission poll reached the service before another request is released.
-			if (kind == RequestKind::Poll && m_HttpTransport && IsHostPeer(m_LocalPeer) && reply.statusCode > 0 && reply.statusCode != 429)
-				NetDirectoryBudget::PollAnswered(m_BaseUrl, m_InstallKey, nowMs);
-			m_ReplyKind = kind; m_RetryReply = reply;
-			switch (kind) {
-				case RequestKind::Post: HandlePostReply(reply, nowMs); break;
-				case RequestKind::Poll: HandlePollReply(reply, nowMs); break;
-				default: break;
-			}
-		}
-		if (m_Request) {
-			return;
 		}
 		if (nowMs < m_NextAttemptMs) return;
 		const bool host = IsHostPeer(m_LocalPeer);
 		const bool pollReady = nowMs >= m_PollRetry.nextMs && (!m_HttpTransport || NetDirectoryBudget::Ready(m_BaseUrl, m_InstallKey, host ? "admission" : "general", nowMs));
 		const bool postReady = nowMs >= m_PostRetry.nextMs && (!m_HttpTransport || NetDirectoryBudget::Ready(m_BaseUrl, m_InstallKey, "general", nowMs));
 		if (m_State == State::Draining) {
+			if (m_PostRequest || m_PollRequest) {
+				return;
+			}
 			if (m_DrainPolled) {
 				SetState(State::Closed);
 			} else {
@@ -248,14 +231,33 @@ namespace RTE {
 			}
 			return;
 		}
-		if (m_State != State::Open || nowMs < m_NextAttemptMs) {
+		// A post never waits behind the held poll, except that after a refusal the host's poll is answered first.
+		if (!m_PostRequest && !m_Outbox.empty() && postReady && nowMs >= m_NextPostMs && !(m_PollFirst && m_PollArmed)) {
+			IssuePost();
+		}
+		if (!m_PollRequest && pollReady && m_PollArmed && (m_PollFirst || nowMs >= m_NextPollMs)) {
+			IssuePoll(nowMs);
+		}
+	}
+
+	void NetDirectorySignalChannel::TakeReply(RequestKind kind, uint64_t nowMs) {
+		std::unique_ptr<NetDirectoryClient::Transport>& request = kind == RequestKind::Post ? m_PostRequest : m_PollRequest;
+		if (!request || !request->Finished()) {
 			return;
 		}
-		const bool pollDue = pollReady && m_PollArmed && (m_PollFirst || nowMs >= m_NextPollMs);
-		if (!m_Outbox.empty() && postReady && nowMs >= m_NextPostMs && (!pollDue || (!m_PollFirst && m_PostBurst < c_MaxPostBurst))) {
-			IssuePost();
-		} else if (pollDue) {
-			IssuePoll(nowMs);
+		const Reply reply = request->Take();
+		request.reset();
+		if (reply.statusCode > 0) {
+			m_LastStatus = reply.statusCode;
+		}
+		// An answer proves the admission poll reached the service before another request is released.
+		if (kind == RequestKind::Poll && m_HttpTransport && IsHostPeer(m_LocalPeer) && reply.statusCode > 0 && reply.statusCode != 429)
+			NetDirectoryBudget::PollAnswered(m_BaseUrl, m_InstallKey, nowMs);
+		m_ReplyKind = kind; m_RetryReply = reply;
+		if (kind == RequestKind::Post) {
+			HandlePostReply(reply, nowMs);
+		} else {
+			HandlePollReply(reply, nowMs);
 		}
 	}
 
@@ -316,11 +318,12 @@ namespace RTE {
 	}
 
 	void NetDirectorySignalChannel::AbortRequest() {
-		if (m_Request) {
-			m_Request->Abort();
-			m_Request.reset();
+		for (std::unique_ptr<NetDirectoryClient::Transport>* request : {&m_PostRequest, &m_PollRequest}) {
+			if (*request) {
+				(*request)->Abort();
+				request->reset();
+			}
 		}
-		m_RequestKind = RequestKind::None;
 	}
 
 	void NetDirectorySignalChannel::ScheduleRetry(uint64_t nowMs) {
@@ -337,13 +340,13 @@ namespace RTE {
 			Fail("no transport configured");
 			return;
 		}
-		m_Request = m_Factory();
-		m_RequestKind = kind;
-		m_Request->Start(request);
+		std::unique_ptr<NetDirectoryClient::Transport>& slot = kind == RequestKind::Post ? m_PostRequest : m_PollRequest;
+		(kind == RequestKind::Post ? m_PostRequestSeq : m_PollRequestSeq) = ++m_RequestSeq;
+		slot = m_Factory();
+		slot->Start(request);
 	}
 
 	void NetDirectorySignalChannel::IssuePost() {
-		m_PostBurst = std::min(m_PostBurst + 1, c_MaxPostBurst);
 		const Outbound& head = m_Outbox.front();
 		NetDirectorySignalPost post;
 		post.tokenOrJoinNonce = m_Credential;
@@ -354,14 +357,13 @@ namespace RTE {
 	}
 
 	void NetDirectorySignalChannel::IssuePoll(uint64_t nowMs) {
-		m_PollStartedMs = nowMs; m_PollFirst = false;
-		m_PostBurst = 0;
+		m_PollStartedMs = nowMs;
 		++m_Polls;
-		// Queued offers still need their answers, without waiting behind an idle long poll.
-		m_ActivePollWaitS = m_State == State::Draining || !m_Outbox.empty() ? 0 : m_PollWaitS;
+		// The last poll of a teardown reads what is there without being held.
+		const int waitS = m_State == State::Draining ? 0 : m_PollWaitS;
 		std::string path = m_SessionPath + "/signals?peer=" + m_LocalPeer + "&after=" + std::to_string(m_Cursor);
-		if (m_ActivePollWaitS > 0) {
-			path += "&wait=" + std::to_string(m_ActivePollWaitS);
+		if (waitS > 0) {
+			path += "&wait=" + std::to_string(waitS);
 		}
 		StartRequest(RequestKind::Poll, {"GET", path, ""});
 	}
@@ -391,6 +393,7 @@ namespace RTE {
 	}
 
 	void NetDirectorySignalChannel::HandlePollReply(const Reply& reply, uint64_t nowMs) {
+		m_PollFirst = false;
 		if (!reply.error.empty() || reply.statusCode == 0) {
 			NoteError("poll: " + (reply.error.empty() ? std::string("transport error") : reply.error));
 			ScheduleRetry(nowMs);
@@ -410,13 +413,11 @@ namespace RTE {
 		}
 		m_BackoffMs = 0; m_PollRetry.Succeeded();
 		// An empty answer is an idle wait only as long as the service held the poll: the directory holds a long poll for less than
-		// asked and names its retry, and a poll sent ahead of queued posts was not held at all.
+		// asked and names its retry.
 		if (m_PollWaitS == 0) {
 			m_NextPollMs = nowMs + c_PollIntervalMs;
 		} else if (!inbound.empty()) {
 			m_NextPollMs = nowMs;
-		} else if (m_ActivePollWaitS == 0) {
-			m_NextPollMs = std::max(nowMs, m_PollStartedMs + c_PollIntervalMs);
 		} else if (const uint64_t retryMs = NetDirectoryRetry::RetryAfterMs(reply.body, reply.retryAfter); retryMs > 0) {
 			m_NextPollMs = std::max(nowMs + retryMs, m_PollStartedMs + c_PollIntervalMs);
 		} else {

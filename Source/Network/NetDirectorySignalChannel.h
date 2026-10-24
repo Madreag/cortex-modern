@@ -16,10 +16,9 @@
 namespace RTE {
 
 	/// One peer's end of the session directory's signal relay, game-thread only. Post() queues a
-	/// signal; Update() keeps at most one request in flight and interleaves queued POSTs with
-	/// armed GETs every c_PollIntervalMs for the signals addressed to this
-	/// peer. Those reach the sink in seq order and the cursor moves only past a signal the sink took,
-	/// so the service keeps the rest for the next poll.
+	/// signal; Update() sends queued POSTs one at a time beside an armed GET, which the service holds
+	/// until a signal addressed to this peer arrives. Those reach the sink in seq order and the cursor
+	/// moves only past a signal the sink took, so the service keeps the rest for the next poll.
 	class NetDirectorySignalChannel {
 	public:
 		enum class State : uint8_t {
@@ -57,7 +56,7 @@ namespace RTE {
 		void SetSink(Sink sink) { m_Sink = std::move(sink); }
 		void SetPolling(bool armed) { m_PollArmed = armed; }
 		/// Long-poll: polls carry wait=<seconds> (clamped to c_MaxPollWaitS) and the next GET issues
-		/// right after the previous returns, instead of after c_PollIntervalMs. 0 keeps short polls.
+		/// right after one that brought signals, instead of after c_PollIntervalMs. 0 keeps short polls.
 		void SetPollWait(int seconds) { m_PollWaitS = std::clamp(seconds, 0, static_cast<int>(c_MaxPollWaitS)); }
 
 		/// Queues bytes for the peer `to`: a joiner signals "host", the host answers "client:<nonce>".
@@ -100,7 +99,6 @@ namespace RTE {
 		static constexpr uint64_t c_DrainBudgetMs = 2000;
 
 	private:
-		static constexpr int c_MaxPostBurst = 2;
 		enum class RequestKind : uint8_t { None, Post, Poll };
 		struct Outbound {
 			std::string to;
@@ -115,6 +113,8 @@ namespace RTE {
 		void AbortRequest();
 		void ScheduleRetry(uint64_t nowMs); //!< Each request path waits 1s, 2s, 4s, up to 30s.
 		void StartRequest(RequestKind kind, const NetDirectoryClient::Request& request);
+		/// Hands a finished request of `kind` to its reply handler.
+		void TakeReply(RequestKind kind, uint64_t nowMs);
 		void IssuePost();
 		void IssuePoll(uint64_t nowMs);
 		void HandlePostReply(const NetDirectoryClient::Reply& reply, uint64_t nowMs);
@@ -139,8 +139,6 @@ namespace RTE {
 		std::deque<Outbound> m_Outbox;
 		int64_t m_Cursor = 0;          //!< The highest seq the sink took; the next poll reads after it.
 		int m_PollWaitS = 0;           //!< Long-poll seconds on the wire; 0 = a plain GET every c_PollIntervalMs.
-		int m_ActivePollWaitS = 0;
-		int m_PostBurst = 0;
 		uint64_t m_NextPollMs = 0;
 		uint64_t m_PollStartedMs = 0;
 		uint64_t m_NextAttemptMs = 0;  //!< Every request waits for this slot after a transport error, 5xx or 429.
@@ -149,8 +147,8 @@ namespace RTE {
 		uint64_t m_PostBackoffMs = 0;
 		bool m_DrainPolled = false;
 
-		std::unique_ptr<NetDirectoryClient::Transport> m_Request;
-		RequestKind m_RequestKind = RequestKind::None;
+		std::unique_ptr<NetDirectoryClient::Transport> m_PostRequest, m_PollRequest;
+		uint64_t m_PostRequestSeq = 0, m_PollRequestSeq = 0, m_RequestSeq = 0; //!< Replies are taken in the order their requests left.
 
 		uint64_t m_SignalsPosted = 0;
 		uint64_t m_SignalsReceived = 0;
