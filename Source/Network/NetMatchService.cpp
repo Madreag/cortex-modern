@@ -9325,6 +9325,11 @@ static std::string ResyncSaveName() {
 		return "Player " + std::to_string(peerId);
 	}
 
+	bool NetMatchService::IsHeldRejoinDriving() const {
+		std::lock_guard<std::mutex> lock(m_Mutex);
+		return m_HeldRejoinDriving;
+	}
+
 	bool NetMatchService::IsMatchResyncing() const {
 		std::lock_guard<std::mutex> lock(m_Mutex);
 		return m_ResyncHealOpen && (m_State == NetMatchServiceState::Running ||

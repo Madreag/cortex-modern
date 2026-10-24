@@ -154,8 +154,8 @@ namespace RTE::NetPlayerPresentation {
 		const auto view = g_NetMatchService.GetSeatView(snapshot.localPeerId);
 		if (OwnSeatHeld(snapshot, view, !view && ScenarioRunner::IsLockstepSeatReleased(snapshot.localPeerId)) || ScenarioRunner::IsLockstepOwnSeatHeld()) return true;
 		// A catch-up alone is no hold: a host serves one and a late joiner runs one with nobody's seat held. This peer's own return is
-		// the catch-up or repair that follows the hold its host told it of.
-		if (!snapshot.isHost && (ScenarioRunner::WorldCatchUpActive() || g_NetMatchService.IsMatchResyncing())) {
+		// the rejoin, catch-up or repair that follows the hold its host told it of.
+		if (!snapshot.isHost && (g_NetMatchService.IsHeldRejoinDriving() || ScenarioRunner::WorldCatchUpActive() || g_NetMatchService.IsMatchResyncing())) {
 			const auto& log = ScenarioRunner::GetNetUiToastLog();
 			if (std::any_of(log.begin(), log.end(), [](const auto& toast) { return toast.kind == "seat_held" && toast.senderPeerId == 0; })) return true;
 		}
