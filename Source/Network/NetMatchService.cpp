@@ -7501,13 +7501,16 @@ static std::string ResyncSaveName() {
 		m_LobbyModerationPublished = true;
 	}
 
-	void NetMatchService::AttachPeerSessionWireLocked() {
-		if (!m_Coordinator || !m_Session || !m_Runner || !m_Coordinator->UsesPeerFrameGroups() || !m_Coordinator->IsRunning() || !m_PeerSessionLinks || m_PeerSessionLinks->sessionAttached) return;
+	void NetMatchService::AttachPeerSessionWireLocked(bool handover) {
+		if (!m_Coordinator || !m_Session || !m_Runner || !m_Coordinator->UsesPeerFrameGroups() || (!handover && !m_Coordinator->IsRunning()) || !m_PeerSessionLinks) return;
+		// The wire is only a view of the links, so a handover rebuilds one its links outlived.
+		if (m_PeerSessionLinks->sessionAttached && (m_MigratedTransport || !handover)) return;
+		const bool attached = m_PeerSessionLinks->sessionAttached;
 		m_MigratedTransport = std::make_unique<NetPeerSessionWire>(m_PeerSessionLinks);
 		m_PeerSessionLinks->sessionAttached = true;
 		m_Session->RebindSessionWire(*m_MigratedTransport);
 		m_Runner->GetLobbySession().RebindSessionWire(*m_MigratedTransport);
-		System::PrintDiagnosticLine("[net-session] retained peer links now carry the session");
+		System::PrintDiagnosticLine(attached ? "[net-session] the handover's session rides a new wire over the retained peer links" : "[net-session] retained peer links now carry the session");
 	}
 
 	void NetMatchService::AttachCoordinatorSessionSink() {
@@ -8153,11 +8156,11 @@ static std::string ResyncSaveName() {
 		const auto& result = m_Coordinator->GetMigrationResult();
 		// The coordinator is the only host-change protocol, including for held seats.
 		const bool peerFrames = m_Coordinator->UsesPeerFrameGroups();
-		if (peerFrames) AttachPeerSessionWireLocked();
+		if (peerFrames) AttachPeerSessionWireLocked(true);
 		if (!peerFrames && !m_Coordinator->MigrationUsesDirectory() && result.members.size() < 2) return;
 		const auto& config = m_Coordinator->GetConfig().matchConfig;
 		auto wire = peerFrames ? std::unique_ptr<INetTransport>{} : m_Coordinator->TakeMigrationTransport();
-		if (!peerFrames && !wire) {
+		if ((!peerFrames && !wire) || (peerFrames && !m_MigratedTransport)) {
 			m_Coordinator->Complete("host handover lost its transport");
 			return;
 		}

@@ -1226,7 +1226,8 @@ namespace RTE {
 		void PublishMigrationCapsulesLocked();
 		std::unique_ptr<INetTransport> m_MigratedTransport;
 		std::shared_ptr<NetPeerSessionLinks> m_PeerSessionLinks;
-		void AttachPeerSessionWireLocked();
+		/// Puts the session on a wire over the retained peer links once the round runs; a handover attaches it at once.
+		void AttachPeerSessionWireLocked(bool handover = false);
 		std::unique_ptr<NetLockstepCoordinator> m_MigrationFallbackCoordinator;
 		std::atomic<bool> m_MigrationFallbackReady{false};
 		uint64_t m_MigrationGeneration = 0;
