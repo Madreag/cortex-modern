@@ -1,4 +1,5 @@
 #include "ADoor.h"
+#include "ActivityMan.h"
 #include "CheckpointNativeSnapshot.h"
 #include "Vector.h"
 #include "Timer.h"
@@ -29,6 +30,17 @@ using namespace RTE;
 ConcreteClassInfo(ADoor, Actor, 20);
 
 namespace {
+	// Single player's path update redraws each drawn door of an active team every 100 ms of sim time, so a dug door is whole again by then.
+	// A match's path updates land on each machine's own ticks, so there the redraw follows the shared sim clock and every peer makes it on the same tick.
+	bool MatchPathUpdateResealDue(int team) {
+		if (!ScenarioRunner::LockstepCoordinatorAttached() || !g_ActivityMan.ActivityRunning() || !g_ActivityMan.GetActivity()->TeamActive(team)) {
+			return false;
+		}
+		const long long period = g_TimerMan.GetTicksPerSecond() / 10;
+		const long long now = g_TimerMan.GetSimTickCount();
+		return now / period != (now - g_TimerMan.GetDeltaTimeTicks()) / period;
+	}
+
 	// CC_TEST_DOOR_DIG_AGE_MS=N: in a match, each closed door with its material drawn has a slit dug through it once it is N sim ms old,
 	// then says how many sim ms its material took to be whole again.
 	long long DoorDigAgeMs() {
@@ -750,6 +762,8 @@ void ADoor::Update() {
 		if (shouldDrawDoorMaterial) {
 			DrawDoorMaterial(true);
 			m_DoorMaterialRedrawTimer.Reset();
+		} else if (m_DoorMaterialDrawn && MatchPathUpdateResealDue(m_Team)) {
+			DrawDoorMaterial(true, false);
 		}
 
 		if (DoorDigAgeMs() >= 0) {
