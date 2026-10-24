@@ -154,7 +154,8 @@ namespace RTE {
 		LuaStateWrapper();
 
 		/// Makes the LuaStateWrapper object ready for use.
-		void Initialize();
+		/// @param interpreted Whether the state runs uncompiled: a saver's graph worker serializes once and closes, so the traces it recorded would go with it.
+		void Initialize(bool interpreted = false);
 #pragma endregion
 
 #pragma region Destruction

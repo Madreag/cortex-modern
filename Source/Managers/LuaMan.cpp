@@ -9195,6 +9195,9 @@ std::vector<MovableObject*> LuaStateWrapper::PreparedScriptHeldObjects(const Che
 }
 
 namespace {
+	// The test recheck's second capture of a save, through compiling workers as the saver once made them.
+	thread_local bool t_CompilingGraphWorkers = false;
+
 	template<class T> concept SnapshotConstructedValue = requires(const T& source, CheckpointNativeSnapshot& snapshot) { T(source, snapshot); };
 	// A value with a snapshot constructor is copied through it; any other is copied as it is.
 	template<class T> void* CopyFrozenValue(CheckpointNativeSnapshot& snapshot, const void* pointer) {
@@ -9250,7 +9253,7 @@ bool LuaStateWrapper::CapturePreparedScriptGraphs(const CheckpointLua::Boundary&
 				worker.Destroy();
 			}
 		} closeState{worker, savedObjects, snapshot.get()};
-		worker.Initialize(); worker.LoadScriptGraphHelper();
+		worker.Initialize(!t_CompilingGraphWorkers); worker.LoadScriptGraphHelper();
 		worker.CheckpointStateValues().randomGenerator = sourceValues->randomGenerator;
 		lua_State* const state = worker.GetLuaState();
 		const auto heap = boundary.LuaHeap(index).WithPrivate(worker.m_CheckpointHeap->PrivateReader());
@@ -9392,7 +9395,7 @@ bool LuaStateWrapper::CapturePreparedScriptGraphs(const CheckpointLua::Boundary&
 			part.nativeCpu += CheckpointThreadCpuUnits() - finishCpu;
 			scopes[index] = callbacks.perPeer ? CheckpointScope::PerPeer : CheckpointScope::Shared;
 		});
-		if (CheckpointPhaseCostsRequested()) {
+		if (CheckpointPhaseCostsRequested() && !t_CompilingGraphWorkers) {
 			const auto total = std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - started).count();
 			System::PrintDiagnosticLine(std::format("[checkpoint-lua-phase] state={} start_us={} total_us={} callbacks_us={} roots_us={} native_us={} native_setup_us={} descriptor_us={} enum_us={} world_us={} answers_us={} native_finish_us={} heap_us={} heap_setup_us={} heap_watch_setup_us={} heap_watch_arm_us={} userdata={} bytes={}", index,
 			    std::chrono::duration_cast<std::chrono::microseconds>(started - origin).count(), total, part.callbacksUs, 0,
@@ -9406,10 +9409,32 @@ bool LuaStateWrapper::CapturePreparedScriptGraphs(const CheckpointLua::Boundary&
 			    CheckpointThreadCpuUnits() - cpu, part.callbacksCpu, part.nativeCpu, part.descriptorCpu, part.heapCpu, CheckpointThreadAccountedCpu() - accounted));
 		}
 	}
-	if (CheckpointPhaseCostsRequested()) {
+	if (CheckpointPhaseCostsRequested() && !t_CompilingGraphWorkers) {
 		const auto* shared = lookups.Current();
 		const auto [vectors, controllers] = shared->DirectOwnerCounts();
 		System::PrintDiagnosticLine(std::format("[checkpoint-native-lookups] direct_vectors={} direct_controllers={} full_owner_index={}", vectors, controllers, shared->HasOwnerIndex()));
+	}
+	// Test lever CCCP_TEST_SAVER_GRAPH_RECHECK=1: the save's states are captured again by compiling workers and each text is
+	// compared byte for byte with the one the interpreted workers made.
+	static const bool recheck = [] { const char* value = std::getenv("CCCP_TEST_SAVER_GRAPH_RECHECK"); return value && std::string_view(value) == "1"; }();
+	if (recheck && !t_CompilingGraphWorkers) {
+		t_CompilingGraphWorkers = true;
+		struct Reset { ~Reset() { t_CompilingGraphWorkers = false; } } reset;
+		std::vector<CheckpointText> compiled;
+		std::vector<CheckpointScope> compiledScopes;
+		std::vector<std::string> compiledProblems;
+		CapturePreparedScriptGraphs(boundary, states, snapshot, compiled, compiledScopes, compiledProblems, captureThread);
+		size_t differing = 0, first = states.size(), bytes = 0;
+		for (size_t index = 0; index < states.size(); ++index) {
+			const std::string& text = graphs[index].Text();
+			bytes += text.size();
+			if (text != compiled[index].Text() || scopes[index] != compiledScopes[index]) {
+				++differing;
+				first = std::min(first, index);
+			}
+		}
+		System::PrintDiagnosticLine(std::format("[graph-recheck] states={} differing={} first={} bytes={} problems={} problems_equal={}", states.size(), differing,
+		    differing ? std::to_string(first) : std::string("none"), bytes, problems.size(), compiledProblems == problems ? 1 : 0));
 	}
 	return problems.empty();
 }
@@ -10205,7 +10230,7 @@ bool LuaStateWrapper::RunNumericPolicySelfTest() {
 	return passed;
 }
 
-void LuaStateWrapper::Initialize() {
+void LuaStateWrapper::Initialize(bool interpreted) {
 	FloatingPointEnvironment::Enter();
 	CheckpointLua::BindingMetadata::Install();
 	if (luaJIT_numeric_policy() != (LUAJIT_NUMERIC_DUAL | LUAJIT_NUMERIC_DOUBLE | (sizeof(void*) == 8 ? LUAJIT_NUMERIC_GC64 : 0))) {
@@ -10255,7 +10280,7 @@ void LuaStateWrapper::Initialize() {
 	}
 
 	// LuaJIT should start automatically after we load the library (if we loaded it) but we're making sure it did anyway.
-	if (!g_SettingsMan.DisableLuaJIT() && !luaJIT_setmode(m_State, 0, LUAJIT_MODE_ENGINE | LUAJIT_MODE_ON)) {
+	if (!g_SettingsMan.DisableLuaJIT() && !luaJIT_setmode(m_State, 0, LUAJIT_MODE_ENGINE | (interpreted ? LUAJIT_MODE_OFF : LUAJIT_MODE_ON))) {
 		RTEAbort("Failed to initialize LuaJIT!\nIf this error persists, please disable LuaJIT with \"Settings.ini\" property \"DisableLuaJIT\".");
 	}
 	if (luaJIT_math_policy(m_State) != 1) { std::abort(); }
