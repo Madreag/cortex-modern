@@ -617,6 +617,15 @@ void UInputMan::DisableMouseMoving(bool disable) {
 		m_PrepareToEnableMouseMoving = true;
 	}
 }
+void UInputMan::WindowFocusLost() {
+	// The scripted-input seam sends its own events, so a scripted window keeps them without the focus.
+	if (GUIInputWrapper::AutomationDriving()) {
+		return;
+	}
+	DisableMouseMoving(true);
+	DisableKeys(true);
+}
+
 bool UInputMan::CheckMultiMouseKeyboardEnabled(std::optional<std::reference_wrapper<const std::vector<int>>> players) {
 	if (m_ForceDisableMultiMouseKeyboard) {
 		m_EnableMultiMouseKeyboard = false;
@@ -2266,6 +2275,34 @@ bool UInputMan::RunScriptedInputEdgeSelfTest() {
 	check("focus_loss_alone_does_not_consume_the_seat", keyAfterFocusLoss && buttonAfterFocusLoss,
 	    "a plain keyboard disable read W as L_UP " + std::to_string(keyAfterFocusLoss) + " and the left button as fire " + std::to_string(buttonAfterFocusLoss));
 	DisableKeys(false);
+	// A scripted window that loses the focus keeps the pointer its seam moves; a player's window stops reading its mouse and keys.
+	{
+		const bool savedDriving = GUIInputWrapper::AutomationDriving();
+		const bool savedMoving = m_DisableMouseMoving, savedPrepare = m_PrepareToEnableMouseMoving, savedKeys = m_DisableKeyboard;
+		m_DisableMouseMoving = false;
+		m_DisableKeyboard = false;
+		GUIInputWrapper::SetAutomationDriving(true);
+		WindowFocusLost();
+		SDL_Event motion{};
+		motion.type = SDL_EVENT_MOUSE_MOTION;
+		motion.motion.x = 123.0F;
+		motion.motion.y = 45.0F;
+		motion.motion.xrel = 3.0F;
+		motion.motion.yrel = 1.0F;
+		HandleInputEvent(motion);
+		const Vector scripted = m_MouseStates[0].position;
+		const bool scriptedKeys = !m_DisableKeyboard;
+		GUIInputWrapper::SetAutomationDriving(false);
+		WindowFocusLost();
+		const bool playerStops = m_DisableMouseMoving && m_DisableKeyboard;
+		check("scripted_window_keeps_its_input_without_the_focus", scripted == Vector(123, 45) && scriptedKeys && playerStops,
+		    "after a focus loss the scripted pointer stood at " + std::to_string(scripted.GetX()) + "," + std::to_string(scripted.GetY()) + " (sent 123,45), its keys " +
+		        (scriptedKeys ? "on" : "off") + ", and a player's window " + (playerStops ? "stopped" : "kept") + " reading its mouse and keys");
+		m_DisableMouseMoving = savedMoving;
+		m_PrepareToEnableMouseMoving = savedPrepare;
+		m_DisableKeyboard = savedKeys;
+		GUIInputWrapper::SetAutomationDriving(savedDriving);
+	}
 	// A match's tick falls between loop passes that each end their frame, so it reads every pass's movement since the last tick.
 	{
 		const bool hadDevice = m_MouseStates.contains(1);

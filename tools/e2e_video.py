@@ -1606,7 +1606,8 @@ def peer_gate_met(gate, root):
         return log_line_seen(root / name / "stdout.log", gate["log"])
     video = root / name / "video"
     if "sim_tick" in gate:
-        return any(row.get("screen") == "game" and row.get("sim_tick", 0) >= gate["sim_tick"] for row in read_index(video))
+        # A recorded tick is a frame the recorder saved; the drop items read only those.
+        return any(row.get("screen") == "game" and row.get("saved", True) and row.get("sim_tick", 0) >= gate["sim_tick"] for row in read_index(video))
     path = video / "events.jsonl"
     return path.is_file() and gate["event"] in path.read_text(encoding="utf-8", errors="replace")
 
@@ -2551,7 +2552,7 @@ def _run_one(options, scenario, run, run_index, out, case_root=None):
             if name in records:
                 return
             rows = read_index(video)
-            hit = next((row for row in reversed(rows) if row.get("screen") == "game" and row.get("sim_tick", 0) >= tick), None)
+            hit = next((row for row in reversed(rows) if row.get("screen") == "game" and row.get("saved", True) and row.get("sim_tick", 0) >= tick), None)
             if hit:
                 write_json(video / "injected-drop.json", {"requested_tick": tick, "last_recorded_frame": hit})
                 drop_peer(runs[name], f"scenario drop after recorded tick {tick}")

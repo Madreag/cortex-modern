@@ -86,7 +86,6 @@ def main():
                               forbidden_log_regex=LATE_LINES,
                               what="A slit dug through a closed door is whole again within 100 sim ms on this player, as single player's path update leaves it."))
     for peer in scene["peers"]:
-        peer["settings"] = dict(peer["settings"], NetworkConnectionMode="Automatic")
         peer["env"] = dict(peer.get("env", {}), CC_TEST_DOOR_DIG_AGE_MS=str(DIG_AGE_MS))
     scene.update(name="door-fill", port_base=49474, timeout_s=900, checklist=checklist,
                  title="Reinforced fill over each brain chamber's closed door: every running tick's terrain alike on both players while the AI re-routes",

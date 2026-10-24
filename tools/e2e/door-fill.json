@@ -18,7 +18,7 @@
       "settings": {
         "SessionDirectoryUrl": "directory.broserver.com",
         "NetworkHostRelayMode": "Directory",
-        "NetworkConnectionMode": "Automatic",
+        "NetworkConnectionMode": "RelayOnly",
         "NetworkIceEnable": 1,
         "NetworkPortMapEnable": 0,
         "NetworkMatchStatusMode": "Always",
@@ -42,7 +42,7 @@
       "settings": {
         "SessionDirectoryUrl": "directory.broserver.com",
         "NetworkHostRelayMode": "Directory",
-        "NetworkConnectionMode": "Automatic",
+        "NetworkConnectionMode": "RelayOnly",
         "NetworkIceEnable": 1,
         "NetworkPortMapEnable": 0,
         "NetworkMatchStatusMode": "Always",

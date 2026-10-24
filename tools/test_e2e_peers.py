@@ -105,6 +105,22 @@ class SceneBoxesTest(unittest.TestCase):
             peers.write_player_files(requests['host'], {"files": copied})
 
 
+class CommittedScenesTest(unittest.TestCase):
+    def test_every_public_scene_passes_the_launchers_own_check(self):
+        # A scene the two-machine launcher would refuse is caught here, before any box is spent on it.
+        refused = {}
+        for path in sorted((Path(__file__).resolve().parent / "e2e").glob("*.json")):
+            if path.name.endswith(".probe.json"):
+                continue
+            document = peers.read(path)
+            if isinstance(document, dict) and document.get("public_directory"):
+                try:
+                    peers.check_scene(document)
+                except ValueError as error:
+                    refused[path.name] = str(error)
+        self.assertEqual(refused, {})
+
+
 class FightEndCheckTest(unittest.TestCase):
     def test_the_fights_end_reads_the_view_state_not_the_absence_of_text(self):
         # A unit lost in the fight's last seconds puts the game's own "Lost control of remote body!" on screen; the end check asks

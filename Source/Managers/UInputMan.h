@@ -376,6 +376,10 @@ namespace RTE {
 		/// @param disable Whether to disable mouse positioning or not.
 		void DisableMouseMoving(bool disable = true);
 
+		/// The game window lost the focus: a player's mouse and keys stop until it is back, while a scripted window keeps
+		/// reading the events its scripted-input seam sends.
+		void WindowFocusLost();
+
 		/// @brief Check if multi mouse and keyboard should be enabled.
 		/// Checks through a list of human players to see if multimouse is required.
 		/// @param player A list of human players.

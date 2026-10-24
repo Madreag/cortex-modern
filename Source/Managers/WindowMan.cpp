@@ -736,8 +736,7 @@ void WindowMan::DisplaySwitchIn(SDL_Window* windowThatShouldTakeInputFocus) cons
 }
 
 void WindowMan::DisplaySwitchOut() const {
-	g_UInputMan.DisableMouseMoving(true);
-	g_UInputMan.DisableKeys(true);
+	g_UInputMan.WindowFocusLost();
 
 	SDL_ShowCursor();
 	// Sometimes the cursor will not be visible after disabling relative mode. Setting it to nullptr forces it to redraw, though this doesn't always work either.

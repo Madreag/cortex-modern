@@ -123,6 +123,8 @@ namespace {
 		uint64_t minuteObservedFrame = UINT64_MAX;
 		uint64_t minuteMs = 0, minuteTick = 0, minuteProbeNs = 0, fightSamples = 0, aiFiredFrames = 0;
 		double minimumFightPace = std::numeric_limits<double>::infinity();
+		bool repairing = false; //!< A resync was taking the round down and rebuilding it at the last poll.
+		uint64_t repairs = 0, repairPollMs = 0, repairStartMs = 0, repairEndMs = 0;
 		size_t landingMoveIndex = SIZE_MAX, actorCycleIndex = SIZE_MAX, aimIndex = SIZE_MAX;
 		int lostRebuys = 0; //!< Purchases bought again because their unit was lost before its player took it.
 		size_t jumpTo = SIZE_MAX; //!< The step a completed one sends the script back to.
@@ -288,6 +290,11 @@ namespace {
 			}
 		}
 		return false;
+	}
+
+	/// Whether a resync is taking the round down and rebuilding it, as the game loop reads it.
+	bool RepairUnderway() {
+		return g_NetMatchService.IsMatchResyncing() || g_ActivityMan.LockstepRelaunchInProgress();
 	}
 
 	Json Observe() {
@@ -1108,8 +1115,22 @@ namespace {
 			observed["pan_scene"] = true; observed["pan_motion_events"] = probe.panMotionEvents;
 			observed["pan_view"]["screen_text"] = text;
 		} else if (op == "measure_minute") {
-			Require(observed["service"] == "Running" && observed["paused"] == false && observed["editing"] == false && observed["local_actor_alive"] == true,
-			        "the AI fight stopped or its local player lost their actor");
+			// A repair stops the fight on purpose: it is waited for, bounded, and the fight must be back right after it.
+			if (probe.repairing) {
+				observed["repair"] = {{"number", probe.repairs}, {"since_ms", NowMs() - probe.repairStartMs}};
+				const uint64_t repairLimit = step.value("repair_ms", uint64_t{120000});
+				Require(NowMs() - probe.repairStartMs <= repairLimit, "repair " + std::to_string(probe.repairs) + " did not finish within " + std::to_string(repairLimit) + " ms");
+				return false;
+			}
+			const bool fighting = observed["service"] == "Running" && observed["paused"] == false && observed["editing"] == false && observed["local_actor_alive"] == true;
+			if (probe.repairEndMs != 0) {
+				Require(observed["service"] != "Failed", "repair " + std::to_string(probe.repairs) + " ended the match: " + observed["error_text"].get<std::string>());
+				observed["repair"] = {{"number", probe.repairs}, {"ms", probe.repairEndMs - probe.repairStartMs}, {"since_ms", NowMs() - probe.repairEndMs}};
+				if (!fighting && NowMs() - probe.repairEndMs <= step.value("repair_settle_ms", uint64_t{10000})) return false;
+				if (fighting) System::PrintDiagnosticLine("[net-ui-probe] repair=" + std::to_string(probe.repairs) + " fight back after_ms=" + std::to_string(NowMs() - probe.repairEndMs));
+				probe.repairEndMs = 0;
+			}
+			Require(fighting, "the AI fight stopped or its local player lost their actor");
 			if (probe.minuteIndex != probe.index) {
 				probe.minuteIndex = probe.index; probe.minuteMs = NowMs(); probe.minuteTick = observed["lockstep_frame"].get<uint64_t>();
 				probe.minuteProbeNs = probeWallNs.load(std::memory_order_relaxed);
@@ -1792,6 +1813,23 @@ namespace {
 			Require(NowMs() <= probe.script.at("timeout_ms").get<uint64_t>(), "script deadline at step " + std::to_string(probe.index));
 			Require(probe.index < probe.script["steps"].size(), "script did not finish explicitly");
 			const auto& step = probe.script["steps"][probe.index];
+			// A repair takes the whole round down and rebuilds it: a fight minute waits it out, and that time is not the step's own.
+			const uint64_t pollMs = NowMs();
+			const bool repairing = RepairUnderway();
+			if (step.at("op") == "measure_minute" && (repairing || probe.repairing) && probe.repairPollMs != 0)
+				probe.stepMs = std::min(pollMs, probe.stepMs + (pollMs - probe.repairPollMs));
+			if (repairing != probe.repairing) {
+				if (repairing) {
+					probe.repairStartMs = pollMs;
+					++probe.repairs;
+				} else {
+					probe.repairEndMs = pollMs;
+				}
+				System::PrintDiagnosticLine("[net-ui-probe] repair=" + std::to_string(probe.repairs) + (repairing ? " began" : " finished ms=" + std::to_string(pollMs - probe.repairStartMs)) +
+				                            " tick=" + std::to_string(g_TimerMan.GetSimUpdateCount()));
+			}
+			probe.repairing = repairing;
+			probe.repairPollMs = pollMs;
 			const uint64_t stepLimit = step.value("within_ms", probe.script.value("step_timeout_ms", uint64_t{0}));
 			Require((!step.contains("within_ms") && stepLimit == 0) || NowMs() - probe.stepMs <= stepLimit,
 			    "step deadline at " + std::to_string(probe.index) + " (" + step.at("op").get<std::string>() + ")");
@@ -1992,6 +2030,48 @@ bool RunCrossScopeSelfTest(std::string* error) {
 		if (!roundClock) *error = "lobby simulation ticks satisfied a lockstep round wait";
 		System::PrintDiagnosticLine("[net-match-selftest] " + std::string(roundClock ? "PASS" : "FAIL") +
 		                            " probe_round_clock_ignores_lobby_ticks_and_preserves_the_default");
+	}
+
+	// A fight minute waits out a repair, bounded; a fight lost without one, or still lost after one, fails as before.
+	{
+		Probe saved = std::move(probe);
+		probe = Probe{};
+		const Json minute = {{"op", "measure_minute"}, {"repair_ms", 30000}, {"repair_settle_ms", 5000}};
+		const Json lost = {{"service", "Running"}, {"paused", false}, {"editing", false}, {"local_actor_alive", false}, {"lockstep_frame", 6000}, {"error_text", ""}};
+		const auto fails = [&](Json observed, const std::string& words) {
+			try {
+				Step(minute, observed);
+			} catch (const std::exception& thrown) {
+				return std::string(thrown.what()).find(words) != std::string::npos;
+			}
+			return false;
+		};
+		const auto waits = [&](Json observed) {
+			try {
+				return !Step(minute, observed);
+			} catch (const std::exception&) {
+				return false;
+			}
+		};
+		std::string failed;
+		if (!fails(lost, "the AI fight stopped or its local player lost their actor")) failed += " lost-without-repair";
+		probe.repairing = true; probe.repairs = 1; probe.repairStartMs = NowMs();
+		if (!waits(lost)) failed += " during-repair";
+		probe.repairStartMs = NowMs() - 31000;
+		if (!fails(lost, "repair 1 did not finish within 30000 ms")) failed += " repair-past-its-bound";
+		probe.repairing = false; probe.repairStartMs = NowMs() - 2000; probe.repairEndMs = NowMs();
+		if (!waits(lost)) failed += " settling-after-repair";
+		Json ended = lost;
+		ended["service"] = "Failed"; ended["error_text"] = "resync failed";
+		if (!fails(ended, "repair 1 ended the match: resync failed")) failed += " repair-ended-the-match";
+		probe.repairEndMs = NowMs() - 6000;
+		if (!fails(lost, "the AI fight stopped or its local player lost their actor")) failed += " lost-after-repair";
+		probe = std::move(saved);
+		const bool repairMinute = failed.empty();
+		passed &= repairMinute;
+		if (!repairMinute) *error = "a fight minute misjudged a repair:" + failed;
+		System::PrintDiagnosticLine("[net-match-selftest] " + std::string(repairMinute ? "PASS" : "FAIL") +
+		                            " probe_fight_minute_waits_out_a_repair_and_fails_a_lost_fight" + (repairMinute ? "" : " (" + failed + ")"));
 	}
 
 	// finish_on_round_end: armed, a round end completes the script with its signals; disarmed or never armed, it is the script's.
