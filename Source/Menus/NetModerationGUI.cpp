@@ -2809,7 +2809,7 @@ void NetModerationGUI::Draw() {
 	const bool matchEnded = snapshot.serviceState == "Completed" && ActivityInMatch();
 	const bool menuLobby = PostMatchLobbySurfaces();
 	if (snapshot.serviceState != "Running" && snapshot.serviceState != "Starting" && snapshot.serviceState != "ReadyToLaunch" &&
-	    !matchEnded && !snapshot.hostLost && !snapshot.migrating && !m_Open && !menuLobby) return;
+	    !matchEnded && !snapshot.hostLost && !snapshot.migrating && !m_Open && !menuLobby && !m_HeldWaitScreen) return;
 	RandomGenerator* previousRNG = t_simRNGOverride;
 	t_simRNGOverride = &g_RenderRNG;
 	const bool inMatch = MatchSurfacesDrawn(ScenarioRunner::IsLockstepControllerSyncActive(), g_NetMatchService.IsMatchResyncing(),
@@ -2819,7 +2819,7 @@ void NetModerationGUI::Draw() {
 	    (ScenarioRunner::HasLockstepCoordinator() || g_NetMatchService.IsMatchResyncing() || snapshot.hostLost);
 	if (m_ConnectionInMatch) CreateConnectionControls();
 	else if (m_ConnectionControls) ClearConnectionControls();
-	if (inMatch) {
+	if (inMatch || m_HeldWaitScreen) {
 		CreateOverlay();
 	} else {
 		DrawRoster(snapshot);
@@ -2827,7 +2827,8 @@ void NetModerationGUI::Draw() {
 	// The lobby arm sits inside inMatch: the rematch lobby keeps the seats reading beside its own box.
 	if (menuLobby) DrawRoster(snapshot);
 	s_OverlayPhases.Lap(1);
-	if (inMatch && (menuLobby || MatchStatusWanted())) {
+	// A held seat waiting for its rejoin reads the same status line as in the match, whatever the round's own state.
+	if (m_HeldWaitScreen || (inMatch && (menuLobby || MatchStatusWanted()))) {
 		DrawMatchStatus(snapshot);
 		m_NetStatus->SetVisible(true);
 	}
