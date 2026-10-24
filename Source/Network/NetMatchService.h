@@ -1495,6 +1495,7 @@ namespace RTE {
 		friend bool TestTheGoodbyeEndsWithItsRound(std::string* error);
 		friend bool TestAnOwnSideErrorKeepsTheSeatsReconnect(std::string* error);
 		friend bool TestAnInPlaceReturnKeepsAnOpenReturnGap(std::string* error);
+		friend bool TestAnImageReturnKeepsTheDirectorysRule(std::string* error);
 		friend bool TestAReturnerToldTheMatchIsOverGetsItsRecord(std::string* error);
 		friend bool TestACaughtUpSeatTakesItsRoundsRecordOnce(std::string* error);
 		friend bool TestARematchStartsWithoutTheEndedRoundsCatchUp(std::string* error);

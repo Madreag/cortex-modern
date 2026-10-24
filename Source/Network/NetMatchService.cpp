@@ -3671,8 +3671,8 @@ static std::string ResyncSaveName() {
 				System::PrintDiagnosticLine(line.str());
 			}
 		} else {
-			System::PrintDiagnosticLine(std::format("[net-lockstep] start round={} frame={} local_peer={} peers={} input_delay={}\n",
-			                         m_Coordinator->GetRoundId(), config.startFrame, config.localPeerId, config.peerCount, config.inputDelayFrames));
+			System::PrintDiagnosticLine(std::format("[net-lockstep] start round={} frame={} local_peer={} peers={} input_delay={} referee={}\n",
+			                         m_Coordinator->GetRoundId(), config.startFrame, config.localPeerId, config.peerCount, config.inputDelayFrames, static_cast<bool>(config.frameTieReferee)));
 		}
 		CaptureA7SeatView();
 		return true;
@@ -6715,6 +6715,8 @@ static std::string ResyncSaveName() {
 			live.frameTieReferee = previous.frameTieReferee; live.hostChangeReferee = previous.hostChangeReferee;
 			live.migrationTransportFactory = previous.migrationTransportFactory; live.migrationIceDial = previous.migrationIceDial; live.migrationIceHost = previous.migrationIceHost;
 		}
+		// The agreed config names the round's rule: a seat back through its image keeps the directory's, whatever round it ran last.
+		if (!live.frameTieReferee) InstallRoundRefereesLocked(live);
 		live.initialSeatBridgeSinceMs = m_CatchUpCoordinator->SeatBridgeTimes();
 		live.roundId = m_WorldCatchUp.roundId; live.originalRoundConfigHash = m_WorldCatchUp.roundConfigHash;
 		live.initialSeatHolds = m_CatchUpCoordinator->HeldTransactions();
@@ -7212,8 +7214,8 @@ static std::string ResyncSaveName() {
 			m_Coordinator->DeferStopsToTickBoundary();
 			m_AutosaveIdentity.roundId = m_Coordinator->GetRoundId();
 			const auto& config = m_Coordinator->GetConfig();
-			System::PrintDiagnosticLine(std::format("[net-lockstep] start round={} frame={} local_peer={} peers={} input_delay={}\n",
-			    m_Coordinator->GetRoundId(), config.startFrame, config.localPeerId, config.peerCount, config.inputDelayFrames));
+			System::PrintDiagnosticLine(std::format("[net-lockstep] start round={} frame={} local_peer={} peers={} input_delay={} referee={}\n",
+			    m_Coordinator->GetRoundId(), config.startFrame, config.localPeerId, config.peerCount, config.inputDelayFrames, static_cast<bool>(config.frameTieReferee)));
 			// Starting the joined round handed its session traffic to the runner's start queue, which nothing reads after the start:
 			// the session takes it back, the queued events first, or a returner never hears the roster, the chat or a kick again.
 			AttachCoordinatorSessionSink();

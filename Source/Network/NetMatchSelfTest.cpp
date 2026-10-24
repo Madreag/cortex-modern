@@ -8715,6 +8715,48 @@ namespace RTE {
 		return true;
 	}
 
+	// A seat back through its image in a directory match runs its live round under the directory's rule, whatever round its
+	// coordinator ran last: on the direct-play rule a held host's traffic is not its liveness, and the seat took the match over.
+	bool TestAnImageReturnKeepsTheDirectorysRule(std::string* error) {
+		NetMatchService service;
+		service.m_LocalPeerId = 2;
+		NetLockstepConfig round;
+		round.sessionId = 0x9A61; round.roundId = 61; round.localPeerId = 2; round.peerCount = 2; round.authorityPeerId = 1;
+		round.matchConfig = NetMatchConfigUtil::MakeDefault(round.sessionId);
+		round.matchConfig.peerCount = 2; round.matchConfig.directoryArbitration = true;
+		service.m_ConnectionAuthority.SetDirectory("d05-directory-session");
+		NetLockstepConfig last = round;
+		last.startFrame = 700;
+		LoopbackTransport lastWire;
+		service.m_Coordinator = std::make_unique<NetLockstepCoordinator>();
+		if (!service.m_Coordinator->StartReplay(lastWire, last, error)) return false;
+		NetLockstepConfig replay = round;
+		replay.startFrame = 701;
+		service.m_CatchUpTransport = std::make_unique<LoopbackTransport>();
+		service.m_CatchUpCoordinator = std::make_unique<NetLockstepCoordinator>();
+		if (!service.m_CatchUpCoordinator->StartReplay(*service.m_CatchUpTransport, replay, error)) return false;
+		service.m_WorldCatchUp.privateMatch = true;
+		service.m_WorldCatchUp.roundId = 61;
+		service.m_WorldCatchUp.appliedThrough = 780;
+		service.m_WorldCatchUp.activationTick = 781;
+		NetLockstepTiming own;
+		own.senderPeerId = 1; own.peerId = 2; own.action = NetTimingAction::Reclaim; own.phase = NetTimingPhase::ReclaimAtFrame;
+		own.sessionId = round.sessionId; own.roundId = 61; own.revision = 9; own.applyFrame = 781; own.delayFrames = 4;
+		own.neutralThroughFrame = 790; own.seatIncarnations[1] = 2; own.cutoffFrame = 781; own.heldPeers = 1U << 1; own.requiredPeers = 1;
+		NetTransportEvent ownReturn;
+		ownReturn.type = NetTransportEventType::PacketReceived; ownReturn.peerId = 1; ownReturn.lane = NetTransportLane::ControlReliable;
+		if (!NetLockstepCodec::Encode({own}, ownReturn.bytes)) { *error = "this seat's own return did not encode"; return false; }
+		service.m_CatchUpWirePackets.push_back(ownReturn);
+		NetLockstepConfig live;
+		if (!service.InPlaceLiveRoundLocked(live)) { *error = "the live round was not formed from the catch-up"; return false; }
+		if (!live.frameTieReferee || !live.hostChangeReferee) {
+			*error = "image-return-lost-the-directory: a seat back through its image in a directory match started its round on the direct-play rule";
+			return false;
+		}
+		std::cout << "[net-match-selftest] PASS an_image_return_keeps_the_directorys_rule" << std::endl;
+		return true;
+	}
+
 	// A held seat whose rejoin meets its round's end is told the match is over and its join cancelled; the round's record then waited
 	// for that seat to ask for its final tail, which it never does, so it never heard its round end and drifted into the next round
 	// (the four-box run: 'rejoin answered connection=...: the match is over', then 'end waits peer=2 final=518 tail=518', again and again).
@@ -19749,6 +19791,7 @@ namespace RTE {
 		sessionRow([&] { return TestARematchLobbyDropReturnsThroughTheRejoin(&error); }, "TestARematchLobbyDropReturnsThroughTheRejoin()");
 		sessionRow([&] { return TestAHeldRejoinAsksAnUnansweringHostAgain(&error); }, "TestAHeldRejoinAsksAnUnansweringHostAgain()");
 		sessionRow([&] { return TestAHeldRejoinAsksItsHostAgainOffTheGameThread(&error); }, "TestAHeldRejoinAsksItsHostAgainOffTheGameThread()");
+		sessionRow([&] { return TestAnImageReturnKeepsTheDirectorysRule(&error); }, "TestAnImageReturnKeepsTheDirectorysRule()");
 		sessionRow([&] { return TestARoundStartsDelayCoversTheStartWork(&error); }, "TestARoundStartsDelayCoversTheStartWork()");
 		sessionRow([&] { return TestARematchStartsWithoutTheEndedRoundsCatchUp(&error); }, "TestARematchStartsWithoutTheEndedRoundsCatchUp()");
 		sessionRow([&] { return TestLeavingEndsTheSeatsCatchUp(&error); }, "TestLeavingEndsTheSeatsCatchUp()");
