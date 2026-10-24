@@ -539,6 +539,7 @@ class Session:
         self.ice_generation = 0
         self.ice_refused = False  # the host's last mint was refused by its relay backend
         self.ice_fixed = False
+        self.lent_logins: dict[str, dict[str, Any]] = {}  # each requester's own login, in memory only
         self.migration_gen = 0  # the host handover generation that holds the row
         self.register_fingerprint = ""
         self.register_retry_until = 0.0
@@ -1529,16 +1530,25 @@ class SessionDirectory:
                 raise TurnError(404, "relay_offer_unavailable")
             if not valid_install_key(install_key):
                 raise PermissionError("forbidden")
+            wall = int(time.time())
+            ttl = min(BOOTSTRAP_RELAY_TTL, self.turn_max_ttl)
+            held = sess.lent_logins.get(install_key)
+            # A re-dial takes the requester's own login again while half its life remains; only a login it lacks spends the allowance.
+            if held and held["expires_at"] - wall > ttl // 2:
+                LOGGER.info('relay_bootstrap_offer_reused %s', json.dumps(dict(session_id=session_id, expires_at=held['expires_at']), sort_keys=True))
+                return dict(held)
             limited = self.turn_limiter.probe(install_key, now, False)
             if limited:
                 raise TurnError(429, "rate_limited_key", limited[1]["retry_after_s"], "relay")
             self.turn_limiter.commit(install_key, now, False)
-        wall = int(time.time())
-        offer = self.turn_provider.mint(session_id, min(BOOTSTRAP_RELAY_TTL, self.turn_max_ttl), wall)
+        offer = self.turn_provider.mint(session_id, ttl, wall)
+        with self._lock:
+            sess.lent_logins = {key: login for key, login in sess.lent_logins.items() if login["expires_at"] > wall}
+            sess.lent_logins[install_key] = offer
         LOGGER.info('relay_bootstrap_offer_issued %s', json.dumps(dict(session_id=session_id,
             provider=self.turn_provider._config.get('backend', 'cloudflare'), expires_at=offer['expires_at'],
             server_count=len(offer['iceServers'])), sort_keys=True))
-        return offer
+        return dict(offer)
 
     def hear_host(self, session_id: str, data: dict[str, Any], now: float, retry_s: float = 0) -> bool:
         """A valid heartbeat is liveness evidence even when its update must wait."""

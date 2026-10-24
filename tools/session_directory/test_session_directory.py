@@ -249,6 +249,31 @@ class DirectoryTests(unittest.TestCase):
             self.assertEqual(store.get_ice_servers(row["session_id"], "joiner0123456789", 14)["iceServers"][0]["username"], "joiner-u")
         self.assertEqual(json.loads(fetch.call_args.args[0].data), {"ttl": session_directory.BOOTSTRAP_RELAY_TTL})
 
+    def test_a_requester_spends_the_relay_allowance_only_on_logins_it_lacks(self) -> None:
+        """A re-dial takes the login its requester still holds; only a login it lacks spends the allowance."""
+        store = session_directory.SessionDirectory(300, 5, turn_config={
+            "backend": "coturn", "static_auth_secret": "server-only-secret", "relay_urls": ["turn:relay.example:3478?transport=udp"]})
+        joiner = "joiner0123456789"
+        sessions = []
+        for index in range(session_directory.TURN_REQUESTS_PER_MIN + 1):
+            host = f"host{index:012d}"
+            row = store.register(sample_register(), "192.0.2.1", 10, host)
+            store.mint_ice_servers(row["session_id"], {"token": row["token"], "match_id": f"match:{index}", "ttl": 3600}, host, 10)
+            sessions.append(row["session_id"])
+        with mock.patch.object(session_directory.time, "time", return_value=1000):
+            first = store.get_ice_servers(sessions[0], joiner, 11)
+            self.assertEqual(store.get_ice_servers(sessions[0], joiner, 12), first, "a re-dial minted a login its requester still held")
+            for sid in sessions[1:session_directory.TURN_REQUESTS_PER_MIN]:
+                store.get_ice_servers(sid, joiner, 13)
+            with self.assertRaises(session_directory.TurnError) as limited:
+                store.get_ice_servers(sessions[-1], joiner, 14)
+            self.assertEqual((limited.exception.status, limited.exception.body["error"]), (429, "rate_limited_key"))
+            self.assertEqual(store.get_ice_servers(sessions[0], joiner, 15), first, "a held login was refused with the allowance spent")
+        with mock.patch.object(session_directory.time, "time", return_value=1000 + session_directory.BOOTSTRAP_RELAY_TTL // 2 + 1):
+            renewed = store.get_ice_servers(sessions[0], joiner, 75)
+        self.assertNotEqual(renewed["iceServers"][0]["username"], first["iceServers"][0]["username"], "a login past half its life was lent again")
+        self.assertEqual(renewed["expires_at"], 1000 + session_directory.BOOTSTRAP_RELAY_TTL // 2 + 1 + session_directory.BOOTSTRAP_RELAY_TTL)
+
     def test_unexpired_relay_offer_survives_listing_gap_and_host_resume(self) -> None:
         store = session_directory.SessionDirectory(15, 5, turn_config={
             "backend": "coturn", "static_auth_secret": "server-only-secret", "relay_urls": ["turn:relay.example:3478?transport=udp"]})
@@ -364,10 +389,9 @@ class DirectoryTests(unittest.TestCase):
         status, second = self.call("GET", path, install_key=other)
         self.assertEqual(status, 200)
         self.assertFalse({server["username"] for server in second["iceServers"]} & lent_logins, "two requesters shared one login")
-        for _ in range(session_directory.TURN_REQUESTS_PER_MIN - 1):
-            self.assertEqual(self.call("GET", path, install_key=other)[0], 200)
-        status, limited = self.call("GET", path, install_key=other)
-        self.assertEqual((status, limited["error"], limited.get("budget")), (429, "rate_limited_key", "relay"))
+        # Re-dials take the requester's own login again and never reach the relay allowance.
+        for _ in range(session_directory.TURN_REQUESTS_PER_MIN + 1):
+            self.assertEqual(self.call("GET", path, install_key=other), (200, second))
         # A fixed account reaches players only in the admitted lobby config.
         private = {"urls": ["turn:private.example:3478?transport=udp"], "username": "private-user", "credential": "private-password"}
         status, fixed = self.call("POST", "/v1/sessions", sample_register(), headers={"X-Install-Key": "hostfixed0123456"}, install_key=None)
@@ -3926,7 +3950,8 @@ class ConnectionAuthorityTests(unittest.TestCase):
         self.wall += 5; self.now += 5
         changed = self.check(route=dict(self.route, listen_addrs=["198.51.100.4", "2001:db8::4"], generation=2))
         self.assertTrue(changed["relay_current"])
-        self.assertNotEqual(first["relay"]["iceServers"][0]["username"], changed["relay"]["iceServers"][0]["username"])
+        # A relay login is not bound to a route, so the seat keeps the one it holds.
+        self.assertEqual(first["relay"], changed["relay"])
         self.assertEqual(changed["peers"][0]["route"]["listen_addrs"], ["198.51.100.4", "2001:db8::4"])
         self.wall += 900; self.now += 900
         self.store.prune(self.now)
@@ -3970,6 +3995,30 @@ class ConnectionAuthorityTests(unittest.TestCase):
         self.store.connection_request(self.sid, dict(removal, action="lifted"), self.now, INSTALL_KEY)
         self.store.connection_request(self.sid, self.issue, self.now, INSTALL_KEY)
         self.assertEqual(self.check()["seat"], 1)
+
+    def test_a_ban_and_readmission_within_a_minute_stay_inside_the_relay_allowance(self) -> None:
+        """A dial, a route change, a refused re-dial and the readmission spend the relay allowance only on logins the player lacks."""
+        joiner = "joiner0123456789"
+        check = lambda **kwargs: self.store.connection_request(self.sid, self.envelope(**kwargs), self.now, joiner)
+        dial = self.store.get_ice_servers(self.sid, joiner, self.now)
+        seated = check()
+        self.wall += 5; self.now += 5
+        moved = check(route=dict(self.route, listen_addrs=["198.51.100.4"], generation=2))
+        self.assertTrue(moved["relay_current"])
+        self.assertEqual(moved["relay"], seated["relay"], "a route change minted a seat login the seat still held")
+        removal = dict(connection_protocol=session_directory.CONNECTION_PROTOCOL, operation="remove", token=self.row["token"], host_generation=0,
+                       participant=self.issue["participant"], name="Original player", action="banned")
+        self.store.connection_request(self.sid, removal, self.now, INSTALL_KEY)
+        self.wall += 7; self.now += 7
+        self.assertEqual(self.store.get_ice_servers(self.sid, joiner, self.now), dial, "a re-dial minted a login its requester still held")
+        self.store.connection_request(self.sid, dict(removal, action="lifted"), self.now, INSTALL_KEY)
+        self.wall += 5; self.now += 5
+        self.assertEqual(self.store.get_ice_servers(self.sid, joiner, self.now), dial, "the readmission's dial minted a login its requester still held")
+        lease = self.store.connection_request(self.sid, dict(self.issue, generation=2), self.now, INSTALL_KEY)
+        readmitted = check(token=lease["seat_token"], instance="40" * 16)
+        self.assertTrue(readmitted["relay_current"])
+        self.assertEqual(readmitted["relay"], seated["relay"], "a readmitted player's seat minted a login the player still held")
+        self.assertIsNone(self.store.turn_limiter.probe(joiner, self.now, False), "a ban and readmission met the relay limit")
 
     def test_a_clock_refusal_names_the_directory_time(self) -> None:
         self.assertEqual(self.check()["directory_time"], int(self.wall))

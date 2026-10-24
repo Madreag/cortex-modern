@@ -328,7 +328,10 @@ class ConnectionAuthority:
                         seat["lease_issued"] = int(now)
                         self._save(sid, record)
                     return self._reply(sid, record, seat, now)
-            seat = dict(seat=seat_id, generation=generation, participant=participant, name=name, epoch=epoch, host_session=host_session, network_protocol=protocol, credential=credential, lease_issued=int(now), instance="", last_check_in=0, route={}, recent_requests={}, relay=None)
+            # A player seated again keeps the relay login it still holds in this match.
+            relay = next((held["relay"] for held in record["seats"].values() if held["participant"] == participant and held["relay"]
+                          and held["relay"].get("expires_at", 0) - now > SEAT_TOKEN_SECONDS), None)
+            seat = dict(seat=seat_id, generation=generation, participant=participant, name=name, epoch=epoch, host_session=host_session, network_protocol=protocol, credential=credential, lease_issued=int(now), instance="", last_check_in=0, route={}, recent_requests={}, relay=relay)
             record["seats"][str(seat_id)] = seat
             record["retain_until"] = now + MATCH_RETENTION_SECONDS
             self._save(sid, record)
@@ -417,7 +420,6 @@ class ConnectionAuthority:
                 raise ConnectionErrorReply(429, "connection_busy", "Too many connection changes. Wait a moment while reconnecting retries.", retry_after_s=wait)
             recent[nonce] = now + REQUEST_WINDOW_SECONDS * 2
             changed = seat["route"] != route or seat["instance"] != instance
-            path_changed = seat["instance"] != instance or any(seat["route"].get(key) != route.get(key) for key in ("ice_identity", "ice_virtual_port", "listen_addrs", "generation"))
             seat.update(instance=instance, last_check_in=now, recent_requests=recent, route=route)
             if now - seat["lease_issued"] >= SEAT_TOKEN_SECONDS // 2:
                 seat["lease_issued"] = int(now)
@@ -425,7 +427,8 @@ class ConnectionAuthority:
                 record["route_revision"] += 1
             record["retain_until"] = now + MATCH_RETENTION_SECONDS
             self._save(sid, record)
-            needs_relay = path_changed or not seat["relay"] or seat["relay"].get("expires_at", 0) - now <= SEAT_TOKEN_SECONDS
+            # A relay login is not bound to a route: the seat's lasts its life whatever path the player moves to.
+            needs_relay = not seat["relay"] or seat["relay"].get("expires_at", 0) - now <= SEAT_TOKEN_SECONDS
             return self._reply(sid, record, seat, now), needs_relay, dict(host_claim, route=route) if host_claim else None
 
     def frame_tie(self, sid: str, envelope: dict[str, Any], now: float) -> dict[str, Any]:
