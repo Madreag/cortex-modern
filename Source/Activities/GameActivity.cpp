@@ -3304,7 +3304,8 @@ void GameActivity::PrepareDrawGUI(int whichScreen) {
 void GameActivity::DrawGUI(BITMAP* pTargetBitmap, const Vector& targetPos, int which) {
 	if (which < 0 || which >= c_MaxScreenCount)
 		return;
-	if (std::getenv("CC_TEST_FIGHT15_PRESENTATION")) {
+	static const bool s_Fight15Presentation = std::getenv("CC_TEST_FIGHT15_PRESENTATION") != nullptr;
+	if (s_Fight15Presentation) {
 		const Vector offset = g_CameraMan.GetOffset(which), render = g_CameraMan.GetRenderOffset(which);
 		System::PrintDiagnosticLine("[fight15-presentation] wall_ms=" + std::to_string(SDL_GetTicks()) +
 		    " sim=" + std::to_string(g_TimerMan.GetSimUpdateCount()) + " game_ms=" + std::to_string(m_GameTimer.GetElapsedRealTimeMS()) +

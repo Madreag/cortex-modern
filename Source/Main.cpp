@@ -8703,7 +8703,8 @@ void RunGameLoop() {
 
 			const long long paceTickStartUs = g_TimerMan.GetAbsoluteTime();
 			const long long paceWaitStartUs = ScenarioRunner::GetLockstepWaitUs();
-			const bool heldTickDetails = std::getenv("CC_TEST_RETURN_INPUT_DETAILS") && ScenarioRunner::IsLockstepOwnSeatHeld();
+			static const bool returnInputDetails = std::getenv("CC_TEST_RETURN_INPUT_DETAILS") != nullptr;
+			const bool heldTickDetails = returnInputDetails && ScenarioRunner::IsLockstepOwnSeatHeld();
 			static const bool tickCostDetails = std::getenv("CC_TEST_TICK_COST_DETAILS") != nullptr;
 			const bool tickPhaseDetails = heldTickDetails || tickCostDetails;
 			long long heldBeforeWorldUs = 0, heldAfterWorldUs = 0, heldAfterHashUs = 0, heldAfterCollectionUs = 0;

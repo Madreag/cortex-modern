@@ -5,6 +5,10 @@
 #include "Actor.h"
 #include "ADSensor.h"
 
+#include <optional>
+#include <utility>
+#include <vector>
+
 namespace RTE {
 
 	class Attachable;
@@ -230,6 +234,19 @@ namespace RTE {
 		/// @param updateMaterialArea Whether to tell the Scene's Terrain that this door has modified the material layer..
 		/// @return Whether the fill erasure was successful (if the same material as the door was found and erased).
 		bool EraseDoorMaterial(bool updateMaterialArea = true);
+
+		/// Flood-fills the door's material like EraseDoorMaterial, kept within the door's own shape, and remembers every pixel it changed.
+		void TempEraseDoorMaterialRestorably();
+
+		/// Puts back exactly the pixels TempEraseDoorMaterialRestorably changed.
+		void RestoreTempErasedDoorMaterial();
+
+		/// The pixels a temporary erase inside a lockstep match changed, all of one material. Disengaged outside the erase.
+		struct TempErasedDoorMaterial {
+			unsigned char material = 0;
+			std::vector<std::pair<int, int>> pixels;
+		};
+		std::optional<TempErasedDoorMaterial> m_TempErasedDoorMaterial;
 
 		bool m_CheckpointInitialized = false;
 

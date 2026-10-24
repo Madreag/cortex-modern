@@ -39,12 +39,17 @@ namespace RTE {
 
 	namespace {
 		uint16_t PeerLinkFixturePort() {
+			// The port is read once: this runs every tick, and every getenv takes the C runtime's environment lock.
+			static const uint16_t fixturePort = [] {
+				const char* text = std::getenv("CC_TEST_PEER_LINK_PORT");
+				if (!text) return uint16_t{0};
+				unsigned int port = 0;
+				const auto [end, error] = std::from_chars(text, text + std::strlen(text), port);
+				return error == std::errc{} && *end == '\0' && port >= 1024 && port <= 65530 ? static_cast<uint16_t>(port) : uint16_t{0};
+			}();
+			if (fixturePort == 0) return 0;
 			const char* headless = std::getenv("CCCP_HEADLESS");
-			const char* text = std::getenv("CC_TEST_PEER_LINK_PORT");
-			if (!headless || std::string_view(headless) != "1" || !text) return 0;
-			unsigned int port = 0;
-			const auto [end, error] = std::from_chars(text, text + std::strlen(text), port);
-			return error == std::errc{} && *end == '\0' && port >= 1024 && port <= 65530 ? static_cast<uint16_t>(port) : 0;
+			return headless && std::string_view(headless) == "1" ? fixturePort : 0;
 		}
 	}
 
@@ -145,21 +150,25 @@ namespace RTE {
 			out.push_back(value);
 		}
 
+		/// The most a migration message carries beyond a full chunk; its decoder refuses anything longer.
+		constexpr size_t c_MessageOverheadBytes = 192;
+
+		// Each value goes in with one insert: a push per byte checks the capacity for every byte.
 		void AppendU16LE(std::vector<uint8_t>& out, uint16_t value) {
-			out.push_back(static_cast<uint8_t>(value & 0xFFU));
-			out.push_back(static_cast<uint8_t>((value >> 8) & 0xFFU));
+			const uint8_t bytes[2] = {static_cast<uint8_t>(value & 0xFFU), static_cast<uint8_t>((value >> 8) & 0xFFU)};
+			out.insert(out.end(), std::begin(bytes), std::end(bytes));
 		}
 
 		void AppendU32LE(std::vector<uint8_t>& out, uint32_t value) {
-			for (int i = 0; i < 4; ++i) {
-				out.push_back(static_cast<uint8_t>((value >> (i * 8)) & 0xFFU));
-			}
+			uint8_t bytes[4];
+			for (int i = 0; i < 4; ++i) bytes[i] = static_cast<uint8_t>((value >> (i * 8)) & 0xFFU);
+			out.insert(out.end(), std::begin(bytes), std::end(bytes));
 		}
 
 		void AppendU64LE(std::vector<uint8_t>& out, uint64_t value) {
-			for (int i = 0; i < 8; ++i) {
-				out.push_back(static_cast<uint8_t>((value >> (i * 8)) & 0xFFU));
-			}
+			uint8_t bytes[8];
+			for (int i = 0; i < 8; ++i) bytes[i] = static_cast<uint8_t>((value >> (i * 8)) & 0xFFU);
+			out.insert(out.end(), std::begin(bytes), std::end(bytes));
 		}
 
 		// LEB128, so a small key field costs one byte and a hash costs ten.
@@ -3073,6 +3082,8 @@ namespace RTE {
 		    std::all_of(key.begin(), key.end(), [](uint8_t value) { return value == 0; }))
 			return false;
 		bytes.clear();
+		// One allocation for the whole message: growing byte by byte reallocates it a dozen times.
+		bytes.reserve(c_MessageOverheadBytes + message.members.size() + message.bytes.size() + message.futureDelays.size() * (2 + 256));
 		AppendU32LE(bytes, c_Magic);
 		AppendU16LE(bytes, c_Version);
 		AppendU16LE(bytes, type);
@@ -3113,7 +3124,8 @@ namespace RTE {
 	}
 
 	bool NetHostMigrationCodec::Decode(const std::vector<uint8_t>& bytes, const NetHash32& key, NetHostMigrationMessage& message) {
-		if (bytes.size() < 32 || bytes.size() > c_ChunkBytes + 192 || std::all_of(key.begin(), key.end(), [](uint8_t value) { return value == 0; }))
+		// Another protocol's packet is refused before its MAC is computed.
+		if (bytes.size() < 32 || bytes.size() > c_ChunkBytes + c_MessageOverheadBytes || !LooksLikePacket(bytes) || std::all_of(key.begin(), key.end(), [](uint8_t value) { return value == 0; }))
 			return false;
 		uint8_t mac[32]{};
 		const size_t bodySize = bytes.size() - sizeof(mac);
@@ -3136,10 +3148,12 @@ namespace RTE {
 		    !reader.ReadU32LE(decoded.totalBytes) || decoded.totalBytes > byteCap || !reader.ReadU32LE(decoded.offset) || !reader.ReadU8(members) || members > NetMatchConfigUtil::c_MaxPeerCount || !reader.ReadBytes(data, members))
 			return false;
 		decoded.members.assign(data, data + members);
-		std::set<uint8_t> unique;
-		for (uint8_t peer: decoded.members)
-			if (peer == 0 || peer > NetMatchConfigUtil::c_MaxPeerCount || !unique.insert(peer).second)
+		uint32_t unique = 0;
+		for (uint8_t peer: decoded.members) {
+			if (peer == 0 || peer > NetMatchConfigUtil::c_MaxPeerCount || (unique & (1U << peer)) != 0)
 				return false;
+			unique |= 1U << peer;
+		}
 		if (!reader.ReadU32LE(count) || count > c_ChunkBytes || !reader.ReadBytes(data, count) || decoded.sessionId == 0 || decoded.roundId == 0 || decoded.generation == 0 ||
 		    decoded.senderPeerId == 0 || decoded.senderPeerId > NetMatchConfigUtil::c_MaxPeerCount || decoded.successorPeerId == 0 || decoded.successorPeerId > NetMatchConfigUtil::c_MaxPeerCount)
 			return false;
@@ -6265,7 +6279,7 @@ namespace RTE {
 		if (!UsesPeerFrameGroups() || !m_Config.joinsRunningRound || m_Playback || !replay.m_Playback ||
 		    m_Config.sessionId != replay.m_Config.sessionId || m_RoundId != replay.m_RoundId || m_RoundConfigHash != replay.m_RoundConfigHash ||
 		    m_Config.localPeerId != replay.m_Config.localPeerId || !replay.m_LastCompletedSimulationTick || m_Config.startFrame == 0) {
-			if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) DiagnosticLine() << "[net-replay-adoption] local=" << static_cast<int>(m_Config.localPeerId)
+			if (NetPeerFrameDetail::ReturnInputDetails()) DiagnosticLine() << "[net-replay-adoption] local=" << static_cast<int>(m_Config.localPeerId)
 			    << " refused: groups=" << UsesPeerFrameGroups() << " joins=" << m_Config.joinsRunningRound << " playback=" << m_Playback << "/" << replay.m_Playback
 			    << " round=" << (m_RoundId == replay.m_RoundId) << " config=" << (m_RoundConfigHash == replay.m_RoundConfigHash)
 			    << " replayed=" << replay.m_LastCompletedSimulationTick.value_or(0) << " start=" << m_Config.startFrame << std::endl;
@@ -10747,7 +10761,8 @@ namespace RTE {
 					if (at != changes->second.begin()) delay = std::prev(at)->second;
 				}
 				m_Config.matchConfig.peerInputDelayFrames[peer - 1] = delay;
-				if (std::getenv("CC_TEST_DELAY_APPLY_DETAILS")) if (const auto changes = m_DelayChanges.find(peer);
+				static const bool s_DelayApplyDetails = std::getenv("CC_TEST_DELAY_APPLY_DETAILS") != nullptr;
+				if (s_DelayApplyDetails) if (const auto changes = m_DelayChanges.find(peer);
 				    changes != m_DelayChanges.end() && changes->second.contains(outFrame.frame)) {
 					DiagnosticLine() << "[net-input-delay-applied] local=" << static_cast<int>(m_Config.localPeerId)
 					                 << " peer=" << static_cast<int>(peer) << " frame=" << outFrame.frame << " ticks=" << delay << std::endl;

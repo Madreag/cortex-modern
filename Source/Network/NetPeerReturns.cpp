@@ -225,7 +225,7 @@ namespace RTE {
 				tail.totalBytes = static_cast<uint32_t>(body.bytes.size()); tail.offset = body.offset;
 				tail.bytes.assign(body.bytes.begin() + body.offset, body.bytes.begin() + end);
 				if (!SendPeerFrameMessage(std::move(tail), independentRecord ? NetTransportLane::BulkUnreliable : NetTransportLane::ControlReliable, peer)) break;
-				if (smallRepeat && std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) DiagnosticLine() << "[net-peer-tail-repeat] donor=" << static_cast<int>(m_Config.localPeerId)
+				if (smallRepeat && ReturnInputDetails()) DiagnosticLine() << "[net-peer-tail-repeat] donor=" << static_cast<int>(m_Config.localPeerId)
 				    << " reader=" << static_cast<int>(peer) << " frame=" << item->first << " bytes=" << body.bytes.size()
 				    << " age_ms=" << nowMs - sent.at(item->first) << " now_ms=" << nowMs << std::endl;
 				const size_t bytes = end - body.offset;
@@ -296,7 +296,7 @@ namespace RTE {
 			if (const auto ready = m_PeerCommittedTail.lower_bound(frame); ready != m_PeerCommittedTail.end()) end = std::min(end, ready->first);
 			request.completeFrom = end;
 			if (!SendPeerFrameMessage(request, NetTransportLane::BulkUnreliable, donor)) break;
-			if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS") && frame == m_Stats.nextFrame)
+			if (ReturnInputDetails() && frame == m_Stats.nextFrame)
 				DiagnosticLine() << "[net-peer-tail-request] reader=" << static_cast<int>(m_Config.localPeerId)
 				    << " donor=" << static_cast<int>(donor) << " from=" << frame << " until=" << end
 				    << " retry_ms=" << retryMs << " now_ms=" << nowMs << std::endl;
@@ -474,7 +474,7 @@ namespace RTE {
 			// No donor gives this frame on the history this seat displays: it read another continuation's records before this one. It returns
 			// through a private image from the frame it began reading, never by playing a second continuation over the first.
 			if (m_GrantedSimulationTick) return false;
-			if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) {
+			if (ReturnInputDetails()) {
 				DiagnosticLine detail;
 				detail << "[net-peer-tail-other-history] local=" << static_cast<int>(m_Config.localPeerId) << " frame=" << frame << " start=" << m_Config.startFrame
 				    << " effective_start=" << m_Stats.effectiveStartFrame << " displayed=" << m_LastCompletedSimulationTick.value_or(0) << " members=" << m_FrameGroupMembers;

@@ -3,9 +3,13 @@
 #include "NetAuthCrypto.h"
 #include "NetSeatAuth.h"
 
+#include <algorithm>
+#include <array>
 #include <cstring>
 #include <iostream>
+#include <iterator>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace RTE {
@@ -132,6 +136,49 @@ namespace RTE {
 				return Fail(std::string("hmac known-answer mismatch on ") + vector.name);
 			}
 		}
+		// The provider keeps keyed contexts per thread: answers stay exact for a key used again, after other keys pushed it out,
+		// for a key too long to keep, and on a thread whose contexts are all new.
+		std::string keptError;
+		const auto keptAnswers = [&](const char* where) {
+			std::vector<std::array<uint8_t, 32>> fillerMacs;
+			for (int round = 0; round < 3; ++round) {
+				for (const HmacVector& vector: MakeHmacVectors()) {
+					const std::vector<uint8_t> expected = HexToBytes(vector.mac);
+					for (int again = 0; again < 2; ++again) {
+						uint8_t mac[32] = {};
+						if (!provider.HmacSha256(vector.key.data(), vector.key.size(), vector.message.data(), vector.message.size(), mac) ||
+						    std::memcmp(mac, expected.data(), sizeof(mac)) != 0) {
+							keptError = std::string("hmac answer changed for ") + vector.name + " on " + where + " in round " + std::to_string(round) + " call " + std::to_string(again);
+							return false;
+						}
+					}
+					for (uint8_t filler = 0; filler < 10; ++filler) {
+						const std::vector<uint8_t> key(32, static_cast<uint8_t>(filler + 1));
+						std::array<uint8_t, 32> mac{};
+						uint8_t raw[32] = {};
+						if (!provider.HmacSha256(key.data(), key.size(), vector.message.data(), vector.message.size(), raw)) {
+							keptError = std::string("hmac refused a filler key on ") + where;
+							return false;
+						}
+						std::copy(std::begin(raw), std::end(raw), mac.begin());
+						fillerMacs.push_back(mac);
+					}
+				}
+			}
+			// Every round computed the same fillers over the same messages.
+			const size_t perRound = fillerMacs.size() / 3;
+			for (size_t at = 0; at < perRound; ++at) {
+				if (fillerMacs[at] != fillerMacs[at + perRound] || fillerMacs[at] != fillerMacs[at + 2 * perRound]) {
+					keptError = std::string("hmac answer for a filler key changed between rounds on ") + where;
+					return false;
+				}
+			}
+			return true;
+		};
+		if (!keptAnswers("the main thread")) return Fail(keptError);
+		bool threadOk = false;
+		std::thread([&] { threadOk = keptAnswers("a new thread"); }).join();
+		if (!threadOk) return Fail(keptError);
 		uint8_t drawA[32] = {};
 		uint8_t drawB[32] = {};
 		if (!provider.RandomBytes(drawA, sizeof(drawA)) || !provider.RandomBytes(drawB, sizeof(drawB))) {

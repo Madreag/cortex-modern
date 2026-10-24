@@ -2584,7 +2584,8 @@ void NetModerationGUI::DrawMatchToasts(const std::string& screenLine) {
 		visible.push_back(queued[index]);
 		indices.push_back(index);
 	}
-	if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) {
+	static const bool s_ReturnInputDetails = std::getenv("CC_TEST_RETURN_INPUT_DETAILS") != nullptr;
+	if (s_ReturnInputDetails) {
 		// CC_TEST_RETURN_INPUT_DETAILS names the band's held-seat reading whenever it changes: the local seat, each seat toast and its line.
 		static std::string s_lastBand;
 		std::string band = "local=" + std::to_string(localPeer) + " own_held=" + std::to_string(ScenarioRunner::IsLockstepOwnSeatHeld()) +

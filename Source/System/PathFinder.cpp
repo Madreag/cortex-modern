@@ -3156,6 +3156,124 @@ int PathFinder::RunHorizonGridSelfTest() {
 		std::cout << Tag << " PASS door-diagonal-wrap" << std::endl;
 	}
 
+	// door-override-terrain: path updates land on each machine's own ticks, so inside a match a door's override must leave every
+	// terrain pixel as it found it - fill laid over the door, a dug door pixel and the seed's material running past the door included -
+	// and open nothing outside the door's own shape.
+	{
+		struct PaintedDoorPiece : TestDoorPiece {
+			void Draw(BITMAP* target, const Vector& targetPos = Vector(), DrawMode mode = g_DrawColor, bool = false) const override {
+				const int x = targetPos.GetFloorIntX();
+				const int y = targetPos.GetFloorIntY();
+				if (mode == g_DrawDoor) rectfill(target, 55 - x, 25 - y, 64 - x, 54 - y, MaterialColorKeys::g_MaterialDoor);
+			}
+		};
+		struct DrawnDoor : TestDoor {
+			void Seat(Attachable* piece) {
+				Arm(piece, Activity::Teams::TeamOne);
+				m_LastDoorMaterialPos = Vector(60.0F, 40.0F);
+			}
+		};
+		auto paint = [](BITMAP* material, bool bandOverSeed) {
+			clear_to_color(material, MaterialColorKeys::g_MaterialAir);
+			rectfill(material, 55, 25, 64, 54, MaterialColorKeys::g_MaterialDoor);
+			rectfill(material, 50, 45, 69, 59, 5);
+			putpixel(material, 58, 30, MaterialColorKeys::g_MaterialAir);
+			if (bandOverSeed) rectfill(material, 0, 38, 159, 42, 5);
+		};
+		auto pixels = [](BITMAP* material) {
+			std::vector<unsigned char> out;
+			for (int y = 0; y < material->h; ++y) out.insert(out.end(), material->line[y], material->line[y] + material->w);
+			return out;
+		};
+		// Runs one erase and redraw of the team's doors; answers the erased view and the terrain after.
+		auto overridePair = [&](BITMAP* material, bool bandOverSeed, std::vector<unsigned char>& before, std::vector<unsigned char>& opened) {
+			paint(material, bandOverSeed);
+			PaintedDoorPiece piece;
+			piece.Arm(Vector(60.0F, 40.0F), 16.0F);
+			DrawnDoor door;
+			door.Seat(&piece);
+			BorrowedActor borrowed;
+			borrowed.Lend(&door);
+			before = pixels(material);
+			g_MovableMan.OverrideMaterialDoors(true, Activity::Teams::TeamOne);
+			opened = pixels(material);
+			g_MovableMan.OverrideMaterialDoors(false, Activity::Teams::TeamOne);
+			borrowed.Reclaim();
+			door.Unarm();
+			return pixels(material);
+		};
+		auto at = [](const std::vector<unsigned char>& bytes, int x, int y) { return static_cast<int>(bytes[static_cast<size_t>(y) * 160 + x]); };
+
+		Scene doorScene;
+		SLTerrain doorTerrain;
+		FixtureBinding binding;
+		if (doorTerrain.TestInstallMaterialBitmap(160, 80) < 0) {
+			return fail("door override fixture material bitmap was not installed");
+		}
+		binding.Bind(&doorScene, &doorTerrain);
+		BITMAP* material = doorTerrain.GetMaterialBitmap();
+		{
+			LoopbackTransport idleDoor;
+			NetLockstepConfig lockstepDoor;
+			lockstepDoor.localPeerId = 1;
+			lockstepDoor.remotePeerId = 2;
+			lockstepDoor.peerCount = 2;
+			lockstepDoor.matchConfig = NetMatchConfigUtil::MakeDefault(0x5048413453455353ULL);
+			NetLockstepCoordinator seatedDoor;
+			std::string doorError;
+			if (!seatedDoor.StartReplay(idleDoor, lockstepDoor, &doorError)) {
+				return fail("door override lockstep replay did not start");
+			}
+			LockstepBinding lockstepBinding;
+			ScenarioRunner::SetLockstepCoordinator(&seatedDoor);
+			for (const bool bandOverSeed: {false, true}) {
+				std::vector<unsigned char> before;
+				std::vector<unsigned char> opened;
+				const std::vector<unsigned char> after = overridePair(material, bandOverSeed, before, opened);
+				const bool doorOpened = bandOverSeed ? at(opened, 60, 40) == MaterialColorKeys::g_MaterialAir : at(opened, 60, 30) == MaterialColorKeys::g_MaterialAir;
+				size_t changed = 0;
+				size_t first = 0;
+				size_t openedOutside = 0;
+				size_t firstOutside = 0;
+				for (size_t index = before.size(); index-- > 0;) {
+					if (before[index] != after[index]) {
+						++changed;
+						first = index;
+					}
+					const int x = static_cast<int>(index % 160);
+					const int y = static_cast<int>(index / 160);
+					if (before[index] != opened[index] && (x < 55 || x > 64 || y < 25 || y > 54)) {
+						++openedOutside;
+						firstOutside = index;
+					}
+				}
+				if (!doorOpened || changed != 0 || openedOutside != 0) {
+					std::cout << Tag << " FAIL door override in a match " << (bandOverSeed ? "with terrain over its seed" : "under fill") << " opened=" << doorOpened
+					          << " changed_pixels=" << changed << " opened_outside_shape=" << openedOutside;
+					if (changed != 0) {
+						std::cout << " first=" << first % 160 << "," << first / 160 << " " << static_cast<int>(before[first]) << "->" << static_cast<int>(after[first]);
+					}
+					if (openedOutside != 0) {
+						std::cout << " first_outside=" << firstOutside % 160 << "," << firstOutside / 160;
+					}
+					std::cout << std::endl;
+					return 1;
+				}
+			}
+		}
+		// Single player keeps the original redraw: the door's whole silhouette comes back as door material.
+		std::vector<unsigned char> before;
+		std::vector<unsigned char> opened;
+		const std::vector<unsigned char> after = overridePair(material, false, before, opened);
+		if (ScenarioRunner::LockstepCoordinatorAttached() || at(opened, 60, 30) != MaterialColorKeys::g_MaterialAir ||
+		    at(after, 58, 30) != MaterialColorKeys::g_MaterialDoor || at(after, 60, 50) != MaterialColorKeys::g_MaterialDoor) {
+			std::cout << Tag << " FAIL door override in single player attached=" << ScenarioRunner::LockstepCoordinatorAttached() << " opened=" << at(opened, 60, 30) << " dug=" << at(after, 58, 30)
+			          << " under_fill=" << at(after, 60, 50) << std::endl;
+			return 1;
+		}
+		std::cout << Tag << " PASS door-override-terrain" << std::endl;
+	}
+
 	// shared-async-tick: both peers publish the same answer on the same applied frame, whatever their solve timing.
 	{
 		PathFinder asyncA;

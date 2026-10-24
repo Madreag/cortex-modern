@@ -1589,7 +1589,8 @@ namespace RTE {
 		(void)RebaseInputDelayClock(nowMs);
 		const bool catchingUp = s_LockstepCoordinator && s_LockstepCoordinator->PeerFrameCatchUpNeeded();
 		static uint64_t detailAtMs = 0, detailCalls = 0, detailActive = 0, detailElapsedMs = 0;
-		if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) {
+		static const bool s_ReturnInputDetails = std::getenv("CC_TEST_RETURN_INPUT_DETAILS") != nullptr;
+		if (s_ReturnInputDetails) {
 			++detailCalls;
 			detailActive += catchingUp;
 			if (catchingUp && nowMs >= s_PeerCatchUpBudgetAtMs) detailElapsedMs += nowMs - s_PeerCatchUpBudgetAtMs;
@@ -1991,7 +1992,8 @@ namespace RTE {
 
 	void ScenarioRunner::ApplyLockstepSeatAI(uint8_t peerId, uint64_t frame) {
 		if (!IsLockstepSeatUnderAI(peerId, frame)) {
-			if (std::getenv("CC_TEST_RETURN_INPUT_DETAILS")) std::cout << "[net-seat-ai] skipped peer=" << static_cast<int>(peerId) << " frame=" << frame << std::endl;
+			static const bool s_ReturnInputDetails = std::getenv("CC_TEST_RETURN_INPUT_DETAILS") != nullptr;
+			if (s_ReturnInputDetails) std::cout << "[net-seat-ai] skipped peer=" << static_cast<int>(peerId) << " frame=" << frame << std::endl;
 			return;
 		}
 		if (auto binding = s_PeerPlayerBindings.find(peerId); binding != s_PeerPlayerBindings.end()) {
