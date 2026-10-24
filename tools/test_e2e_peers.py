@@ -161,6 +161,9 @@ class HeldHostSceneTest(unittest.TestCase):
         self.assertTrue(re.search(never, "[net-frame-wait] frame=6023 wait_ms=1639 on=Captain blocked=remote-input duplicates=0"))
         self.assertFalse(re.search(never, "[net-frame-wait] frame=6030 wait_ms=11 on=Captain"))
         self.assertFalse(re.search(never, "[net-frame-wait] frame=8049 wait_ms=500 on=Captain"))
+        # The bound is on the wait and the whole 50 ms window is kept: a wait to the window's end passes, one past it does not.
+        self.assertFalse(re.search(never, "[net-frame-wait] frame=6023 wait_ms=50 on=Joiner local=1"))
+        self.assertTrue(re.search(never, "[net-frame-wait] frame=6023 wait_ms=51 on=Joiner local=1"))
         self.assertEqual(host["env"].get("CC_TEST_RETURN_INPUT_DETAILS"), "1")
         # The lever's own freeze of the host's screen is named and left out of the host's drawn frames and stills, nothing else.
         (excluded,) = document["drawn_frames_exclude"]

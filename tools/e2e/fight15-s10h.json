@@ -777,12 +777,12 @@
       "peer": "joiner",
       "mark": "minute-02-joiner",
       "screen": "game",
-      "what": "The joiner never waited 50 ms or more on the host from its stall at tick 6000 to 6199.",
+      "what": "The joiner never waited over 50 ms on the host from its stall at tick 6000 to 6199.",
       "log_regex": [
         "\\[fight15-scene\\] minute=2 pace="
       ],
       "forbidden_log_regex": [
-        "\\[net-frame-wait\\] frame=(60|61)\\d\\d wait_ms=(\\d{3,}|[5-9]\\d) "
+        "\\[net-frame-wait\\] frame=(60|61)\\d\\d wait_ms=(\\d{3,}|5[1-9]|[6-9]\\d) "
       ]
     }
   ],

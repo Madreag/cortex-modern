@@ -34,13 +34,13 @@ def held_host(document):
                 f"within {HOLD_WITHIN_TICKS} ticks and the host came back to it while the joiner played on.",
         "log_regex": [f"\\[net-test\\] live stall frame=\\d+ ms={STALL_MS}", f"\\[net-seat-ai\\] peer=1 held=1 frame=({held})\\d ",
                       "\\[net-match\\] seat-reclaimed peer=1 frame="]})
-    # The joiner never waits on the stalled host past A1's bound: 50 ms on any frame from the stall to its hold's end.
+    # The joiner never waits on the stalled host past A1's bound: over 50 ms on any frame from the stall to its hold's end.
     waited = "|".join(str(STALL_TICK // 100 + offset) for offset in range(2))
     scene["checklist"].append({
         "id": "joiner-never-waited-joiner", "peer": "joiner", "mark": "minute-02-joiner", "screen": "game",
-        "what": f"The joiner never waited 50 ms or more on the host from its stall at tick {STALL_TICK} to {STALL_TICK + 199}.",
+        "what": f"The joiner never waited over 50 ms on the host from its stall at tick {STALL_TICK} to {STALL_TICK + 199}.",
         "log_regex": ["\\[fight15-scene\\] minute=2 pace="],
-        "forbidden_log_regex": [f"\\[net-frame-wait\\] frame=({waited})\\d\\d wait_ms=(\\d{{3,}}|[5-9]\\d) "]})
+        "forbidden_log_regex": [f"\\[net-frame-wait\\] frame=({waited})\\d\\d wait_ms=(\\d{{3,}}|5[1-9]|[6-9]\\d) "]})
     return scene
 
 
