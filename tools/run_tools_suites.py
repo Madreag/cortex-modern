@@ -54,6 +54,7 @@ SUITES = (
     ("split-loser-judgement", ["test_split_loser_host.py", "--self-test"]),
     ("two-machine-scenes", ["-m", "unittest", "test_e2e_peers.CommittedScenesTest"]),
     ("drop-gates", ["-m", "unittest", "test_drop_gates"]),
+    ("spread-kit-locator", ["-m", "unittest", "test_spread_kit_locator"]),
     ("inventory-run-split", [str(INVENTORY / "run_split.py"), "--self-test"]),
     ("inventory-run-stream", [str(INVENTORY / "run_stream.py"), "--self-test"]),
     ("inventory-extract-defects", [str(INVENTORY / "extract_defects.py"), "--self-test"]),

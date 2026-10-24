@@ -531,12 +531,17 @@ def installed_pool(dispatcher=None, registry=None):
     if not path:
         try:
             import box_facts
-            path = box_facts.pool_dispatcher()
+            box_file = box_facts.file()
         except ImportError:
-            config = read_json(os.environ.get("CORTEX_BOXES", Path.home()/".cortex-modern/boxes.json"), {})
-            path = config.get("pool_dispatcher") or config.get("tool_paths", {}).get("pool_dispatcher")
+            box_file = Path(os.environ.get("CORTEX_BOXES") or Path.home()/".cortex-modern/boxes.json")
+        config = read_json(box_file, {}) or {}
+        path = ((config.get("paths") or {}).get("pool_dispatcher") or config.get("pool_dispatcher")
+                or (config.get("tool_paths") or {}).get("pool_dispatcher"))
     if not path or not Path(path).resolve().parent.joinpath("pool_transport.py").is_file():
-        raise SpreadRefusal("named peers require the existing per-box transport kit; set --pool-registry or --pool-dispatcher")
+        raise SpreadRefusal("named peers require the existing per-box transport kit; set --pool-registry or --pool-dispatcher "
+                            "(or CORTEX_POOL_DISPATCHER, or paths.pool_dispatcher in the box file) to a folder holding "
+                            "pool.py, pool_transport.py and its boxes.json"
+                            + (f"; {path} has no pool_transport.py beside it" if path else ""))
     path = Path(path).resolve()
     sys.path.insert(0, str(path.parent))
     pool = importlib.import_module("pool")
