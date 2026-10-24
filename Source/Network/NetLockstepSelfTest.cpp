@@ -258,6 +258,65 @@ namespace RTE {
 			return true;
 		}
 
+		static bool ASeatEveryOtherHeldYieldsItsPlay(std::string* error) {
+			// The other seat held this one at 969 after this one played it: this seat's play past the hold is its own to leave.
+			for (const bool alreadyHeldThem: {false, true}) {
+				Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
+				peer.m_Config.localPeerId = 1;
+				peer.m_Config.peerCount = peer.m_Config.matchConfig.peerCount = 2;
+				peer.m_Config.matchConfig.players.resize(2);
+				peer.m_Config.matchConfig.successorOrder = {2};
+				peer.m_Config.peerFrameGroups = peer.m_Config.substituteSlowPeers = true;
+				peer.m_Config.slowPlayerBoundTicks = 3;
+				peer.m_Config.inputDelayFrames = 4;
+				peer.m_Config.frameTieReferee = [](const NetFrameTieRequest&) { NetFrameTieReply reply; reply.state = NetFrameTieReply::State::Waiting; return reply; };
+				peer.m_RoundConfigHash = NetMatchConfigUtil::HashConfig(peer.m_Config.matchConfig);
+				peer.m_MigrationPhase = NetHostMigrationPhase::None; peer.m_MigrationSuccessor = 0;
+				peer.m_FrameGroupMembers = 3; peer.m_FrameGroupChanges = {{1, 3}};
+				peer.m_RemotePeerIds = {2}; peer.m_RemoteTransports = {{2, 42}};
+				for (uint64_t played = 960; played <= 970; ++played) peer.m_MigrationHistory[played] = {1, 2, 3};
+				peer.m_Stats.nextFrame = 971; peer.m_LastCompletedSimulationTick = 970;
+				if (alreadyHeldThem) peer.m_PeerBridges[2] = {969, 969, true, std::nullopt, {}, 1};
+				auto vote = peer.PeerFrameMessage(NetHostMigrationMessageType::PeerBridge);
+				vote.senderPeerId = vote.successorPeerId = 2; vote.frame = 969; vote.boundary = 969; vote.preparedFrame = 0;
+				vote.connectedMask = 2; vote.members = {1};
+				const auto prefix = peer.PeerFramePrefix(968); vote.bytes.assign(prefix.begin(), prefix.end()); vote.totalBytes = vote.bytes.size();
+				auto certificate = vote; certificate.type = NetHostMigrationMessageType::PeerBridgeCommit; certificate.voterMask = 2;
+				certificate.bytes = {1};
+				auto signedBy = vote; signedBy.voterMask = 2;
+				std::vector<uint8_t> signedVote;
+				if (!NetHostMigrationCodec::Encode(signedBy, peer.m_Config.migrationKey, signedVote)) { *error = "the hold vote did not encode"; return false; }
+				for (unsigned shift = 0; shift < 32; shift += 8) certificate.bytes.push_back(static_cast<uint8_t>(signedVote.size() >> shift));
+				certificate.bytes.insert(certificate.bytes.end(), signedVote.begin(), signedVote.end());
+				certificate.totalBytes = certificate.bytes.size();
+				peer.InstallPeerBridge(certificate, 1000);
+				// Its own input of 971 is out and unreceipted at the bound: the receipt the other seat's hold withholds.
+				peer.m_PeerPaceStartFrame = 970; peer.m_PeerPaceStartMs = peer.m_PeerConsumerAtMs = 1000;
+				peer.m_FirstMissingFrame = 971; peer.m_FirstMissingMs = 1000;
+				peer.m_ConsumerWaitingFrame = 971; peer.m_ConsumerWaitStartMs = 1000;
+				for (uint8_t owner = 1; owner <= 2; ++owner) {
+					ControllerFrame controls; controls.actorUniqueID = 1000 + owner;
+					NetLockstepFrame input; input.senderPeerId = owner; input.roundId = 77; input.targetFrame = 971; input.frames = {controls};
+					peer.m_PeerSourceInputs[971][owner] = input;
+					if (owner == 1) peer.m_LocalFrames[971] = input.frames; else peer.m_RemoteFrames[971][owner] = input.frames;
+				}
+				peer.m_PeerInputReceipts[2][1] = 972; peer.m_PeerInputReceipts[1][2] = 971;
+				peer.m_PeerInputSentAtMs[971] = 930;
+				const uint64_t heldAt = 1000 + static_cast<uint64_t>(std::ceil(3 * peer.m_Config.simTickMs)) + 1;
+				peer.m_TimingNowMs = heldAt;
+				const bool heldThem = peer.ProposePeerBridge(971, heldAt);
+				peer.PollPeerFrameTies(heldAt);
+				const bool yielded = peer.IsStopped() && peer.m_LocalSeatHeld && peer.GetStats().timeoutReason.starts_with("PeerHeld:");
+				if (!alreadyHeldThem && (heldThem || !yielded)) {
+					*error = std::string("played-past-hold-held-the-others: the other seat held this one at 969, which it had played, and it ") +
+					    (heldThem ? "held that seat at 971 for the receipt the hold withholds" : "played on instead of returning through the image");
+					return false;
+				}
+				if (alreadyHeldThem && yielded) { *error = "a seat that held the other one left its half of a split to it instead of the referee"; return false; }
+			}
+			return true;
+		}
+
 		static bool AcceptedInputsKeepTheirPlayingReceiptGroup(std::string* error) {
 			for (bool directory: {false, true}) for (uint8_t local: {1, 3, 4}) {
 				Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
@@ -33618,6 +33677,12 @@ namespace {
 				std::cout << "[net-lockstep-selftest] PASS tail_hold_signers_are_not_another_playing_half\n[net-lockstep-selftest] PASS" << std::endl;
 				return 0;
 			}
+			if (std::string_view(selectedCase) == "played-past-own-hold") {
+				std::string error;
+				if (!SessionPlaneRecoveryTest::ASeatEveryOtherHeldYieldsItsPlay(&error)) return fail(error);
+				std::cout << "[net-lockstep-selftest] PASS a_seat_every_other_held_yields_its_play\n[net-lockstep-selftest] PASS" << std::endl;
+				return 0;
+			}
 			if (std::string_view(selectedCase) == "own-late-input-receipt") {
 				std::string error;
 				if (!SessionPlaneRecoveryTest::OwnLateInputsLeaveTheirReceiptTime(&error)) return fail(error);
@@ -34121,6 +34186,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::LegacyCombatHoldUsesItsInputDeadline, "legacy_combat_hold_uses_its_input_deadline");
 		row(&SessionPlaneRecoveryTest::RemoteInputReceiptsFormTheLocalHoldGroup, "remote_input_receipts_form_the_local_hold_group");
 		row(&SessionPlaneRecoveryTest::OwnLateInputsLeaveTheirReceiptTime, "own_late_inputs_leave_their_receipt_time");
+		row(&SessionPlaneRecoveryTest::ASeatEveryOtherHeldYieldsItsPlay, "a_seat_every_other_held_yields_its_play");
 		row(&SessionPlaneRecoveryTest::AcceptedInputsKeepTheirPlayingReceiptGroup, "accepted_inputs_keep_their_playing_receipt_group");
 		row(&SessionPlaneRecoveryTest::MissingInputsExcludeIncompatibleWitnesses, "missing_inputs_exclude_incompatible_witnesses");
 		row(&SessionPlaneRecoveryTest::MissingOrZeroLinkNeverUsesReceipts, "missing_or_zero_rtt_never_uses_machine_receipts");

@@ -435,6 +435,17 @@ namespace RTE {
 	}
 
 	void NetLockstepCoordinator::PollPeerFrameTies(uint64_t nowMs) {
+		if (m_PeerYieldFrame && IsRunning() && !m_GrantedSimulationTick) {
+			// As a split's losing half does: the private image replaces this play at its completed boundary.
+			m_Stats.nextFrame = GetResumeFrame();
+			m_ReadyFrames.clear();
+			m_LocalSeatHeld = true; m_LocalHoldFrame = std::min<uint64_t>(m_Stats.nextFrame, *m_PeerYieldFrame);
+			m_State = NetLockstepState::Stopped;
+			m_Stats.timeoutReason = "PeerHeld:every other seat held this one; returning through a private image";
+			DiagnosticLine() << "[net-peer-yield] local=" << static_cast<int>(m_Config.localPeerId) << " frame=" << *m_PeerYieldFrame << " next=" << m_Stats.nextFrame
+			    << " now_ms=" << nowMs << " action=image_return" << std::endl;
+			return;
+		}
 		// A split whose group has settled asks for the seats it plays with now.
 		for (auto settle = m_PeerTieSettles.begin(); settle != m_PeerTieSettles.end();) {
 			const uint64_t split = settle->first;

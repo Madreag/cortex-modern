@@ -5439,7 +5439,7 @@ namespace RTE {
 		m_ReleasedAiSeats.clear();
 		m_SeatReleases.clear();
 		m_AnnouncedLeavers.clear();
-		m_PeerSplitsStanding.clear(); m_PeerSplitsSettled.clear(); m_PeerSplitDecisions.clear(); m_PeerSplitDecisionsSent.clear();
+		m_PeerSplitsStanding.clear(); m_PeerSplitsSettled.clear(); m_PeerSplitDecisions.clear(); m_PeerSplitDecisionsSent.clear(); m_PeerYieldFrame.reset();
 		m_SlowMachineHolds.clear();
 		m_PendingMemberEnds.clear();
 		m_EvictAfterReclaim.clear();

@@ -325,7 +325,22 @@ namespace RTE {
 		return false;
 	}
 
+	void NetLockstepCoordinator::NotePeerYield(const NetHostMigrationMessage& hold, uint32_t voters, uint64_t nowMs) {
+		const uint32_t local = SeatBit(m_Config.localPeerId);
+		const uint32_t others = PeerFrameMembersAt(hold.frame) & PeerRetainedSeatsAt(hold.frame) & ~local;
+		// A seat every other seat held, holding none of them, is no half of a split for the directory to rule: its play past the hold
+		// is its own, so it leaves it rather than hold the others for the receipts their hold withholds. Direct play's heal decides.
+		if (!m_Config.frameTieReferee || hold.preparedFrame != 0 || m_Playback || !IsRunning() || std::find(hold.members.begin(), hold.members.end(), m_Config.localPeerId) == hold.members.end() ||
+		    others == 0 || (voters & others) != others || (PeerHeldSeatsAt(std::max(hold.frame, m_Stats.nextFrame)) & others) != 0 ||
+		    (m_PeerYieldFrame && *m_PeerYieldFrame <= hold.frame)) return;
+		m_PeerYieldFrame = hold.frame;
+		DiagnosticLine() << "[net-peer-yield] local=" << static_cast<int>(m_Config.localPeerId) << " frame=" << hold.frame << " next=" << m_Stats.nextFrame
+		    << " displayed=" << m_LastCompletedSimulationTick.value_or(0) << " signers=" << voters << " now_ms=" << nowMs << std::endl;
+	}
+
 	bool NetLockstepCoordinator::ProposePeerBridge(uint64_t frame, uint64_t nowMs, bool returningOnly) {
+		// A seat leaving its play for the others' hold of it holds none of them.
+		if (m_PeerYieldFrame) return false;
 		if (!UsesPeerFrameGroups() || WaitsForPlacement() || frame != m_Stats.nextFrame) return false;
 		// Under the details lever, a consumer past its bound whose hold this function never reaches says why, once per frame.
 		const auto exited = [&](const char* why) {
@@ -889,6 +904,7 @@ namespace RTE {
 			// local hold: it never stops this group's frame.
 			if (agreed.preparedFrame == 0 && (agreed.connectedMask & SeatBit(m_Config.localPeerId)) == 0 &&
 			    (PeerFrameMembersAt(agreed.frame) & SeatBit(m_Config.localPeerId)) != 0 && !IsLocalPrivateReaderAt(agreed.frame)) {
+				NotePeerYield(agreed, voters, nowMs);
 				refused("foreign continuation"); return;
 			}
 			m_AuthorityWaitSinceMs.try_emplace(decision, nowMs);
@@ -949,6 +965,7 @@ namespace RTE {
 			// membership does not make it a participant; an already matching historical hold remains valid.
 			const auto arbitration = m_PeerSplitArbitrations.find(PeerSplitEpoch(agreed.frame));
 			if (arbitration != m_PeerSplitArbitrations.end()) arbitration->second.offeredHold = certificate;
+			NotePeerYield(agreed, voters, nowMs);
 			refused("foreign continuation"); return;
 		}
 		// Two holds certified at one frame by signers that each hold the other are two continuations. A seat that signed neither takes
