@@ -1214,7 +1214,7 @@ namespace RTE {
 				uint64_t simTick = c_SnapshotTick, committed = c_SnapshotTick + c_Behind;
 				while (committed - simTick > c_NetWorldActivationLeadFrames && nowMs < c_LimitMs) {
 					ScenarioRunner::BeginWorldCatchUpFrame(drawMs, capped ? std::max(0.0, nextDrawMs - nowMs) : -1.0, at(nowMs));
-					while (ScenarioRunner::TakeWorldCatchUpGrant(simTick + 1, at(nowMs))) {
+					while (ScenarioRunner::TakeWorldCatchUpGrant(simTick + 1, false, at(nowMs))) {
 						NetLockstepReadyFrame ready;
 						if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(++simTick, ready, &error)) {
 							ScenarioRunner::ReleaseWorldCatchUp();
@@ -1267,7 +1267,7 @@ namespace RTE {
 				ScenarioRunner::BeginWorldCatchUpFrame(0.0, -1.0, at(nowMs));
 				uint64_t simTick = from;
 				int granted = 0;
-				while (ScenarioRunner::TakeWorldCatchUpGrant(simTick + 1, at(nowMs))) {
+				while (ScenarioRunner::TakeWorldCatchUpGrant(simTick + 1, false, at(nowMs))) {
 					NetLockstepReadyFrame ready;
 					if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(++simTick, ready, &error)) {
 						granted = -1;
@@ -1288,6 +1288,46 @@ namespace RTE {
 			if (fresh < fits) {
 				return Fail("catch-up-kept-the-last-ticks-time: a fresh catch-up of 1 ms ticks applied " + std::to_string(fresh) +
 				            " ticks in a frame with " + std::to_string(fits + 1) + " ms free, after a catch-up whose ticks took a second each");
+			}
+			return 0;
+		}
+
+		/// A tick the round named for a capture collects every Lua state, several ticks' work: the catch-up runs it alone in its frame,
+		/// never after other ticks of that frame and never with more after it.
+		int TestCatchUpRunsACollectingTickAlone() {
+			using namespace std::chrono;
+			std::string error;
+			constexpr uint64_t c_From = 4000, c_Collecting = c_From + 2;
+			std::vector<NetLockstepFrame> tail;
+			for (uint64_t target = c_From + 1; target <= c_From + 40; ++target) {
+				tail.push_back(MakeCommittedFrame(target));
+			}
+			if (!ScenarioRunner::InstallWorldCatchUp(c_From, tail, &error)) return Fail("collecting catch-up install: " + error);
+			const RTE::SteadyClock::time_point began = RTE::SteadyClock::now();
+			const auto at = [&](double ms) { return began + duration_cast<RTE::SteadyClock::duration>(duration<double, std::milli>(ms)); };
+			// Uncapped and undrawn, 1 ms ticks: a frame has room for a dozen; the counts per frame are what the rule sets.
+			std::vector<int> frames;
+			uint64_t simTick = c_From;
+			double nowMs = 0.0;
+			for (int frame = 0; frame < 3; ++frame) {
+				ScenarioRunner::BeginWorldCatchUpFrame(0.0, -1.0, at(nowMs));
+				int granted = 0;
+				while (ScenarioRunner::TakeWorldCatchUpGrant(simTick + 1, simTick + 1 == c_Collecting, at(nowMs))) {
+					NetLockstepReadyFrame ready;
+					if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(++simTick, ready, &error)) {
+						ScenarioRunner::ReleaseWorldCatchUp();
+						return Fail("collecting catch-up: tick " + std::to_string(simTick) + " had no committed frame");
+					}
+					++granted;
+					nowMs += 1.0;
+				}
+				frames.push_back(granted);
+				nowMs = std::ceil((nowMs + 0.5) / (c_DefaultDeltaTimeS * 1000.0)) * c_DefaultDeltaTimeS * 1000.0;
+			}
+			ScenarioRunner::ReleaseWorldCatchUp();
+			if (frames[0] != 1 || frames[1] != 1 || frames[2] < 2) {
+				return Fail("catch-up-stacks-a-collecting-tick: frames applied " + std::to_string(frames[0]) + ", " + std::to_string(frames[1]) + ", " +
+				            std::to_string(frames[2]) + " ticks with tick " + std::to_string(c_Collecting) + " collecting every state (expected 1, 1, then more)");
 			}
 			return 0;
 		}
@@ -10110,6 +10150,10 @@ namespace RTE {
 			s_FailTag = "net-world-catchup-fresh-selftest";
 			return TestCatchUpForgetsTheLastTicksTime();
 		}
+		if (std::strcmp(name, "catchup-collecting") == 0 || std::strcmp(name, "-net-world-catchup-collecting-selftest") == 0) {
+			s_FailTag = "net-world-catchup-collecting-selftest";
+			return TestCatchUpRunsACollectingTickAlone();
+		}
 		if (std::strcmp(name, "catchup-census") == 0 || std::strcmp(name, "-net-world-catchup-census-selftest") == 0) {
 			s_FailTag = "net-world-catchup-census-selftest";
 			return TestCatchUpTicksAreNotSinglePlayers();
@@ -10445,6 +10489,9 @@ namespace RTE {
 			return result;
 		}
 		if (const int result = TestCatchUpForgetsTheLastTicksTime(); result != 0) {
+			return result;
+		}
+		if (const int result = TestCatchUpRunsACollectingTickAlone(); result != 0) {
 			return result;
 		}
 		if (const int result = TestCatchUpTicksAreNotSinglePlayers(); result != 0) {

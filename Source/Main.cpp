@@ -8628,8 +8628,9 @@ void RunGameLoop() {
 				break;
 			}
 			const uint64_t nextSimTick = static_cast<uint64_t>(g_TimerMan.GetSimUpdateCount()) + 1;
+			const bool collectsEveryState = g_NetMatchService.IsNamedCaptureTick(nextSimTick);
 			if (ScenarioRunner::WorldCatchUpActive()) {
-				if (!ScenarioRunner::TakeWorldCatchUpGrant(nextSimTick)) {
+				if (!ScenarioRunner::TakeWorldCatchUpGrant(nextSimTick, collectsEveryState)) {
 					// A joiner that cannot advance still has to receive: the tail's next frame and the
 					// lockstep start both arrive on this pump, which otherwise runs per sim tick only.
 					g_NetMatchService.PumpSessionEvents();
@@ -8640,7 +8641,7 @@ void RunGameLoop() {
 					g_TimerMan.GrantSimUpdates(1);
 				}
 			} else if (!g_TimerMan.TimeForSimUpdate()) {
-				if (!ScenarioRunner::TakeOwnSeatCatchUpGrant(nextSimTick)) break;
+				if (!ScenarioRunner::TakeOwnSeatCatchUpGrant(nextSimTick, collectsEveryState)) break;
 				g_TimerMan.GrantSimUpdates(1);
 			}
 			if (!ScenarioRunner::WorldCatchUpActive() && !ScenarioRunner::PollLockstepSimulationTick(nextSimTick)) {

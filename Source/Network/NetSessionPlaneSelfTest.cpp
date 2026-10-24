@@ -4721,7 +4721,7 @@ namespace RTE {
 			};
 			while (elapsedMs < 120000) {
 				ScenarioRunner::BeginWorldCatchUpFrame(10.0, -1.0, at(elapsedMs));
-				while (ScenarioRunner::TakeWorldCatchUpGrant(applied + 1, at(elapsedMs))) {
+				while (ScenarioRunner::TakeWorldCatchUpGrant(applied + 1, false, at(elapsedMs))) {
 					NetLockstepReadyFrame ready;
 					if (!ScenarioRunner::TakeWorldCatchUpReadyFrame(applied + 1, ready, &error)) return false;
 					++applied; elapsedMs += 12.0; ScenarioRunner::NoteWorldCatchUpTickCost(applied, 12000, 12000);
