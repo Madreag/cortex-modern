@@ -9703,6 +9703,81 @@ namespace RTE {
 		return 0;
 	}
 
+	// A player whose game was killed and started again reaches the host before the host has timed its old connection out: the host
+	// still counts the seat as played by that connection, and the return waits for it to close. It never trades its own seat for a
+	// fresh join, which a running match with no open seat refuses.
+	int TestARestartedOwnerWaitsForItsOldLink() {
+		std::string error;
+		if (!ResetLaneDirectory(&error)) return Fail(error);
+		uint64_t unixNow = 1700000000000ULL, nowMs = 0;
+		const uint16_t port = 42141;
+		NetParticipantIdentityStore hostKey, ownerKey;
+		hostKey.SetPath(StorePath("restart-host-key")); ownerKey.SetPath(StorePath("restart-owner-key"));
+		if (!hostKey.LoadOrCreate(&error) || !ownerKey.LoadOrCreate(&error)) return Fail(error);
+		NetConnectionAuthority hostAuthority, ownerAuthority;
+		hostAuthority.Configure(&hostKey, "", "", ""); ownerAuthority.Configure(&ownerKey, "", "", "");
+		NetSeatAuthRegistry registry;
+		if (!registry.BeginHostedSession()) return Fail("restarted-owner registry");
+		NetReconnectHost admission;
+		NetSessionConfig hostConfig = MakeSessionConfig(port, 101, "Host");
+		hostConfig.maxPeers = 1;
+		admission.Configure(&registry, hostConfig.sessionId, MakeIdentity());
+		admission.SetSeatTable({MakeSeatTable().front()}, NetMatchMode::PvPSkirmish);
+		admission.SetUnixClock(&FixedUnixClock, &unixNow);
+		admission.SetConnectionAuthority(&hostAuthority);
+		LoopbackTransport hostTransport, ownerTransport;
+		NetSession host, owner;
+		host.SetReconnectHost(&admission);
+		host.EnableParticipantProof(nullptr);
+		NetReconnectTicketStore ownerStore;
+		ownerStore.SetPath(StorePath("restart-owner"));
+		const auto configure = [&](NetReconnectClient& client, NetSession& session) {
+			client.Configure(&ownerStore, MakeIdentity(), "Original player");
+			client.SetUnixClock(&FixedUnixClock, &unixNow);
+			client.SetHostContext("loopback", MakeHash(5));
+			client.SetConnectionAuthority(&ownerAuthority);
+			session.SetReconnectClient(&client);
+			session.EnableParticipantProof(&ownerKey);
+		};
+		NetReconnectClient ownerClient;
+		configure(ownerClient, owner);
+		if (!host.StartHost(hostTransport, hostConfig, &error) || !owner.StartClient(ownerTransport, "loopback", MakeSessionConfig(port, 202, "Original player"), &error)) return Fail(error);
+		bool ownerRuns = true;
+		const auto pump = [&](NetSession* restarted, LoopbackTransport* transport, uint64_t duration) {
+			for (const uint64_t until = nowMs + duration; nowMs <= until; nowMs += 10) {
+				host.Tick(nowMs);
+				if (ownerRuns) owner.Tick(nowMs);
+				if (restarted) restarted->Tick(nowMs);
+				hostTransport.AdvanceTimeMs(10); ownerTransport.AdvanceTimeMs(10);
+				if (transport) transport->AdvanceTimeMs(10);
+			}
+		};
+		pump(nullptr, nullptr, 600);
+		NetH4TicketRecord ticket;
+		if (!owner.IsReady() || ownerStore.Load(unixNow, ticket) != NetH4TicketLoadResult::Loaded) return Fail("the restarted-owner fixture did not seat its player");
+		admission.SetLiveMatch(true);
+		admission.NotePlacementPhase(false, 0);
+		// The game is killed: its connection says nothing more, and the host has not timed it out.
+		ownerRuns = false;
+		LoopbackTransport restartedTransport;
+		NetSession restarted;
+		NetReconnectClient restartedClient;
+		configure(restartedClient, restarted);
+		if (!restarted.StartClient(restartedTransport, "loopback", MakeSessionConfig(port, 303, "Original player"), &error)) return Fail(error);
+		pump(&restarted, &restartedTransport, 1500);
+		if (restarted.IsRejected() || std::string(restartedClient.ReclaimOutcome()) == "new_join_after_refusal")
+			return Fail(std::string("restarted-owner-joined-anew: the restarted player traded its seat for a fresh join (") + restartedClient.ReclaimOutcome() + ") and was refused: " +
+			            restarted.BuildRejectText());
+		// The host times the old connection out.
+		ownerTransport.Stop();
+		pump(&restarted, &restartedTransport, 10000);
+		if (!restarted.IsReady() || !restartedClient.UsedStoredTicket() || restartedClient.GetIncarnation() != 2 || restarted.GetLocalPeerId() != MakeSeatTable().front().peerId)
+			return Fail(std::string("restarted-owner-not-back: the restarted player is ") + NetReconnectClientStateName(restartedClient.GetState()) + " at incarnation " +
+			            std::to_string(restartedClient.GetIncarnation()) + ": " + restarted.BuildRejectText());
+		std::cout << "[net-reconnect-session-selftest] PASS a_restarted_owner_waits_for_its_old_link retries=" << restartedClient.GetStats().returnRetries << " incarnation=2" << std::endl;
+		return 0;
+	}
+
 	int TestSignedSeatOwnership() {
 		if (const int result = TestSignedSeatLobbyAdmission(); result != 0) return result;
 		std::string error;
@@ -9784,10 +9859,12 @@ namespace RTE {
 		if (const char* selected = std::getenv("CCCP_TEST_RECONNECT_CASE")) {
 			if (std::string(selected) == "applicant-decisions") return TestApplicantDecisionsKeepTheHolder();
 			if (std::string(selected) == "signed-seats") return TestSignedSeatOwnership();
+			if (std::string(selected) == "restarted-owner") return TestARestartedOwnerWaitsForItsOldLink();
 			return Fail("unknown selected reconnect check");
 		}
 		if (const int result = TestApplicantDecisionsKeepTheHolder(); result != 0) return result;
 		if (const int result = TestSignedSeatOwnership(); result != 0) return result;
+		if (const int result = TestARestartedOwnerWaitsForItsOldLink(); result != 0) return result;
 		if (const int result = TestLocalHostPresence(); result != 0) return result;
 		if (const int result = TestRemovalStoreKindsAndAlias(); result != 0) return result;
 		if (const int result = TestStoreFailsClosed(); result != 0) {
