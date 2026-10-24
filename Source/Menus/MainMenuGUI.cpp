@@ -62,10 +62,12 @@
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <initializer_list>
 #include <iomanip>
 #include <iostream>
 #include <format>
 #include <sstream>
+#include <string>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -4743,10 +4745,10 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 			sentence = PlayerFacingStatus(snapshot.statusText);
 		} else if (snapshot.isHost) {
 			if (seatsToFill > 0 || !snapshot.occupancyComplete) {
-				// The start waits for the round's own members by name and for its open seats by count.
-				const size_t missing = awaited.empty() ? std::max<size_t>(seatsToFill, 1) : seatsToFill;
-				const std::string seats = std::to_string(missing) + (missing == 1 ? " more player to join" : " more players to join");
-				sentence = awaited.empty() ? "Waiting for " + seats : "Waiting for " + names(awaited) + " to reconnect" + (missing == 0 ? std::string() : " and " + seats);
+				// A forming round waits only for its own members, by name; a first lobby waits for its open seats, by count.
+				const size_t missing = std::max<size_t>(seatsToFill, 1);
+				sentence = !awaited.empty() ? "Waiting for " + names(awaited) + " to reconnect"
+				                            : "Waiting for " + std::to_string(missing) + (missing == 1 ? " more player to join" : " more players to join");
 			} else if (snapshot.startCommitted) {
 				sentence = "Starting the match...";
 			} else if (snapshot.startCountdownRunning) {
@@ -4781,7 +4783,8 @@ void MainMenuGUI::RefreshMultiplayerScreenControls(const NetLobbySnapshot& snaps
 	};
 	std::string sentence = compose();
 	size_t longest = 0;
-	for (const std::string& name: notReady) longest = std::max(longest, name.size());
+	for (const std::vector<std::string>* list: {&notReady, &awaited})
+		for (const std::string& name: *list) longest = std::max(longest, name.size());
 	while (m_MultiplayerLobbyPlayerRowFont && m_MultiplayerLobbyPlayerRowFont->CalculateWidth(sentence, m_MultiplayerLobbyPlayerRowFallbackFont) > rowBoxWidth &&
 	       std::min(nameBudget, longest) > 6) {
 		nameBudget = std::min(nameBudget, longest) - 1;

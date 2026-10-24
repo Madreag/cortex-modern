@@ -5029,6 +5029,17 @@ bool GameActivity::RunFight15SelfTest(const std::string& row) {
 		snapshot.startCountdownRunning = snapshot.occupancyComplete = false; snapshot.awaitedPeers = {2, 3}; draw();
 		System::PrintDiagnosticLine("[fight15-selftest] R5 observed awaited start: " + menu.m_MultiplayerStatusLabel->GetText());
 		check("start_names_the_members_it_waits_for", menu.m_MultiplayerStatusLabel->GetText() == "Waiting for Joiner and Joiner2 to reconnect");
+		// The longest names a player can type shorten in their middle and keep the sentence's end inside the row.
+		snapshot.members[1].displayName = "PlayerNumberOneLongNameA"; snapshot.members[2].displayName = "PlayerNumberTwoLongNameB"; draw();
+		const std::string longAwaited = menu.m_MultiplayerStatusLabel->GetText();
+		System::PrintDiagnosticLine("[fight15-selftest] R5 observed long awaited start: " + longAwaited);
+		check("start_shortens_long_awaited_names_inside_the_row", longAwaited.starts_with("Waiting for Pl") && longAwaited.ends_with("eB to reconnect") &&
+		      longAwaited.find("eA and Pl") != std::string::npos && longAwaited.find("...") != std::string::npos);
+		// A forming round waits only for its own members, never for an open seat.
+		NetLobbyMember open; open.peerId = 4; open.displayName = NetMatchConfigUtil::UnseatedSlotName(4, false);
+		snapshot.members = {host, joiner, joiner2, open}; snapshot.members[1].connected = false; snapshot.members[1].dropped = true; snapshot.awaitedPeers = {2}; draw();
+		System::PrintDiagnosticLine("[fight15-selftest] R5 observed awaited start beside an open seat: " + menu.m_MultiplayerStatusLabel->GetText());
+		check("start_beside_an_open_seat_names_only_its_members", menu.m_MultiplayerStatusLabel->GetText() == "Waiting for Joiner to reconnect");
 		snapshot.members = {host, player}; snapshot.occupancyComplete = true; snapshot.awaitedPeers.clear();
 		snapshot.isHost = false; snapshot.localPeerId = 2; snapshot.members[0].isLocal = false; snapshot.members[1].isLocal = true;
 		snapshot.joiningWorld = snapshot.startCountdownRunning = true; snapshot.startCountdownMs = 30000;
