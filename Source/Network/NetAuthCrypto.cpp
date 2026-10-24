@@ -18,6 +18,14 @@ namespace RTE {
 
 	namespace {
 #ifdef CCCP_WITH_GNS
+		// Outside the provider so its thread-local slots can use these member initializers inside the class.
+		struct KeyedHmac {
+			std::array<uint8_t, 64> key{};
+			size_t keyCount = 0;
+			std::unique_ptr<EVP_MAC_CTX, decltype(&EVP_MAC_CTX_free)> context{nullptr, EVP_MAC_CTX_free};
+			~KeyedHmac() { OPENSSL_cleanse(key.data(), key.size()); }
+		};
+
 		class OpenSslAuthCrypto : public NetAuthCrypto {
 		public:
 			bool IsRealCrypto() const override { return true; }
@@ -37,7 +45,7 @@ namespace RTE {
 				// thread keeps contexts for the keys it used last, so a message under one of them costs only its own blocks.
 				static EVP_MAC* const hmac = EVP_MAC_fetch(nullptr, "HMAC", nullptr);
 				if (hmac == nullptr) return false;
-				Keyed* slot = nullptr;
+				KeyedHmac* slot = nullptr;
 				for (auto& candidate: t_Keyed)
 					if (candidate.context && candidate.keyCount == keyCount && std::equal(key, key + keyCount, candidate.key.begin())) slot = &candidate;
 				const bool reused = slot != nullptr;
@@ -66,13 +74,7 @@ namespace RTE {
 			}
 
 		private:
-			struct Keyed {
-				std::array<uint8_t, 64> key{};
-				size_t keyCount = 0;
-				std::unique_ptr<EVP_MAC_CTX, decltype(&EVP_MAC_CTX_free)> context{nullptr, EVP_MAC_CTX_free};
-				~Keyed() { OPENSSL_cleanse(key.data(), key.size()); }
-			};
-			static inline thread_local std::array<Keyed, 8> t_Keyed;
+			static inline thread_local std::array<KeyedHmac, 8> t_Keyed;
 			static inline thread_local size_t t_NextKeyed = 0;
 		};
 #endif
