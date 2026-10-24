@@ -3822,8 +3822,7 @@ namespace RTE {
 	std::optional<double> NetLockstepCoordinator::PeerInputDeadlineMs(uint64_t frame) const {
 		const auto due = PeerInputDueMs(frame);
 		if (!due) return due;
-		// The held tick shows inside the bound, its own work included.
-		const double bound = std::ceil(m_Config.slowPlayerBoundTicks * m_Config.simTickMs) - PeerHoldWorkMs();
+		const double bound = std::ceil(m_Config.slowPlayerBoundTicks * m_Config.simTickMs);
 		double deadline = *due + bound;
 		// A drawn frame that already showed waits past their own ticks' slots has only the rest of the bound for this one.
 		if (m_LateWaitShownMs > 0 && m_ConsumerWaitingFrame == frame && m_LastPresentMs && m_ConsumerWaitStartMs >= *m_LastPresentMs) {
@@ -3837,15 +3836,6 @@ namespace RTE {
 		NET_PLANE_CHECK();
 		m_LastPresentMs = nowMs;
 		m_LateWaitShownMs = 0;
-	}
-
-	double NetLockstepCoordinator::PeerHoldWorkMs() const {
-		const size_t ticks = std::min(m_TickCosts.size(), c_OwnPaceTicks);
-		if (ticks == 0 || m_Config.simTickMs <= 0) return 0;
-		std::array<double, c_OwnPaceTicks> costs;
-		std::copy(m_TickCosts.end() - ticks, m_TickCosts.end(), costs.begin());
-		std::nth_element(costs.begin(), costs.begin() + ticks / 2, costs.begin() + ticks);
-		return std::min(std::floor(m_Config.simTickMs / 4), std::ceil(costs[ticks / 2]));
 	}
 
 	bool NetLockstepCoordinator::PeerConsumerHoldDue(uint64_t frame, uint64_t nowMs) const {
