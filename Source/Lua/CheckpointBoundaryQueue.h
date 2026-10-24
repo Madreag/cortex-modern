@@ -147,6 +147,12 @@ namespace RTE::CheckpointLua {
 			const SaverThreads::Await await;
 			return WaitUntilPrepared();
 		}
+		/// Waits, the game lending the saver its time at the game's priority, until the saver has finished what it writes and
+		/// prepared its next plan. False when it stops or fails instead.
+		bool WaitForWriter() const {
+			const SaverThreads::Await await;
+			return WaitUntilPrepared();
+		}
 
 	private:
 		enum class State { Preparing, Ready, Claimed, Armed, Working, Rebuild, Failed, Stopped };

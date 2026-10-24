@@ -216,6 +216,8 @@ namespace RTE {
 		bool AutosaveWriterReady();
 		/// Whether the saver is still writing, retiring or preparing; a saver whose preparation failed is not busy, only unready.
 		bool AutosaveWriterBusy();
+		/// Waits, lending the saver the game's time, until this machine's writer can take a capture; whether it can.
+		bool AwaitAutosaveWriter();
 		/// The full-state oracle's captures still holding their images; a lever-only count, 0 without the lever.
 		size_t UnfinishedFullStateCaptures();
 		/// The last automatic capture this process published; empty when none has.

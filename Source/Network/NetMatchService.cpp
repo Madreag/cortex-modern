@@ -4552,8 +4552,22 @@ static std::string ResyncSaveName() {
 			// tail privately, which replays this tick late; the host's own held seat still names the round's park.
 			bool taken = false;
 			const bool privateReader = m_Coordinator && !m_IsHost && m_Coordinator->IsLocalPrivateReaderAt(tick);
-			const bool attempted = !ScenarioRunner::WorldCatchUpActive() && !privateReader && g_ActivityMan.ActivityRunning();
-			if (attempted) {
+			const bool replaying = ScenarioRunner::WorldCatchUpActive() || privateReader;
+			const bool attempted = g_ActivityMan.ActivityRunning();
+			if (attempted && replaying) {
+				// It still writes the save, later than the live peers: its replay passes the named ticks closer together than the round
+				// did, so it waits here for the save its writer still holds.
+				const auto waitBegan = RTE::SteadyClock::now();
+				const bool writerBusy = !g_ActivityMan.AutosaveWriterReady();
+				if (writerBusy) (void)g_ActivityMan.AwaitAutosaveWriter();
+				const auto waitedMs = writerBusy ? std::chrono::duration_cast<std::chrono::milliseconds>(RTE::SteadyClock::now() - waitBegan).count() : 0;
+				m_AutosaveIdentity.savedByHost = output.manual;
+				taken = SaveStampedAutosave(tick, !joinCapture);
+				m_CaptureAnchorSimTime = input.now;
+				m_AutosaveIdentity.savedByHost = false;
+				System::PrintDiagnosticLine(std::format("[autosave] named tick={} {} while replaying the round: catch_up={} private_reader={} writer_waited_ms={}", tick, taken ? "taken" : "not taken",
+				    ScenarioRunner::WorldCatchUpActive(), privateReader, waitedMs));
+			} else if (attempted) {
 				if (m_Coordinator) m_Coordinator->BeginSynchronizedCapture(tick);
 				const auto captureBegan = RTE::SteadyClock::now();
 				CrossCaptureBarrierFromEnvironment("capture_announced", tick, m_AutosaveIdentity.roundId);
@@ -4610,7 +4624,7 @@ static std::string ResyncSaveName() {
 			} else {
 				// A capture this peer did not take holds nothing, and says so at once; one it did not try names why, not an older refusal.
 				const ActivityMan::AutosaveRefusal refusal = g_ActivityMan.LastAutosaveRefusal();
-				const std::string reason = attempted ? refusal.reason : ScenarioRunner::WorldCatchUpActive() ? "this peer was catching up" : privateReader ? "this peer reads the round's tail privately" : "the activity is not running";
+				const std::string reason = attempted ? refusal.reason : "the activity is not running";
 				System::PrintDiagnosticLine(std::format("[autosave] named tick={} not taken: catch_up={} running={} reason={}", tick, ScenarioRunner::WorldCatchUpActive(), g_ActivityMan.ActivityRunning(), reason));
 				if (m_IsHost && joinCapture && m_WorldJoin.IsPrivateMatch()) NotePrivateBaseRefusalLocked(refusal);
 				output.send.push_back({0, NetGameCheckpoint::Missed, tick});

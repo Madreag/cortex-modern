@@ -2222,6 +2222,12 @@ bool ActivityMan::AutosaveWriterBusy() {
 	return UnwrittenAutosaves() != 0 || (m_PreparedAutosave && m_PreparedAutosave->queue.Busy());
 }
 
+bool ActivityMan::AwaitAutosaveWriter() {
+	if (AutosaveWriterReady()) return true;
+	if (!m_PreparedAutosave || !m_PreparedAutosave->queue.WaitForWriter()) return false;
+	return AutosaveWriterReady();
+}
+
 bool ActivityMan::RunCheckpointCaptureSelfTest(uint64_t tick) {
 	try {
 		const bool admission = AutosaveArchiveWriter::RunAdmissionSelfTest();
