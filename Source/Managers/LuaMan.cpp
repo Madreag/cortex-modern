@@ -18180,22 +18180,30 @@ void LuaMan::StartAsyncGarbageCollection(uint64_t tick, bool everyState) {
 	static const bool recheckSkips = std::getenv("CCCP_TEST_GC_SKIP_RECHECK") != nullptr;
 	static std::atomic<uint64_t> s_RecheckedSkips{0}, s_RecheckFailures{0};
 	if (recheckSkips) {
+		// Objects, not bytes: a full cycle also shrinks thread stacks, the scratch buffer and the string table, which frees memory and no object.
+		const auto objects = [](lua_State* state) {
+			size_t count = G(state)->str.num;
+			for (GCobj* object = gcref(G(state)->gc.root); object; object = gcref(object->gch.nextgc)) ++count;
+			return count;
+		};
 		for (LuaStateWrapper* luaState: cleanStates) {
-			m_GarbageCollectionTask.push_back(g_ThreadMan.GetPriorityThreadPool().submit([this, luaState, tick]() {
+			m_GarbageCollectionTask.push_back(g_ThreadMan.GetPriorityThreadPool().submit([this, luaState, tick, objects]() {
 				std::lock_guard<std::recursive_mutex> lock(luaState->GetMutex());
 				lua_State* state = luaState->GetLuaState();
 				const CheckpointLua::HeapOwner::CollectionScope collecting;
 				const long long before = static_cast<long long>(G(state)->gc.total);
+				const size_t objectsBefore = objects(state);
 				const uint64_t touchedBefore = luaJIT_state_touched(state);
 				lua_gc(state, LUA_GCCOLLECT, 0);
 				lua_gc(state, LUA_GCSTOP, 0);
 				const long long freed = before - static_cast<long long>(G(state)->gc.total);
+				const long long dead = static_cast<long long>(objectsBefore) - static_cast<long long>(objects(state));
 				const uint64_t finalizers = luaJIT_state_touched(state) - touchedBefore;
 				luaState->NoteCollected(touchedBefore);
 				s_RecheckedSkips.fetch_add(1, std::memory_order_relaxed);
-				if (freed != 0 || finalizers != 0) {
+				if (dead != 0 || finalizers != 0) {
 					s_RecheckFailures.fetch_add(1, std::memory_order_relaxed);
-					System::PrintDiagnosticLine(std::format("[gc-clean-recheck] FAIL tick={} slot={} freed_bytes={} finalizer_calls={}", tick, GetStateIndex(luaState), freed, finalizers));
+					System::PrintDiagnosticLine(std::format("[gc-clean-recheck] FAIL tick={} slot={} dead_objects={} freed_bytes={} finalizer_calls={}", tick, GetStateIndex(luaState), dead, freed, finalizers));
 				}
 			}));
 		}
