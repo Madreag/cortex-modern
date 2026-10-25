@@ -288,7 +288,6 @@ LUA_API int luaJIT_preview_begin(lua_State *L, const char *const *skip, size_t n
   size_t i;
   int timed = p ? p->timed : preview_env_on("CC_PREVIEW_BARRIER_STATS");
   double started = timed ? preview_clock() : 0.0;
-  g->touched++;
 #if LJ_HASJIT
   /* The recorded preview guard is hoisted out of loops, so a window must not open inside a trace. */
   if (G2J(g)->state != LJ_TRACE_IDLE)
@@ -470,7 +469,6 @@ LUA_API size_t luaJIT_preview_end(lua_State *L)
   LJPreview *p = g->preview;
   size_t changes = 0, i;
   double started;
-  g->touched++;
   if (!p || !p->active) return 0;
   p->active = 0;
   if (p->measure && p->nupvalues) {
