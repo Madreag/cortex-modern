@@ -221,6 +221,8 @@ namespace RTE {
 
 	void LocalPrediction::RunPreview() {
 		const auto entered = RTE::SteadyClock::now();
+		g_LuaMan.NoteTouchPhase(8);
+		struct TouchPhase { ~TouchPhase() { g_LuaMan.NoteTouchPhase(9); } } touchPhase;
 		if (!IsEnabled() || !ScenarioRunner::IsLockstepControllerSyncActive() || ScenarioRunner::IsLockstepPaused() || !g_ActivityMan.ActivityRunning()) {
 			if (TraceEnabled()) {
 				std::cout << "[localpred] skip: enabled=" << IsEnabled() << " lockstep=" << ScenarioRunner::IsLockstepControllerSyncActive() << " paused=" << ScenarioRunner::IsLockstepPaused() << " running=" << g_ActivityMan.ActivityRunning() << std::endl;

@@ -10766,8 +10766,8 @@ std::string LuaMan::TakeHeapFaultsByState() {
 void LuaMan::NoteTouchPhase(int phase) {
 	static const bool enabled = std::getenv("CCCP_TEST_LUA_TOUCH_PHASES") != nullptr;
 	if (!enabled) return;
-	constexpr int c_Phases = 8;
-	static const std::array<const char*, c_Phases> names{"between_ticks", "activity", "scene", "world", "audio", "late", "collection", "after"};
+	constexpr int c_Phases = 10;
+	static const std::array<const char*, c_Phases> names{"between_ticks", "activity", "scene", "world", "audio", "late", "collection", "after", "before_preview", "preview"};
 	static std::vector<uint64_t> last;
 	static std::array<std::vector<uint32_t>, c_Phases> touches;
 	static int ticks = 0;
