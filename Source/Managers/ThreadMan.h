@@ -242,6 +242,19 @@ namespace RTE {
 		bool m_Finished = false;
 	};
 
+	/// While a lockstep round runs, the game's process goes ahead of a desktop's ordinary programs. Windows gives the processor
+	/// only to the highest priority ready work, so a process started below normal, or a game behind a busy foreground program,
+	/// gets no time at all until that program goes idle, and its round feels a frozen machine.
+	class RoundScheduling {
+	public:
+		/// Called as a round's coordinator arrives (true) and leaves (false); the priority the process had comes back when it leaves.
+		/// @return The name of the priority the process was raised from, or nullptr when nothing changed.
+		static const char* SetRoundRunning(bool running);
+
+		/// The process's scheduling priority by name ("shared" where the scheduler shares the processor by weight).
+		static const char* PriorityName();
+	};
+
 	/// The centralized singleton manager of all threads.
 	class ThreadMan :
 	    public Singleton<ThreadMan> {

@@ -310,6 +310,54 @@ SaverThreads::Gating::~Gating() {
 	s_SliceOpened.notify_all();
 }
 
+#ifdef _WIN32
+namespace {
+	const char* PriorityClassName(DWORD priorityClass) {
+		switch (priorityClass) {
+			case IDLE_PRIORITY_CLASS: return "idle";
+			case BELOW_NORMAL_PRIORITY_CLASS: return "below_normal";
+			case NORMAL_PRIORITY_CLASS: return "normal";
+			case ABOVE_NORMAL_PRIORITY_CLASS: return "above_normal";
+			case HIGH_PRIORITY_CLASS: return "high";
+			case REALTIME_PRIORITY_CLASS: return "realtime";
+			default: return "unknown";
+		}
+	}
+}
+#endif
+
+const char* RoundScheduling::SetRoundRunning(bool running) {
+#ifdef _WIN32
+	static std::mutex s_Lock;
+	static DWORD s_Restore = 0; //!< The class the round raised the process from; 0 while it raised nothing.
+	std::lock_guard lock(s_Lock);
+	const HANDLE process = GetCurrentProcess();
+	if (running && s_Restore == 0) {
+		// Above normal, not high: the round goes ahead of ordinary programs and stays behind the system's own interactive work.
+		const DWORD started = GetPriorityClass(process);
+		if ((started == IDLE_PRIORITY_CLASS || started == BELOW_NORMAL_PRIORITY_CLASS || started == NORMAL_PRIORITY_CLASS) && SetPriorityClass(process, ABOVE_NORMAL_PRIORITY_CLASS)) {
+			s_Restore = started;
+			return PriorityClassName(started);
+		}
+	} else if (!running && s_Restore != 0) {
+		SetPriorityClass(process, s_Restore);
+		s_Restore = 0;
+	}
+#else
+	// The POSIX schedulers share the processor among ready threads by weight, and an unprivileged process cannot raise itself.
+	(void)running;
+#endif
+	return nullptr;
+}
+
+const char* RoundScheduling::PriorityName() {
+#ifdef _WIN32
+	return PriorityClassName(GetPriorityClass(GetCurrentProcess()));
+#else
+	return "shared";
+#endif
+}
+
 ThreadMan::ThreadMan() :
     m_PriorityThreadPool(0, FloatingPointEnvironment::Initialize, [] { FloatingPointEnvironment::Assert("priority task"); }),
     m_BackgroundThreadPool(0, FloatingPointEnvironment::Initialize, [] { FloatingPointEnvironment::Assert("background task"); }) {

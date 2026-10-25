@@ -21,6 +21,7 @@
 #include "NetLobbySnapshot.h"
 #include "RTETools.h"
 #include "SettingsMan.h"
+#include "ThreadMan.h"
 #include "TimerMan.h"
 #include "WindowMan.h"
 
@@ -1156,6 +1157,9 @@ namespace RTE {
 			s_RetiredChecksumCounters.mismatches += retiring.checksumMismatches;
 		}
 		s_LockstepCoordinator = coordinator;
+		if (const char* started = RoundScheduling::SetRoundRunning(coordinator != nullptr)) {
+			System::PrintDiagnosticLine(std::string("[net-match] the round runs above normal priority; the process started at ") + started);
+		}
 		CheckpointNativeStorage::SetLockstepAttached(coordinator != nullptr);
 		NetLockstepPlane::Target(coordinator);
 		s_PreSimWait.reset();

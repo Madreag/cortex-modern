@@ -29,6 +29,7 @@
 #include "NetResyncSelfTest.h"
 #include "NetResyncRuntimeSelfTest.h"
 #include "System/ScenarioRunner.h"
+#include "ThreadMan.h"
 #include "ActivityMan.h"
 #include "Activity.h"
 #include "ACDropShip.h"
@@ -2880,6 +2881,23 @@ namespace RTE {
 				*error = "a returning seat waited on a late member start its certificate's terms answer: received=" + std::to_string(peer.m_RemoteStartsReceived.contains(3)) +
 				    " running=" + std::to_string(peer.IsRunning()); return false;
 			}
+			return true;
+		}
+
+		static bool ARoundOutranksOrdinaryDesktopWork(std::string* error) {
+			// Started below normal, as a scheduled task starts it, a Windows engine gets no processor while a desktop program is busy.
+			const std::string before = RoundScheduling::PriorityName();
+			Wire wire; NetLockstepCoordinator peer; Configure(peer, wire);
+			std::string during;
+			{
+				struct Scope { ~Scope() { ScenarioRunner::SetLockstepCoordinator(nullptr); } } scope;
+				ScenarioRunner::SetLockstepCoordinator(&peer);
+				during = RoundScheduling::PriorityName();
+			}
+			const std::string after = RoundScheduling::PriorityName();
+			const bool raised = before == "idle" || before == "below_normal" || before == "normal";
+			if (during != (raised ? std::string("above_normal") : before)) { *error = "a round in a process started at " + before + " priority ran at " + during; return false; }
+			if (after != before) { *error = "the process stayed at " + after + " priority after its round, not its own " + before; return false; }
 			return true;
 		}
 
@@ -34149,6 +34167,7 @@ namespace {
 		row(&SessionPlaneRecoveryTest::AMinorityGroupOnlyQueriesTheReferee, "a_minority_group_only_queries_the_referee");
 		row(&SessionPlaneRecoveryTest::AReturningSeatTakesItsMembersTermsAsTheirStarts, "a_returning_seat_takes_its_members_terms_as_their_starts");
 		row(&SessionPlaneRecoveryTest::AHeldHostLeavesTheCommandOutboxBounded, "a_held_host_leaves_the_command_outbox_bounded");
+		row(&SessionPlaneRecoveryTest::ARoundOutranksOrdinaryDesktopWork, "a_round_outranks_ordinary_desktop_work");
 		row(&SessionPlaneRecoveryTest::ReaderLinksContributeToInputRunway, "reader_links_contribute_to_input_runway");
 		row(&SessionPlaneRecoveryTest::LinkRiseHasNoResizeCooldown, "link_rise_has_no_resize_cooldown");
 		row(&SessionPlaneRecoveryTest::LinkFallNeedsFiveMeasuredSeconds, "link_fall_requires_five_continuous_measured_seconds");
