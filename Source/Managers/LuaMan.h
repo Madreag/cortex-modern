@@ -492,6 +492,9 @@ namespace RTE {
 		/// @param touchedBefore The state's touched count as the collection began.
 		void NoteCollected(uint64_t touchedBefore);
 
+		/// A restore writes the heap without the calls the counter sees, so the state's next collection is a real one.
+		void ForgetCleanCollection() { m_CleanCollectorMode = 0; }
+
 		/// Gives the checkpoint heap's free memory back to the system once its collector step has freed it; under the state's lock.
 		void TrimHeap();
 #pragma endregion

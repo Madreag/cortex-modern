@@ -8882,6 +8882,7 @@ void LuaStateWrapper::ReleaseScriptOwnedObjects() {
 
 bool LuaStateWrapper::RestoreScriptGraph(const std::string& text, std::vector<std::string>& problems, bool reuseHeld) {
 	std::lock_guard<std::recursive_mutex> lock(GetMutex());
+	ForgetCleanCollection();
 	// A restore rebinds instance tables, so the answers a frozen capture kept no longer hold.
 	m_NativeCache.reset();
 	m_GraphWorker.reset();
@@ -9000,6 +9001,7 @@ void LuaStateWrapper::CallScriptGraph(const char* function) {
 
 bool LuaStateWrapper::RestoreLegacyScriptObjectFields(long uniqueID, const std::string& text) {
 	std::lock_guard<std::recursive_mutex> lock(GetMutex());
+	ForgetCleanCollection();
 	LoadScriptGraphHelper();
 	const int top = lua_gettop(m_State);
 	lua_getglobal(m_State, "_ScriptedObjects");
@@ -9594,6 +9596,7 @@ static bool CallbacksFitScripts(lua_State* L, int index, const Scripts& scripts)
 }
 
 void LuaStateWrapper::RestoreScriptCallbacks(std::vector<std::string>& problems, bool restoreAsync, std::unordered_set<const MovableObject*>* rebound) {
+	ForgetCleanCollection();
 	// A round's start scripts carry no activity: the one in play is about to be replaced, and its pending paths go with it.
 	restoreAsync = restoreAsync && !s_RoundStartScripts;
 	const int top = lua_gettop(m_State);
@@ -20043,6 +20046,7 @@ bool LuaStateWrapper::SnapshotPreviewGlobals(std::string& text, std::vector<std:
 
 bool LuaStateWrapper::RestorePreviewGlobals(const std::string& text, std::vector<std::string>& problems) {
 	std::lock_guard<std::recursive_mutex> lock(GetMutex());
+	ForgetCleanCollection();
 	LoadScriptGraphHelper();
 	const int top = lua_gettop(m_State);
 	lua_getglobal(m_State, "_ScriptGraph");
