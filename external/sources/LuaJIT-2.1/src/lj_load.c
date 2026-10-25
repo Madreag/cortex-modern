@@ -65,6 +65,7 @@ LUA_API int lua_loadx(lua_State *L, lua_Reader reader, void *data,
 {
   LexState ls;
   int status;
+  G(L)->touched++;
   ls.rfunc = reader;
   ls.rdata = data;
   ls.chunkarg = chunkname ? chunkname : "?";

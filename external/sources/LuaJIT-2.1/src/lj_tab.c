@@ -66,6 +66,7 @@ LJ_FUNCA void lj_checkpoint_mark(lua_State *L, GCtab *t)
 
 LUA_API void luaJIT_arm_tab_write_trap(lua_State *L)
 {
+  G(L)->touched++;
   /* Interpreted stores take the meta path and compiled stores exit while armed. */
   if (checkpoint_tab_write) G(L)->checkpoint_armed = 1;
 }
@@ -79,6 +80,7 @@ static LJ_AINLINE void checkpoint_arm_table(GCtab *t)
 LUA_API void luaJIT_arm_tab_write(lua_State *L, int idx)
 {
   cTValue *o = L->base + (idx - 1);
+  G(L)->touched++;
   if (idx < 0) o = L->top + idx;
   if (o < L->top && tvistab(o)) checkpoint_arm_table(tabV(o));
 }
@@ -124,6 +126,7 @@ LUA_API uint64_t luaJIT_value_serial(lua_State *L, int idx)
 LUA_API void luaJIT_set_value_serial(lua_State *L, int idx, uint64_t serial)
 {
   uint64_t *slot = serial_slot(serial_object(L, idx));
+  G(L)->touched++;
   if (slot) *slot = serial;
 }
 
@@ -136,6 +139,7 @@ LUA_API uint64_t luaJIT_upvalue_serial(lua_State *L, int idx, int n)
 LUA_API void luaJIT_set_upvalue_serial(lua_State *L, int idx, int n, uint64_t serial)
 {
   GCupval *uv = serial_upvalue(L, idx, n);
+  G(L)->touched++;
   if (uv) uv->serial = serial;
 }
 
@@ -146,6 +150,7 @@ LUA_API uint64_t luaJIT_state_serial(lua_State *L)
 
 LUA_API void luaJIT_set_state_serial(lua_State *L, uint64_t serial)
 {
+  G(L)->touched++;
   G(L)->objserial = serial;
 }
 

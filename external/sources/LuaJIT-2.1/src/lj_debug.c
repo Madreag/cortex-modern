@@ -424,7 +424,9 @@ LUA_API const char *lua_getlocal(lua_State *L, const lua_Debug *ar, int n)
 LUA_API const char *lua_setlocal(lua_State *L, const lua_Debug *ar, int n)
 {
   const char *name = NULL;
-  TValue *o = debug_localname(L, ar, &name, (BCReg)n);
+  TValue *o;
+  G(L)->touched++;
+  o = debug_localname(L, ar, &name, (BCReg)n);
   if (name)
     copyTV(L, o, L->top-1);
   L->top--;
@@ -536,6 +538,7 @@ int lj_debug_getinfo(lua_State *L, const char *what, lj_Debug *ar, int ext)
 
 LUA_API int lua_getinfo(lua_State *L, const char *what, lua_Debug *ar)
 {
+  G(L)->touched++;
   return lj_debug_getinfo(L, what, (lj_Debug *)ar, 0);
 }
 

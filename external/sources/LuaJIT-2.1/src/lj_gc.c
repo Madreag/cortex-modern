@@ -572,6 +572,7 @@ static void gc_call_finalizer(global_State *g, lua_State *L,
   int errcode;
   lua_State *VL = vmthread(g);
   TValue *top;
+  g->touched++;  /* A finalizer runs Lua code: the state is no longer known to hold no garbage. */
   lj_trace_abort(g);
   hook_entergc(g);  /* Disable hooks and new traces during __gc. */
   if (LJ_HASPROFILE && (oldh & HOOK_PROFILE)) lj_dispatch_update(g);

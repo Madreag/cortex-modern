@@ -483,6 +483,14 @@ namespace RTE {
 		/// Tells the checkpoint heap the bytes in use before and after a full collection.
 		void NoteFullCollection(size_t before, size_t after);
 
+		/// Whether a full collection left this state with no garbage and nothing has reached it since: no call into it, its collector
+		/// paused, the same collector mode. Such a state has nothing for a collection to find. Under the state's lock.
+		bool HoldsNoGarbage();
+
+		/// Records what the full collection just run left: no garbage, unless a finalizer ran Lua code meanwhile. Under the state's lock.
+		/// @param touchedBefore The state's touched count as the collection began.
+		void NoteCollected(uint64_t touchedBefore);
+
 		/// Gives the checkpoint heap's free memory back to the system once its collector step has freed it; under the state's lock.
 		void TrimHeap();
 #pragma endregion
@@ -613,6 +621,8 @@ namespace RTE {
 		std::vector<CheckpointUnorderedSet<MovableObject*>*> m_HeldRegisteredMOs; //!< Script update lists a set-aside world will swap back.
 
 		lua_State* m_State;
+		uint64_t m_TouchedWhenClean = 0; //!< The touched count a full collection left with no garbage.
+		uint64_t m_CleanCollectorMode = 0; //!< The collector mode that collection ran in; 0 while no collection has left the state clean.
 		std::unique_ptr<CheckpointLua::HeapOwner> m_CheckpointHeap;
 		std::shared_ptr<CheckpointLua::NativeCache> m_NativeCache; //!< The class descriptors and the heap values a frozen capture keeps between freezes.
 		std::shared_ptr<CheckpointLua::GraphWorker> m_GraphWorker; //!< Saver-only proxy and root caches; never entered by the simulation.

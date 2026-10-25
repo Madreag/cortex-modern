@@ -121,6 +121,9 @@ LUA_API void luaJIT_set_value_serial(lua_State *L, int idx, uint64_t serial);
 LUA_API uint64_t luaJIT_upvalue_serial(lua_State *L, int idx, int n);
 LUA_API void luaJIT_set_upvalue_serial(lua_State *L, int idx, int n, uint64_t serial);
 LUA_API uint64_t luaJIT_state_serial(lua_State *L);
+/* Grows with every API call that could drop a reference or run code: a state that took none since its last full
+** collection holds no garbage. */
+LUA_API uint64_t luaJIT_state_touched(lua_State *L);
 LUA_API void luaJIT_set_state_serial(lua_State *L, uint64_t serial);
 
 /* Saved tables keep their key positions when their objects acquire private addresses. */

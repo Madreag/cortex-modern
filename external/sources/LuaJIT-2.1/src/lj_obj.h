@@ -692,6 +692,7 @@ typedef struct global_State {
   GCRef gcroot[GCROOT_MAX];  /* GC roots. */
   struct LJPreview *preview;
   uint64_t objserial;	/* Objects born in this state. Never reused, saved with a checkpoint. */
+  uint64_t touched;	/* API calls that could drop a reference or run code. */
 } global_State;
 
 #define mainthread(g)	(&gcref(g->mainthref)->th)

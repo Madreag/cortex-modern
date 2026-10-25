@@ -28,11 +28,17 @@
 
 /* -- Common helper functions --------------------------------------------- */
 
+LUA_API uint64_t luaJIT_state_touched(lua_State *L)
+{
+  return G(L)->touched;
+}
+
 #define lj_checkapi_slot(idx) \
   lj_checkapi((idx) <= (L->top - L->base), "stack slot %d out of range", (idx))
 
 static TValue *index2adr(lua_State *L, int idx)
 {
+  G(L)->touched++;
   if (idx > 0) {
     TValue *o = L->base + (idx - 1);
     return o < L->top ? o : niltv(L);
@@ -70,6 +76,7 @@ static LJ_AINLINE TValue *index2adr_check(lua_State *L, int idx)
 
 static TValue *index2adr_stack(lua_State *L, int idx)
 {
+  G(L)->touched++;
   if (idx > 0) {
     TValue *o = L->base + (idx - 1);
     if (o < L->top) {
@@ -123,6 +130,7 @@ LUALIB_API void luaL_checkstack(lua_State *L, int size, const char *msg)
 LUA_API void lua_xmove(lua_State *L, lua_State *to, int n)
 {
   TValue *f, *t;
+  G(L)->touched++;
   if (L == to) return;
   lj_checkapi_slot(n);
   lj_checkapi(G(L) == G(to), "move across global states");
@@ -149,6 +157,7 @@ LUA_API int lua_gettop(lua_State *L)
 
 LUA_API void lua_settop(lua_State *L, int idx)
 {
+  G(L)->touched++;
   if (idx >= 0) {
     lj_checkapi(idx <= tvref(L->maxstack) - L->base, "bad stack slot %d", idx);
     if (L->base + idx > L->top) {
@@ -759,6 +768,7 @@ LUA_API void *lua_newuserdata(lua_State *L, size_t size)
 
 LUA_API void lua_concat(lua_State *L, int n)
 {
+  G(L)->touched++;
   lj_checkapi_slot(n);
   if (n >= 2) {
     n--;
@@ -1113,6 +1123,7 @@ static TValue *api_call_base(lua_State *L, int nargs)
 
 LUA_API void lua_call(lua_State *L, int nargs, int nresults)
 {
+  G(L)->touched++;
   lj_checkapi(L->status == LUA_OK || L->status == LUA_ERRERR,
 	      "thread called in wrong state %d", L->status);
   lj_checkapi_slot(nargs+1);
@@ -1129,6 +1140,7 @@ LUA_API int lua_pcall(lua_State *L, int nargs, int nresults, int errfunc)
   uint8_t oldh;
   ptrdiff_t ef;
   int status;
+  g->touched++;
 #if LJ_HASJIT
   if (G2J(g)->state < LJ_TRACE_ACTIVE)
     lj_trace_abort_leftover(L);
@@ -1174,6 +1186,7 @@ LUA_API int lua_cpcall(lua_State *L, lua_CFunction func, void *ud)
   global_State *g = G(L);
   uint8_t oldh = hook_save(g);
   int status;
+  g->touched++;
   lj_checkapi(L->status == LUA_OK || L->status == LUA_ERRERR,
 	      "thread called in wrong state %d", L->status);
   status = lj_vm_cpcall(L, func, ud, cpcall);
@@ -1249,6 +1262,7 @@ LUA_API int lua_yield(lua_State *L, int nresults)
 
 LUA_API int lua_resume(lua_State *L, int nargs)
 {
+  G(L)->touched++;
   if (L->cframe == NULL && L->status <= LUA_YIELD) {
     int status = lj_vm_resume(L,
       L->status == LUA_OK ? api_call_base(L, nargs) : L->top - nargs,

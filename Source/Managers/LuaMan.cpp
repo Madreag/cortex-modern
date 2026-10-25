@@ -10697,7 +10697,13 @@ bool LuaMan::IsCheckpointAllocationSinking() {
 	return s_AllocationSinking;
 }
 
+namespace {
+	// Each setting of the collector's mode, so a state's record of a clean collection never outlives the mode it was made in.
+	std::atomic<uint64_t> s_CollectorModeSettings{1};
+}
+
 void LuaMan::SetDeterministicCollection(bool deterministic) {
+	s_CollectorModeSettings.fetch_add(1, std::memory_order_acq_rel);
 	if (s_DeterministicCollection.exchange(deterministic) != deterministic && s_CollectorModeAnnounced) {
 		PrintCollectorMode(deterministic);
 	}
@@ -10726,6 +10732,17 @@ std::array<uint32_t, 2> LuaStateWrapper::TakeHeapFirstTickWrites() {
 
 void LuaStateWrapper::NoteFullCollection(size_t before, size_t after) {
 	if (m_CheckpointHeap) m_CheckpointHeap->NoteFullCollection(before, after);
+}
+
+bool LuaStateWrapper::HoldsNoGarbage() {
+	return m_CleanCollectorMode == s_CollectorModeSettings.load(std::memory_order_acquire) && m_TouchedWhenClean == luaJIT_state_touched(m_State) &&
+	       G(m_State)->gc.state == GCSpause && lua_gc(m_State, LUA_GCISRUNNING, 0) == 0;
+}
+
+void LuaStateWrapper::NoteCollected(uint64_t touchedBefore) {
+	const uint64_t touched = luaJIT_state_touched(m_State);
+	m_TouchedWhenClean = touched;
+	m_CleanCollectorMode = touched == touchedBefore ? s_CollectorModeSettings.load(std::memory_order_acquire) : 0;
 }
 
 void LuaStateWrapper::TrimHeap() {
@@ -18082,28 +18099,39 @@ void LuaMan::StartAsyncGarbageCollection(uint64_t tick, bool everyState) {
 	const bool fullCollection = IsDeterministicCollection();
 	s_LastCollectionTick.store(tick, std::memory_order_release);
 	// A full collection costs the whole live heap, so each state takes one in its own slot of the period, not every tick. A
-	// state whose collector runs (a fresh state, a script's collectgarbage) takes one now, so nothing collects mid-tick.
+	// state whose collector runs (a fresh state, a script's collectgarbage) takes one now, so nothing collects mid-tick. A state
+	// nothing has reached since a collection left it with no garbage takes none, a tick named for a capture included: it has
+	// nothing for one to find, on any peer.
 	const auto due = [fullCollection, everyState, tick](LuaStateWrapper& luaState, uint64_t slot) {
-		if (!fullCollection || everyState || slot % c_CollectionPeriodTicks == tick % c_CollectionPeriodTicks) {
+		if (!fullCollection) {
 			return true;
 		}
 		std::lock_guard<std::recursive_mutex> lock(luaState.GetMutex());
-		return lua_gc(luaState.GetLuaState(), LUA_GCISRUNNING, 0) != 0;
+		if (luaState.HoldsNoGarbage()) {
+			return false;
+		}
+		return everyState || slot % c_CollectionPeriodTicks == tick % c_CollectionPeriodTicks || lua_gc(luaState.GetLuaState(), LUA_GCISRUNNING, 0) != 0;
 	};
 	std::vector<LuaStateWrapper*> dueStates;
 	dueStates.reserve(m_ScriptStates.size() + 1);
+	std::string skipped;
 	if (due(m_MasterScriptState, 0)) {
 		dueStates.push_back(&m_MasterScriptState);
+	} else if (everyState) {
+		skipped += " 0";
 	}
 	for (size_t index = 0; index < m_ScriptStates.size(); ++index) {
 		if (due(m_ScriptStates[index], index + 1)) {
 			dueStates.push_back(&m_ScriptStates[index]);
+		} else if (everyState) {
+			skipped += " " + std::to_string(index + 1);
 		}
 	}
 
 	m_GarbageCollectionTask = BS::multi_future<void>();
 	// Test lever CC_TEST_TICK_COST_DETAILS: a full collection over 2 ms, and every one of a tick named for a capture, names its state, heap and time.
 	static const bool reportSlowCollections = std::getenv("CC_TEST_TICK_COST_DETAILS") != nullptr;
+	if (reportSlowCollections && everyState) System::PrintDiagnosticLine(std::format("[gc-clean] tick={} collected={} held_no_garbage={}", tick, dueStates.size(), skipped));
 	for (LuaStateWrapper* luaState: dueStates) {
 		m_GarbageCollectionTask.push_back(
 		    g_ThreadMan.GetPriorityThreadPool().submit([this, luaState, fullCollection, tick, everyState]() {
@@ -18113,6 +18141,7 @@ void LuaMan::StartAsyncGarbageCollection(uint64_t tick, bool everyState) {
 			    if (fullCollection) {
 				    const CheckpointLua::HeapOwner::CollectionScope collecting;
 				    const size_t inUse = static_cast<size_t>(G(state)->gc.total);
+				    const uint64_t touchedBefore = luaJIT_state_touched(state);
 				    const auto collectionBegan = reportSlowCollections ? RTE::SteadyClock::now() : RTE::SteadyClock::time_point{};
 				    // A whole cycle, so the tick a dropped object dies on does not follow its state's heap size.
 				    if (G(state)->gc.state == GCSpause) {
@@ -18130,6 +18159,7 @@ void LuaMan::StartAsyncGarbageCollection(uint64_t tick, bool everyState) {
 					    if (us > 2000 || everyState) System::PrintDiagnosticLine(std::format("[gc-slow] tick={} slot={} us={} before_kb={} after_kb={} freed_bytes={}", tick, GetStateIndex(luaState), us, inUse >> 10, static_cast<size_t>(G(state)->gc.total) >> 10, static_cast<long long>(inUse) - static_cast<long long>(G(state)->gc.total)));
 				    }
 				    lua_gc(state, LUA_GCSTOP, 0);
+				    luaState->NoteCollected(touchedBefore);
 			    } else {
 				    // Keep allocation-triggered collection on in single player. A fixed tick-end step alone cannot keep up
 				    // with sustained script churn; stopping here lets unreachable objects fill the heap before it can trim.
