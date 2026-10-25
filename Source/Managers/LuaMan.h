@@ -484,7 +484,8 @@ namespace RTE {
 		void NoteFullCollection(size_t before, size_t after);
 
 		/// Whether a full collection left this state with no garbage and nothing has reached it since: no call into it, its collector
-		/// paused, the same collector mode. Such a state has nothing for a collection to find. Under the state's lock.
+		/// paused, the same collector mode. Such a state has nothing for a collection to find. Under the state's lock, or where no
+		/// script runs in it.
 		bool HoldsNoGarbage();
 
 		/// Records what the full collection just run left: no garbage, unless a finalizer ran Lua code meanwhile. Under the state's lock.

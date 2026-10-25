@@ -10803,6 +10803,10 @@ void LuaMan::NoteTouchPhase(int phase) {
 uint64_t LuaMan::TicksUntilFullCollection(size_t slot) {
 	const uint64_t last = s_LastCollectionTick.load(std::memory_order_acquire);
 	if (!IsDeterministicCollection() || last == (std::numeric_limits<uint64_t>::max)()) return 0;
+	// A state nothing reaches takes no collection at its slot. Asked at a capture's boundary, where no script runs, so its record stands.
+	LuaStatesArray& threaded = g_LuaMan.GetThreadedScriptStates();
+	LuaStateWrapper* state = slot == 0 ? &g_LuaMan.GetMasterScriptState() : slot <= threaded.size() ? &threaded[slot - 1] : nullptr;
+	if (state && state->HoldsNoGarbage()) return 0;
 	const uint64_t next = (last + 1) % c_CollectionPeriodTicks;
 	return (slot % c_CollectionPeriodTicks + c_CollectionPeriodTicks - next) % c_CollectionPeriodTicks + 1;
 }
