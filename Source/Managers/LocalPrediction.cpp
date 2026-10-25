@@ -356,6 +356,7 @@ namespace RTE {
 				cloned.push_back(preview.original);
 			}
 		}
+		g_MovableMan.SetPreviewStandIns(clones);
 		LuaMan::BeginPreviewScripts(clones, PreviewScriptSelfTest::SharedSlot(), cloned);
 		if (LuaMan::PreviewFrozenCount() > 0) {
 			++s_FrozenPreviews;

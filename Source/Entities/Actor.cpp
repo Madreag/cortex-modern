@@ -2597,7 +2597,7 @@ void Actor::ResolveFaithfulLinks() {
 		m_FaithfulItemInReachUID = 0;
 	}
 	if (m_FaithfulMOMoveTargetUID > 0) {
-		m_pMOMoveTarget = g_MovableMan.FindObjectByUniqueID(m_FaithfulMOMoveTargetUID);
+		m_pMOMoveTarget = g_MovableMan.ResolveRecordLink(m_FaithfulMOMoveTargetUID);
 		m_FaithfulMOMoveTargetUID = 0;
 	}
 	if (!m_FaithfulWaypointUIDs.empty()) {
@@ -2606,7 +2606,7 @@ void Actor::ResolveFaithfulLinks() {
 			if (uid == m_FaithfulWaypointUIDs.end()) {
 				break;
 			}
-			waypointObject = *uid > 0 ? g_MovableMan.FindObjectByUniqueID(*uid) : nullptr;
+			waypointObject = *uid > 0 ? g_MovableMan.ResolveRecordLink(*uid) : nullptr;
 			++uid;
 		}
 		m_FaithfulWaypointUIDs.clear();

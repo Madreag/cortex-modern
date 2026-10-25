@@ -1173,8 +1173,8 @@ void Atom::ResolveCheckpointLinks() {
 	if (!m_HasCheckpointLinks) return;
 	m_OwnerMO = g_MovableMan.FindObjectByUniqueID(m_CheckpointLinkIDs[0]);
 	for (int index = 0; index < 2; ++index) {
-		m_LastHit.Body[index] = g_MovableMan.FindObjectByUniqueID(m_CheckpointLinkIDs[1 + index]);
-		m_LastHit.RootBody[index] = g_MovableMan.FindObjectByUniqueID(m_CheckpointLinkIDs[3 + index]);
+		m_LastHit.Body[index] = g_MovableMan.ResolveRecordLink(m_CheckpointLinkIDs[1 + index]);
+		m_LastHit.RootBody[index] = g_MovableMan.ResolveRecordLink(m_CheckpointLinkIDs[3 + index]);
 	}
 	m_CheckpointLinkIDs.fill(0);
 	m_HasCheckpointLinks = false;

@@ -4402,6 +4402,7 @@ void MovableMan::EndSpeculation(std::vector<MovableObject*>* takenResidents) {
 	m_Speculation.travelerSteps = 0;
 	m_Speculation.travelersMoved = false;
 	m_Speculation.residentIgnoreLinks.clear();
+	m_Speculation.standIns.clear();
 	m_Speculation.shadows.clear();
 	m_Speculation.residents.clear();
 	m_Speculation.taken.clear();
@@ -4584,6 +4585,19 @@ MovableObject* MovableMan::ResolveIgnoreLink(MovableObject* holder, long uniqueI
 	return found;
 }
 
+MovableObject* MovableMan::ResolveRecordLink(long uniqueID) {
+	if (!m_Speculation.active || CheckpointNativeStorage::Reading() || CheckpointNativeSnapshot::Current()) return FindObjectByUniqueID(uniqueID);
+	if (m_LinkRoot) {
+		if (MovableObject* part = m_LinkRoot->FindPartByUniqueID(uniqueID)) return part;
+	}
+	const auto* known = CheckpointFind(std::as_const(*this).CheckpointLookupValues().m_KnownObjects, uniqueID);
+	MovableObject* found = known ? known->second : nullptr;
+	if (!found) return nullptr;
+	const MovableObject* root = found->GetRootParent();
+	const bool standsIn = std::any_of(m_Speculation.standIns.begin(), m_Speculation.standIns.end(), [root](const MovableObject* standIn) { return standIn->GetUniqueID() == root->GetUniqueID(); });
+	return standsIn || ExistingShadowOf(root) ? SpeculativeView(found) : found;
+}
+
 MovableObject* MovableMan::ExistingShadowOf(const MovableObject* resident) const {
 	const auto existing = m_Speculation.shadows.find(resident);
 	return existing != m_Speculation.shadows.end() ? existing->second.object : nullptr;
@@ -4593,6 +4607,12 @@ MovableObject* MovableMan::SpeculativeView(MovableObject* found) {
 	MovableObject* root = found->GetRootParent();
 	if (!IsResident(root)) {
 		return found;
+	}
+	for (MovableObject* standIn: m_Speculation.standIns) {
+		if (standIn->GetUniqueID() == root->GetUniqueID()) {
+			MovableObject* part = root == found ? nullptr : standIn->FindPartByUniqueID(found->GetUniqueID());
+			return part ? part : standIn;
+		}
 	}
 	MovableObject* shadowRoot = ShadowOf(root);
 	if (!shadowRoot || root == found) {

@@ -486,6 +486,12 @@ namespace RTE {
 		/// Resolves a do-not-hit link. It is only compared, never written through, and a shadow keeps its resident's MOIDs: during a
 		/// speculation it names the resident while the resident has no shadow, and follows it into one made later.
 		MovableObject* ResolveIgnoreLink(MovableObject* holder, long uniqueID);
+		/// Resolves a link that only records an object (an atom's last hit, an AI's move target, a waypoint): nothing moves it or writes
+		/// through it before it is replaced, so during a speculation it names the resident and never costs a shadow.
+		MovableObject* ResolveRecordLink(long uniqueID);
+		/// The clones a preview simulates in their originals' place: every speculative lookup of an original or one of its parts gets
+		/// the clone's, never a second copy of the actor. Cleared when the speculation ends.
+		void SetPreviewStandIns(const std::vector<MovableObject*>& clones) { m_Speculation.standIns = clones; }
 		/// Called with each shadow the overlay makes, once it is made.
 		void SetShadowMadeHook(void (*hook)(MovableObject* resident, MovableObject* shadow)) { m_ShadowMadeHook = hook; }
 		/// Ends the overlay: its unowned shadows and spawns are deleted, the rosters and flags go back.
@@ -1310,6 +1316,7 @@ namespace RTE {
 			int travelerSteps = 0; //!< The steps the travelers still move; past them they stand as the rest of the world does.
 			bool travelersMoved = false; //!< They moved this step, so only now can one have come to rest.
 			std::vector<MovableObject*> residentIgnoreLinks; //!< Speculative objects whose do-not-hit link names a resident with no shadow yet.
+			std::vector<MovableObject*> standIns; //!< The previewed actors' clones, standing in for their originals.
 			std::vector<MovableObject*> taken;
 			AddQueueMark mark;
 			CheckpointList<Actor*> rosters[Activity::MaxTeamCount];
