@@ -314,22 +314,20 @@ namespace RTE::CheckpointLua {
 			return "a Lua heap grew or closed since the plan";
 		}
 		struct Heap { HeapOwner::PreparationLease lease; std::shared_ptr<HeapOwner::Prepared> prepared; };
-		// A collection writes every page of its state's heap, so the heap collected in the next tick, which comes before any
-		// idle time, and those collected soon after while they fit a couple of milliseconds of copying, are copied whole at
-		// the boundary instead of fenced; a saver copies the rest in the order they collect. A busy heap (see
-		// HeapOwner::NoteFullCollection) whose hot runs cover less than an eighth of it has not learned what the ticks after a
-		// boundary write: it is copied whole and fenced to learn them, while all the whole copies fit c_BusyCopyBytes.
+		// A collection writes every page of its state's heap, so the heaps collected in the next tick, which comes before any
+		// idle time, are copied whole at the boundary instead of fenced; a saver copies the rest in the order they collect, in
+		// the idle time before their collections. A busy heap (see HeapOwner::NoteFullCollection) whose hot runs cover less
+		// than an eighth of it has not learned what the ticks after a boundary write: it is copied whole and fenced to learn
+		// them, while all the whole copies fit c_BusyCopyBytes.
 		std::vector<bool> CopiedWhole(const std::vector<uint64_t>& until, std::vector<bool>& learn) const {
-			constexpr size_t c_WholeCopyBytes = size_t{16} << 20, c_BusyCopyBytes = size_t{96} << 20;
+			constexpr size_t c_BusyCopyBytes = size_t{96} << 20;
 			std::vector<bool> whole(m_Heaps.size(), false);
 			learn.assign(m_Heaps.size(), false);
 			size_t bytes = 0;
 			for (const size_t index: m_DrainOrder) {
-				if (!until[index]) break;
-				const size_t heapBytes = m_Heaps[index].prepared->Image().ByteCount();
-				if (until[index] > 1 && bytes + heapBytes > c_WholeCopyBytes) break;
+				if (until[index] != 1) break;
 				whole[index] = true;
-				bytes += heapBytes;
+				bytes += m_Heaps[index].prepared->Image().ByteCount();
 			}
 			for (const size_t index: m_DrainOrder) {
 				const auto image = m_Heaps[index].prepared->Image();
