@@ -10763,6 +10763,43 @@ std::string LuaMan::TakeHeapFaultsByState() {
 	return text;
 }
 
+void LuaMan::NoteTouchPhase(int phase) {
+	static const bool enabled = std::getenv("CCCP_TEST_LUA_TOUCH_PHASES") != nullptr;
+	if (!enabled) return;
+	constexpr int c_Phases = 8;
+	static const std::array<const char*, c_Phases> names{"between_ticks", "activity", "scene", "world", "audio", "late", "collection", "after"};
+	static std::vector<uint64_t> last;
+	static std::array<std::vector<uint32_t>, c_Phases> touches;
+	static int ticks = 0;
+	std::vector<LuaStateWrapper*> states{&m_MasterScriptState};
+	for (LuaStateWrapper& state: m_ScriptStates) states.push_back(&state);
+	if (last.size() != states.size()) {
+		last.assign(states.size(), 0);
+		for (auto& counts: touches) counts.assign(states.size(), 0);
+	}
+	const int index = std::clamp(phase, 0, c_Phases - 1);
+	for (size_t slot = 0; slot < states.size(); ++slot) {
+		const uint64_t touched = luaJIT_state_touched(states[slot]->GetLuaState());
+		if (touched != last[slot]) ++touches[index][slot];
+		last[slot] = touched;
+	}
+	if (phase != 0 || ++ticks < 600) return;
+	std::string line = std::format("[lua-touch-phases] tick={} ticks={}", g_TimerMan.GetSimUpdateCount(), ticks);
+	for (int each = 0; each < c_Phases; ++each) {
+		int reached = 0;
+		std::string slots;
+		for (size_t slot = 0; slot < states.size(); ++slot) {
+			if (touches[each][slot] == 0) continue;
+			++reached;
+			slots += std::format("{}{}:{}", slots.empty() ? "" : ",", slot, touches[each][slot]);
+		}
+		line += std::format(" {}={}[{}]", names[each], reached, slots);
+		touches[each].assign(states.size(), 0);
+	}
+	ticks = 0;
+	System::PrintDiagnosticLine(line);
+}
+
 uint64_t LuaMan::TicksUntilFullCollection(size_t slot) {
 	const uint64_t last = s_LastCollectionTick.load(std::memory_order_acquire);
 	if (!IsDeterministicCollection() || last == (std::numeric_limits<uint64_t>::max)()) return 0;

@@ -1003,6 +1003,10 @@ namespace RTE {
 		/// @return The ticks, or 0 when collections follow no slot or none has run yet.
 		static uint64_t TicksUntilFullCollection(size_t slot);
 
+		/// Test lever CCCP_TEST_LUA_TOUCH_PHASES: at each of a tick's phase boundaries, which states some call reached since the
+		/// last boundary, summed over 600 ticks into one line. @param phase The boundary just reached, 0 the tick's start.
+		void NoteTouchPhase(int phase);
+
 		/// Test lever CCCP_TEST_FAULT_TICKS: the Lua heap write faults taken since the last call, and their microseconds.
 		static std::pair<uint64_t, uint64_t> TakeHeapFaultTally();
 

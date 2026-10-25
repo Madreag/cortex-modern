@@ -8720,6 +8720,7 @@ void RunGameLoop() {
 			g_PerformanceMan.NewPerformanceSample();
 			if (!measureLockstepCost) g_PerformanceMan.UpdateMSPSU();
 			g_TimerMan.UpdateSim();
+			g_LuaMan.NoteTouchPhase(0);
 			// Test lever: a slower machine's sim cost, spent inside the tick on this one - in the simulation's update, where a slower
 			// machine spends it; CCCP_TEST_SIM_COST_OUTSIDE_WINDOW spends it before the update instead, where the plane cannot tick.
 			static const long long s_testSimCostUs = [] { const char* text = std::getenv("CCCP_TEST_SIM_COST_US"); return text ? std::atoll(text) : 0LL; }();
@@ -9284,14 +9285,17 @@ void RunGameLoop() {
 					g_MovableMan.TraceFog("activity");
 					g_ActivityMan.Update();
 					if (tickCostDetails) detailAfterActivityUs = g_TimerMan.GetAbsoluteTime();
+					g_LuaMan.NoteTouchPhase(1);
 
 					if (g_SceneMan.GetScene()) {
 						g_SceneMan.GetScene()->Update();
 					}
 					if (tickCostDetails) detailAfterSceneUs = g_TimerMan.GetAbsoluteTime();
+					g_LuaMan.NoteTouchPhase(2);
 
 					g_LuaMan.ClearScriptTimings();
 					g_MovableMan.Update();
+					g_LuaMan.NoteTouchPhase(3);
 				}
 				if (tickPhaseDetails) heldAfterWorldUs = g_TimerMan.GetAbsoluteTime();
 			}
@@ -9305,6 +9309,7 @@ void RunGameLoop() {
 			g_AudioMan.Update();
 			g_MusicMan.Update();
 			if (tickCostDetails) detailAfterAudioUs = g_TimerMan.GetAbsoluteTime();
+			g_LuaMan.NoteTouchPhase(4);
 
 			if (!lockstepPausedTick) {
 				// A long late script is this machine's own like the update's: the plane commits for the round meanwhile.
@@ -9395,6 +9400,7 @@ void RunGameLoop() {
 			CrossEndTargetObservation(simTick);
 			CrossRecoveryAtCommittedTick(simTick, lockstepPausedTick);
 			if (tickCostDetails) detailBeforeHashUs = g_TimerMan.GetAbsoluteTime();
+			g_LuaMan.NoteTouchPhase(5);
 			if (hashThisTick) {
 				const HarnessCost::SimulationSpan harnessSpan;
 				// The object census goes in here, not inside MovableMan::Update: the checkpoint
@@ -9493,6 +9499,7 @@ void RunGameLoop() {
 				NetLockstepPlane::Window collectionWindow("tick-end collection wait");
 				g_LuaMan.WaitForAsyncGarbageCollection();
 			}
+			g_LuaMan.NoteTouchPhase(6);
 			if (tickPhaseDetails) heldAfterCollectionUs = g_TimerMan.GetAbsoluteTime();
 			if (s_crossLeaveRequested) { s_crossLeaveRequested = false; s_scriptedLeaveDue = true; }
 			if (const MinimizeLever& lever = TestMinimizeLever(); lever.to != 0 && g_WindowMan.GetWindow()) {
@@ -9750,6 +9757,7 @@ void RunGameLoop() {
 				if (!catchingUp && ((roundStart && !reclaimStart) || simTick % s_netFullStateEvery == 0)) g_NetMatchService.CaptureFullStateHash(simTick, round, s_netFullStateDump);
 			}
 			g_NetMatchService.AutosaveAtTickBoundary(simTick, lockstepPausedTick);
+			g_LuaMan.NoteTouchPhase(7);
 			TelemetryBundle::CaptureAtTickBoundary();
 			const long long crossCaptureUs = g_TimerMan.GetAbsoluteTime() - crossCaptureStartUs;
 			const long long crossCaptureWaitUs = ScenarioRunner::GetLockstepWaitUs() - crossCaptureWaitStartUs;
