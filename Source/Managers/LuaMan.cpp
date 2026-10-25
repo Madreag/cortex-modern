@@ -18102,11 +18102,11 @@ void LuaMan::StartAsyncGarbageCollection(uint64_t tick, bool everyState) {
 	}
 
 	m_GarbageCollectionTask = BS::multi_future<void>();
-	// Test lever CC_TEST_TICK_COST_DETAILS: a full collection over 2 ms names its state, heap and time.
+	// Test lever CC_TEST_TICK_COST_DETAILS: a full collection over 2 ms, and every one of a tick named for a capture, names its state, heap and time.
 	static const bool reportSlowCollections = std::getenv("CC_TEST_TICK_COST_DETAILS") != nullptr;
 	for (LuaStateWrapper* luaState: dueStates) {
 		m_GarbageCollectionTask.push_back(
-		    g_ThreadMan.GetPriorityThreadPool().submit([this, luaState, fullCollection, tick]() {
+		    g_ThreadMan.GetPriorityThreadPool().submit([this, luaState, fullCollection, tick, everyState]() {
 			    ZoneScopedN("Lua Garbage Collection");
 			    std::lock_guard<std::recursive_mutex> lock(luaState->GetMutex());
 			    lua_State* state = luaState->GetLuaState();
@@ -18127,7 +18127,7 @@ void LuaMan::StartAsyncGarbageCollection(uint64_t tick, bool everyState) {
 				    if (CheckpointNativeStorage::Enabled()) luaState->NoteFullCollection(inUse, static_cast<size_t>(G(state)->gc.total));
 				    if (reportSlowCollections) {
 					    const auto us = std::chrono::duration_cast<std::chrono::microseconds>(RTE::SteadyClock::now() - collectionBegan).count();
-					    if (us > 2000) System::PrintDiagnosticLine(std::format("[gc-slow] tick={} slot={} us={} before_kb={} after_kb={}", tick, GetStateIndex(luaState), us, inUse >> 10, static_cast<size_t>(G(state)->gc.total) >> 10));
+					    if (us > 2000 || everyState) System::PrintDiagnosticLine(std::format("[gc-slow] tick={} slot={} us={} before_kb={} after_kb={} freed_bytes={}", tick, GetStateIndex(luaState), us, inUse >> 10, static_cast<size_t>(G(state)->gc.total) >> 10, static_cast<long long>(inUse) - static_cast<long long>(G(state)->gc.total)));
 				    }
 				    lua_gc(state, LUA_GCSTOP, 0);
 			    } else {
