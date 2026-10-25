@@ -18153,19 +18153,21 @@ void LuaMan::StartAsyncGarbageCollection(uint64_t tick, bool everyState) {
 		}
 		return everyState || slot % c_CollectionPeriodTicks == tick % c_CollectionPeriodTicks || lua_gc(luaState.GetLuaState(), LUA_GCISRUNNING, 0) != 0;
 	};
-	std::vector<LuaStateWrapper*> dueStates;
+	std::vector<LuaStateWrapper*> dueStates, cleanStates;
 	dueStates.reserve(m_ScriptStates.size() + 1);
 	std::string skipped;
 	if (due(m_MasterScriptState, 0)) {
 		dueStates.push_back(&m_MasterScriptState);
-	} else if (everyState) {
-		skipped += " 0";
+	} else if (fullCollection && m_MasterScriptState.HoldsNoGarbage()) {
+		cleanStates.push_back(&m_MasterScriptState);
+		if (everyState) skipped += " 0";
 	}
 	for (size_t index = 0; index < m_ScriptStates.size(); ++index) {
 		if (due(m_ScriptStates[index], index + 1)) {
 			dueStates.push_back(&m_ScriptStates[index]);
-		} else if (everyState) {
-			skipped += " " + std::to_string(index + 1);
+		} else if (fullCollection && m_ScriptStates[index].HoldsNoGarbage()) {
+			cleanStates.push_back(&m_ScriptStates[index]);
+			if (everyState) skipped += " " + std::to_string(index + 1);
 		}
 	}
 
@@ -18173,6 +18175,32 @@ void LuaMan::StartAsyncGarbageCollection(uint64_t tick, bool everyState) {
 	// Test lever CC_TEST_TICK_COST_DETAILS: a full collection over 2 ms, and every one of a tick named for a capture, names its state, heap and time.
 	static const bool reportSlowCollections = std::getenv("CC_TEST_TICK_COST_DETAILS") != nullptr;
 	if (reportSlowCollections && everyState) System::PrintDiagnosticLine(std::format("[gc-clean] tick={} collected={} held_no_garbage={}", tick, dueStates.size(), skipped));
+	// Test lever CCCP_TEST_GC_SKIP_RECHECK: every state a tick skips as holding no garbage is collected anyway, and one that frees a byte or
+	// runs a finalizer is named: a skip must be exactly the collection that would have changed nothing.
+	static const bool recheckSkips = std::getenv("CCCP_TEST_GC_SKIP_RECHECK") != nullptr;
+	static std::atomic<uint64_t> s_RecheckedSkips{0}, s_RecheckFailures{0};
+	if (recheckSkips) {
+		for (LuaStateWrapper* luaState: cleanStates) {
+			m_GarbageCollectionTask.push_back(g_ThreadMan.GetPriorityThreadPool().submit([this, luaState, tick]() {
+				std::lock_guard<std::recursive_mutex> lock(luaState->GetMutex());
+				lua_State* state = luaState->GetLuaState();
+				const CheckpointLua::HeapOwner::CollectionScope collecting;
+				const long long before = static_cast<long long>(G(state)->gc.total);
+				const uint64_t touchedBefore = luaJIT_state_touched(state);
+				lua_gc(state, LUA_GCCOLLECT, 0);
+				lua_gc(state, LUA_GCSTOP, 0);
+				const long long freed = before - static_cast<long long>(G(state)->gc.total);
+				const uint64_t finalizers = luaJIT_state_touched(state) - touchedBefore;
+				luaState->NoteCollected(touchedBefore);
+				s_RecheckedSkips.fetch_add(1, std::memory_order_relaxed);
+				if (freed != 0 || finalizers != 0) {
+					s_RecheckFailures.fetch_add(1, std::memory_order_relaxed);
+					System::PrintDiagnosticLine(std::format("[gc-clean-recheck] FAIL tick={} slot={} freed_bytes={} finalizer_calls={}", tick, GetStateIndex(luaState), freed, finalizers));
+				}
+			}));
+		}
+		if (everyState) System::PrintDiagnosticLine(std::format("[gc-clean-recheck] tick={} rechecked_skips={} failures={}", tick, s_RecheckedSkips.load(), s_RecheckFailures.load()));
+	}
 	for (LuaStateWrapper* luaState: dueStates) {
 		m_GarbageCollectionTask.push_back(
 		    g_ThreadMan.GetPriorityThreadPool().submit([this, luaState, fullCollection, tick, everyState]() {
